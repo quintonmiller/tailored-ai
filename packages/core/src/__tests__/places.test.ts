@@ -516,6 +516,8 @@ describe("the map, and any place on it", () => {
       const room = meetingRoom("standup", n);
       expect(placeProblems(room), `${n} seats`).toEqual([]);
       expect(room.props.filter((p) => p.kind === "armchair")).toHaveLength(Math.max(2, n));
+      // Lit after dark.
+      expect(room.props.filter((p) => p.kind === "lamp").length).toBeGreaterThan(0);
       expect(room.width).toBeGreaterThanOrEqual(last);
       last = room.width;
     }

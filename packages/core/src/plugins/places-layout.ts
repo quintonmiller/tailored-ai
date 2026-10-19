@@ -305,6 +305,15 @@ export function meetingRoom(name: string, seats: number): Place {
       at: [round(width / 2 - 0.35), round(-depth / 2 + 0.35)],
       facing: 0,
     },
+    // Lamps, back left and on the right wall, clear of the camera at the open front: a room with none is dark after sunset.
+    { id: "lamp", name: "the lamp", kind: "lamp", at: [round(-width / 2 + 0.3), round(-depth / 2 + 0.3)], facing: 0 },
+    {
+      id: "lamp-2",
+      name: "the other lamp",
+      kind: "lamp",
+      at: [round(width / 2 - 0.3), round(-depth / 2 + 1.1)],
+      facing: 0,
+    },
   );
   return withSpots({
     name,

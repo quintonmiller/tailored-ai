@@ -10,7 +10,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
 import type { Hold, Sign } from "./doing";
 import { armClearance, bodyPoints } from "./fit";
-import { Director, findPath, type Obstacle, route, turnBetween, Walker } from "./locomotion";
+import { Director, findPath, type Obstacle, route, slide, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
@@ -95,6 +95,8 @@ export class Figure {
   private readonly size: number;
   private held: { kind: string; how: Hold; thing: THREE.Group } | undefined;
   private dozing = false;
+  /** How far it was steered since the last frame, which drives its stride like a walk. */
+  private steered = 0;
   /** Something it said, shown in a bubble from `from` to `until` on the stage's clock. */
   private line: { bubble: THREE.Sprite; from: number; until: number } | undefined;
   private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
@@ -204,6 +206,37 @@ export class Figure {
     return true;
   }
 
+  /**
+   * Walk under someone's control: `dx`, `dz` metres this frame, sliding round
+   * furniture and kept on the floor, turned the way it is going. Any walk to
+   * a spot is dropped, and a seat is left first.
+   */
+  steer(dx: number, dz: number, room: Room, obstacles: Obstacle[]) {
+    if (!dx && !dz) return;
+    this.pending = undefined;
+    this.current = undefined;
+    const p = this.walker.place;
+    const [x, z] = slide(room, [p.x, p.z], [dx, dz], obstacles, this.radius);
+    const moved = Math.hypot(x - p.x, z - p.z);
+    p.x = x;
+    p.z = z;
+    // Turn at walking pace toward where it is heading, with nothing left to walk.
+    this.walker.go([], Math.atan2(dx, dz));
+    this.steered += moved;
+  }
+
+  /** Walk to a point on the floor, round the furniture, and face the way it walked. */
+  goTo(room: Room, to: [number, number], obstacles: Obstacle[]) {
+    this.director.sent();
+    this.pending = undefined;
+    this.current = undefined;
+    const from: [number, number] = [this.walker.place.x, this.walker.place.z];
+    const way = findPath(room, from, to, obstacles, this.radius);
+    const last = way.at(-2) ?? from;
+    const end = way.at(-1) ?? to;
+    this.walker.go(way, Math.atan2(end[0] - last[0], end[1] - last[1]));
+  }
+
   /** Where its eyes are, near enough: what others look at. */
   head(): THREE.Vector3 {
     return new THREE.Vector3(this.body.position.x, this.body.position.y + this.torso, this.body.position.z);
@@ -310,7 +343,8 @@ export class Figure {
     doing?: { activity: Activity | undefined },
   ): { walked: number } {
     if (this.pending && this.seated <= 0.05) this.go(room, this.pending, obstacles);
-    const walked = this.pending ? 0 : this.walker.step(dt);
+    const walked = (this.pending ? 0 : this.walker.step(dt)) + this.steered;
+    this.steered = 0;
     const here = this.here;
     const spot = this.current ? spotById(room, this.current) : undefined;
     // Asleep, it does nothing where it is but sit: no typing in its sleep.

@@ -7,6 +7,7 @@ import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
 import type { Companion, Line } from "../avatar/stage";
 import { subscribeStateChanges } from "../lib/state-events";
 import { useVoice } from "./voice";
+import { useWorldMap, WorldMap } from "./WorldMap";
 
 /**
  * The chat page's scene and voice: the agent's 3D body behind the
@@ -145,6 +146,42 @@ async function must(res: Promise<Response>, what: string): Promise<void> {
   }
 }
 
+/**
+ * Any place, by id, as a visitor sees it: its room and everyone in it, asked
+ * again when someone comes or goes, and redrawn as it changes.
+ */
+export function useScene(id: string | null): { room: Room; company: Companion[]; id?: string } | null {
+  const [scene, setScene] = useState<{ room: Room; company: Companion[]; id?: string } | null>(null);
+  useEffect(() => {
+    if (!id) {
+      setScene(null);
+      return;
+    }
+    let gone = false;
+    const load = () =>
+      fetch(`/api/ext/builtin:places/scene/${encodeURIComponent(id)}`)
+        .then((res) => (res.ok ? (res.json() as Promise<PlaceInfo>) : null))
+        .then((body) => {
+          if (!gone) setScene({ room: body?.place ?? DEFAULT_ROOM, company: companyOf(body), id });
+        })
+        .catch(() => {
+          if (!gone) setScene({ room: DEFAULT_ROOM, company: [], id });
+        });
+    void load();
+    const off = subscribeStateChanges((change) => {
+      if (change.type === "whereabouts") void load();
+      if (change.type !== "place" || change.id !== id) return;
+      if (change.op === "delete" || !change.after) void load();
+      else setScene((s) => (s ? { ...s, room: change.after as unknown as Room } : s));
+    });
+    return () => {
+      gone = true;
+      off();
+    };
+  }, [id]);
+  return scene;
+}
+
 /** What the server says about the place an agent is in. */
 export interface PlaceInfo {
   id?: string;
@@ -218,7 +255,17 @@ export function useChatStage({
     return () => q.removeEventListener?.("change", on);
   }, []);
 
-  const { room, company, id: placeId } = useRoom(agent, has3d);
+  const own = useRoom(agent, has3d);
+  // Visiting a place in your own body, walking or flying; null is the agent's own view.
+  const [visiting, setVisiting] = useState<string | null>(null);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [near, setNear] = useState<string | undefined>(undefined);
+  const visited = useScene(visiting);
+  const { room, company, id: placeId } = visited ?? own;
+  const map = useWorldMap(mapOpen && showStage);
+  useEffect(() => {
+    if (!visiting) setNear(undefined);
+  }, [visiting]);
   const activities = useRecords<AgentActivity>("activity", showStage);
   const speech = useRecords<Line>("speech", showStage);
   const online = useOnlineAgents(showStage);
@@ -267,13 +314,14 @@ export function useChatStage({
     [shown, onChatWith, placeId, online, activities],
   );
   // What the body can do in this room: its moves, the things it can go to, look at and point at, and who is with it.
+  // Always the agent's own place: its cues move its own body, which a visit doesn't change.
   const body = useMemo(
     () =>
       bodyFor(
-        room,
-        company.map((c) => c.name),
+        own.room,
+        own.company.map((c) => c.name),
       ),
-    [room, company],
+    [own.room, own.company],
   );
 
   const controls = useRef<AvatarControls | null>(null);
@@ -292,7 +340,7 @@ export function useChatStage({
   const voice = useVoice({
     agent: agent || undefined,
     sessionKey: keyFor,
-    body: showStage ? body : undefined,
+    body: showStage && !visiting ? body : undefined,
     measure: showStage,
     onCue: (cue) => controls.current?.cue(cue),
     onHeard: (text) => {
@@ -311,9 +359,10 @@ export function useChatStage({
   // Typed turns move the body too, while it is on screen: same cues as talking.
   useEffect(() => {
     if (!setTurnExtras) return;
-    setTurnExtras(showStage ? { body, onCue: (cue) => controls.current?.cue(cue) } : {});
+    // On a visit the body on screen is yours: the agent's cues have nothing to move.
+    setTurnExtras(showStage && !visiting ? { body, onCue: (cue) => controls.current?.cue(cue) } : {});
     return () => setTurnExtras({});
-  }, [showStage, setTurnExtras, body]);
+  }, [showStage, setTurnExtras, body, visiting]);
 
   // Another conversation on the page, or a new chat: the voice session is for the old one.
   const end = voice.end;
@@ -327,6 +376,17 @@ export function useChatStage({
       inUse.current = null;
     }
   }, [sessionKey, end]);
+
+  // M opens the map, unless the person is typing.
+  useEffect(() => {
+    if (!showStage) return;
+    const toggle = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
+      if (e.code === "KeyM" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) setMapOpen((open) => !open);
+    };
+    window.addEventListener("keydown", toggle);
+    return () => window.removeEventListener("keydown", toggle);
+  }, [showStage]);
 
   // Space to talk, like a walkie-talkie, unless the person is typing.
   const { hold, release } = voice;
@@ -380,24 +440,67 @@ export function useChatStage({
   );
 
   const state: BodyState = voice.phase !== "idle" ? voice.phase : sending ? "thinking" : "idle";
+  const tools = (
+    <>
+      <button
+        type="button"
+        className="talk-tool"
+        aria-expanded={mapOpen}
+        title="Every place there is (M)"
+        onClick={() => setMapOpen((open) => !open)}
+      >
+        Map
+      </button>
+      {visiting && (
+        <button type="button" className="talk-tool" onClick={() => setVisiting(null)}>
+          Back to {shown === "default" ? "the agent" : shown}
+        </button>
+      )}
+      {visiting && near && near !== shown && onChatWith && (
+        <button type="button" className="talk-tool talk-near" onClick={() => onChatWith(near)}>
+          Talk to {near}
+        </button>
+      )}
+    </>
+  );
   const stage: ReactNode =
     showStage && info.avatar ? (
       <Avatar
+        // A new place is a new stage: you arrive at its start, not wherever you stood in the last one.
+        key={visiting ?? "own"}
         fill
         url={info.avatar}
         animations={info.animations ?? []}
-        state={state}
-        loudness={voice.loudness}
-        engaged={busy || conversing}
+        state={visiting ? "idle" : state}
+        loudness={visiting ? () => 0 : voice.loudness}
+        engaged={visiting ? false : busy || conversing}
         controls={controls}
         insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
         room={room}
         company={company}
-        agent={shown}
+        agent={visiting ? "you" : shown}
         activities={activities}
         speech={speech}
         menuFor={menuFor}
-        {...(info.enabled ? { chooseIdle } : {})}
+        visitor={!!visiting}
+        onNear={setNear}
+        tools={tools}
+        overlay={
+          mapOpen ? (
+            <WorldMap
+              places={map.places}
+              problem={map.problem}
+              here={visiting ?? own.id}
+              activities={activities}
+              onGo={(id) => {
+                setVisiting(id);
+                setMapOpen(false);
+              }}
+              onClose={() => setMapOpen(false)}
+            />
+          ) : undefined
+        }
+        {...(info.enabled && !visiting ? { chooseIdle } : {})}
       />
     ) : null;
 

@@ -342,3 +342,37 @@ export class Director {
     this.leaveAt = undefined;
   }
 }
+
+/**
+ * One step of walking under your own control: as far as `delta` goes without
+ * leaving the floor or walking into furniture, sliding along whatever is in
+ * the way rather than stopping dead. A body already inside something (sat
+ * down in a seat, say) may walk out of it.
+ */
+export function slide(
+  room: { width: number; depth: number },
+  from: [number, number],
+  delta: [number, number],
+  obstacles: Obstacle[],
+  radius: number,
+): [number, number] {
+  const hx = room.width / 2 - radius;
+  const hz = room.depth / 2 - radius;
+  const clamp = ([x, z]: [number, number]): [number, number] => [
+    Math.max(-hx, Math.min(hx, x)),
+    Math.max(-hz, Math.min(hz, z)),
+  ];
+  const inside = ([x, z]: [number, number]) =>
+    obstacles.some((o) => x > o.minX - radius && x < o.maxX + radius && z > o.minZ - radius && z < o.maxZ + radius);
+  const stuck = inside(from);
+  const tries: [number, number][] = [
+    [from[0] + delta[0], from[1] + delta[1]],
+    [from[0] + delta[0], from[1]],
+    [from[0], from[1] + delta[1]],
+  ];
+  for (const t of tries) {
+    const to = clamp(t);
+    if (stuck || !inside(to)) return to;
+  }
+  return from;
+}

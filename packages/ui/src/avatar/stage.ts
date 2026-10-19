@@ -9,6 +9,10 @@
  * its hand, a sign over its head, a seat when it reads or sleeps. Imported
  * only when an avatar is configured, so three.js stays out of the main bundle.
  *
+ * A stage can also be visited: the body on it is then yours, walked with the
+ * arrow keys or WASD (or by clicking the floor), with the camera following;
+ * or put away to fly the camera anywhere. Agents look up as you come near.
+ *
  * VRM is the open format for humanoid avatars: a glTF file whose skeleton,
  * mouth shapes and blink follow one standard, so any VRM model works here
  * without per-model setup.
@@ -49,6 +53,28 @@ const STALE_LINE_MS = 15_000;
 /** The whole room, or the avatar's head and torso. */
 export type StageView = "room" | "close";
 
+/** How a visitor gets around: walking their body, or flying the camera free. */
+export type Travel = "walk" | "fly";
+
+/** Keys a visitor moves by: [right, forward, up]. */
+const MOVE_KEYS: Record<string, [number, number, number]> = {
+  KeyW: [0, 1, 0],
+  ArrowUp: [0, 1, 0],
+  KeyS: [0, -1, 0],
+  ArrowDown: [0, -1, 0],
+  KeyA: [-1, 0, 0],
+  ArrowLeft: [-1, 0, 0],
+  KeyD: [1, 0, 0],
+  ArrowRight: [1, 0, 0],
+  KeyE: [0, 0, 1],
+  KeyQ: [0, 0, -1],
+};
+/** Metres a second the flying camera moves. */
+const FLY_SPEED = 2.2;
+/** How near an agent you have to be for it to notice you, and how far to go before it forgets. */
+const NOTICE_AT = 1.5;
+const FORGET_AT = 2.4;
+
 /** Another agent in the same room: who, what to call it, and its body. */
 export interface Companion {
   agent: string;
@@ -78,6 +104,8 @@ export interface Stage {
   setActivities(activities: Record<string, AgentActivity>): void;
   /** The last thing each agent said, by agent: a new line shows in a bubble over its head. */
   setSpeech(speech: Record<string, Line>): void;
+  /** A visitor walks their body, or flies the camera. */
+  setTravel(travel: Travel): void;
   dispose(): void;
 }
 
@@ -144,6 +172,10 @@ export async function createStage(
     agent?: string;
     /** Someone clicked an agent's body (or its tag): which agent, and where on the page. */
     onPick?: (agent: string, at: { x: number; y: number }) => void;
+    /** The body here is the visitor's own, moved by keys and clicks, not an agent's. */
+    visitor?: boolean;
+    /** The agent the visitor is standing next to, when it changes; undefined when none is. */
+    onNear?: (agent: string | undefined) => void;
   } = {},
 ): Promise<Stage> {
   let room = opts.room ?? DEFAULT_ROOM;
@@ -406,6 +438,11 @@ export async function createStage(
     controls.target.copy(f.target);
     [controls.minAzimuthAngle, controls.maxAzimuthAngle] = f.azimuth;
     [controls.minPolarAngle, controls.maxPolarAngle] = f.polar;
+    // A visitor can look all the way round, and from nearly overhead to the floor.
+    if (opts.visitor) {
+      [controls.minAzimuthAngle, controls.maxAzimuthAngle] = [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY];
+      [controls.minPolarAngle, controls.maxPolarAngle] = [0.15, 1.5];
+    }
     controls.enabled = true;
     controls.update();
   };
@@ -449,6 +486,18 @@ export async function createStage(
     }
     return undefined;
   };
+  /** Where on the floor the pointer is, for a visitor to walk to. */
+  const floorAt = (e: PointerEvent): [number, number] | undefined => {
+    const r = canvas.getBoundingClientRect();
+    ray.setFromCamera(
+      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
+      camera,
+    );
+    const hit = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+    if (!hit || Math.abs(hit.x) > room.width / 2 || Math.abs(hit.z) > room.depth / 2) return undefined;
+    return [hit.x, hit.z];
+  };
+
   /** The agent whose body (or tag, or sign) is under the pointer, if any. */
   const agentAt = (e: PointerEvent): string | undefined => {
     const r = canvas.getBoundingClientRect();
@@ -482,11 +531,37 @@ export async function createStage(
     }
     const id = spotAt(e);
     if (id) go(id);
+    else if (opts.visitor && travel === "walk") {
+      const to = floorAt(e);
+      if (to) me.goTo(room, to, obstacles);
+    }
   };
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
     canvas.style.cursor = (opts.onPick && agentAt(e)) || spotAt(e) ? "pointer" : "";
   };
+  // A visitor's keys: held keys move them every frame, unless they are typing.
+  let travel: Travel = "walk";
+  const held = new Set<string>();
+  const typing = (e: KeyboardEvent) =>
+    (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (!opts.visitor || !(e.code in MOVE_KEYS) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    held.add(e.code);
+  };
+  const onKeyUp = (e: KeyboardEvent) => held.delete(e.code);
+  const onBlur = () => held.clear();
+  if (opts.visitor) {
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    // Free to look all the way round, and in and out with the wheel.
+    controls.enableZoom = true;
+  }
+  // Agents who have noticed the visitor, until the visitor walks away.
+  const noticed = new Set<string>();
+  let near: string | undefined;
   canvas.addEventListener("pointerdown", onDown);
   canvas.addEventListener("pointerup", onUp);
   canvas.addEventListener("pointermove", onHover);
@@ -560,7 +635,7 @@ export async function createStage(
         : behavior.label
       : undefined;
     // The agent you talk to needs no name; the others always show theirs.
-    f.label(f === me ? undefined : f.name, status);
+    f.label(f === me ? (opts.visitor ? "you" : undefined) : f.name, status);
     if (was && sameBehavior(was.behavior, behavior)) return;
     shows.set(f, {
       behavior,
@@ -668,6 +743,76 @@ export async function createStage(
     }
   };
 
+  /** The camera's heading on the floor, and its right, for keys that move relative to the view. */
+  const heading = () => {
+    const fwd = controls.target.clone().sub(camera.position);
+    fwd.y = 0;
+    if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
+    fwd.normalize();
+    return { fwd, right: new THREE.Vector3(-fwd.z, 0, fwd.x) };
+  };
+
+  /** One frame of a visit: move by the held keys, and keep the camera with you. */
+  function visit(dt: number) {
+    const [r, f, u] = [...held].reduce(
+      (acc, k) => {
+        const m = MOVE_KEYS[k];
+        return [acc[0] + m[0], acc[1] + m[1], acc[2] + m[2]];
+      },
+      [0, 0, 0],
+    );
+    if (travel === "walk") {
+      if (r || f) {
+        const { fwd, right } = heading();
+        const v = fwd
+          .multiplyScalar(f)
+          .add(right.multiplyScalar(r))
+          .normalize()
+          .multiplyScalar(me.walker.speed * dt);
+        me.steer(v.x, v.z, room, obstacles);
+      }
+      // The camera keeps the same angle on you, wherever you walk.
+      if (!tween) {
+        const follow = me
+          .head()
+          .sub(controls.target)
+          .multiplyScalar(1 - Math.exp(-dt / 0.2));
+        controls.target.add(follow);
+        camera.position.add(follow);
+      }
+    } else if (r || f || u) {
+      const look = controls.target.clone().sub(camera.position).normalize();
+      const right = new THREE.Vector3().crossVectors(look, camera.up).normalize();
+      const v = look
+        .multiplyScalar(f)
+        .add(right.multiplyScalar(r))
+        .add(new THREE.Vector3(0, u, 0))
+        .multiplyScalar(FLY_SPEED * dt);
+      camera.position.add(v);
+      controls.target.add(v);
+    }
+  }
+
+  /** Agents look up as the visitor comes near, and wave if they are free; the nearest is reported. */
+  function noticeVisitor(t: number) {
+    let nearest: { agent: string; d: number } | undefined;
+    for (const [agent, c] of companions) {
+      const d = Math.hypot(c.walker.place.x - me.walker.place.x, c.walker.place.z - me.walker.place.z);
+      if (travel === "walk" && d < NOTICE_AT && (!nearest || d < nearest.d)) nearest = { agent, d };
+      if (travel === "walk" && d < NOTICE_AT && !noticed.has(agent)) {
+        noticed.add(agent);
+        if (!c.walker.busy) {
+          c.aim(me.head(), false, t);
+          if (!shows.get(c)?.behavior.stays) c.gesture("wave", t);
+        }
+      } else if (d > FORGET_AT) noticed.delete(agent);
+    }
+    if (nearest?.agent !== near) {
+      near = nearest?.agent;
+      opts.onNear?.(near);
+    }
+  }
+
   renderer.setAnimationLoop((now: number) => {
     // A photo's frame, once ready, holds: the screenshot is of that moment, not a later one.
     if (readyFired && opts.still) {
@@ -702,7 +847,8 @@ export async function createStage(
     const poseAt = shoot && gestureAt !== undefined ? gestureAt + peak : t;
     const here = me.here;
     const mine = shows.get(me)?.behavior;
-    const next = asking || opts.still || mine?.stays ? undefined : me.director.decide(t, here, engaged, taken(me));
+    const next =
+      asking || opts.still || opts.visitor || mine?.stays ? undefined : me.director.decide(t, here, engaged, taken(me));
     if (typeof next === "string") go(next);
     else if (next && opts.chooseIdle) {
       // The agent picks what it does with the quiet; if it can't be asked, a random spot.
@@ -722,7 +868,8 @@ export async function createStage(
           me.director.sent();
         });
     }
-    if (!opts.still) attend(me, t, !engaged);
+    if (!opts.still && !opts.visitor) attend(me, t, !engaged);
+    if (opts.visitor) visit(dt);
     me.step(
       room,
       obstacles,
@@ -768,6 +915,7 @@ export async function createStage(
         meHead,
       );
     }
+    if (opts.visitor) noticeVisitor(t);
     for (const w of warm)
       if (w.fire && lit)
         w.light.intensity = (lit.lamp.on ? 1.8 : 0.9) * (0.85 + 0.15 * Math.sin(t * 9) * Math.sin(t * 3.7));
@@ -831,6 +979,27 @@ export async function createStage(
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
     },
+    setTravel(next) {
+      if (!opts.visitor || next === travel) return;
+      travel = next;
+      held.clear();
+      me.body.visible = next === "walk";
+      if (next === "fly") {
+        // Turn about a point just ahead, so dragging feels like turning your head.
+        const look = controls.target.clone().sub(camera.position).normalize();
+        controls.target.copy(camera.position).add(look.multiplyScalar(1.2));
+        controls.minAzimuthAngle = Number.NEGATIVE_INFINITY;
+        controls.maxAzimuthAngle = Number.POSITIVE_INFINITY;
+        controls.minPolarAngle = 0.05;
+        controls.maxPolarAngle = Math.PI - 0.05;
+        if (near) {
+          near = undefined;
+          opts.onNear?.(undefined);
+        }
+      } else {
+        moveCamera(framing("room"));
+      }
+    },
     setSpeech(next) {
       speech = next;
       for (const [agent, line] of Object.entries(next)) hear(agent, line);
@@ -842,6 +1011,9 @@ export async function createStage(
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointermove", onHover);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
       controls.dispose();
       me.dispose();
       for (const c of companions.values()) c.dispose();
