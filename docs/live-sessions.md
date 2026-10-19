@@ -125,17 +125,27 @@ has somewhere to sit, a desk to work at, a window, lamps, and a picture or a
 painting for photos to hang in. The agent can change it (see
 [A room the agent can change](#a-room-the-agent-can-change)). It is lit for
 the time of day: daylight through the windows, the lamps on in the evening,
-the lamps alone at night. That cosy dark is for homes and shared places. The
+the lamps at night, reaching further than in the evening, with enough
+moonlight left to tell a body or a couch from the floor across the room. That
+cosy dark is for homes and shared places. The
 lobby, the halls and the meeting rooms are public, somewhere anyone may be at
 any hour, so after dark their lights overhead stay on and they stay bright;
 only the windows say it is night.
 
-The view shows the whole room when that leaves the agent big enough to make
-out. A bigger room is seen from close by instead, centred on the agent as
-nearly as the room's edges allow, and the view drifts after the agent as it
-moves about. Drag to look around the room, or press **Close up** to frame the
-head and torso. The page remembers the choice. The furniture is built from
-simple shapes, so there are no files to download.
+The view frames the part of the room the agent is in, near enough that the
+agent stands about a quarter of the picture tall, and drifts after it as it
+moves about, as far as the room's edges allow. A room small enough to see
+whole from there is seen whole. The wheel, or a pinch on a touch screen,
+brings the view nearer or takes it back as far as the whole room, and the
+page keeps that while it is open. Drag to look around the room, or press
+**Close up** to frame the head and torso. The page remembers the choice. The
+furniture is built from simple shapes, so there are no files to download.
+
+Something tall standing between the camera and anyone in the room, a palm at
+the front of a meeting room or a bookshelf you walked behind, fades to a
+ghost of itself until the view is clear again. On a visit you can turn the
+view all the way round; a wall the camera goes behind fades the same way,
+with whatever hangs on it, so you see into the room rather than its back.
 
 The avatar moves around the room on its own. Between sessions it wanders:
 it sits on the couch, types at the desk, looks out of the window, browses
@@ -149,7 +159,9 @@ avatar walks round the furniture to get between spots. The way is found on a
 grid of the floor with each piece grown by the avatar's width, then
 straightened into as few legs as stay clear, so it works in any room the
 agent has furnished. When the agent moves the avatar, it names a spot
-("on the couch"), never coordinates.
+("on the couch"), never coordinates. On a visit, your own body counts as in
+the way too: an agent heading somewhere walks round you with a step to
+spare, and finds a new way if you step into its path.
 
 ### Animation files
 
@@ -201,7 +213,9 @@ browser asks for reduced motion.
 
 When the agent has a body, its room fills the chat page and the conversation
 becomes a panel laid over it, on the right on a wide screen and at the bottom
-on a phone. The camera frames the room in the part the panel leaves clear.
+on a phone. The camera frames the agent in the part the panel and the
+toolbar leave clear: beside the panel, or above it on a phone, so the agent
+is never under the chat.
 **3D** in the toolbar turns the scene off and on, and the page remembers the
 choice. **Chat** hides the panel when you want the whole room; the message
 box stays. An agent without a body has no 3D button, just the chat.
@@ -405,8 +419,8 @@ keeps whatever you set for as long as it is open: through doors, by the map,
 and back. A small home stops zooming out sooner than the lobby, but the lobby
 still opens out as far as you left it. The zoom is measured in the part of
 the stage you can see: with the chat or a panel open over the right of it,
-the camera backs off so you see as much round you as with it closed, and you
-stay in the middle of what is left. A panel opening or closing slides the
+or along the bottom on a phone, the camera backs off so you see as much round
+you as with it closed, and you stay in the middle of what is left. A panel opening or closing slides the
 picture over rather than jumping.
 
 **Fly** puts your body away and lets the camera go
@@ -951,6 +965,12 @@ The chat page draws it on every body in the room:
 
 A tag over each head says what it is doing ("searching the web · hotels near
 Alfama") under its name; the agent you are talking to shows the status alone.
+Tags, signs and bubbles are drawn to read on your screen however far back
+the camera is: as they are in the room when that reads, and never smaller
+than a name about 14 pixels high, or larger than one about 22. Where bodies
+stand close, their tags don't pile up: the one you are pointing at or
+standing by keeps its place, and the others step up clear of it, each still
+over its own body.
 Point at a body, or walk up to it on a visit, and the tag says more. An idle
 agent's says what it is up to ("watering the plant"), what it did last and
 how long ago ("last: searched the web, 40 min ago"), and when it next wakes
@@ -1000,8 +1020,13 @@ plugins:
 What agents say shows too. The plugin keeps a `speech` record per agent, the
 last thing it said in a room or to another agent directly, and the page puts
 it in a bubble over the speaker's head as it is said, mouth moving, for long
-enough to read. Both halves of a direct message show, the answer just after
-the question. Only people can read speech records: the type is closed to
+enough to read. The bubble names the speaker, since its tag steps aside while
+it talks, and its tail points down to the speaker. Both halves of a direct
+message show, the answer just after the question: the answer sits over its
+speaker and the question moves up above it, so two agents talking read from
+the top down, like a comic, the newest drawn on top. A bubble that would run
+off the top of the stage, under the buttons over it, or under the chat panel
+comes back into view, over its speaker if it has to. Only people can read speech records: the type is closed to
 agents, so a direct message stays as private from other agents as it was.
 `speech: false` in the plugin's config keeps none. A room post shows when its
 speaker's room name is the agent's own name.

@@ -12,11 +12,12 @@ import type { Hold, Sign } from "./doing";
 import { armClearance, bodyPoints } from "./fit";
 import { Director, findPath, type Obstacle, type Pick, route, slide, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
+import { BUBBLE_PX, GAP_PX, type Over, SETTLE_SECONDS, SIGN_PX, type Stacked, TAG_PX, TAIL_WIDTH_PX } from "./overhead";
 import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
-import { disposeSprite, SignPost, speechBubble, tag } from "./signs";
+import { bubbleTail, disposeSprite, fitSprite, liftSprite, SignPost, speechBubble, tag } from "./signs";
 import { tintModel } from "./tint";
-import { gait } from "./travel";
+import { ease, gait } from "./travel";
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 /** Seconds its pace takes to catch up with how fast it is really going: long enough to smooth a frame's hitch. */
@@ -106,11 +107,17 @@ export class Figure {
   private pace = 0;
   /** Its walking speed was set for it, and is kept when a walk clip loads. */
   private readonly paceSet: boolean;
-  /** Something it said, shown in a bubble from `from` to `until` on the stage's clock. */
-  private line: { bubble: THREE.Sprite; from: number; until: number } | undefined;
+  /** Something it said, shown in a bubble with its tail from `from` to `until` on the stage's clock. */
+  private line: { bubble: THREE.Sprite; tail: THREE.Sprite; from: number; until: number } | undefined;
   private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
   /** The sign over its head. */
   readonly signs = new SignPost();
+  /** The top of its head, standing: its tag, its sign and its bubble stand on it, lifted on the screen. */
+  private readonly crownPoint = new THREE.Group();
+  /** How far up the screen each of those stands now, in pixels, easing toward where the stage last stacked them. */
+  private lifted: Stacked | undefined;
+  /** Metres a screen pixel covers at its head, as of the last layout. */
+  private perPixel = 0.005;
 
   constructor(
     readonly vrm: VRM,
@@ -185,8 +192,9 @@ export class Figure {
     this.hand = vrm.humanoid.getNormalizedBoneNode("rightHand");
     // A little larger than life, so what it holds reads from across the room.
     this.size = 1.3 * Math.min(1.25, Math.max(0.6, (this.bounds.max.y - this.bounds.min.y) / 1.6));
-    this.signs.group.position.y = this.bounds.max.y + 0.16;
-    this.body.add(this.signs.group);
+    this.crownPoint.position.y = this.bounds.max.y;
+    this.crownPoint.add(this.signs.group);
+    this.body.add(this.crownPoint);
     if (vrm.lookAt) vrm.lookAt.target = this.gaze;
     // Animation files take over the base pose once they load; until then, and if they can't, code moves it.
     this.clipsSettled = !opts.animations?.length;
@@ -288,6 +296,19 @@ export class Figure {
     this.walker.go(way, Math.atan2(end[0] - last[0], end[1] - last[1]));
   }
 
+  /**
+   * Find a new way to where it was walking, round whatever is in the way now
+   * (someone stepped into its path), and walk on, turning at the end as it
+   * meant to. Nothing happens while it isn't walking anywhere.
+   */
+  reroute(room: Room, obstacles: Obstacle[]) {
+    const end = this.walker.way.at(-1);
+    if (!end || this.pending || this.headed) return;
+    this.walker.reroute(
+      findPath(room, [this.walker.place.x, this.walker.place.z], [end[0], end[1]], obstacles, this.radius),
+    );
+  }
+
   /** Where its eyes are, near enough: what others look at. */
   head(): THREE.Vector3 {
     return new THREE.Vector3(this.body.position.x, this.body.position.y + this.torso, this.body.position.z);
@@ -328,14 +349,20 @@ export class Figure {
 
   /**
    * Say something: a bubble over its head from `from` (the stage's clock)
-   * for long enough to read, replacing whatever it was saying before.
+   * for long enough to read, replacing whatever it was saying before. `who`
+   * names the speaker in the bubble, for a body that wears a tag: the tag is
+   * put away while it speaks.
    */
-  say(text: string, from: number) {
+  say(text: string, from: number, who?: string) {
     this.hush();
-    const bubble = speechBubble(text);
+    const bubble = speechBubble(text, who);
+    const tail = bubbleTail();
     bubble.visible = false;
-    this.body.add(bubble);
-    this.line = { bubble, from, until: from + Math.min(12, 3 + 0.06 * text.length) };
+    tail.visible = false;
+    this.crownPoint.add(bubble, tail);
+    this.line = { bubble, tail, from, until: from + Math.min(12, 3 + 0.06 * text.length) };
+    // A new bubble appears where it goes, rather than gliding there from where the last one was.
+    if (this.lifted) this.lifted = { ...this.lifted, bubble: Number.NaN, across: Number.NaN };
   }
 
   /** Whether it is saying something right now: its mouth moves while it is. */
@@ -344,7 +371,10 @@ export class Figure {
   }
 
   private hush() {
-    if (this.line) disposeSprite(this.line.bubble);
+    if (this.line) {
+      disposeSprite(this.line.bubble);
+      disposeSprite(this.line.tail);
+    }
     this.line = undefined;
   }
 
@@ -385,12 +415,68 @@ export class Figure {
     if (this.shownTag.sprite) disposeSprite(this.shownTag.sprite);
     const sprite = tag({ ...(name ? { name } : {}), ...(status ? { status } : {}), more });
     if (sprite) {
-      sprite.position.y = this.bounds.max.y + 0.08 + sprite.scale.y / 2;
-      this.body.add(sprite);
+      this.crownPoint.add(sprite);
+      // Where the last tag stood, until the stage lays this one out.
+      fitSprite(sprite, this.perPixel, TAG_PX);
+      if (this.lifted) liftSprite(sprite, this.lifted.tag, this.perPixel);
     }
     this.shownTag = { sprite, key };
-    // The sign sits just above the tag, or just above the head.
-    this.signs.group.position.y = (sprite ? sprite.position.y + sprite.scale.y / 2 : this.bounds.max.y) + 0.16;
+  }
+
+  /** The top of its head in the room, standing or sat: where what floats over it stands. */
+  crown(): THREE.Vector3 {
+    return this.crownPoint.getWorldPosition(new THREE.Vector3());
+  }
+
+  /**
+   * Size what floats over its head for the screen, `perPixel` metres a
+   * screen pixel there: its tag, its sign and, while it is speaking at
+   * `clock`, its bubble. Returns their sizes on the screen, in pixels, and
+   * when it started saying what is in the bubble.
+   */
+  fitOver(perPixel: number, clock: number): Over {
+    this.perPixel = perPixel;
+    const out: Over = {};
+    // Speaking, the bubble says who it is: the tag is put away until it's done.
+    if (this.line && this.speaking(clock)) {
+      out.bubble = fitSprite(this.line.bubble, perPixel, BUBBLE_PX);
+      out.said = this.line.from;
+      return out;
+    }
+    if (this.shownTag.sprite) out.tag = fitSprite(this.shownTag.sprite, perPixel, TAG_PX);
+    const sign = this.signs.fit(perPixel, SIGN_PX);
+    if (sign !== undefined) out.sign = sign;
+    return out;
+  }
+
+  /**
+   * Stand what floats over its head where the stage stacked it (`at`, in
+   * screen pixels up from the top of the head), easing there over `dt`
+   * seconds so a tag that has to make way glides rather than jumps. Its
+   * bubble draws over earlier ones by `order`.
+   */
+  placeOver(at: Stacked, dt: number, order: number) {
+    const was = this.lifted;
+    const go = (from: number | undefined, to: number) =>
+      from === undefined || Number.isNaN(from) ? to : ease(from, to, dt, SETTLE_SECONDS);
+    this.lifted = {
+      tag: go(was?.tag, at.tag),
+      sign: go(was?.sign, at.sign),
+      bubble: go(was?.bubble, at.bubble),
+      across: go(was?.across, at.across),
+    };
+    if (this.shownTag.sprite) liftSprite(this.shownTag.sprite, this.lifted.tag, this.perPixel);
+    this.signs.place(this.lifted.sign);
+    if (this.line) {
+      const { bubble, tail } = this.line;
+      liftSprite(bubble, this.lifted.bubble, this.perPixel, this.lifted.across);
+      bubble.renderOrder = order;
+      // The tail from the bubble down to just over the head, straight over the speaker wherever the bubble went.
+      const long = this.lifted.bubble - GAP_PX;
+      tail.scale.set(TAIL_WIDTH_PX * this.perPixel, Math.max(1, long) * this.perPixel, 1);
+      tail.center.set(0.5, -GAP_PX / Math.max(1, long));
+      tail.userData.long = long;
+    }
   }
 
   /** A gesture: a nod or a head shake from the files when they have one, the rest by code. */
@@ -467,15 +553,18 @@ export class Figure {
     this.body.position.set(x, y, z);
     this.body.rotation.y = this.walker.place.facing;
     this.signs.update(t);
-    // A bubble while it speaks, over the tag, with the sign put away until it's done.
+    // A bubble while it speaks, with the tag and the sign put away until it's done.
     if (this.line) {
       const on = this.speaking(t);
       this.line.bubble.visible = on;
+      // Brought down over its speaker's head, it has no room for a tail.
+      this.line.tail.visible = on && (this.line.tail.userData.long ?? Number.POSITIVE_INFINITY) > 4;
       this.signs.group.visible = !on;
-      if (on) this.line.bubble.position.y = this.signs.group.position.y + this.line.bubble.scale.y / 2 - 0.08;
+      if (this.shownTag.sprite) this.shownTag.sprite.visible = !on;
       if (t >= this.line.until) {
         this.hush();
         this.signs.group.visible = true;
+        if (this.shownTag.sprite) this.shownTag.sprite.visible = true;
       }
     }
     const size = Math.max(0.05, this.bounds.max.y - this.hipsY) * 0.5;

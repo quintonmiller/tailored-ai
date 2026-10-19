@@ -3,19 +3,52 @@
  * sign for its state — thinking dots, a speech bubble, an exclamation when it
  * is waiting on you, a question when it is stuck, and Zs while it sleeps.
  * Drawn on canvases into sprites, so they always face the camera and stay
- * readable from any angle.
+ * readable from any angle. Each stands on the top of the head; how big it is
+ * drawn and how far up it goes are the screen's to say (`overhead.ts`).
  */
 import * as THREE from "three";
 import { TAG_LINE_CHARS } from "../lib/did";
 import { doingCss, type Sign } from "./doing";
+import { drawnScale } from "./overhead";
+
+/** A sprite's canvas, in its pixels, and the metres each of them covers as made. */
+interface Drawn {
+  w: number;
+  h: number;
+  made: number;
+}
 
 function sprite(canvas: HTMLCanvasElement, height: number): THREE.Sprite {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
   s.scale.set((height * canvas.width) / canvas.height, height, 1);
+  // Standing on the point it is put at, so lifting it is the screen's up, whatever the camera's angle.
+  s.center.set(0.5, 0);
   s.renderOrder = 10;
+  const drawn: Drawn = { w: canvas.width, h: canvas.height, made: height / canvas.height };
+  s.userData.drawn = drawn;
   return s;
+}
+
+/**
+ * Size a sprite for the screen: `perPixel` metres a screen pixel where it
+ * stands, and `limits` the screen pixels each of its canvas's may come out
+ * at. Returns its size on the screen, in pixels.
+ */
+export function fitSprite(s: THREE.Sprite, perPixel: number, limits: [number, number]): [number, number] {
+  const { w, h, made } = s.userData.drawn as Drawn;
+  const k = drawnScale(made, perPixel, limits);
+  s.scale.set(w * k, h * k, 1);
+  return [(w * k) / perPixel, (h * k) / perPixel];
+}
+
+/**
+ * Stand a sprite `lift` screen pixels up from where it is put, and `across`
+ * pixels to the right of it, at the size it was last fitted to.
+ */
+export function liftSprite(s: THREE.Sprite, lift: number, perPixel: number, across = 0) {
+  s.center.set(0.5 - across / Math.max(1e-6, s.scale.x / perPixel), -lift / Math.max(1e-6, s.scale.y / perPixel));
 }
 
 function disposeSprite(s: THREE.Sprite) {
@@ -109,43 +142,79 @@ export function wrap(text: string, width = BUBBLE_CHARS, lines = BUBBLE_LINES): 
   return out;
 }
 
-/** A speech bubble with what was said in it, the tail pointing down to the speaker. */
-export function speechBubble(text: string): THREE.Sprite {
+/** The white of a bubble, and of its tail. */
+const BUBBLE_FILL = "rgba(252, 252, 255, 0.96)";
+
+/**
+ * A speech bubble with what was said in it, and the speaker's name over the
+ * words when it has one: its tag is put away while it speaks, so the bubble
+ * says who is talking. Its tail is drawn apart (`bubbleTail`), so it can
+ * reach down to the speaker however far up the bubble has had to go.
+ */
+export function speechBubble(text: string, who?: string): THREE.Sprite {
   const lines = wrap(text);
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const font = "500 38px system-ui, sans-serif";
+  const nameFont = "700 30px system-ui, sans-serif";
+  const name = who ? clip(who, BUBBLE_CHARS) : undefined;
   let width = 0;
   if (ctx) ctx.font = font;
   for (const l of lines) width = Math.max(width, ctx?.measureText(l).width ?? l.length * 20);
+  if (ctx && name) ctx.font = nameFont;
+  if (name) width = Math.max(width, ctx?.measureText(name).width ?? name.length * 17);
   const lineHeight = 48;
+  const nameHeight = name ? 40 : 0;
   const pad = 26;
-  const tail = 30;
   canvas.width = Math.ceil(width + pad * 2);
-  canvas.height = lines.length * lineHeight + pad * 2 + tail;
+  canvas.height = nameHeight + lines.length * lineHeight + pad * 2;
   if (ctx) {
-    const h = canvas.height - tail;
-    ctx.fillStyle = "rgba(252, 252, 255, 0.96)";
+    ctx.fillStyle = BUBBLE_FILL;
     ctx.beginPath();
-    ctx.roundRect(0, 0, canvas.width, h, 30);
+    ctx.roundRect(0, 0, canvas.width, canvas.height, 30);
     ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(canvas.width / 2 - 18, h - 2);
-    ctx.lineTo(canvas.width / 2, canvas.height);
-    ctx.lineTo(canvas.width / 2 + 18, h - 2);
-    ctx.fill();
-    ctx.font = font;
-    ctx.fillStyle = "#1d2230";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    if (name) {
+      ctx.font = nameFont;
+      ctx.fillStyle = "#4a5470";
+      ctx.fillText(name, canvas.width / 2, pad + nameHeight / 2 - 2);
+    }
+    ctx.font = font;
+    ctx.fillStyle = "#1d2230";
     lines.forEach((l, i) => {
-      ctx.fillText(l, canvas.width / 2, pad + lineHeight * i + lineHeight / 2 + 2);
+      ctx.fillText(l, canvas.width / 2, pad + nameHeight + lineHeight * i + lineHeight / 2 + 2);
     });
   }
   const bubble = sprite(canvas, 0.12 * (canvas.height / 72));
   // Over every tag and sign: what is being said is what to read.
   bubble.renderOrder = 12;
   return bubble;
+}
+
+/**
+ * A bubble's tail: a narrow wedge, wide where it meets the bubble and coming
+ * to a point at the speaker's head, stretched to whatever length the gap
+ * between them is. Drawn under tags and bubbles, so one passing behind
+ * another's never hides the words.
+ */
+export function bubbleTail(): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = BUBBLE_FILL;
+    ctx.beginPath();
+    ctx.moveTo(2, 0);
+    ctx.lineTo(30, 0);
+    ctx.lineTo(16, 64);
+    ctx.closePath();
+    ctx.fill();
+  }
+  const tail = sprite(canvas, 0.1);
+  tail.renderOrder = 9;
+  return tail;
 }
 
 function drawSign(sign: Sign): HTMLCanvasElement {
@@ -234,6 +303,8 @@ export class SignPost {
   private current: Sign | undefined;
   private shown: THREE.Sprite | undefined;
   private since = 0;
+  /** Metres a screen pixel covers where it stands, as last laid out: its bob is in screen pixels, like the rest. */
+  private perPixel = 0.005;
 
   /** Show a sign, or none. */
   set(sign: Sign | undefined, clock: number) {
@@ -245,19 +316,31 @@ export class SignPost {
     if (this.shown) this.group.add(this.shown);
   }
 
+  /** Size the sign for the screen; its height there in pixels, or undefined with no sign showing. */
+  fit(perPixel: number, limits: [number, number]): number | undefined {
+    this.perPixel = perPixel;
+    return this.shown && this.group.visible ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
+  }
+
+  /** Stand the sign `lift` screen pixels up from the top of the head. */
+  place(lift: number) {
+    if (this.shown) liftSprite(this.shown, lift, this.perPixel);
+  }
+
   update(clock: number) {
     const s = this.shown;
     if (!s) return;
     const t = clock - this.since;
+    const px = this.perPixel;
     if (this.current === "sleep") {
       const u = (t % 2.6) / 2.6;
-      s.position.set(0.04 * u, 0.12 * u, 0);
+      s.position.set(6 * u * px, 18 * u * px, 0);
       s.material.opacity = Math.min(1, 4 * u) * (1 - u * u);
     } else {
-      s.position.set(0, 0.025 * Math.sin(t * 2.4), 0);
+      s.position.set(0, 3 * Math.sin(t * 2.4) * px, 0);
       const pop = Math.min(1, t / 0.25);
       s.material.opacity = pop;
-      if (this.current === "wait") s.position.y += 0.02 * Math.abs(Math.sin(t * 5));
+      if (this.current === "wait") s.position.y += 3 * Math.abs(Math.sin(t * 5)) * px;
     }
   }
 

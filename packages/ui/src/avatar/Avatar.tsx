@@ -47,6 +47,8 @@ export function Avatar({
   controls,
   fill = false,
   insetRight = 0,
+  insetTop = 0,
+  insetBottom = 0,
   chooseIdle,
   room,
   company,
@@ -85,6 +87,9 @@ export function Avatar({
   fill?: boolean;
   /** Pixels of the right side covered by something laid over the scene; the camera frames what is left. */
   insetRight?: number;
+  /** The same for the top (a toolbar) and the bottom (a phone's chat). */
+  insetTop?: number;
+  insetBottom?: number;
   /** Ask the agent what it does with a quiet moment; without it, the avatar wanders at random. */
   chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
   /** The room it lives in; a new one is shown as it changes, without rebuilding the stage. */
@@ -153,11 +158,11 @@ export function Avatar({
   const chooseRef = useRef(chooseIdle);
   chooseRef.current = chooseIdle;
   const choosing = !!chooseIdle;
-  const insetRef = useRef(insetRight);
-  insetRef.current = insetRight;
+  const insetRef = useRef({ right: insetRight, top: insetTop, bottom: insetBottom });
+  insetRef.current = { right: insetRight, top: insetTop, bottom: insetBottom };
   useEffect(() => {
-    stage.current?.setInsets({ right: insetRight });
-  }, [insetRight]);
+    stage.current?.setInsets({ right: insetRight, top: insetTop, bottom: insetBottom });
+  }, [insetRight, insetTop, insetBottom]);
   const stillRef = useRef({ still, onReady, onProblem });
   stillRef.current = { still, onReady, onProblem };
   const companyRef = useRef(company);
@@ -280,6 +285,10 @@ export function Avatar({
               }
             : {}),
           lights: lightsFor(placeRef.current),
+          // The view toggle and the tools over the top of the stage: what is said stays out from under them.
+          overlays: () => [
+            ...(host.current?.parentElement?.querySelectorAll(":scope > .talk-view, :scope > .talk-tools") ?? []),
+          ],
           ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {
@@ -317,7 +326,7 @@ export function Avatar({
         }
         stage.current = s;
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
-        s.setInsets({ right: insetRef.current });
+        s.setInsets(insetRef.current);
         // The room, or who is in it, may have arrived or changed while the stage was loading.
         s.setLights(lightsFor(placeRef.current));
         if (roomRef.current) s.setRoom(roomRef.current);

@@ -146,8 +146,12 @@ export function buildShell(room: Room): THREE.Group {
   const left = box(shell, 0.1, h, d, wall, -w / 2 - 0.05, h / 2, 0);
   for (const panel of [back, left]) panel.castShadow = false;
   const skirting = tint(wall, -0.14);
-  box(shell, w, 0.09, 0.02, skirting, 0, 0.065, -d / 2 + 0.01).castShadow = false;
-  box(shell, 0.02, 0.09, d, skirting, -w / 2 + 0.01, 0.065, 0).castShadow = false;
+  const backSkirting = box(shell, w, 0.09, 0.02, skirting, 0, 0.065, -d / 2 + 0.01);
+  const leftSkirting = box(shell, 0.02, 0.09, d, skirting, -w / 2 + 0.01, 0.065, 0);
+  for (const board of [backSkirting, leftSkirting]) board.castShadow = false;
+  // Which wall each is, so it can fade when the camera goes round behind it.
+  for (const part of [back, backSkirting]) part.userData.wall = "back";
+  for (const part of [left, leftSkirting]) part.userData.wall = "left";
   return shell;
 }
 

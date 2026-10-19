@@ -17,7 +17,10 @@ import {
   MIN_ASPECT,
   nearestWithin,
   OPEN_SIDES,
-  ROOM_REACH,
+  OWN_NEAREST,
+  OWN_VIEW,
+  ownDistance,
+  ownZoom,
   ROOM_TARGET,
   ROOM_VIEW,
   type Room,
@@ -93,11 +96,24 @@ describe("lightingFor", () => {
     expect(lightingFor(3)).toEqual(lightingFor(23));
   });
 
+  it("lights a home at night well enough to tell bodies and furniture from the floor, and keeps it darker than evening", () => {
+    const night = lightingFor(23);
+    const evening = lightingFor(18);
+    // The fill from everywhere: what keeps a body in a dark corner from melting into the floor.
+    expect(night.sky.intensity).toBeGreaterThanOrEqual(0.85);
+    // The lamps reach further than their room alone would have them, so their pools meet across a big room.
+    expect(night.lamp.reach ?? 1).toBeGreaterThan(1.2);
+    expect(evening.lamp.reach ?? 1).toBe(1);
+    // Still night: dimmer all round than the evening, the windows dark.
+    expect(night.sun.intensity + night.sky.intensity).toBeLessThan(evening.sun.intensity + evening.sky.intensity);
+    expect(night.window.glow).toBeLessThan(evening.window.glow);
+  });
+
   it("keeps a public place bright after dark, where a home stays cosy, and lights both alike by day", () => {
     const brightness = (l: ReturnType<typeof lightingFor>) => l.sun.intensity + l.sky.intensity;
     const hall = lightingFor(23, "public");
     const home = lightingFor(23, "home");
-    expect(brightness(hall)).toBeGreaterThan(brightness(home) * 2.5);
+    expect(brightness(hall)).toBeGreaterThan(brightness(home) * 2);
     // Nearly as bright as day, in warm white rather than moonlight blue.
     expect(brightness(hall)).toBeGreaterThan(brightness(lightingFor(11)) * 0.85);
     expect(hall.sky.color & 0xff).toBeGreaterThan(0xd0);
@@ -179,46 +195,120 @@ describe("roomDistance", () => {
   });
 });
 
-describe("roomFocus", () => {
-  it("sees a small room whole, as before", () => {
-    for (const aspect of [1, 1.8])
-      expect(roomFocus(DEFAULT_ROOM, aspect, { x: 1.5, z: 1 })).toEqual({
-        target: ROOM_TARGET,
-        distance: roomDistance(DEFAULT_ROOM, aspect),
-      });
+describe("ownDistance", () => {
+  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360);
+
+  it("takes in enough of the room's height that the agent stands about a quarter of the frame tall", () => {
+    for (const aspect of [1, 1.6, 2.4]) expect(2 * ownDistance(aspect) * tanV).toBeCloseTo(OWN_VIEW.height, 6);
   });
 
-  it("stays near enough in a big room to make out the agent, and keeps it in frame wherever it stands", () => {
+  it("takes in as much above a phone's chat as on the whole stage, backing off by the share that is covered", () => {
+    expect(ownDistance(1.3, 0.4)).toBeCloseTo(ownDistance(1.3) / 0.4, 9);
+    // And the whole room, fitted into the strip above it.
+    const home: Room = { ...DEFAULT_ROOM, width: 8, depth: 6.5, height: 2.8 };
+    expect(roomDistance(home, 1.3, 0.5)).toBeGreaterThan(roomDistance(home, 1.3) * 1.8);
+  });
+
+  it("backs off on a phone held upright, so there is still something to see either side", () => {
+    const upright = ownDistance(0.46);
+    expect(2 * upright * tanV * 0.46).toBeCloseTo(OWN_VIEW.width, 6);
+    expect(upright).toBeGreaterThan(ownDistance(1.6));
+  });
+});
+
+describe("roomFocus", () => {
+  // A home as the server lays one out: 8 by 6.5.
+  const home: Room = { ...DEFAULT_ROOM, width: 8, depth: 6.5, height: 2.8 };
+
+  it("sees a room whole when it fits the view, centred on the room", () => {
+    const small: Room = { ...DEFAULT_ROOM, width: 2.4, depth: 2, height: 2.2 };
+    for (const aspect of [1.4, 1.8]) {
+      expect(roomDistance(small, aspect)).toBeLessThan(ownDistance(aspect));
+      expect(roomFocus(small, aspect, { x: 1, z: 0.5 })).toEqual({
+        target: ROOM_TARGET,
+        distance: roomDistance(small, aspect),
+      });
+    }
+  });
+
+  it("comes in close on a home, so the agent you talk to is comfortably big, and follows it round", () => {
+    for (const aspect of [0.91, 1.57]) {
+      const there = roomFocus(home, aspect, { x: 2.5, z: 1.5 });
+      expect(there.distance).toBeCloseTo(ownDistance(aspect), 6);
+      // About half as far back as seeing the whole room, so the agent is about twice the size.
+      expect(there.distance).toBeLessThan(roomDistance(home, aspect) * 0.6);
+      // The view slides toward where the agent is.
+      expect(there.target[0]).toBeGreaterThan(ROOM_TARGET[0]);
+      expect(there.target[2]).toBeGreaterThan(ROOM_TARGET[2]);
+      expect(roomFocus(home, aspect, { x: -2.5, z: -1.5 }).target[0]).toBeLessThan(ROOM_TARGET[0]);
+    }
+  });
+
+  it("zooms out as far as the whole room, and in only so far", () => {
+    for (const aspect of [0.91, 1.57]) {
+      expect(roomFocus(home, aspect, { x: 2, z: 1 }, 50)).toEqual({
+        target: ROOM_TARGET,
+        distance: roomDistance(home, aspect),
+      });
+      expect(roomFocus(home, aspect, { x: 2, z: 1 }, 0.1).distance).toBeCloseTo(ownDistance(aspect) * OWN_NEAREST, 6);
+      const out = roomFocus(home, aspect, { x: 2, z: 1 }, 1.3).distance;
+      expect(out).toBeGreaterThan(ownDistance(aspect));
+      expect(out).toBeLessThan(roomDistance(home, aspect));
+    }
+  });
+
+  it("keeps the agent in frame wherever it stands, near or zoomed out, and never slides off the room", () => {
     const rooms = [
+      home,
       { ...DEFAULT_ROOM, width: 10, depth: 8, height: 3 },
       { ...DEFAULT_ROOM, width: 14, depth: 10, height: 3.2 },
       { ...DEFAULT_ROOM, width: 16, depth: 12, height: 4 },
     ];
     for (const room of rooms)
-      for (const aspect of [0.46, 1.1, 1.8]) {
-        expect(roomFocus(room, aspect, { x: 0, z: 0 }).distance).toBeLessThanOrEqual(ROOM_REACH);
-        const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, aspect, 0.05, farFor(room));
-        for (let x = -room.width / 2 + 0.5; x <= room.width / 2 - 0.5; x += 1)
-          for (let z = -room.depth / 2 + 0.5; z <= room.depth / 2 - 0.5; z += 1) {
-            const { target, distance } = roomFocus(room, aspect, { x, z });
-            const aim = new THREE.Vector3(...target);
-            camera.position
-              .setFromSphericalCoords(distance, Math.PI / 2 - ROOM_VIEW.elevation, ROOM_VIEW.azimuth)
-              .add(aim);
-            camera.lookAt(aim);
-            camera.updateMatrixWorld();
-            const label = `${room.width}x${room.depth} at ${aspect}, agent at ${x}, ${z}`;
-            // Its feet and its head.
-            for (const y of [0, 1.6]) {
-              const p = new THREE.Vector3(x, y, z).project(camera);
-              expect(Math.abs(p.x), label).toBeLessThanOrEqual(1);
-              expect(Math.abs(p.y), label).toBeLessThanOrEqual(1);
+      for (const aspect of [0.46, 1.1, 1.8])
+        for (const zoom of [OWN_NEAREST, 1, 1.6]) {
+          const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, aspect, 0.05, farFor(room));
+          for (let x = -room.width / 2 + 0.5; x <= room.width / 2 - 0.5; x += 1)
+            for (let z = -room.depth / 2 + 0.5; z <= room.depth / 2 - 0.5; z += 1) {
+              const { target, distance } = roomFocus(room, aspect, { x, z }, zoom);
+              const aim = new THREE.Vector3(...target);
+              camera.position
+                .setFromSphericalCoords(distance, Math.PI / 2 - ROOM_VIEW.elevation, ROOM_VIEW.azimuth)
+                .add(aim);
+              camera.lookAt(aim);
+              camera.updateMatrixWorld();
+              const label = `${room.width}x${room.depth} at ${aspect} zoomed ${zoom}, agent at ${x}, ${z}`;
+              // Its feet and its head.
+              for (const y of [0, 1.6]) {
+                const p = new THREE.Vector3(x, y, z).project(camera);
+                expect(Math.abs(p.x), label).toBeLessThanOrEqual(1);
+                expect(Math.abs(p.y), label).toBeLessThanOrEqual(1);
+              }
+              // The view never slides off the room: what it looks at is always on the floor.
+              expect(Math.abs(target[0]), label).toBeLessThanOrEqual(room.width / 2);
+              expect(Math.abs(target[2]), label).toBeLessThanOrEqual(room.depth / 2);
             }
-            // The view never slides off the room: what it looks at is always on the floor.
-            expect(Math.abs(target[0]), label).toBeLessThanOrEqual(room.width / 2);
-            expect(Math.abs(target[2]), label).toBeLessThanOrEqual(room.depth / 2);
-          }
-      }
+        }
+  });
+});
+
+describe("ownZoom", () => {
+  const home: Room = { ...DEFAULT_ROOM, width: 8, depth: 6.5, height: 2.8 };
+
+  it("stops at the nearest the view comes, and at the whole room", () => {
+    expect(ownZoom(0.2, home, 1.57)).toBe(OWN_NEAREST);
+    expect(ownZoom(1.2, home, 1.57)).toBe(1.2);
+    const whole = roomDistance(home, 1.57) / ownDistance(1.57);
+    expect(ownZoom(9, home, 1.57)).toBeCloseTo(whole, 9);
+    // So the first notch back in comes in at once, rather than unwinding zoom past the whole room.
+    expect(roomFocus(home, 1.57, { x: 0, z: 0 }, ownZoom(9, home, 1.57) / 1.2).distance).toBeLessThan(
+      roomDistance(home, 1.57),
+    );
+  });
+
+  it("lets a room smaller than the view zoom in but not out", () => {
+    const small: Room = { ...DEFAULT_ROOM, width: 2.4, depth: 2, height: 2.2 };
+    expect(ownZoom(3, small, 1.57)).toBe(1);
   });
 });
 

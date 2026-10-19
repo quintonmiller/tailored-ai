@@ -34,6 +34,15 @@ export interface Obstacle {
   maxZ: number;
 }
 
+/** Room left round someone standing when others walk past them, in metres: about a step, so nobody brushes them. */
+export const PASSING_ROOM = 0.25;
+
+/** Someone standing at `at`, with a body `radius` across, as something to walk round with room to pass. */
+export function standingIn([x, z]: readonly [number, number], radius: number): Obstacle {
+  const r = radius + PASSING_ROOM;
+  return { minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r };
+}
+
 /** The floor grid the way is searched on, in metres. */
 const CELL = 0.1;
 
@@ -240,6 +249,16 @@ export class Walker {
     this.place.facing = facing;
   }
 
+  /** The points it has still to walk through, the last where it is going. */
+  get way(): readonly (readonly [number, number])[] {
+    return this.legs;
+  }
+
+  /** Walk on through `points` instead of the rest of the way it had, still turning as it meant to at the end. */
+  reroute(points: [number, number][]) {
+    this.legs = points.map((p) => [...p] as [number, number]);
+  }
+
   /** Still walking or turning. */
   get busy(): boolean {
     return this.legs.length > 0 || this.finalFacing !== undefined;
@@ -281,6 +300,32 @@ export class Walker {
     }
     return 0;
   }
+}
+
+/**
+ * Whether the rest of a walk, from `from` through `way`, passes within
+ * `clearance` of `at`: someone standing in the way. Not when the walk ends
+ * that near them, since no way round gets it there.
+ */
+export function inTheWay(
+  from: readonly [number, number],
+  way: readonly (readonly [number, number])[],
+  at: readonly [number, number],
+  clearance: number,
+): boolean {
+  const end = way.at(-1);
+  if (!end || Math.hypot(end[0] - at[0], end[1] - at[1]) < clearance) return false;
+  let a = from;
+  for (const b of way) {
+    const dx = b[0] - a[0];
+    const dz = b[1] - a[1];
+    const long = dx * dx + dz * dz;
+    // The nearest point of this leg to them.
+    const k = long ? Math.max(0, Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dz) / long)) : 0;
+    if (Math.hypot(a[0] + k * dx - at[0], a[1] + k * dz - at[1]) < clearance) return true;
+    a = b;
+  }
+  return false;
 }
 
 /** Seconds it stays at a spot before wandering on: [shortest, longest]. Longer once it has sat down. */

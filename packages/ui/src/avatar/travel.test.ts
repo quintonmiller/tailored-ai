@@ -159,6 +159,12 @@ describe("the walking camera's reach", () => {
     expect(narrow * tan * 0.8).toBeCloseTo(4, 9);
   });
 
+  it("backs off further when a phone's chat covers the lower part of the stage, by the share it covers", () => {
+    const fov = 35;
+    // Only 40% of the stage's height above the chat: the same 4 m round you, fitted into that strip.
+    expect(followDistance(4, 1.3, fov, 0.4)).toBeCloseTo(followDistance(4, 1.3, fov) / 0.4, 9);
+  });
+
   it("eases toward a new distance over a fraction of a second, without overshooting", () => {
     let d = 10;
     const first = ease(d, 20, 1 / 60, 0.18);

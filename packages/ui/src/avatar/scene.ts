@@ -381,8 +381,8 @@ export interface Lighting {
   sun: { color: number; intensity: number };
   /** Fill light from everywhere: sky and floor colours, strength. */
   sky: { color: number; ground: number; intensity: number };
-  /** The floor lamp: off by day. */
-  lamp: { on: boolean; intensity: number };
+  /** The floor lamp: off by day. `reach` stretches how far its light goes, beyond what the room's size gives it. */
+  lamp: { on: boolean; intensity: number; reach?: number };
   /** The window glass glows with what is outside. */
   window: { color: number; glow: number };
 }
@@ -426,11 +426,12 @@ export function lightingFor(hour: number, lights: Lights = "home"): Lighting {
       window: { color: 0xffb88a, glow: 0.55 },
     };
   }
-  // Moonlight and the sky's glow, enough to make out a big room's far side; the lamps do the rest.
+  // Moonlight and the sky's glow, enough to make out who is where and what they sit on across a big room; the
+  // lamps, reaching further than in the evening, do the rest, and still pool warm round each one.
   return {
-    sun: { color: 0x8fa8ff, intensity: 0.4 },
-    sky: { color: 0x5a6a8c, ground: 0x3a3340, intensity: 0.62 },
-    lamp: { on: true, intensity: 2.2 },
+    sun: { color: 0x9db2ff, intensity: 0.5 },
+    sky: { color: 0x7180a6, ground: 0x4a4352, intensity: 0.88 },
+    lamp: { on: true, intensity: 2.4, reach: 1.35 },
     window: { color: 0x2b3a66, glow: 0.25 },
   };
 }
@@ -462,10 +463,12 @@ const FRAME_FILL = 0.92;
  * How far back the camera sits to fit the room at this aspect ratio: every
  * corner of what is drawn (the floor, and the tops of the back and left
  * walls) inside the frame, with a margin. A narrow frame (a phone) backs off
- * further than a wide one, and a big room further than a small one.
+ * further than a wide one, and a big room further than a small one. `tall` is
+ * the share of the stage's height that can be seen: with a phone's chat over
+ * the rest, the room is fitted into what is left.
  */
-export function roomDistance(room: Room, aspect: number): number {
-  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * FRAME_FILL;
+export function roomDistance(room: Room, aspect: number, tall = 1): number {
+  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * FRAME_FILL * tall;
   const tanH = tanV * aspect;
   const { azimuth: a, elevation: e } = ROOM_VIEW;
   // Toward the camera from what it looks at, and the frame's right and up.
@@ -509,25 +512,58 @@ export function farFor(room: Room): number {
   return Math.max(60, roomDistance(room, MIN_ASPECT) + Math.hypot(room.width, room.depth, room.height));
 }
 
-/** How far back the chat page's room view sits at most, however big the room: near enough to make out the agent. */
-export const ROOM_REACH = 12;
+/**
+ * How much of the room the chat page's view takes in round the agent you
+ * talk to, in metres: this much of the room's height up the frame, so the
+ * agent stands about a quarter of it tall, and never less than `width`
+ * across, so a phone held upright still shows what is round it.
+ */
+export const OWN_VIEW = { height: 4.6, width: 3.4 };
+/** The nearest the wheel or a pinch brings the chat page's view, as a share of how far back it starts. */
+export const OWN_NEAREST = 0.55;
 
 /**
- * Where the chat page's room view looks, and from how far. A room that fits
- * within `ROOM_REACH` is seen whole, as before. A bigger one is seen from
- * `ROOM_REACH`, as much of it as fits, centred on the agent as nearly as the
- * room's edges allow, so the agent stays a readable size and the view never
- * runs off the room. Dragging and the Map show the rest.
+ * How far back the chat page's view sits to take in `OWN_VIEW` at this
+ * aspect ratio, before any zoom. `tall` is the share of the stage's height
+ * that can be seen, with a phone's chat over the rest: the view takes in as
+ * much in what is left.
+ */
+export function ownDistance(aspect: number, tall = 1): number {
+  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * tall;
+  return Math.max(OWN_VIEW.height / (2 * tanV), OWN_VIEW.width / (2 * tanV * aspect));
+}
+
+/**
+ * A zoom for the chat page's view, kept between the nearest it comes and the
+ * whole room: so zooming out past the whole room and back starts coming in at
+ * once. 1 is where it starts; more is further back.
+ */
+export function ownZoom(zoom: number, room: Room, aspect: number, tall = 1): number {
+  return Math.min(
+    Math.max(zoom, OWN_NEAREST),
+    Math.max(1, roomDistance(room, aspect, tall) / ownDistance(aspect, tall)),
+  );
+}
+
+/**
+ * Where the chat page's room view looks, and from how far: near enough that
+ * the agent you talk to is comfortably big (see `OWN_VIEW`), times `zoom`,
+ * centred on the agent as nearly as the room's edges allow, so the view
+ * follows it round a big room and never runs off the room. A room small
+ * enough to see whole from there, or zoomed out that far, is seen whole.
  */
 export function roomFocus(
   room: Room,
   aspect: number,
   agent: { x: number; z: number },
+  zoom = 1,
+  tall = 1,
 ): { target: [number, number, number]; distance: number } {
-  const whole = roomDistance(room, aspect);
-  if (whole <= ROOM_REACH) return { target: [...ROOM_TARGET], distance: whole };
+  const whole = roomDistance(room, aspect, tall);
+  const distance = ownDistance(aspect, tall) * Math.max(zoom, OWN_NEAREST);
+  if (whole <= distance) return { target: [...ROOM_TARGET], distance: whole };
   // The share of the room out of view, which is how far off the middle the view may slide.
-  const slack = 1 - ROOM_REACH / whole;
+  const slack = 1 - distance / whole;
   const toward = (from: number, to: number, half: number) =>
     from + Math.max(-half * slack, Math.min(half * slack, to - from));
   return {
@@ -536,7 +572,7 @@ export function roomFocus(
       ROOM_TARGET[1],
       toward(ROOM_TARGET[2], agent.z, room.depth / 2),
     ],
-    distance: ROOM_REACH,
+    distance,
   };
 }
 

@@ -123,12 +123,13 @@ export function pinchReach(reach: number, before: number, after: number, widest:
 /**
  * How far back the camera sits for a reach: `reach` metres either side of you
  * across the narrower way of what can be seen, `aspect` its width over its
- * height and `fov` the camera's vertical field of view in degrees. A strip
- * beside the chat backs off further than the whole stage would, so you see as
- * much round you either way.
+ * height and `fov` the camera's vertical field of view in degrees; `tall` the
+ * share of the stage's height that can be seen, with a phone's chat over the
+ * rest. A strip beside the chat or above it backs off further than the whole
+ * stage would, so you see as much round you either way.
  */
-export function followDistance(reach: number, aspect: number, fov: number): number {
-  const tanV = Math.tan((fov * Math.PI) / 360);
+export function followDistance(reach: number, aspect: number, fov: number, tall = 1): number {
+  const tanV = Math.tan((fov * Math.PI) / 360) * tall;
   return reach / Math.min(tanV, tanV * aspect);
 }
 
