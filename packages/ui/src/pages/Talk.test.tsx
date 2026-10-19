@@ -13,6 +13,8 @@ import { Talk } from "./Talk";
 const stage = vi.hoisted(() => ({
   calls: [] as { url: string; input: StageInput; view?: StageView }[],
   views: [] as StageView[],
+  /** The agent's cues the page passed on, in the order the avatar was told. */
+  cues: [] as string[],
   fail: null as string | null,
   /** Every createStage call, made or failed: what loadStage waits on. */
   attempts: 0,
@@ -22,7 +24,11 @@ vi.mock("../avatar/stage", () => ({
     stage.attempts++;
     if (stage.fail) throw new Error(stage.fail);
     stage.calls.push({ url, input, view: opts.view });
-    return { dispose: () => {}, setView: (v: StageView) => stage.views.push(v) };
+    return {
+      dispose: () => {},
+      setView: (v: StageView) => stage.views.push(v),
+      cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
+    };
   },
 }));
 
@@ -31,6 +37,10 @@ vi.mock("../avatar/stage", () => ({
 let root: Root;
 let container: HTMLDivElement;
 const played: string[] = [];
+/** Every Audio the page made, so a test can say one finished playing. */
+const audios: { onended: (() => void) | null }[] = [];
+/** What the page sent when it started a session. */
+let started: Record<string, unknown> | null = null;
 const posted: { url: string; type: string | null; body: unknown }[] = [];
 let turnChunks: string[] = [];
 let turnStatus = 200;
@@ -70,11 +80,14 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   played.length = 0;
+  audios.length = 0;
+  started = null;
   posted.length = 0;
   turnStatus = 200;
   liveInfo = {};
   stage.calls.length = 0;
   stage.views.length = 0;
+  stage.cues.length = 0;
   stage.fail = null;
   stage.attempts = 0;
   localStorage.clear();
@@ -101,7 +114,9 @@ beforeEach(() => {
     "Audio",
     class {
       onended: (() => void) | null = null;
-      constructor(readonly src: string) {}
+      constructor(readonly src: string) {
+        audios.push(this);
+      }
       play() {
         played.push(this.src);
         return Promise.resolve();
@@ -117,6 +132,7 @@ beforeEach(() => {
       if (url === "/api/agents") return new Response(JSON.stringify({ talker: {} }));
       if (url === "/api/live") return new Response(JSON.stringify(liveInfo));
       if (url === "/api/live/sessions") {
+        started = typeof init?.body === "string" ? JSON.parse(init.body) : null;
         return new Response(
           JSON.stringify({
             id: "live-1",
@@ -276,6 +292,44 @@ describe("Talk page", () => {
     await loadStage(2);
     expect(stage.calls[1].view).toBe("close");
     expect(pressed()).toBe("Close up");
+  });
+
+  it("tells the agent what its body can do only when there is an avatar on the page", async () => {
+    await render();
+    await startSession();
+    expect(started).toEqual({});
+  });
+
+  it("declares the avatar's body, and plays each cue as its sentence starts or once the speech ends", async () => {
+    liveInfo = { avatar: "/api/live/avatar" };
+    const audio = btoa("mp3-bytes");
+    turnChunks = [
+      'event: transcript\ndata: {"text":"come sit down"}\n\n',
+      'event: cue\ndata: {"seq":0,"name":"wave"}\n\n',
+      'event: text\ndata: {"delta":"Coming over."}\n\n',
+      `event: audio\ndata: {"seq":0,"text":"Coming over.","mimeType":"audio/mpeg","data":"${audio}"}\n\n`,
+      'event: cue\ndata: {"seq":1,"name":"go","target":"the couch"}\n\n',
+      'event: done\ndata: {"transcript":"come sit down","reply":"Coming over.","timings":{"totalMs":900}}\n\n',
+    ];
+    await render();
+    await loadStage();
+    await startSession();
+    const body = started?.body as { gestures: string[]; aimed: { verb: string; targets: string[] }[] };
+    expect(body.gestures).toContain("wave");
+    expect(body.aimed.find((m) => m.verb === "go")?.targets).toContain("the couch");
+
+    const input = container.querySelector(".talk-type input") as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      setter?.call(input, "come sit down");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => button("Send").click());
+    for (let i = 0; i < 4; i++) await act(async () => {});
+    // The wave went with the sentence; the walk waits for the speech to end.
+    expect(stage.cues).toEqual(["wave"]);
+    await act(async () => audios.at(-1)?.onended?.());
+    expect(stage.cues).toEqual(["wave", "go:the couch"]);
   });
 
   it("says why when the avatar can't be drawn, and the page still works", async () => {

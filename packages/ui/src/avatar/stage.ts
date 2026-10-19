@@ -15,19 +15,21 @@ import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { Director, route, Walker } from "./locomotion";
+import { Director, route, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { type BuiltProp, buildProp, buildShell, disposeTree } from "./props";
 import {
   DEFAULT_ROOM,
   type Lighting,
   lightingFor,
+  lookTarget,
   nearestWithin,
   OPEN_SIDES,
   ROOM_VIEW,
   type Room,
   roomDistance,
   spotById,
+  spotFor,
 } from "./scene";
 
 /** The whole room, or the avatar's head and torso. */
@@ -37,6 +39,11 @@ export interface Stage {
   setView(view: StageView): void;
   /** Walk to a spot in the room, by id. False when there is no such spot. */
   walkTo(spot: string): boolean;
+  /**
+   * Do what a cue from the agent says: a gesture, `go` to a place, or `look`
+   * or `point` at something. One the room can't make sense of is ignored.
+   */
+  cue(cue: { name: string; target?: string }): void;
   dispose(): void;
 }
 
@@ -299,8 +306,31 @@ export async function createStage(
   const motion = new Motion(opts);
   const started = performance.now();
   let last = started;
+  /** The stage's clock, in seconds, as of the last frame: when a cue's move starts. */
+  let clock = 0;
+
+  // Looking or pointing at something: the head turns toward it, and the whole
+  // body turns first when it is too far round for a head, or to point.
+  const aim = (target: string, point: boolean) => {
+    const where = lookTarget(room, target);
+    if (!where) return;
+    const from = new THREE.Vector3(body.position.x, body.position.y + torso, body.position.z);
+    const to = "viewer" in where ? camera.position.clone() : new THREE.Vector3(...where.at);
+    const yaw = turnBetween(walker.place.facing, Math.atan2(to.x - from.x, to.z - from.z));
+    const pitch = Math.atan2(to.y - from.y, Math.hypot(to.x - from.x, to.z - from.z));
+    const free = seated < 0.05 && !walker.busy && !pending;
+    if (free && (point || Math.abs(yaw) > 0.9)) {
+      walker.go([], walker.place.facing + yaw);
+      motion.look(0, pitch, clock);
+    } else {
+      motion.look(yaw, pitch, clock);
+    }
+    if (point) motion.gesture("point", clock);
+  };
+
   renderer.setAnimationLoop((now: number) => {
     const t = (now - started) / 1000;
+    clock = t;
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (tween) {
@@ -385,6 +415,16 @@ export async function createStage(
       };
     },
     walkTo: go,
+    cue(c) {
+      if (c.name === "go") {
+        const spot = c.target ? spotFor(room, c.target) : undefined;
+        if (spot) go(spot.id);
+      } else if (c.name === "look" || c.name === "point") {
+        if (c.target) aim(c.target, c.name === "point");
+      } else {
+        motion.gesture(c.name, clock);
+      }
+    },
     dispose() {
       renderer.setAnimationLoop(null);
       observer.disconnect();

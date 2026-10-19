@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAgents } from "../api";
-import { Avatar } from "../avatar/Avatar";
+import { Avatar, type AvatarControls } from "../avatar/Avatar";
+import { CueTimeline } from "../avatar/cues";
 import { decodeEnvelope, loudnessAt } from "../avatar/envelope";
 import type { BodyState } from "../avatar/motion";
+import { bodyFor, DEFAULT_ROOM } from "../avatar/scene";
 
 /**
  * Talk to an agent out loud: push-to-talk over the live session routes.
@@ -45,9 +47,16 @@ export function Talk() {
   const chunks = useRef<Blob[]>([]);
   // The configured avatar's model file, if there is one.
   const [avatar, setAvatar] = useState<string | null>(null);
+  // The avatar's moves the agent asks for, each played as its sentence starts.
+  const avatarControls = useRef<AvatarControls | null>(null);
+  const timeline = useRef(new CueTimeline((cue) => avatarControls.current?.cue(cue)));
   const player = useAudioQueue(
-    (busy) => setPhase((p) => (busy ? "speaking" : p === "speaking" ? "idle" : p)),
+    (busy) => {
+      setPhase((p) => (busy ? "speaking" : p === "speaking" ? "idle" : p));
+      if (!busy) timeline.current.quiet();
+    },
     avatar !== null,
+    (seq) => timeline.current.started(seq),
   );
 
   useEffect(() => {
@@ -74,7 +83,8 @@ export function Talk() {
     const res = await fetch("/api/live/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(agent ? { agent } : {}),
+      // With an avatar on the page, the agent is told what its body can do.
+      body: JSON.stringify({ ...(agent ? { agent } : {}), ...(avatar ? { body: bodyFor(DEFAULT_ROOM) } : {}) }),
     });
     const body = (await res.json().catch(() => ({}))) as Session & { error?: string };
     if (!res.ok) {
@@ -108,6 +118,7 @@ export function Talk() {
       if (!session) return;
       setPhase("thinking");
       setError(null);
+      timeline.current.reset();
       const res = await fetch(`/api/live/sessions/${encodeURIComponent(session.id)}/turn`, {
         method: "POST",
         headers: { "Content-Type": typeof body === "string" ? "application/json" : body.type || "audio/webm" },
@@ -136,8 +147,16 @@ export function Talk() {
             l.map((line, i) => (i === agentLine ? { ...line, text: line.text + String(data.delta ?? "") } : line)),
           );
         } else if (event === "audio") {
-          player.push(String(data.data ?? ""), String(data.mimeType ?? "audio/mpeg"));
+          player.push(String(data.data ?? ""), String(data.mimeType ?? "audio/mpeg"), Number(data.seq));
+        } else if (event === "cue") {
+          if (typeof data.name === "string")
+            timeline.current.cue({
+              name: data.name,
+              seq: Number(data.seq) || 0,
+              ...(typeof data.target === "string" ? { target: data.target } : {}),
+            });
         } else if (event === "done") {
+          timeline.current.finished();
           const t = data.timings as Record<string, number> | undefined;
           if (t) {
             setTiming(
@@ -161,6 +180,8 @@ export function Talk() {
 
   function hold() {
     if (!stream.current || phase === "listening" || session?.endedAt) return;
+    // Cutting in drops the moves still waiting, along with the words.
+    timeline.current.reset();
     player.stop();
     chunks.current = [];
     const rec = new MediaRecorder(stream.current);
@@ -219,7 +240,13 @@ export function Talk() {
       </div>
       {error && <div className="config-error">{error}</div>}
       {avatar && (
-        <Avatar url={avatar} state={phase} loudness={player.loudness} engaged={!!session && !session.endedAt} />
+        <Avatar
+          url={avatar}
+          state={phase}
+          loudness={player.loudness}
+          engaged={!!session && !session.endedAt}
+          controls={avatarControls}
+        />
       )}
       {!session ? (
         <div className="talk-start">
@@ -335,8 +362,10 @@ async function readEvents(
  * `measure` on, it also decodes each chunk's loudness over time, so an avatar's
  * mouth can follow the voice.
  */
-function useAudioQueue(onBusy: (busy: boolean) => void, measure: boolean) {
-  const queue = useRef<string[]>([]);
+function useAudioQueue(onBusy: (busy: boolean) => void, measure: boolean, onStart?: (seq: number) => void) {
+  const queue = useRef<{ url: string; seq?: number }[]>([]);
+  const starting = useRef(onStart);
+  starting.current = onStart;
   const current = useRef<{ url: string; audio: HTMLAudioElement } | null>(null);
   const busy = useRef(false);
   const notify = useRef(onBusy);
@@ -347,15 +376,17 @@ function useAudioQueue(onBusy: (busy: boolean) => void, measure: boolean) {
   const envelopes = useRef(new Map<string, Float32Array | null>());
 
   const next = useCallback(() => {
-    const url = queue.current.shift();
-    if (!url) {
+    const item = queue.current.shift();
+    if (!item) {
       busy.current = false;
       current.current = null;
       notify.current(false);
       return;
     }
+    const { url } = item;
     busy.current = true;
     notify.current(true);
+    if (item.seq !== undefined) starting.current?.(item.seq);
     const audio = new Audio(url);
     current.current = { url, audio };
     audio.onended = () => {
@@ -367,22 +398,23 @@ function useAudioQueue(onBusy: (busy: boolean) => void, measure: boolean) {
   }, []);
 
   return useRef({
-    push(base64: string, mimeType: string) {
+    push(base64: string, mimeType: string, seq?: number) {
       const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
       const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
       if (measuring.current) {
         void decodeEnvelope(bytes).then((envelope) => {
           // A chunk already played, or cut off, needs no envelope.
-          if (queue.current.includes(url) || current.current?.url === url) envelopes.current.set(url, envelope);
+          if (queue.current.some((q) => q.url === url) || current.current?.url === url)
+            envelopes.current.set(url, envelope);
         });
       }
-      queue.current.push(url);
+      queue.current.push({ url, ...(Number.isFinite(seq) ? { seq } : {}) });
       if (!busy.current) next();
     },
     /** Stop speaking: the person has started talking. */
     stop() {
       current.current?.audio.pause();
-      for (const url of queue.current.splice(0)) URL.revokeObjectURL(url);
+      for (const { url } of queue.current.splice(0)) URL.revokeObjectURL(url);
       envelopes.current.clear();
       busy.current = false;
       current.current = null;

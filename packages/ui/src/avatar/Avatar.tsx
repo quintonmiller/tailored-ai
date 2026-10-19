@@ -1,8 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { type MutableRefObject, useEffect, useRef, useState } from "react";
+import type { Cue } from "./cues";
 import type { BodyState } from "./motion";
 import type { Stage, StageView } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
+
+/** What the page can tell the avatar to do once it is on screen. */
+export interface AvatarControls {
+  cue(cue: Cue): void;
+}
 
 function savedView(): StageView {
   try {
@@ -25,12 +31,15 @@ export function Avatar({
   state,
   loudness,
   engaged,
+  controls,
 }: {
   url: string;
   state: BodyState;
   loudness: () => number;
   /** A session is under way: the avatar stays put and faces you instead of wandering. */
   engaged: boolean;
+  /** Filled in once the avatar is on screen, so the page can pass on the agent's cues. */
+  controls?: MutableRefObject<AvatarControls | null>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -40,6 +49,8 @@ export function Avatar({
   const [view, setView] = useState<StageView>(savedView);
   const viewRef = useRef(view);
   viewRef.current = view;
+  const controlsRef = useRef(controls);
+  controlsRef.current = controls;
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,8 +62,12 @@ export function Avatar({
     import("./stage")
       .then(({ createStage }) => createStage(el, url, () => live.current, { reducedMotion, view: viewRef.current }))
       .then((s) => {
-        if (gone) s.dispose();
-        else stage.current = s;
+        if (gone) {
+          s.dispose();
+          return;
+        }
+        stage.current = s;
+        if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
       })
       .catch((err: unknown) => {
         if (!gone) setProblem(err instanceof Error ? err.message : String(err));
@@ -61,6 +76,7 @@ export function Avatar({
       gone = true;
       stage.current?.dispose();
       stage.current = null;
+      if (controlsRef.current) controlsRef.current.current = null;
     };
   }, [url]);
 

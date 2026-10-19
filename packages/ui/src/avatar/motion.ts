@@ -114,6 +114,64 @@ const ACTIVITIES: Record<Activity, Offsets> = {
   browse: { head: [0.04, 0, 0.12], rightUpperArm: [-0.7, 0, -0.65], rightLowerArm: [0, 0.4, 0] },
 };
 
+/**
+ * One-off moves the agent asks for with a cue, on top of everything else:
+ * how long each lasts, and its offsets from rest at full strength, `u`
+ * seconds in. Each eases in and out, so it starts and ends from whatever the
+ * body was doing.
+ */
+const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offsets }> = {
+  // Right arm up and out, the forearm swinging side to side.
+  wave: {
+    seconds: 1.8,
+    pose: (u) => ({ rightUpperArm: [0, 0, -2.1], rightLowerArm: [0, 0, -0.5 + 0.4 * Math.sin(2 * Math.PI * 2.5 * u)] }),
+  },
+  // Two dips of the head.
+  nod: { seconds: 1.0, pose: (u) => ({ head: [0.16 * Math.sin(Math.PI * 2 * u) ** 2, 0, 0] }) },
+  shake: { seconds: 1.1, pose: (u) => ({ head: [0, 0.28 * Math.sin(2 * Math.PI * 2.5 * u), 0] }) },
+  // Arms out from the sides, elbows bent, head tipped.
+  shrug: {
+    seconds: 1.1,
+    pose: () => ({
+      leftUpperArm: [0, 0, 0.45],
+      rightUpperArm: [0, 0, -0.45],
+      leftLowerArm: [0, -0.7, 0],
+      rightLowerArm: [0, 0.7, 0],
+      head: [0, 0, 0.12],
+      spine: [-0.03, 0, 0],
+    }),
+  },
+  // Hand to chin, eyes up and aside.
+  think: {
+    seconds: 2.2,
+    pose: () => ({ rightUpperArm: [-0.9, 0, -0.75], rightLowerArm: [0, 1.5, 0], head: [-0.12, 0.18, 0.05] }),
+  },
+  bow: {
+    seconds: 1.5,
+    pose: () => ({
+      spine: [0.45, 0, 0],
+      head: [0.15, 0, 0],
+      leftUpperArm: [-0.15, 0, 0],
+      rightUpperArm: [-0.15, 0, 0],
+    }),
+  },
+  // Right arm out straight ahead; the stage turns the body to face the target first.
+  point: { seconds: 2.2, pose: () => ({ rightUpperArm: [-1.35, 0, -1.0], rightLowerArm: [0, -0.15, 0] }) },
+};
+
+/** Seconds a look at something is held. */
+const LOOK_SECONDS = 2.5;
+
+/** 0 to 1 and back over a move's length: eased in over a quarter second, out over a third. */
+function envelope(u: number, seconds: number): number {
+  if (u < 0 || u > seconds) return 0;
+  const smooth = (x: number) => {
+    const c = Math.min(1, Math.max(0, x));
+    return c * c * (3 - 2 * c);
+  };
+  return smooth(u / 0.25) * smooth((seconds - u) / 0.35);
+}
+
 /** Seconds for the body to settle into a new moment. */
 const SETTLE_SECONDS = 0.35;
 /** Starting and stopping a walk. */
@@ -140,12 +198,26 @@ export class Motion {
   private mouth = 0;
   private nextBlink: number | undefined;
   private blinkStart = Number.NEGATIVE_INFINITY;
+  private moves: { name: string; at: number }[] = [];
+  private gazeAt: { yaw: number; pitch: number; at: number } | undefined;
   private readonly drift: number;
   private readonly random: () => number;
 
   constructor(opts: { reducedMotion?: boolean; random?: () => number } = {}) {
     this.drift = opts.reducedMotion ? REDUCED_DRIFT : 1;
     this.random = opts.random ?? Math.random;
+  }
+
+  /** Make a gesture, starting at `at` seconds. False for one this body has no move for. */
+  gesture(name: string, at: number): boolean {
+    if (!GESTURE_MOVES[name]) return false;
+    this.moves = [...this.moves.filter((m) => m.name !== name), { name, at }];
+    return true;
+  }
+
+  /** Turn the head toward something for a moment: `yaw` to the figure's left, `pitch` up, in radians. */
+  look(yaw: number, pitch: number, at: number) {
+    this.gazeAt = { yaw: Math.max(-1, Math.min(1, yaw)), pitch: Math.max(-0.5, Math.min(0.5, pitch)), at };
   }
 
   /**
@@ -214,6 +286,24 @@ export class Motion {
     bones.rightUpperArm[0] -= 0.35 * s * w;
     bones.spine[1] += 0.05 * s * w;
     bones.head[1] -= 0.03 * s * w;
+
+    // Gestures and looks the agent asked for, layered on top.
+    this.moves = this.moves.filter((m) => t - m.at <= GESTURE_MOVES[m.name].seconds);
+    for (const m of this.moves) {
+      const move = GESTURE_MOVES[m.name];
+      const weight = envelope(t - m.at, move.seconds);
+      const pose = move.pose(t - m.at);
+      for (const bone of POSE_BONES) {
+        const o = pose[bone];
+        if (o) for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * weight;
+      }
+    }
+    if (this.gazeAt) {
+      const weight = envelope(t - this.gazeAt.at, LOOK_SECONDS);
+      bones.head[1] += this.gazeAt.yaw * weight;
+      bones.head[0] -= this.gazeAt.pitch * weight;
+      if (t - this.gazeAt.at > LOOK_SECONDS) this.gazeAt = undefined;
+    }
 
     const gaze: [number, number] = [0, 0];
     for (const st of STATES) {

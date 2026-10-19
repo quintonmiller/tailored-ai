@@ -133,4 +133,42 @@ describe("Motion", () => {
     expect(pose.bones.leftUpperArm[0]).toBeLessThan(rest.bones.leftUpperArm[0] - 0.6);
     expect(pose.bones.head[0]).toBeGreaterThan(rest.bones.head[0] + 0.1);
   });
+
+  it("waves when asked: right arm up, then back down once the wave is over", () => {
+    const motion = new Motion({ random: steady });
+    run(motion, "idle", 1);
+    expect(motion.gesture("wave", 1)).toBe(true);
+    const mid = run(motion, "speaking", 0.6, 0, 1.02);
+    expect(mid.bones.rightUpperArm[2]).toBeLessThan(0);
+    const after = run(motion, "idle", 2, 0, 1.7);
+    expect(after.bones.rightUpperArm[2]).toBeGreaterThan(1);
+  });
+
+  it("nods and shakes the head", () => {
+    const rest = run(new Motion({ random: steady }), "idle", 1);
+    const nodding = new Motion({ random: steady });
+    run(nodding, "idle", 1);
+    nodding.gesture("nod", 1);
+    expect(nodding.step(1.25, "idle", 0).bones.head[0]).toBeGreaterThan(rest.bones.head[0] + 0.05);
+    const shaking = new Motion({ random: steady });
+    run(shaking, "idle", 1);
+    shaking.gesture("shake", 1);
+    const turns = [1.1, 1.2, 1.3, 1.4, 1.5].map((t) => shaking.step(t, "idle", 0).bones.head[1]);
+    expect(Math.max(...turns) - Math.min(...turns)).toBeGreaterThan(0.2);
+  });
+
+  it("has no move for a gesture it doesn't know", () => {
+    expect(new Motion({ random: steady }).gesture("dance", 0)).toBe(false);
+  });
+
+  it("turns its head toward something it is told to look at, then back", () => {
+    const motion = new Motion({ random: steady, reducedMotion: true });
+    run(motion, "idle", 1);
+    motion.look(0.6, 0.2, 1);
+    const looking = run(motion, "idle", 1, 0, 1.02);
+    expect(looking.bones.head[1]).toBeGreaterThan(0.45);
+    expect(looking.bones.head[0]).toBeLessThan(-0.1);
+    const back = run(motion, "idle", 3, 0, 2.1);
+    expect(Math.abs(back.bones.head[1])).toBeLessThan(0.1);
+  });
 });
