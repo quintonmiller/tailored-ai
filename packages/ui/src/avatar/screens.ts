@@ -199,6 +199,28 @@ export function cardFor(widget: DashboardWidgetSpec, fetched: Fetched, now = Dat
   }
 }
 
+/**
+ * The pages a screen showing the dashboard goes through: a card for each of
+ * the first few widgets it can draw. Once the dashboard has answered with
+ * none of those, one page says why: it couldn't be had, the Board has no
+ * widgets, or none a screen can draw. None before it answers, so the screen
+ * stays dark rather than say something that isn't so yet.
+ */
+export function dashboardCards(
+  at: { widgets: DashboardWidgetSpec[]; fetched: Record<string, Fetched>; loaded: boolean; error?: string },
+  now = Date.now(),
+): ScreenCard[] {
+  const shown = screenWidgets(at.widgets);
+  if (shown.length) return shown.map((w) => cardFor(w, at.fetched[w.id], now));
+  if (!at.loaded) return [];
+  const empty = at.error
+    ? `Couldn't load the dashboard: ${at.error}`
+    : at.widgets.length
+      ? "Nothing on the Board a screen can show: click to see it."
+      : "Nothing on the Board yet.";
+  return [{ id: "board", title: "Dashboard", empty }];
+}
+
 /** The tone of what an agent is doing: busy green, thinking blue, waiting on you orange, stuck red. */
 function doingTone(doing: AgentActivity["doing"] | undefined): Tone {
   if (doing === "working") return "ok";
@@ -304,7 +326,8 @@ export function rowsFit(count: number, top: number, bottom: number, height: numb
 
 /**
  * Draw a page: its heading and which page of how many it is, then a big word,
- * rows, lines or the time. A screen with nothing to show yet says so.
+ * rows, lines or the time. A screen with no page yet, or in a photo, which
+ * never gets one, is dark: it says nothing rather than something untrue.
  */
 export function drawScreen(canvas: HTMLCanvasElement, card: ScreenCard | undefined, page: number, pages: number) {
   const ctx = canvas.getContext("2d");
@@ -328,12 +351,7 @@ export function drawScreen(canvas: HTMLCanvasElement, card: ScreenCard | undefin
       ctx.fillStyle = i === page ? "#e8ecf5" : "#3d475c";
       ctx.fill();
     }
-  if (!card) {
-    ctx.fillStyle = "#9aa3b5";
-    ctx.font = font(500, h * 0.07);
-    ctx.fillText("Nothing to show yet", pad, pad);
-    return;
-  }
+  if (!card) return;
   ctx.fillStyle = "#e8ecf5";
   ctx.font = font(700, h * 0.085);
   ctx.fillText(clip(ctx, card.title, w - pad * 3 - pages * h * 0.05), pad, pad);

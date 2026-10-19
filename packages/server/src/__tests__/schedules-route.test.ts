@@ -1,13 +1,21 @@
 /**
  * `GET /api/schedules`: the wakes agents booked with the `schedule` tool that
- * are still to come, soonest first, everyone's or one agent's; and when each
- * cron job next runs on `GET /api/cron`. Read only: the calendars in the 3D
- * world are drawn from them.
+ * are still to come, soonest first, everyone's or one agent's; when each
+ * cron job next runs on `GET /api/cron`; and when each agent that runs on its
+ * own next takes a turn, on `GET /api/exploratory/agents`. Read only: the
+ * calendars in the 3D world are drawn from them.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type AgentConfig, AgentRuntime, type AIProvider, initDatabase, ScheduleStore } from "@tailored-ai/core";
+import {
+  type AgentConfig,
+  AgentRuntime,
+  type AIProvider,
+  initDatabase,
+  ScheduleStore,
+  updateExploratoryState,
+} from "@tailored-ai/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer } from "../index.js";
 
@@ -185,5 +193,47 @@ describe("GET /api/cron", () => {
     } as AgentConfig["cron"];
     const jobs = (await get("/api/cron")).body.jobs as { next_run: string | null }[];
     expect(jobs[0].next_run).toBeNull();
+  });
+});
+
+describe("GET /api/exploratory/agents", () => {
+  const hm = (h: number) => `${String(((h % 24) + 24) % 24).padStart(2, "0")}:00`;
+  const agents = async () =>
+    ((await get("/api/exploratory/agents")).body.agents as { name: string; next_turn_at: string | null }[]).reduce<
+      Record<string, string | null>
+    >((all, a) => Object.assign(all, { [a.name]: a.next_turn_at }), {});
+
+  it("says when each agent next takes its turn, the way the worker decides", async () => {
+    const hour = new Date().getUTCHours();
+    const last = new Date(Date.now() - 10 * 60_000).toISOString();
+    cfg.agents = {
+      // Every half hour, any time: ten minutes ago plus thirty.
+      planner: { online: { enabled: true, cadence: { interval_minutes: 30 } } },
+      // Every half hour, but only in an hour that starts two from now: not through the hours before it.
+      writer: {
+        online: {
+          enabled: true,
+          cadence: { interval_minutes: 30, window: { start: hm(hour + 2), end: hm(hour + 3) } },
+        },
+      },
+      // Every half hour, and it has had all its turns today: none till tomorrow, UTC.
+      reviewer: {
+        online: { enabled: true, cadence: { interval_minutes: 30 }, budgets: { stop_after_runs_per_day: 2 } },
+      },
+      // Paused for a day: none.
+      scout: { online: { enabled: true, cadence: { interval_minutes: 30 } } },
+    } as unknown as AgentConfig["agents"];
+    const today = new Date().toISOString().slice(0, 10);
+    for (const name of ["planner", "writer", "reviewer", "scout"])
+      updateExploratoryState(db, name, { last_tick_at: last, runs_today: 2, tokens_today_resets_at: today });
+    updateExploratoryState(db, "scout", { paused_until: new Date(Date.now() + 86_400_000).toISOString() });
+
+    const next = await agents();
+    expect(next.planner).toBe(new Date(Date.parse(last) + 30 * 60_000).toISOString());
+    const opens = new Date();
+    opens.setUTCHours(hour + 2, 0, 0, 0);
+    expect(next.writer).toBe(opens.toISOString());
+    expect(next.reviewer).toBe(`${new Date(Date.parse(today) + 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`);
+    expect(next.scout).toBeNull();
   });
 });

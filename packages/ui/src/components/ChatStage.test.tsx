@@ -177,6 +177,8 @@ let homeExtra: Record<string, unknown>[] = [];
 let bookedRows: Record<string, unknown>[] = [];
 /** The dashboard's widgets, as `GET /api/dashboard` resolves them. */
 let dashboardWidgets: Record<string, unknown>[] = [];
+/** The dashboard can't be had: `GET /api/dashboard` fails. */
+let dashboardDown = false;
 
 /** The agent's own room, as the server keeps it. */
 const home = {
@@ -280,6 +282,7 @@ beforeEach(() => {
   homeExtra = [];
   bookedRows = [];
   dashboardWidgets = [];
+  dashboardDown = false;
   drafts.length = 0;
   replies.length = 0;
   chattedWith.length = 0;
@@ -441,7 +444,10 @@ beforeEach(() => {
       if (url === "/api/task-watcher") return new Response(JSON.stringify(watcherInfo));
       if (url.startsWith("/api/schedules")) return new Response(JSON.stringify({ schedules: bookedRows }));
       if (url === "/api/cron") return new Response(JSON.stringify({ enabled: false, jobs: [] }));
-      if (url === "/api/dashboard") return new Response(JSON.stringify({ widgets: dashboardWidgets }));
+      if (url === "/api/dashboard")
+        return dashboardDown
+          ? new Response(JSON.stringify({ error: "boom" }), { status: 500, statusText: "Internal Server Error" })
+          : new Response(JSON.stringify({ widgets: dashboardWidgets }));
       if (url === "/api/health") return new Response(JSON.stringify({ status: "ok", model: "a-model", uptime: 600 }));
       if (url === "/api/exploratory/agents")
         return new Response(JSON.stringify({ enabled: true, activity: null, agents: ownAgents }));
@@ -1544,6 +1550,60 @@ describe("the chat page's scene", () => {
     await settle();
     expect(container.querySelector(".world-task .world-panel-title")?.textContent).toBe("Book flights");
     expect(window.location.hash).not.toMatch(/tasks/);
+  });
+
+  it("says why a screen shows no dashboard, on the screen and in the panel, rather than looking forever", async () => {
+    placeId = "shared:lounge";
+    homeExtra = [wall("screen")];
+    await render();
+    await settle(80);
+    expect(stage.screens.at(-1)).toEqual([{ id: "board", title: "Dashboard", empty: "Nothing on the Board yet." }]);
+    await act(async () => stage.onUse?.("screen", { card: "board" }));
+    await settle();
+    const panel = container.querySelector(".world-dashboard-panel") as HTMLElement;
+    expect(panel.textContent).toMatch(/Nothing on the Board yet/);
+    expect(panel.textContent).not.toMatch(/Looking/);
+  });
+
+  it("says the dashboard couldn't be had when it can't", async () => {
+    placeId = "shared:lounge";
+    homeExtra = [wall("screen")];
+    dashboardDown = true;
+    await render();
+    await settle(80);
+    expect(stage.screens.at(-1)?.[0]).toMatchObject({
+      empty: expect.stringMatching(/^Couldn't load the dashboard: 500/),
+    });
+    await act(async () => stage.onUse?.("screen", { card: "board" }));
+    await settle();
+    expect(container.querySelector(".world-dashboard-panel")?.textContent).toMatch(/Couldn't load the dashboard: 500/);
+  });
+
+  it("shows the wakes of whoever is in a shared place on its calendar, and opens the list on them", async () => {
+    placeId = "shared:lounge";
+    homeExtra = [wall("calendar")];
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    bookedRows = [booking("b1", "planner", 2, "plan the route"), booking("b2", "writer", 3, "send the draft")];
+    await render();
+    await settle(60);
+    const shown = stage.calendars.at(-1);
+    expect(shown?.title).toBe("Next wakes for who's here");
+    expect(shown?.wakes.map((w) => w.key)).toEqual(["booked:b1"]);
+    await act(async () => stage.onUse?.("calendar"));
+    await settle();
+    const panel = container.querySelector(".world-calendar-panel") as HTMLElement;
+    // The list the wall showed: the same people, under the same name.
+    expect(panel.querySelector(".world-panel-title")?.textContent).toBe("Next wakes for who's here");
+    expect(panel.textContent).toMatch(/plan the route/);
+    expect(panel.textContent).not.toMatch(/send the draft/);
+    await fill(panel.querySelector("select") as HTMLSelectElement, "\u0000everyone");
+    expect(container.querySelector(".world-calendar-panel")?.textContent).toMatch(/send the draft/);
+    // And back to who's here.
+    await fill(container.querySelector(".world-calendar-panel select") as HTMLSelectElement, "\u0000here");
+    expect(container.querySelector(".world-calendar-panel .world-panel-title")?.textContent).toBe(
+      "Next wakes for who's here",
+    );
+    expect(container.querySelector(".world-calendar-panel")?.textContent).not.toMatch(/send the draft/);
   });
 
   it("shows what a home's owner is up to on a screen there, each page opening its own thing", async () => {

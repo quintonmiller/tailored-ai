@@ -18,12 +18,18 @@ export function taskLink(href: string): { task: string } | { tasks: true } | und
  */
 export function WorldDashboard({
   widgets,
+  loaded,
+  error,
   focus,
   onTask,
   onTasks,
   onClose,
 }: {
   widgets: DashboardWidgetSpec[];
+  /** The dashboard has answered, with widgets or without. */
+  loaded: boolean;
+  /** Why it couldn't be had. */
+  error?: string;
   /** The widget the screen was showing when it was clicked. */
   focus?: string;
   onTask: (id: string) => void;
@@ -73,8 +79,14 @@ export function WorldDashboard({
             </div>
           ))}
         </div>
-      ) : (
+      ) : !loaded ? (
         <p className="world-panel-quiet">Looking…</p>
+      ) : error ? (
+        <p className="agent-menu-problem">Couldn't load the dashboard: {error}</p>
+      ) : (
+        <p className="world-panel-quiet">
+          Nothing on the Board yet. Add widgets under <code>dashboard.widgets</code> in config.yaml.
+        </p>
       )}
     </WorldPanel>
   );

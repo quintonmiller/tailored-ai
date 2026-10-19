@@ -1,7 +1,9 @@
 /**
- * When an agent that runs on its own takes its next turn, worked out the way
- * the exploratory worker decides: its last turn plus the interval it is on
- * now, unless it is paused past that. Pure, so it is tested without a server.
+ * When an agent that runs on its own takes its next turn: as the server works
+ * it out the way the exploratory worker decides, within its hours and once
+ * the day's limit lifts; from a server that doesn't say, its last turn plus
+ * the interval it is on now, unless it is paused past that. Pure, so it is
+ * tested without a server.
  */
 import { whenMs } from "./tasks";
 
@@ -12,6 +14,8 @@ export interface OwnTurns {
   last_tick_at: string | null;
   current_interval_ms: number | null;
   cadence: { interval_minutes?: number; window?: { start: string; end: string } } | null;
+  /** When the worker next takes its turn, its hours and its day's limit counted; null when none will come. */
+  next_turn_at?: string | null;
 }
 
 export type NextTurn =
@@ -31,12 +35,21 @@ function interval(agent: OwnTurns): number | undefined {
   return minutes && minutes > 0 ? minutes * 60_000 : undefined;
 }
 
-/** When the agent next takes a turn on its own. A time window it keeps to is not counted: the time is "about". */
+/**
+ * When the agent next takes a turn on its own. A turn the server says is due
+ * and hasn't been taken is taken at the worker's next look: now. Without the
+ * server's word, a time window it keeps to is not counted: the time is "about".
+ */
 export function nextTurn(agent: OwnTurns, now = Date.now()): NextTurn {
   if (!agent.enabled_in_state) return { kind: "off" };
   const paused = whenMs(agent.paused_until);
   if (paused > now) return { kind: "paused", until: paused };
   const every = interval(agent);
+  if (agent.next_turn_at !== undefined) {
+    const at = whenMs(agent.next_turn_at);
+    if (!Number.isFinite(at)) return { kind: "unknown" };
+    return { kind: "due", at: Math.max(now, at), ...(every ? { every } : {}) };
+  }
   const last = whenMs(agent.last_tick_at);
   if (!Number.isFinite(last)) return { kind: "due", at: now, ...(every ? { every } : {}) };
   if (!every) return { kind: "unknown" };

@@ -846,8 +846,9 @@ made and wait for your go-ahead, because rooms go on your default room
 transport, and on Discord that is a new channel in your server. **Write the
 message** puts it in the chat. **New task** opens a small form: a title,
 details, and who should do it, saying as the card does whether the agent you
-pick is woken to start on it. The lobby's board shows every open task, and
-its big screen and calendar are below.
+pick is woken to start on it. The lobby's board shows every open task. The
+lobby also has a big screen and a calendar: see
+[Screens and calendars](#screens-and-calendars).
 
 The card asks `GET /api/task-watcher` whether the watcher is on and which
 changes it reacts to (`created`, `updated`), as the server runs it now. Every
@@ -877,38 +878,52 @@ There it shows what the agent is up to: what it is doing now (with what it
 did last and when it next wakes, while it rests), the open tasks on its list,
 and what is coming up for it. A click opens what the page on screen is about:
 the agent's card, its tasks, or its calendar. A screen in a shared place or a
-meeting room shows the dashboard.
+meeting room shows the dashboard. Until the dashboard answers a screen is
+dark; when the Board has no widgets, or the dashboard can't be had, the
+screen and its panel say so. In a photo, which is never told what is on
+them, screens are dark and calendars show only the date.
 
-Every home has a **calendar** on the wall, by the desk where there is room.
+Homes come with a **calendar** on the wall, by the desk where there is room.
 It shows its owner's day: today's date, the wakes still to come this week,
-day by day, and what it got done today. A wake is one the agent booked with
-the `schedule` tool, a cron job that runs as it, or its next turn when it
-runs on its own; the dot before each says which (blue booked, purple cron,
-grey its own turn). What got done is the tasks it finished today and the
-last thing it did. The lobby's calendar, across from the task board, is
-everyone's: the next wakes in time order, each with whose it is. Anywhere
-else, a calendar shows the wakes of whoever is there. While agents are
-paused, it says nothing wakes until you resume them.
+day by day, and what it got done today when there is room for it. A wake is
+one the agent booked with the `schedule` tool, a cron job that runs as it, or
+its next turn when it runs on its own, at the time the worker will take it:
+an agent that keeps to set hours has none through the night, and one that
+has had all its turns for the day has none till the next. The dot before
+each says which (blue booked, purple cron, grey its own turn). What got done
+is the tasks it finished today and the last thing it did. A home's calendar
+has fewer, bigger lines than the lobby's, so it reads from the agent's own
+view. The lobby's calendar, across from the task board, is everyone's: the
+next wakes in time order, each with whose it is. Anywhere else, a calendar
+shows the wakes of whoever is there. While agents are paused, it says
+nothing wakes until you resume them.
 
 **Click a calendar** for the whole list. Each wake says when, what kind it
 is, whose it is, what it will do (a booked wake's note in full, a cron job's
 prompt), how often it comes round, and where a booked wake wakes the agent:
-in a room, or in its own conversation. **Whose** switches between one agent
-and everyone. Click an agent's name to go to it, where its body is, and a
+in a room, or in its own conversation. The list is the calendar's own: its
+owner's, everyone's from the lobby, or who's here from anywhere else.
+**Whose** switches between one agent, who's here, and everyone. Click an agent's name to go to it, where its body is, and a
 task it finished to open its card.
 
 A home nobody has changed gets its calendar the next time anything asks for
 the room, the way homes are redrawn (see
 [A room the agent can change](#a-room-the-agent-can-change)). A home someone
-has changed keeps what it has, and its agent can add a calendar with the
-`place` tool. A wall too full for a calendar of the usual size gets a smaller
-one.
+has changed keeps what it has, so one changed before homes had calendars has
+none: nothing is hung there unasked. When its agent looks round with the
+`place` tool, it is told the home has no calendar and how to add one, and
+you can ask it to. A wall too full for a calendar of the usual size gets a
+smaller one.
 
 Screens and calendars ask the server again once a minute, and only while one
 hangs where you are or its panel is open. They are drawn again only when
 what they show changes, or when a screen turns to its next page. A calendar
 reads `GET /api/schedules`, `GET /api/cron` and `GET /api/exploratory/agents`;
 a screen reads `GET /api/dashboard` and each widget's own endpoint.
+`GET /api/exploratory/agents` gives each agent that runs on its own a
+`next_turn_at`: when the worker will take its next turn, within its hours
+and once the day's limit lifts, as an ISO instant; null while it is switched
+off or paused, or when its hours never come.
 
 #### What needs you
 
@@ -1197,6 +1212,7 @@ cues, and its text passes through untouched.
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company` (each `with` the agent there it came to see, as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
+| `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/say` | a line in an agent's voice: `{agent?, text}` → the audio, from the live text-to-speech stage with the agent's `voice.voice` (else `live.tts.voice`). Markdown is stripped first. `400` for an empty line or one over 400 characters, `409` when live sessions are off, `502` when the voice can't be made |

@@ -656,6 +656,7 @@ export {
   type WaterfallNext,
   type WaterfallOptions,
 } from "./events.js";
+export { nextOwnTurn, type OwnTurns, ownTurnsOf } from "./exploratory/next-turn.js";
 export type {
   ExploratoryActivity,
   ExploratoryWorkerOptions,

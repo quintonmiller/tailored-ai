@@ -388,6 +388,21 @@ describe("the place tool", () => {
     expect(renamed.props.find((p) => p.kind === "sign")?.label).toBe("Quiet please");
   });
 
+  it("tells an agent whose home has no calendar how to hang one, and says nothing once it has one", async () => {
+    const t = tool();
+    expect(String((await t.execute({ action: "look" }, context("assistant"))).output)).not.toMatch(/no calendar/);
+    const removed = await t.execute({ action: "remove", item: "calendar" }, context("assistant"));
+    expect(removed.success).toBe(true);
+    const bare = String((await t.execute({ action: "look" }, context("assistant"))).output);
+    expect(bare).toMatch(/Your home has no calendar yet\. Add one \(kind "calendar"\)/);
+    // Nothing is hung for it: the room it changed stays as it left it.
+    const record = await state.get(
+      { actor: { kind: "user", name: "owner" } },
+      { type: PLACE_TYPE, id: homeId("assistant") },
+    );
+    expect((record?.data as unknown as Place).props.some((p) => p.kind === "calendar")).toBe(false);
+  });
+
   it("tells an agent with no body there's no room to change", async () => {
     const out = await tool().execute({ action: "look" }, context("planner"));
     expect(out.success).toBe(false);

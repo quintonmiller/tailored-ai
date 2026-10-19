@@ -6,6 +6,7 @@
  * Which lines go on the page is worked out here, without a canvas, so it is
  * tested; the drawing only lays them out.
  */
+import { nameOf } from "../lib/conversations";
 import { pastTense } from "../lib/did";
 import { whenMs } from "../lib/tasks";
 import { nextTurn, type OwnTurns } from "../lib/wakes";
@@ -136,13 +137,15 @@ export function upcoming(
     for (const agent of from.own) {
       const next = nextTurn(agent, now);
       if (next.kind !== "due" || next.at > until) continue;
+      // Within the hours it keeps to, when it keeps to some: "every 30 min, 09:00–17:00".
+      const hours = agent.cadence?.window ? `, ${agent.cadence.window.start}–${agent.cadence.window.end}` : "";
       out.push({
         key: `turn:${agent.name}`,
         agent: agent.name,
         at: next.at,
         kind: "turn",
         what: "its own turn",
-        ...(next.every ? { every: everyWords(next.every) } : {}),
+        ...(next.every ? { every: `${everyWords(next.every)}${hours}` } : {}),
       });
     }
   return out.sort((a, b) => a.at - b.at || a.agent.localeCompare(b.agent));
@@ -313,9 +316,11 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-dig
 /**
  * Draw a calendar: today's date large on a coloured band, whose it is, then
  * each day's wakes (the time, a dot for what kind of wake, whose in the lobby,
- * what it will do), and what got done today at the foot.
+ * what it will do), and what got done today at the foot. With nothing to show
+ * yet, or in a photo, which is never told, only the date: an empty page says
+ * nothing untrue, where "Nothing booked" might.
  */
-export function drawCalendar(canvas: HTMLCanvasElement, view: CalendarView) {
+export function drawCalendar(canvas: HTMLCanvasElement, view: CalendarView | undefined, now = Date.now()) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const { width: w, height: h } = canvas;
@@ -326,7 +331,7 @@ export function drawCalendar(canvas: HTMLCanvasElement, view: CalendarView) {
   const band = h * 0.19;
   ctx.fillStyle = BAND;
   ctx.fillRect(0, 0, w, band);
-  const today = new Date(view.now);
+  const today = new Date(view?.now ?? now);
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   ctx.fillStyle = "#fff";
@@ -339,6 +344,7 @@ export function drawCalendar(canvas: HTMLCanvasElement, view: CalendarView) {
   ctx.font = font(500, band * 0.22);
   ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fillText(today.toLocaleDateString([], { month: "long", year: "numeric" }), pad + dayW + pad * 0.6, band * 0.68);
+  if (!view) return;
   let y = band + h * 0.05;
   ctx.fillStyle = INK;
   ctx.font = font(700, h * 0.052);
@@ -350,8 +356,9 @@ export function drawCalendar(canvas: HTMLCanvasElement, view: CalendarView) {
     ctx.fillText(clip(ctx, view.note, w - pad * 2), pad, y);
     y += h * 0.05;
   }
-  // A few lines, big enough to read from a step or two back: the rest is in the list a click opens.
-  const lineH = h * 0.095;
+  // A few lines, big enough to read from a step or two back: the rest is in the list a click opens. A home's, whose
+  // lines say no names, has fewer and bigger ones, to read from the agent's own view, where there is no walking up.
+  const lineH = h * (view.names ? 0.095 : 0.13);
   const room = Math.max(3, Math.floor((h - pad * 0.6 - y) / lineH));
   // As wide as the widest time the page's clock writes: "22:58", or "10:58 PM" where it counts in twelves.
   const timeW = (() => {
@@ -387,7 +394,7 @@ export function drawCalendar(canvas: HTMLCanvasElement, view: CalendarView) {
       if (view.names) {
         ctx.fillStyle = BAND;
         ctx.font = font(700, size);
-        const who = clip(ctx, wake.agent, w * 0.24);
+        const who = clip(ctx, nameOf(wake.agent), w * 0.24);
         ctx.fillText(who, x, mid);
         x += ctx.measureText(who).width + lineH * 0.25;
       }
@@ -400,7 +407,7 @@ export function drawCalendar(canvas: HTMLCanvasElement, view: CalendarView) {
       ctx.fillText("✓", pad, mid);
       ctx.fillStyle = INK;
       ctx.font = font(500, lineH * 0.54);
-      const who = view.names ? `${line.done.agent} ` : "";
+      const who = view.names ? `${nameOf(line.done.agent)} ` : "";
       ctx.fillText(clip(ctx, `${who}${line.done.what}`, w - pad * 2 - timeW), pad + timeW, mid);
     } else if (line.kind === "more") {
       ctx.fillStyle = DIM;

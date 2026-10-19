@@ -123,6 +123,20 @@ describe("upcoming", () => {
     expect(wakes.map((w) => w.key)).toEqual(["booked:late"]);
   });
 
+  it("puts a turn when the server says the worker takes it: an agent out of its hours is not due every half hour", () => {
+    // 22:00, every half hour, its hours 09:00 to 17:00: one turn, at 09:00 tomorrow, not one each half hour tonight.
+    const late = new Date(2026, 9, 19, 22, 0).getTime();
+    const windowed = {
+      ...own("scout", new Date(2026, 9, 19, 16, 50).getTime(), 30),
+      cadence: { interval_minutes: 30, window: { start: "09:00", end: "17:00" } },
+      next_turn_at: iso(at(1, 9)),
+    };
+    const wakes = upcoming({ ...from, booked: [], cron: [], own: [windowed] }, late);
+    expect(wakes.map((w) => [w.kind, w.at, w.every])).toEqual([["turn", at(1, 9), "every 30 min, 09:00–17:00"]]);
+    // None to come, by the server's word (its hours never come): none.
+    expect(upcoming({ ...from, booked: [], cron: [], own: [{ ...windowed, next_turn_at: null }] }, late)).toEqual([]);
+  });
+
   it("leaves out an agent that is paused or switched off", () => {
     const paused = { ...own("scout", at(0, 9), 30), paused_until: iso(at(0, 18)) };
     const off = { ...own("other", at(0, 9), 30), enabled_in_state: false };

@@ -93,10 +93,23 @@ describe("homes drawn from a seed", () => {
           h.props.some((p) => PHOTO_FRAMES.includes(p.kind)),
           label,
         ).toBe(true);
-        // A calendar of its owner's day.
+      }
+  });
+
+  // Every seed, every preset: a wall too full for a calendar is rare, a few homes in a few thousand, so a handful
+  // of seeds would never meet one.
+  it("always have a calendar of their owner's day, whatever the preset", { timeout: 60_000 }, () => {
+    for (const h of homes)
+      expect(
+        h.props.some((p) => p.kind === "calendar"),
+        h.name,
+      ).toBe(true);
+    for (const preset of PRESETS)
+      for (const seed of seeds) {
+        const h = homePlace(seed, "a room", preset.id);
         expect(
           h.props.some((p) => p.kind === "calendar"),
-          label,
+          `${preset.id} ${seed}`,
         ).toBe(true);
       }
   });

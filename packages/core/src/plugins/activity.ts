@@ -44,15 +44,13 @@
  */
 
 import { isStallStop, stallReasonOf } from "../agent/loop.js";
-import { isInTimeWindow } from "../db/autopilot-queries.js";
 import { type ExploratoryState, getExploratoryState } from "../db/exploratory-queries.js";
 import type { EventBus, RuntimeEventPayload, Subscription } from "../events.js";
-import { tickIntervalMs } from "../exploratory/worker.js";
+import { nextOwnTurn, type OwnTurns, ownTurnsOf } from "../exploratory/next-turn.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import { fromDbTime, ScheduleStore } from "../schedules/store.js";
 import type { StateCaller, StateService } from "../state/service.js";
-import { runtimeTimeProvider, systemTimeZone } from "../time/provider.js";
-import { zonedParts } from "../time/zoned.js";
+import { runtimeTimeProvider } from "../time/provider.js";
 import { anyAvatar } from "./places.js";
 
 export const ACTIVITY_TYPE = "activity";
@@ -738,67 +736,22 @@ export function whyAsleep(at: {
   return null;
 }
 
-/** How an agent that runs on its own keeps time, for {@link nextWake}. */
-export interface OwnTurns {
-  /** Its last turn; null before its first. */
-  last: string | null;
-  /** The interval it is on. */
-  intervalMs: number;
-  /** The hours it keeps to, as HH:MM in `timeZone`: a turn due outside them waits for them to start. */
-  window?: { start: string; end: string };
-  timeZone?: string;
-  /** It has had all the turns it may today: none before this. */
-  notBefore?: string;
-}
-
 /**
  * When an agent next wakes on its own, as an ISO time: the soonest wake it
  * booked, or its next turn when it runs on its own, whichever comes first.
  * Null when nothing will wake it. A time that has passed stays as it was
  * rather than becoming "now": the plugin asks again every few seconds, and a
- * time that moved each time would be a new record each time.
+ * time that moved each time would be a new record each time. So nothing
+ * before its first turn either, which the worker takes at its next look.
  */
 export function nextWake(at: { booked: string | null; own: OwnTurns | null; now: Date }): string | null {
   const times: number[] = [];
   const booked = at.booked ? Date.parse(at.booked) : Number.NaN;
   if (Number.isFinite(booked)) times.push(booked);
-  const own = at.own ? ownTurn(at.own, at.now.getTime()) : undefined;
+  const first = !at.own || !Number.isFinite(Date.parse(at.own.last ?? ""));
+  const own = at.own && !first ? nextOwnTurn(at.own, at.now.getTime()) : undefined;
   if (own !== undefined) times.push(own);
   return times.length ? new Date(Math.min(...times)).toISOString() : null;
-}
-
-/**
- * Its next turn, the way the exploratory worker decides: its last turn plus
- * the interval it is on, once the day's limit lifts, within its hours. Due
- * outside its hours, or overdue while they are over, it is when they next
- * start. Nothing before its first turn, which the worker takes at its next
- * look, and nothing when its hours never come.
- */
-function ownTurn(own: OwnTurns, now: number): number | undefined {
-  const last = own.last ? Date.parse(own.last) : Number.NaN;
-  if (!Number.isFinite(last) || !(own.intervalMs > 0)) return undefined;
-  const lifts = own.notBefore ? Date.parse(own.notBefore) : Number.NaN;
-  const due = Math.max(last + own.intervalMs, Number.isFinite(lifts) ? lifts : 0);
-  if (!own.window) return due;
-  const { start, end } = own.window;
-  const opens = minuteOfDay(start);
-  if (opens === undefined || minuteOfDay(end) === undefined || opens === minuteOfDay(end)) return undefined;
-  // The worker takes a turn at its first look once it is due: then, or now if that has passed.
-  const from = Math.max(due, now);
-  if (isInTimeWindow(start, end, new Date(from), own.timeZone)) return due;
-  // The next time the clock reads the window's start, to the minute: the same answer for every look until then.
-  const local = zonedParts(new Date(from), own.timeZone ?? systemTimeZone());
-  const wait = (opens - (local.hour * 60 + local.minute) + 1440) % 1440 || 1440;
-  return Math.floor(from / 60_000) * 60_000 + wait * 60_000;
-}
-
-/** An HH:MM time as minutes into the day, the way the worker reads its window; undefined when it isn't one. */
-function minuteOfDay(hm: string): number | undefined {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(hm.trim());
-  if (!m) return undefined;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  return h <= 23 && min <= 59 ? h * 60 + min : undefined;
 }
 
 export const SPEECH_SCHEMA = {
@@ -869,25 +822,9 @@ const plugin: Plugin = (ctx) => {
       }
       const online = onlineOf(agent);
       const now = new Date();
-      let own: OwnTurns | null = null;
       const state =
         online?.enabled && runtime.getConfig().exploratory?.enabled && getExploratoryState(runtime.db, agent);
-      if (online && state && state.enabled && !(state.paused_until && new Date(state.paused_until) > now)) {
-        // Its turns for the day are counted against the store's date, in UTC: once they run out, none till the next.
-        const today = now.toISOString().slice(0, 10);
-        const cap = online.budgets?.stop_after_runs_per_day;
-        const spent = cap !== undefined && state.tokens_today_resets_at === today && state.runs_today >= cap;
-        own = {
-          last: state.last_tick_at,
-          intervalMs: tickIntervalMs(state, online),
-          ...(online.cadence?.window
-            ? { window: online.cadence.window, timeZone: runtimeTimeProvider(runtime).timeZone() }
-            : {}),
-          ...(spent
-            ? { notBefore: `${new Date(Date.parse(today) + 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z` }
-            : {}),
-        };
-      }
+      const own = online && state ? ownTurnsOf(state, online, runtimeTimeProvider(runtime).timeZone(), now) : null;
       return nextWake({ booked, own, now });
     },
     roomName: (ref) => runtime.getRoomStore().getRoomByRef(ref)?.name,

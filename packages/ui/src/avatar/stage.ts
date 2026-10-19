@@ -457,11 +457,10 @@ export async function createStage(
       s.texture.needsUpdate = true;
     }
   };
-  // Until the page says what is on them (and in a photo, where it never does), calendars show today and nothing booked.
+  // Until the page says what is on them (and in a photo, where it never does), calendars show today's date alone.
   const drawCalendars = () => {
-    const view = calendar ?? { title: "", now: Date.now(), wakes: [], done: [], names: false };
     for (const c of calendars) {
-      drawCalendar(c.canvas, view);
+      drawCalendar(c.canvas, calendar);
       c.texture.needsUpdate = true;
     }
   };

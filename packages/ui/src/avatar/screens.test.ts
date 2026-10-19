@@ -4,11 +4,21 @@
  * every quarter of a minute read off the clock; and in a home, the pages
  * about its owner.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { DashboardWidgetSpec } from "../api";
 import { clockTime } from "../lib/did";
 import type { AgentActivity } from "./doing";
-import { cardFor, endpointOf, homeCards, PAGE_MS, pageAt, plainLines, rowsFit, screenWidgets } from "./screens";
+import {
+  cardFor,
+  dashboardCards,
+  endpointOf,
+  homeCards,
+  PAGE_MS,
+  pageAt,
+  plainLines,
+  rowsFit,
+  screenWidgets,
+} from "./screens";
 
 const widget = (id: string, type: string, options?: Record<string, unknown>): DashboardWidgetSpec => ({
   id,
@@ -115,11 +125,18 @@ describe("cardFor", () => {
     expect(card.rows?.[0]).toMatchObject({ text: "planner", tag: { text: "error", tone: "bad" } });
     expect(card.rows?.[0].meta).toMatch(/\d/);
     expect(card.rows?.[1]).toEqual({ text: "writer", tag: { text: "ok", tone: "ok" } });
-    // As the run store sends them: its own name for the agent, and UTC with nothing to say so.
-    const stored = cardFor(widget("runs", "activity"), {
-      data: { runs: [{ agent_name: "scout", started_at: "2026-10-19 12:00:00", status: "noop" }] },
-    });
-    expect(stored.rows?.[0]).toMatchObject({ text: "scout", meta: clockTime(now), tag: { tone: "dim" } });
+    // As the run store sends them: its own name for the agent, and UTC with nothing to say so. On a clock off UTC,
+    // where a time read as local is hours out: CI's is on UTC, where it would be right by chance.
+    vi.stubEnv("TZ", "America/New_York");
+    try {
+      const stored = cardFor(widget("runs", "activity"), {
+        data: { runs: [{ agent_name: "scout", started_at: "2026-10-19 12:00:00", status: "noop" }] },
+      });
+      expect(clockTime(now)).toMatch(/^0?8:00/);
+      expect(stored.rows?.[0]).toMatchObject({ text: "scout", meta: clockTime(now), tag: { tone: "dim" } });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("makes a metric one big number, with its unit and what it counts", () => {
@@ -161,6 +178,34 @@ describe("cardFor", () => {
 
   it("draws a clock with the time it is drawn at, and needs nothing fetched for it", () => {
     expect(cardFor(widget("clock", "clock"), undefined)).toEqual({ id: "clock", title: "clock", clock: true });
+  });
+});
+
+describe("dashboardCards", () => {
+  it("is a page for each widget a screen can draw, with what its endpoint sent", () => {
+    const cards = dashboardCards({
+      widgets: [widget("embed", "iframe"), widget("clock", "clock"), widget("runs", "activity")],
+      fetched: { runs: { data: { runs: [{ agent: "planner", status: "ok" }] } } },
+      loaded: true,
+    });
+    expect(cards.map((c) => c.id)).toEqual(["clock", "runs"]);
+    expect(cards[1].rows?.[0]).toMatchObject({ text: "planner" });
+  });
+
+  it("is nothing until the dashboard answers, so the screen stays dark rather than say what isn't so", () => {
+    expect(dashboardCards({ widgets: [], fetched: {}, loaded: false })).toEqual([]);
+  });
+
+  it("says why there is nothing once it has: no widgets, none a screen can draw, or it couldn't be had", () => {
+    expect(dashboardCards({ widgets: [], fetched: {}, loaded: true })).toEqual([
+      { id: "board", title: "Dashboard", empty: "Nothing on the Board yet." },
+    ]);
+    expect(dashboardCards({ widgets: [widget("embed", "iframe")], fetched: {}, loaded: true })[0].empty).toMatch(
+      /Nothing on the Board a screen can show/,
+    );
+    expect(dashboardCards({ widgets: [], fetched: {}, loaded: true, error: "500 Internal" })[0].empty).toBe(
+      "Couldn't load the dashboard: 500 Internal",
+    );
   });
 });
 

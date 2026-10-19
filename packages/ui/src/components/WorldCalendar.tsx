@@ -5,6 +5,7 @@ import { clockTime } from "../lib/did";
 import { WorldPanel } from "./WorldPanel";
 
 const EVERYONE = "\u0000everyone";
+const HERE = "\u0000here";
 
 /** What kind of wake it is, in a word or two. */
 const KINDS: Record<Wake["kind"], string> = { booked: "booked", cron: "cron job", turn: "own turn" };
@@ -20,14 +21,16 @@ export function wakeWhere(wake: Wake, roomName: (ref: string) => string | undefi
 
 /**
  * A calendar's full list, opened from one on a wall: every wake to come in
- * the week, day by day, or one agent's with what it got done today. Each
- * wake says when, what kind it is, whose it is (a click goes to that agent),
- * what it will do, and where and how often it comes.
+ * the week, day by day; or one agent's, or those of whoever is in the place
+ * it hangs in, with what they got done today. Each wake says when, what kind
+ * it is, whose it is (a click goes to that agent), what it will do, and where
+ * and how often it comes.
  */
 export function WorldCalendar({
   wakes,
   done,
   who,
+  here,
   agents,
   note,
   loading,
@@ -41,31 +44,35 @@ export function WorldCalendar({
   wakes: Wake[];
   /** What agents got done today, newest first. */
   done: Done[];
-  /** Whose calendar it is; everyone's when undefined. */
-  who: string | undefined;
+  /** Whose calendar it is: one agent's, those of the agents listed, or everyone's when undefined. */
+  who: string | string[] | undefined;
+  /** Who is in the place it was opened in, when its calendar there shows theirs: "Who's here" picks them. */
+  here?: string[];
   /** Whose can be picked. */
   agents: string[];
   /** Why nothing wakes on time, when something says so: agents are paused. */
   note?: string;
   loading: boolean;
   roomName: (ref: string) => string | undefined;
-  onWho: (who: string | undefined) => void;
+  onWho: (who: string | string[] | undefined) => void;
   /** Go to an agent, where its body is. */
   onGo: (agent: string) => void;
   onTask: (id: string) => void;
   onClose: () => void;
 }) {
-  const shown = useMemo(() => (who ? wakes.filter((w) => w.agent === who) : wakes), [wakes, who]);
+  const one = typeof who === "string" ? who : undefined;
+  const among = useMemo(() => (Array.isArray(who) ? who : who ? [who] : undefined), [who]);
+  const shown = useMemo(() => (among ? wakes.filter((w) => among.includes(w.agent)) : wakes), [wakes, among]);
   const days = useMemo(() => byDay(shown), [shown]);
-  const finished = useMemo(() => (who ? done.filter((d) => d.agent === who) : done), [done, who]);
+  const finished = useMemo(() => (among ? done.filter((d) => among.includes(d.agent)) : done), [done, among]);
   const people = useMemo(
-    () => [...new Set([...agents, ...(who ? [who] : []), ...wakes.map((w) => w.agent)])].sort(),
-    [agents, who, wakes],
+    () => [...new Set([...agents, ...(one ? [one] : []), ...wakes.map((w) => w.agent)])].sort(),
+    [agents, one, wakes],
   );
   return (
     <WorldPanel
       kicker="Calendar"
-      title={who ? `${nameOf(who)}'s day` : "Everyone's next wakes"}
+      title={one ? `${nameOf(one)}'s day` : among ? "Next wakes for who's here" : "Everyone's next wakes"}
       className="world-calendar-panel"
       onClose={onClose}
     >
@@ -73,10 +80,13 @@ export function WorldCalendar({
         <label className="world-list-who">
           Whose
           <select
-            value={who ?? EVERYONE}
-            onChange={(e) => onWho(e.target.value === EVERYONE ? undefined : e.target.value)}
+            value={one ?? (among ? HERE : EVERYONE)}
+            onChange={(e) =>
+              onWho(e.target.value === EVERYONE ? undefined : e.target.value === HERE ? (here ?? []) : e.target.value)
+            }
           >
             <option value={EVERYONE}>Everyone's</option>
+            {(here || (among && !one)) && <option value={HERE}>Who's here</option>}
             {people.map((a) => (
               <option key={a} value={a}>
                 {nameOf(a)}
@@ -121,9 +131,13 @@ export function WorldCalendar({
         <p className="world-panel-quiet">
           {loading
             ? "Looking…"
-            : who
-              ? `Nothing will wake ${nameOf(who)} this week: no wake it booked, no cron job runs as it, and it doesn't run on its own.`
-              : "Nothing will wake anyone this week."}
+            : one
+              ? `Nothing will wake ${nameOf(one)} this week: no wake it booked, no cron job runs as it, and it doesn't run on its own.`
+              : among
+                ? among.length
+                  ? "Nothing will wake anyone here this week."
+                  : "No agent is here."
+                : "Nothing will wake anyone this week."}
         </p>
       )}
       {finished.length > 0 && (
@@ -134,7 +148,7 @@ export function WorldCalendar({
               <li key={d.key} className="world-calendar-wake world-calendar-done">
                 <time dateTime={new Date(d.at).toISOString()}>{clockTime(d.at)}</time>
                 <div className="world-calendar-what">
-                  {!who && (
+                  {!one && (
                     <div className="world-calendar-head">
                       <button type="button" className="world-panel-inline" onClick={() => onGo(d.agent)}>
                         {nameOf(d.agent)}

@@ -94,6 +94,8 @@ import {
   type MemoryFragment,
   NpmResourceSource,
   nextOccurrence,
+  nextOwnTurn,
+  ownTurnsOf,
   type ProjectQueryFilter,
   parseBody,
   parseSkillMd,
@@ -984,10 +986,29 @@ export function createServer(opts: ServerOptions) {
     const config = runtime.getConfig();
     const states = listExploratoryStates(runtime.db);
     const stateByName = new Map(states.map((s) => [s.agent_name, s]));
+    const timeZone = runtimeTimeProvider(runtime).timeZone();
+    const now = new Date();
     const agents = Object.entries(config.agents ?? {})
       .filter(([, def]) => def.online?.enabled)
       .map(([name, def]) => {
         const state = stateByName.get(name);
+        // When the worker next takes its turn, as the worker decides: within its hours, once the day's limit lifts.
+        // Null while it takes none (switched off, paused) or its hours never come. Running on their own being off
+        // for every agent is `enabled` below, and pausing every agent the pause routes': neither is counted here.
+        const own = ownTurnsOf(
+          {
+            enabled: state?.enabled ?? true,
+            paused_until: state?.paused_until ?? null,
+            last_tick_at: state?.last_tick_at ?? null,
+            current_interval_ms: state?.current_interval_ms ?? null,
+            runs_today: state?.runs_today ?? 0,
+            tokens_today_resets_at: state?.tokens_today_resets_at ?? null,
+          },
+          def.online ?? {},
+          timeZone,
+          now,
+        );
+        const next = own ? nextOwnTurn(own, now.getTime()) : undefined;
         return {
           name,
           enabled_in_config: true,
@@ -1000,6 +1021,7 @@ export function createServer(opts: ServerOptions) {
           runs_today: state?.runs_today ?? 0,
           cadence: def.online?.cadence ?? null,
           budgets: def.online?.budgets ?? null,
+          next_turn_at: next !== undefined ? new Date(next).toISOString() : null,
         };
       });
     return c.json({

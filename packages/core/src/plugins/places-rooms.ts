@@ -615,7 +615,7 @@ const NEEDS: Record<Need, Needed> = {
     kind: "calendar",
     has: (p) => p.props.some((i) => i.kind === "calendar"),
     near: (p) => p.spots.find((s) => s.activity === "type")?.item,
-    smaller: [0.8],
+    smaller: [0.8, 0.6],
   },
 };
 

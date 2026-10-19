@@ -24,7 +24,7 @@ import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
-import { cardFor, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
+import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
 import type { Companion, UseSpot } from "../avatar/stage";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
@@ -312,16 +312,23 @@ export function useBoardTasks(enabled: boolean): {
 /** How often the screens and calendars on the walls ask again for what they show. */
 const WALL_REFRESH_MS = 60_000;
 
+/** The dashboard as the walls have it: its widgets, what the first few's endpoints sent, and whether it was had. */
+export interface WallDashboard {
+  widgets: DashboardWidgetSpec[];
+  fetched: Record<string, Fetched>;
+  /** Asked for and answered, with widgets or without. */
+  loaded: boolean;
+  /** Why it couldn't be had, the last time it was asked for. */
+  error?: string;
+}
+
 /**
  * The dashboard, for a screen on a wall and the panel it opens: every widget
  * the Board page has, and what the endpoints of the first few, the ones a
  * screen shows, sent. Asked again every minute.
  */
-export function useDashboard(enabled: boolean): { widgets: DashboardWidgetSpec[]; fetched: Record<string, Fetched> } {
-  const [state, setState] = useState<{ widgets: DashboardWidgetSpec[]; fetched: Record<string, Fetched> }>({
-    widgets: [],
-    fetched: {},
-  });
+export function useDashboard(enabled: boolean): WallDashboard {
+  const [state, setState] = useState<WallDashboard>({ widgets: [], fetched: {}, loaded: false });
   useEffect(() => {
     if (!enabled) return;
     let gone = false;
@@ -329,7 +336,10 @@ export function useDashboard(enabled: boolean): { widgets: DashboardWidgetSpec[]
       let widgets: DashboardWidgetSpec[];
       try {
         widgets = (await fetchDashboard()).widgets ?? [];
-      } catch {
+      } catch (err) {
+        // What it showed stays up; the panel and an empty screen say why there is nothing newer.
+        const error = err instanceof Error ? err.message : String(err);
+        if (!gone) setState((was) => ({ ...was, loaded: true, error }));
         return;
       }
       const fetched = await Promise.all(
@@ -343,7 +353,7 @@ export function useDashboard(enabled: boolean): { widgets: DashboardWidgetSpec[]
           }
         }),
       );
-      if (!gone) setState({ widgets, fetched: Object.fromEntries(fetched) });
+      if (!gone) setState({ widgets, fetched: Object.fromEntries(fetched), loaded: true });
     };
     void load();
     const timer = setInterval(load, WALL_REFRESH_MS);
@@ -666,7 +676,8 @@ type Panel =
   | { kind: "needs" }
   | { kind: "need"; agent: string; fromList?: boolean }
   | { kind: "dashboard"; focus?: string }
-  | { kind: "calendar"; who?: string };
+  /** A calendar's full list: one agent's, those of whoever is in the place it hangs in, or everyone's. */
+  | { kind: "calendar"; who?: string; here?: true };
 
 interface LiveInfo {
   enabled?: boolean;
@@ -1073,7 +1084,8 @@ export function useChatStage({
   const dashboard = useDashboard(showStage && ((hasScreen && !owner) || panel?.kind === "dashboard"));
   const wakes = useWakes(showStage && (hasCalendar || hasScreen || panel?.kind === "calendar"));
   const minute = useMinute(showStage && (hasCalendar || hasScreen || panel?.kind === "calendar"));
-  // Every agent asleep for the same reason is everyone paused: nothing on a calendar wakes until they are resumed.
+  // Pausing is for every agent at once, so one asleep because agents are paused means they all are: nothing on a
+  // calendar wakes until they are resumed.
   const paused = useMemo(() => Object.values(activities).some((a) => a.detail === "agents are paused"), [activities]);
   const done = useMemo(() => doneToday(allTasks, activities, minute), [allTasks, activities, minute]);
   // A screen in a home goes through what its owner is up to; anywhere else, the dashboard's first few widgets.
@@ -1089,8 +1101,10 @@ export function useChatStage({
           .map((w) => ({ when: wakeWhen(w.at, minute), what: w.what })),
         now: minute,
       });
-    return screenWidgets(dashboard.widgets).map((w) => cardFor(w, dashboard.fetched[w.id], minute));
+    return dashboardCards(dashboard, minute);
   }, [hasScreen, owner, activities, allTasks, wakes, minute, dashboard]);
+  // Whose wakes a calendar shows outside a home and the lobby: whoever is there. Its full list opens on them too.
+  const among = useMemo(() => (owner || placeId === "lobby" ? undefined : here), [owner, placeId, here]);
   // A calendar in a home is its owner's day; in the lobby, everyone's next wakes; elsewhere, those of whoever is there.
   const calendarView = useMemo((): CalendarView | undefined => {
     if (!hasCalendar) return undefined;
@@ -1121,7 +1135,7 @@ export function useChatStage({
         return;
       }
       if (action === "calendar") {
-        setPanel({ kind: "calendar", ...(owner ? { who: owner } : {}) });
+        setPanel({ kind: "calendar", ...(owner ? { who: owner } : placeId !== "lobby" ? { here: true } : {}) });
         return;
       }
       if (action === "tasks") {
@@ -1347,6 +1361,8 @@ export function useChatStage({
     overlay = (
       <WorldDashboard
         widgets={dashboard.widgets}
+        loaded={dashboard.loaded}
+        {...(dashboard.error ? { error: dashboard.error } : {})}
         {...(panel.focus ? { focus: panel.focus } : {})}
         onTask={(id) => setPanel({ kind: "task", id })}
         onTasks={() => {
@@ -1361,12 +1377,13 @@ export function useChatStage({
       <WorldCalendar
         wakes={wakes ?? []}
         done={done}
-        who={panel.who}
+        who={panel.here ? (among ?? []) : panel.who}
+        {...(among ? { here: among } : {})}
         agents={agentNames}
         {...(paused ? { note: PAUSED_NOTE } : {})}
         loading={wakes === null}
         roomName={(ref) => map.places.find((p) => p.id === `room:${ref}`)?.name}
-        onWho={(who) => setPanel({ kind: "calendar", ...(who ? { who } : {}) })}
+        onWho={(who) => setPanel({ kind: "calendar", ...(Array.isArray(who) ? { here: true } : who ? { who } : {}) })}
         onGo={(who) => {
           // Off to it, where its body is: or its card, when it has no body anywhere to go to.
           if (goSee(who)) setPanel(null);
