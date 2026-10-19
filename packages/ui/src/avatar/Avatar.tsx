@@ -308,8 +308,8 @@ export function Avatar({
           </fieldset>
           <p className="talk-keys">
             {travel === "walk"
-              ? "WASD or arrows to walk · click the floor to go there · drag to look round"
-              : "WASD to fly · E up, Q down · drag to turn · wheel to zoom"}
+              ? "WASD or arrows to walk · Shift to run · click the floor to go there · drag to look"
+              : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to zoom"}
           </p>
         </>
       )}

@@ -156,8 +156,10 @@ by their usual names: an idle, a talking idle, a walk, sitting and talking
 while seated, arms folded, a head shake and a dance. A moment with no clip
 keeps the code-driven motion. Gestures with no clip, such as a wave, a point,
 a hand to the chin or a shrug, take over the arm while they play, so a wave
-isn't stacked on whatever the talking clip had the arm doing. Walking speed
-follows the walk clip's own pace, so the feet don't slide.
+isn't stacked on whatever the talking clip had the arm doing. An agent walks
+at its walk clip's own pace, so the feet don't slide. Something walking faster
+than that (you, on a visit) plays the clip faster to keep up, and a run plays
+a run clip (`Jog…`, `Run…` or `Sprint…` by name) when the library has one.
 
 Free libraries exist. Quaternius's Universal Animation Library is CC0, with
 glTF versions. As with models, keep the files in your own instance.
@@ -318,12 +320,17 @@ a mark for anyone waiting on you (`!`), stuck (`?`) or asleep (`z`). Type to
 find a place or an agent. Click one to go there.
 
 You arrive in your own body ("you"), in a colour of its own. **Walk** with
-WASD or the arrow keys, which move you the way the camera faces, or click the
-floor to walk there round the furniture; drag to look round and use the wheel
-to zoom. **Fly** puts your body away and lets the camera go anywhere: WASD to
-move, `E` up, `Q` down, drag to turn. Agents look up as you come near, and
-wave if they're free; standing next to one offers **Talk to** it, which
-switches the chat to that agent. Click any agent for its menu as usual.
+WASD or the arrow keys, which move you the way the camera faces, at a brisk
+2.75 metres a second; hold **Shift** to run at twice that. Click the floor to
+walk there round the furniture, at the same walking pace. Drag to look round
+and use the wheel to zoom. The camera moves with you every frame, so it keeps
+up however fast you go. **Fly** puts your body away and lets the camera go
+anywhere, faster again (6 metres a second, twice that with Shift): WASD to
+move, `E` up, `Q` down, drag to turn. Agents keep their own calmer pace in
+their rooms. Every speed is named in one place,
+`packages/ui/src/avatar/travel.ts`. Agents look up as you come near, and wave
+if they're free; standing next to one offers **Talk to** it, which switches
+the chat to that agent. Click any agent for its menu as usual.
 **Voices** (off until you switch it on) speaks what agents say near you: as
 a line starts in an agent's bubble within a few metres of you, the page asks
 `POST /api/live/say` for it in that agent's voice and plays it, quieter the
@@ -331,6 +338,36 @@ further you stand, one line at a time. It is off by default because each line
 is a text-to-speech render, which may run on your GPU. **Back to** returns to
 the agent's own view. While you visit, your body is
 yours: the agent's turns still run, but its cues have nothing to move.
+
+#### Who you are talking to
+
+The top of the chat panel says who the conversation is with: their name, a
+dot in their body's colour (the default agent has none), and what they are
+doing right now, from their `activity` record. **Talk to** beside it switches
+to someone else. The conversation follows who you are with:
+
+- **Going to an agent's home**, on the map or any other way, talks to that
+  agent. Your latest conversation with it comes back, or a new one starts.
+- **Coming back**, with **Back to** or by picking on the map the place the
+  agent you came from is in, talks to that agent again, where you left off.
+- **The lobby and shared places** keep the conversation you had.
+- **A reply on its way** is never cut off. The switch waits until it's done,
+  and the panel says who is next meanwhile.
+
+Switching agents, from the panel, the toolbar or the floating chat, always
+leaves the last agent's conversation. It used to keep it, so the next message
+went into the previous agent's conversation under the new agent's name. A new
+web conversation's key names its agent (`web:<agent>:<time>`, and
+`web:default:<time>` for the default agent), which is how your latest one with
+an agent is found, and how a conversation you reopen knows who it is with.
+Keys from before that (`web:<time>`) count as the default agent's.
+
+**In a meeting room** there is nobody in particular to talk to, so the panel
+reads out the room's own conversation instead: who said what, and to whom,
+newest at the bottom, read again every 15 seconds. It is for reading only.
+Nobody's read cursor moves, and you can't post into the room from here. The
+room's members are tabs above it: pick one to talk to them, and **Room** to
+go back to reading.
 
 #### Every place, and the rooms agents talk in
 
@@ -503,6 +540,7 @@ cues, and its text passes through untouched.
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
 | `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company}`, its home made from the starting room on first use. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` change means someone came or went |
 | `GET /api/ext/builtin:places/map` | every place: `{places: [{id, name, kind, agents, owner?, purpose?}]}`. `kind` is `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `agents` is who is in it: a body is in one home or shared place at a time, while a room lists every member with a body |
+| `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, made fresh each time. `404` for a place that isn't there |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |

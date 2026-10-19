@@ -16,8 +16,11 @@ import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
 import { disposeSprite, SignPost, speechBubble, tag } from "./signs";
 import { tintModel } from "./tint";
+import { gait } from "./travel";
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
+/** Seconds its pace takes to catch up with how fast it is really going: long enough to smooth a frame's hitch. */
+const PACE_SECONDS = 0.12;
 
 /** A VRM model, loaded and made ready to pose: facing +Z like a VRM 1.0 model, casting shadows. */
 export async function loadModel(url: string): Promise<VRM> {
@@ -97,6 +100,10 @@ export class Figure {
   private dozing = false;
   /** How far it was steered since the last frame, which drives its stride like a walk. */
   private steered = 0;
+  /** How fast it is going, in metres a second, smoothed over a few frames: which walk plays, and how fast. */
+  private pace = 0;
+  /** Its walking speed was set for it, and is kept when a walk clip loads. */
+  private readonly paceSet: boolean;
   /** Something it said, shown in a bubble from `from` to `until` on the stage's clock. */
   private line: { bubble: THREE.Sprite; from: number; until: number } | undefined;
   private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
@@ -118,6 +125,14 @@ export class Figure {
       onClips?: () => void;
       /** Degrees round the colour wheel, so it can be told from others in the same model. */
       hue?: number;
+      /**
+       * Metres a second it walks, instead of the pace its size or its walk
+       * clip suggests: a visitor walks briskly whatever body they have, and
+       * the clip plays faster to keep up.
+       */
+      pace?: number;
+      /** Radians a second it turns, instead of an agent's unhurried turn. */
+      turn?: number;
     } = {},
   ) {
     this.flip = vrm.meta.metaVersion === "0" ? -1 : 1;
@@ -137,8 +152,10 @@ export class Figure {
     // A small robot pads along; a tall figure strides.
     this.walker = new Walker(
       { x: this.body.position.x, z: this.body.position.z, facing: this.body.rotation.y },
-      Math.max(0.3, this.hipsY * 1.35),
+      opts.pace ?? Math.max(0.3, this.hipsY * 1.35),
     );
+    this.paceSet = opts.pace !== undefined;
+    if (opts.turn) this.walker.turnSpeed = opts.turn;
     this.stride = Math.max(0.15, this.hipsY * 1.1);
     this.radius = Math.min(0.3, Math.max(0.16, ((this.bounds.max.x - this.bounds.min.x) / 2) * 0.8));
     this.director = new Director(room, Math.random, !!opts.agentChooses);
@@ -170,7 +187,7 @@ export class Figure {
           const player = clipPlayer(library, vrm);
           if (!player) return;
           this.motion.armClearance = armClearance(vrm, points, (extra) => player.sample("idle", extra, this.flip));
-          if (player.walkSpeed) this.walker.speed = player.walkSpeed;
+          if (player.walkSpeed && !this.paceSet) this.walker.speed = player.walkSpeed;
           this.clips = player;
           opts.onClips?.();
         })
@@ -351,6 +368,7 @@ export class Figure {
     const there = here && !(this.dozing && spot?.activity !== "sit") ? spot?.activity : undefined;
     const activity = doing ? doing.activity : there;
     if (walked > 0) this.lastWalkAt = t;
+    if (dt > 0) this.pace += (walked / dt - this.pace) * (1 - Math.exp(-dt / PACE_SECONDS));
     const pose = this.motion.step(t, input.state, input.loudness, {
       walked,
       stride: this.stride,
@@ -361,9 +379,15 @@ export class Figure {
     if (this.clips) {
       // The files play the base: walking, sitting, arms folded at the window,
       // talking, or idle. The code-driven moves go on top.
+      const stride = gait(
+        this.pace,
+        this.walker.speed,
+        { walk: this.clips.walkSpeed, run: this.clips.runSpeed },
+        this.clips.covers.run,
+      );
       const role: ClipRole =
         t - this.lastWalkAt < 0.2
-          ? "walk"
+          ? stride.role
           : activity === "sit"
             ? input.state === "speaking"
               ? "sitTalk"
@@ -373,7 +397,7 @@ export class Figure {
               : input.state === "speaking"
                 ? "talk"
                 : "idle";
-      this.clips.update(role, t, dt);
+      this.clips.update(role, t, dt, role === stride.role ? stride.rate : 1);
       overlay(this.vrm, pose, this.flip);
     } else {
       apply(this.vrm, pose, this.flip);
@@ -435,10 +459,13 @@ export class Figure {
 /** Plays the animation files' base pose, crossfading between roles, with one-off clips over it. */
 interface ClipPlayer {
   /** What the files cover, so the code-driven motion leaves it alone. */
-  covers: { walk: boolean; activities: ("sit" | "look")[] };
+  covers: { walk: boolean; run: boolean; activities: ("sit" | "look")[] };
   /** The walking speed the walk clip was made for, in metres per second, so the feet don't slide. */
   walkSpeed?: number;
-  update(role: ClipRole, t: number, dt: number): void;
+  /** The same for the run clip, when there is one. */
+  runSpeed?: number;
+  /** Play a role as the base; a walk or a run at `rate` times its own speed, to keep pace with the ground. */
+  update(role: ClipRole, t: number, dt: number, rate?: number): void;
   /** Play a one-off over the base: true when the files have one for this role. */
   shot(role: ClipRole, t: number): boolean;
   /** Pose the model as a role looks partway through, arms swung out by `extra`, for fitting. */
@@ -472,14 +499,18 @@ function clipPlayer(library: ClipLibrary, vrm: VRM): ClipPlayer | undefined {
     if (from && from !== next) next.crossFadeFrom(from, seconds, false);
     else next.fadeIn(seconds);
   };
-  const walkSpeed = (clipFor("walk")?.userData as { speed?: number } | undefined)?.speed;
+  const madeFor = (role: ClipRole) => (clipFor(role)?.userData as { speed?: number } | undefined)?.speed;
+  const walkSpeed = madeFor("walk");
+  const runSpeed = roles.run ? madeFor("run") : undefined;
   return {
     covers: {
       walk: !!roles.walk,
+      run: !!roles.run,
       activities: [...(roles.sit ? (["sit"] as const) : []), ...(roles.foldArms ? (["look"] as const) : [])],
     },
     ...(walkSpeed && walkSpeed > 0.1 ? { walkSpeed } : {}),
-    update(role, t, dt) {
+    ...(runSpeed && runSpeed > 0.1 ? { runSpeed } : {}),
+    update(role, t, dt, rate = 1) {
       if (oneOff && t >= oneOff.ends) {
         if (base) fadeTo(base, oneOff.action, FADE);
         oneOff = undefined;
@@ -492,6 +523,7 @@ function clipPlayer(library: ClipLibrary, vrm: VRM): ClipPlayer | undefined {
         }
         baseRole = role;
       }
+      if (base) base.timeScale = rate;
       // Bones the files don't move keep only what goes on top: clear them each frame.
       for (const bone of POSE_BONES) vrm.humanoid.getNormalizedBoneNode(bone)?.quaternion.identity();
       mixer.update(dt);

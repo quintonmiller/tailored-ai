@@ -41,6 +41,9 @@ import {
   spotById,
   spotFor,
 } from "./scene";
+import { heldMove, keepUp, MOVE_KEYS, RUN_KEYS, type Travel, travelSpeed, VISITOR_TURN, WALK_SPEED } from "./travel";
+
+export type { Travel } from "./travel";
 
 /** Something an agent said, and when it said it (an ISO time; a reply can be timed to follow). */
 export interface Line {
@@ -54,24 +57,6 @@ const STALE_LINE_MS = 15_000;
 /** The whole room, or the avatar's head and torso. */
 export type StageView = "room" | "close";
 
-/** How a visitor gets around: walking their body, or flying the camera free. */
-export type Travel = "walk" | "fly";
-
-/** Keys a visitor moves by: [right, forward, up]. */
-const MOVE_KEYS: Record<string, [number, number, number]> = {
-  KeyW: [0, 1, 0],
-  ArrowUp: [0, 1, 0],
-  KeyS: [0, -1, 0],
-  ArrowDown: [0, -1, 0],
-  KeyA: [-1, 0, 0],
-  ArrowLeft: [-1, 0, 0],
-  KeyD: [1, 0, 0],
-  ArrowRight: [1, 0, 0],
-  KeyE: [0, 0, 1],
-  KeyQ: [0, 0, -1],
-};
-/** Metres a second the flying camera moves. */
-const FLY_SPEED = 2.2;
 /** How near an agent you have to be for it to notice you, and how far to go before it forgets. */
 const NOTICE_AT = 1.5;
 const FORGET_AT = 2.4;
@@ -336,6 +321,8 @@ export async function createStage(
     agentChooses: !!opts.chooseIdle,
     ...(selfie && start && start.activity !== "sit" ? { facing: 0.5 } : {}),
     hue: hueFor(opts.agent ?? "default"),
+    // Your own body walks briskly and turns on the spot, whatever its size; the agents keep their own calmer pace.
+    ...(opts.visitor ? { pace: WALK_SPEED, turn: VISITOR_TURN } : {}),
     // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
     onClips: () => {
       host.dataset.motion = "clips";
@@ -630,8 +617,10 @@ export async function createStage(
   const typing = (e: KeyboardEvent) =>
     (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
   const onKeyDown = (e: KeyboardEvent) => {
-    if (!opts.visitor || !(e.code in MOVE_KEYS) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
-    e.preventDefault();
+    const run = RUN_KEYS.has(e.code);
+    if (!opts.visitor || !(run || e.code in MOVE_KEYS) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
+    // Shift alone does nothing in the page to keep from it, so it is only listened to.
+    if (!run) e.preventDefault();
     held.add(e.code);
   };
   const onKeyUp = (e: KeyboardEvent) => held.delete(e.code);
@@ -850,33 +839,15 @@ export async function createStage(
     return { fwd, right: new THREE.Vector3(-fwd.z, 0, fwd.x) };
   };
 
-  /** One frame of a visit: move by the held keys, and keep the camera with you. */
+  /** One frame of a visit: move by the held keys, at a run while Shift is held. */
   function visit(dt: number) {
-    const [r, f, u] = [...held].reduce(
-      (acc, k) => {
-        const m = MOVE_KEYS[k];
-        return [acc[0] + m[0], acc[1] + m[1], acc[2] + m[2]];
-      },
-      [0, 0, 0],
-    );
+    const { right: r, forward: f, up: u, running } = heldMove(held);
+    const speed = travelSpeed(travel, running) * dt;
     if (travel === "walk") {
       if (r || f) {
         const { fwd, right } = heading();
-        const v = fwd
-          .multiplyScalar(f)
-          .add(right.multiplyScalar(r))
-          .normalize()
-          .multiplyScalar(me.walker.speed * dt);
+        const v = fwd.multiplyScalar(f).add(right.multiplyScalar(r)).normalize().multiplyScalar(speed);
         me.steer(v.x, v.z, room, obstacles);
-      }
-      // The camera keeps the same angle on you, wherever you walk.
-      if (!tween) {
-        const follow = me
-          .head()
-          .sub(controls.target)
-          .multiplyScalar(1 - Math.exp(-dt / 0.2));
-        controls.target.add(follow);
-        camera.position.add(follow);
       }
     } else if (r || f || u) {
       const look = controls.target.clone().sub(camera.position).normalize();
@@ -885,10 +856,28 @@ export async function createStage(
         .multiplyScalar(f)
         .add(right.multiplyScalar(r))
         .add(new THREE.Vector3(0, u, 0))
-        .multiplyScalar(FLY_SPEED * dt);
+        .multiplyScalar(speed);
       camera.position.add(v);
       controls.target.add(v);
     }
+  }
+
+  /** Where your body stood last frame, so the camera moves exactly as far as you did. */
+  let lastAt: [number, number] = [me.walker.place.x, me.walker.place.z];
+  /**
+   * The camera keeps the same angle on you, wherever you walk: it moves with
+   * your body each frame, after the body has moved, so it never trails behind.
+   */
+  function keepWithYou(dt: number) {
+    const p = me.walker.place;
+    const moved: [number, number, number] = [p.x - lastAt[0], 0, p.z - lastAt[1]];
+    lastAt = [p.x, p.z];
+    if (tween || travel !== "walk") return;
+    const head = me.head();
+    const t = controls.target;
+    const step = new THREE.Vector3(...keepUp([t.x, t.y, t.z], [head.x, head.y, head.z], moved, dt));
+    controls.target.add(step);
+    camera.position.add(step);
   }
 
   /** Agents look up as the visitor comes near, and wave if they are free; the nearest is reported. */
@@ -980,6 +969,7 @@ export async function createStage(
       camera.position,
       opts.still ? { activity: stillActivity } : undefined,
     );
+    if (opts.visitor) keepWithYou(dt);
     // Arrived somewhere: the close-up finds its best angle again, unless the
     // person turned the view themselves a moment ago.
     if (wasBusy && !me.walker.busy && view === "close" && !tween && t - lastDragAt > 8) moveCamera(framing("close"));

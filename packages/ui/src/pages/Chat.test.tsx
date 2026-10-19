@@ -18,13 +18,17 @@ import { Chat } from "./Chat";
 
 let root: Root;
 let container: HTMLDivElement;
-const chatPosts: { sessionKey?: string; sessionId?: string }[] = [];
+const chatPosts: { sessionKey?: string; sessionId?: string; agent?: string }[] = [];
 /** Whether the fake server continues a conversation named by id, as the real one does. */
 let continuesById = true;
 const messageFetches: string[] = [];
 let sessionRows: unknown[] = [];
 /** Pictures the fake turn's tools made, as the server sends them on the response event. */
 let turnMedia: unknown[] = [];
+/** The agents there are, as the server lists them. */
+let agentList: Record<string, unknown> = {};
+/** When set, a reply waits for this before it finishes: a turn still on its way. */
+let held: Promise<void> | null = null;
 
 const history: Record<string, unknown[]> = {
   "sess-1": [
@@ -35,16 +39,33 @@ const history: Record<string, unknown[]> = {
 
 /** The chat route's reply: it continues the conversation its key or id names, or starts a new one. */
 function reply(sessionKey: string | undefined, sessionId: string | undefined): Response {
+  const named = Object.entries(keys).find(([, k]) => k === sessionKey)?.[0];
   const continued = sessionKey === "web:kitchen" || (continuesById && sessionId === "sess-1");
-  const id = continued ? "sess-1" : "sess-new";
-  const key = continued ? "web:kitchen" : "web:fresh";
+  const id = named ?? (continued ? "sess-1" : "sess-new");
+  // A key the page made up is the new conversation's key, as the server keeps it.
+  const key = named || continued ? (keys[id] ?? "web:kitchen") : (sessionKey ?? "web:fresh");
   history[id] = [...(history[id] ?? []), { role: "user", content: "Hey!" }, { role: "assistant", content: "Hello!" }];
   const frames = [
     `event: delta\ndata: ${JSON.stringify({ text: "Hello!" })}\n\n`,
     `event: response\ndata: ${JSON.stringify({ content: "Hello!", sessionId: id, sessionKey: key, ...(turnMedia.length ? { media: turnMedia } : {}) })}\n\n`,
   ];
-  return new Response(frames.join(""));
+  const wait = held;
+  if (!wait) return new Response(frames.join(""));
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        controller.enqueue(encoder.encode(frames[0]));
+        await wait;
+        controller.enqueue(encoder.encode(frames[1]));
+        controller.close();
+      },
+    }),
+  );
 }
+
+/** Each stored conversation's key. */
+const keys: Record<string, string> = { "sess-1": "web:kitchen", "sess-p": "web:planner:100" };
 
 beforeEach(() => {
   container = document.createElement("div");
@@ -55,6 +76,12 @@ beforeEach(() => {
   sessionRows = [];
   continuesById = true;
   turnMedia = [];
+  agentList = {};
+  held = null;
+  history["sess-p"] = [
+    { role: "user", content: "Where should we stay?" },
+    { role: "assistant", content: "Alfama, near the river." },
+  ];
   localStorage.clear();
   window.location.hash = "/chat";
   delete history["sess-new"];
@@ -74,7 +101,7 @@ beforeEach(() => {
         return new Response(JSON.stringify(history[m[1]] ?? []));
       }
       if (url.startsWith("/api/sessions")) return new Response(JSON.stringify(sessionRows));
-      if (url.startsWith("/api/agents")) return new Response("{}");
+      if (url.startsWith("/api/agents")) return new Response(JSON.stringify(agentList));
       if (url.startsWith("/api/live")) return new Response(JSON.stringify({ enabled: false }));
       return new Response("{}");
     }),
@@ -191,5 +218,84 @@ describe("coming back to the chat", () => {
     await send("Send me a selfie");
     const img = container.querySelector(".chat-messages .message-bubble.assistant img") as HTMLImageElement | null;
     expect(img?.getAttribute("src")).toBe("/api/media/img-1");
+  });
+});
+
+describe("talking to another agent", () => {
+  const plannerRow = {
+    id: "sess-p",
+    key: "web:planner:100",
+    model: "m",
+    provider: "p",
+    project_id: null,
+    title: null,
+    pinned: 0,
+    created_at: "2026-10-01 09:00:00",
+    updated_at: "2026-10-01 09:00:00",
+  };
+
+  beforeEach(() => {
+    agentList = { planner: {}, writer: {} };
+    sessionRows = [plannerRow];
+    localStorage.setItem("tai.chat.activeSessionId", "sess-1");
+    localStorage.setItem("tai.chat.activeSessionKey", "web:kitchen");
+  });
+
+  async function choose(agent: string) {
+    const select = container.querySelector(".chat-agent-select") as HTMLSelectElement;
+    await act(async () => {
+      select.value = agent;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+  }
+
+  it("leaves the last agent's conversation, and picks up your latest with the new one", async () => {
+    await render();
+    expect(shown()).toContain("Earlier answer");
+    await choose("planner");
+    expect(shown()).toContain("Alfama, near the river.");
+    expect(shown()).not.toContain("Earlier answer");
+    await send("Hey!");
+    expect(chatPosts.at(-1)).toMatchObject({ sessionKey: "web:planner:100", agent: "planner" });
+  });
+
+  it("starts a new conversation, named for the agent, with one you haven't talked to", async () => {
+    await render();
+    await choose("writer");
+    expect(shown()).not.toContain("Earlier answer");
+    // Nor does a reload bring it back: the URL has let go of it.
+    expect(routeProps().sessionId).toBeUndefined();
+    await send("Hey!");
+    // Never the default agent's conversation, which is where it used to go.
+    expect(chatPosts.at(-1)?.sessionKey).toMatch(/^web:writer:\d+$/);
+    expect(chatPosts.at(-1)?.agent).toBe("writer");
+  });
+
+  it("lets a reply on its way finish before switching", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    await render();
+    await send("Hey!");
+    await choose("planner");
+    // The reply is still coming into the conversation it was asked in.
+    expect(shown()).toContain("Earlier answer");
+    expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("");
+    await act(async () => release());
+    await settle();
+    expect(chatPosts.map((p) => p.sessionKey)).toEqual(["web:kitchen"]);
+    expect(shown()).toContain("Alfama, near the river.");
+    expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("planner");
+  });
+
+  it("goes on with the agent a reopened conversation was with", async () => {
+    localStorage.setItem("tai.chat.activeSessionId", "sess-p");
+    localStorage.setItem("tai.chat.activeSessionKey", "web:planner:100");
+    await render();
+    expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("planner");
+    await send("Hey!");
+    expect(chatPosts.at(-1)).toMatchObject({ sessionKey: "web:planner:100", agent: "planner" });
   });
 });

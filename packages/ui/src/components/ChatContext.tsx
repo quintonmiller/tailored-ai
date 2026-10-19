@@ -17,6 +17,7 @@ import {
   updateSession,
 } from "../api";
 import type { ComponentSpec, MediaRef } from "../lib/content.js";
+import { agentOfKey, latestWith, newChatKey } from "../lib/conversations";
 import { describeError, useToast } from "./Toast";
 
 export interface PendingApproval {
@@ -55,8 +56,16 @@ export interface ChatStore {
   approvals: PendingApproval[];
   // Agent registry + selection
   agents: Record<string, AgentInfo>;
+  /** The agent the conversation on screen is with; "" is the default agent. */
   selectedAgent: string;
-  setSelectedAgent: (name: string) => void;
+  /**
+   * Talk to another agent: your latest conversation with it comes back, or a
+   * new one starts (always new with `fresh`). Never the last agent's
+   * conversation. While a reply is on its way the switch waits for it.
+   */
+  setSelectedAgent: (name: string, opts?: { fresh?: boolean }) => void;
+  /** The agent a switch is waiting to go to, until the reply on its way is done; null when none is. */
+  nextAgent: string | null;
   // Session list (sidebar)
   sessions: SessionRow[];
   refreshSessions: () => void;
@@ -107,12 +116,22 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [elapsed, setElapsed] = useState(0);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [agents, setAgents] = useState<Record<string, AgentInfo>>({});
-  const [selectedAgent, setSelectedAgent] = useState("");
+  const [selectedAgent, setAgent] = useState("");
+  const [nextAgent, setNextAgent] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [dockSignal, setDockSignal] = useState<DockSignal | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const dockNonce = useRef(0);
+  // Moved on by every switch, opened conversation and message sent: a latest
+  // conversation that turns up after any of them is too late to open.
+  const turns = useRef(0);
+  /** A switch asked for while a reply was on its way. */
+  const queued = useRef<{ name: string; fresh: boolean } | null>(null);
+  const sendingNow = useRef(false);
+  sendingNow.current = sending;
+  const agentNow = useRef(selectedAgent);
+  agentNow.current = selectedAgent;
 
   const requestDock = useCallback((text?: string) => {
     dockNonce.current += 1;
@@ -139,6 +158,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         setSessionId(stored);
         setMessages(msgs);
         if (storedKey) setSessionKey(storedKey);
+        // Who it is with, so the next message goes to them and not to the default agent.
+        const who = agentOfKey(storedKey);
+        if (who !== undefined) setAgent(who);
       })
       .catch(() => {
         // Stored id is stale (db reset, etc.) — drop it silently.
@@ -167,6 +189,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // An image with no caption is a real message — requiring text here would
       // repeat the bug this feature exists to fix.
       if ((!text.trim() && !media?.length) || sending) return;
+      turns.current++;
       setSending(true);
       setPendingTools([]);
       setApprovals([]);
@@ -190,9 +213,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       // Components the turn's tools sent, by id so an update replaces in place.
       const components = new Map<string, ComponentSpec>();
 
+      // A new conversation is named for the agent it is with, so it can be found again by going to them.
+      const key = sessionKey ?? (sessionId ? undefined : newChatKey(selectedAgent));
       abortRef.current = sendChat(
         text,
-        sessionKey,
+        key,
         (event: ChatEvent) => {
           switch (event.type) {
             case "cue":
@@ -367,6 +392,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [sending, approvals, pendingTools]);
 
   const newChat = useCallback(() => {
+    turns.current++;
     setMessages([]);
     setSessionKey(undefined);
     setSessionId(undefined);
@@ -375,9 +401,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const loadSession = useCallback(
     (s: SessionRow) => {
+      turns.current++;
       setSessionId(s.id);
       setSessionKey(s.key ?? undefined);
       setStoredChatSessionId(s.id, s.key ?? null);
+      // A conversation whose key says who it is with goes on with them.
+      const who = agentOfKey(s.key);
+      if (who !== undefined) setAgent(who);
       setMessages([]);
       fetchMessages(s.id)
         .then(setMessages)
@@ -385,6 +415,51 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     },
     [toast],
   );
+
+  const switchTo = useCallback(
+    (name: string, fresh: boolean) => {
+      if (name === agentNow.current && !fresh) return;
+      // Off the last agent's conversation at once: what is typed now starts one with this agent.
+      newChat();
+      setAgent(name);
+      if (fresh) return;
+      const turn = turns.current;
+      fetchSessions({ limit: 500 })
+        .then((rows) => {
+          if (turns.current !== turn) return;
+          const latest = latestWith(rows, name);
+          if (latest) loadSession(latest);
+        })
+        .catch(() => {
+          // Nothing to pick up: the new conversation stands.
+        });
+    },
+    [newChat, loadSession],
+  );
+
+  const setSelectedAgent = useCallback(
+    (name: string, opts?: { fresh?: boolean }) => {
+      const fresh = !!opts?.fresh;
+      // A reply on its way is never cut off: the switch waits for it.
+      if (sendingNow.current) {
+        queued.current = { name, fresh };
+        setNextAgent(name);
+        return;
+      }
+      queued.current = null;
+      setNextAgent(null);
+      switchTo(name, fresh);
+    },
+    [switchTo],
+  );
+
+  useEffect(() => {
+    if (sending || !queued.current) return;
+    const { name, fresh } = queued.current;
+    queued.current = null;
+    setNextAgent(null);
+    switchTo(name, fresh);
+  }, [sending, switchTo]);
 
   const renameSession = useCallback(
     (s: SessionRow, title: string | null) => {
@@ -470,6 +545,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       agents,
       selectedAgent,
       setSelectedAgent,
+      nextAgent,
       sessions,
       refreshSessions,
       send,
@@ -502,6 +578,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       approvals,
       agents,
       selectedAgent,
+      setSelectedAgent,
+      nextAgent,
       sessions,
       refreshSessions,
       send,

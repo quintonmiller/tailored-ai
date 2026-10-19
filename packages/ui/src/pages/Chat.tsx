@@ -3,6 +3,7 @@ import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
 import { useChatStore } from "../components/ChatContext";
 import { TalkButton, useChatStage } from "../components/ChatStage";
+import { ChatWith, RoomLines, RoomWith, useRoomTalk } from "../components/ChatWith";
 import { AttachmentTray, filesFromDrop, filesFromPaste, useAttachments } from "../components/Composer.js";
 import { MessageBubble, ThinkingDisclosure, ToolLogPanel } from "../components/MessageBubble";
 import { SuggestionChips } from "../components/SuggestionChips";
@@ -78,7 +79,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     [store.messages],
   );
 
-  const agentNames = Object.keys(store.agents);
+  const agentNames = Object.keys(store.agents).filter((name) => name !== "default");
 
   // The agent's body behind the conversation, when it has one, and talking
   // out loud into the same conversation.
@@ -91,8 +92,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     setTurnExtras: store.setTurnExtras,
     onChatWith: (name) => store.setSelectedAgent(name === "default" ? "" : name),
     onDraft: (name, text) => {
-      store.setSelectedAgent(name === "default" ? "" : name);
-      store.newChat();
+      store.setSelectedAgent(name === "default" ? "" : name, { fresh: true });
       setInput(text);
       setPanelOpen(true);
     },
@@ -113,6 +113,16 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       });
     },
   });
+
+  // In a meeting room there is nobody in particular to talk to: the panel reads out the room's own
+  // conversation, until you pick one of its members to talk to.
+  const meeting = scene.showStage && scene.visiting?.startsWith("room:") ? scene.visiting : null;
+  const talk = useRoomTalk(meeting);
+  const [reading, setReading] = useState(true);
+  useEffect(() => {
+    if (meeting) setReading(true);
+  }, [meeting]);
+  const showRoom = !!meeting && reading;
 
   const { attachments, add, remove, clear, readyIds, busy } = useAttachments();
   const [dragging, setDragging] = useState(false);
@@ -157,8 +167,16 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
 
   // Reflect store session changes in the URL hash so reload preserves the
   // location and so route prop drives the canonical state.
+  const hadSession = useRef(false);
   useEffect(() => {
-    if (!store.sessionId) return;
+    if (!store.sessionId) {
+      // Switched to another agent, or a new chat: the URL lets go of the old conversation, so a reload
+      // doesn't open it again. Not before one was shown, or a link to one would be dropped as it loads.
+      if (hadSession.current && window.location.hash.includes("session=")) window.location.hash = "/chat";
+      hadSession.current = false;
+      return;
+    }
+    hadSession.current = true;
     const params = new URLSearchParams();
     if (store.sessionKey) params.set("key", store.sessionKey);
     params.set("session", store.sessionId);
@@ -250,7 +268,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           <button type="button" className="chat-toolbar-btn chat-new-btn" onClick={handleNewChat}>
             + New Chat
           </button>
-          {agentNames.length > 0 && (
+          {agentNames.length > 0 && !scene.showStage && (
             <select
               className="chat-agent-select"
               value={store.selectedAgent}
@@ -265,7 +283,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
               ))}
             </select>
           )}
-          {store.sessionKey && <span className="chat-session-label">Session: {store.sessionKey}</span>}
+          {store.sessionKey && !showRoom && <span className="chat-session-label">Session: {store.sessionKey}</span>}
           <span className="chat-toolbar-spacer" />
           {scene.has3d && (
             <button
@@ -291,40 +309,70 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           )}
         </div>
 
-        <div className="chat-messages">
-          {store.messages.length === 0 && !store.sending && (
-            <div className="chat-empty-state">
-              <SuggestionChips onPick={(text) => store.send(text)} />
-              <div className="chat-empty-text">
-                Send a message to start a conversation
-                {store.selectedAgent ? ` with the "${store.selectedAgent}" agent` : ""}.
-              </div>
-            </div>
-          )}
-          {displayMessages.map((m, i) => (
-            <MessageBubble key={i} message={m} />
+        {scene.showStage &&
+          (meeting ? (
+            <RoomWith
+              talk={talk}
+              fallbackName={scene.placeName}
+              reading={reading}
+              agent={store.selectedAgent}
+              activities={scene.activities}
+              onRead={() => setReading(true)}
+              onTalk={(name) => {
+                setReading(false);
+                store.setSelectedAgent(name === "default" ? "" : name);
+              }}
+            />
+          ) : (
+            <ChatWith
+              agent={store.selectedAgent}
+              agents={agentNames}
+              activity={scene.activities[store.selectedAgent || "default"]}
+              next={store.nextAgent}
+              onSwitch={(name) => store.setSelectedAgent(name)}
+            />
           ))}
-          {store.sending && store.streamReasoning && <ThinkingDisclosure reasoning={store.streamReasoning} live />}
-          {store.sending && store.streamText && (
-            <MessageBubble message={{ role: "assistant", content: store.streamText }} />
-          )}
-          {store.sending &&
-            !store.streamText &&
-            (store.pendingTools.length > 0 ? (
-              <ToolLogPanel entries={store.pendingTools} live elapsed={store.elapsed} />
-            ) : (
-              <div className="tool-activity">
-                <div className="spinner" />
-                <span>
-                  {store.activeTool ? `Calling ${store.activeTool}…` : (store.activityDesc ?? "Thinking…")}
-                  {store.elapsed > 0 ? ` · ${store.elapsed}s` : ""}
-                </span>
-              </div>
-            ))}
-          {scene.spoken && (
+
+        <div className="chat-messages">
+          {showRoom ? (
+            <RoomLines talk={talk} />
+          ) : (
             <>
-              <MessageBubble message={{ role: "user", content: scene.spoken.heard }} />
-              <MessageBubble message={{ role: "assistant", content: scene.spoken.replying || "…" }} />
+              {store.messages.length === 0 && !store.sending && (
+                <div className="chat-empty-state">
+                  <SuggestionChips onPick={(text) => store.send(text)} />
+                  <div className="chat-empty-text">
+                    Send a message to start a conversation
+                    {store.selectedAgent ? ` with the "${store.selectedAgent}" agent` : ""}.
+                  </div>
+                </div>
+              )}
+              {displayMessages.map((m, i) => (
+                <MessageBubble key={i} message={m} />
+              ))}
+              {store.sending && store.streamReasoning && <ThinkingDisclosure reasoning={store.streamReasoning} live />}
+              {store.sending && store.streamText && (
+                <MessageBubble message={{ role: "assistant", content: store.streamText }} />
+              )}
+              {store.sending &&
+                !store.streamText &&
+                (store.pendingTools.length > 0 ? (
+                  <ToolLogPanel entries={store.pendingTools} live elapsed={store.elapsed} />
+                ) : (
+                  <div className="tool-activity">
+                    <div className="spinner" />
+                    <span>
+                      {store.activeTool ? `Calling ${store.activeTool}…` : (store.activityDesc ?? "Thinking…")}
+                      {store.elapsed > 0 ? ` · ${store.elapsed}s` : ""}
+                    </span>
+                  </div>
+                ))}
+              {scene.spoken && (
+                <>
+                  <MessageBubble message={{ role: "user", content: scene.spoken.heard }} />
+                  <MessageBubble message={{ role: "assistant", content: scene.spoken.replying || "…" }} />
+                </>
+              )}
             </>
           )}
           {store.approvals.length > 0 && (
@@ -338,6 +386,9 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           )}
         </div>
         {scene.voice.error && <div className="chat-voice-error">{scene.voice.error}</div>}
+        {showRoom && (
+          <p className="chat-room-note">The room's own conversation, to read. Pick someone above to talk to them.</p>
+        )}
         <AttachmentTray attachments={attachments} onRemove={remove} />
         {/*
           Drag handlers sit on the bar itself so the whole strip is a target.
@@ -350,6 +401,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
         */}
         <div
           className={`chat-input-bar${dragging ? " dragging" : ""}`}
+          hidden={showRoom}
           onDragOver={(e) => {
             // Only claim the drop when files are actually being dragged;
             // otherwise text selections inside the page start looking droppable.
@@ -390,7 +442,9 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           </button>
           <input
             type="text"
-            placeholder="Type a message..."
+            placeholder={
+              scene.showStage ? `Message ${store.selectedAgent || "the default agent"}…` : "Type a message..."
+            }
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onPaste={(e) => {
