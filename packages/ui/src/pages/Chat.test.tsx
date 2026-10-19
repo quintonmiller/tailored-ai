@@ -23,6 +23,8 @@ const chatPosts: { sessionKey?: string; sessionId?: string }[] = [];
 let continuesById = true;
 const messageFetches: string[] = [];
 let sessionRows: unknown[] = [];
+/** Pictures the fake turn's tools made, as the server sends them on the response event. */
+let turnMedia: unknown[] = [];
 
 const history: Record<string, unknown[]> = {
   "sess-1": [
@@ -39,7 +41,7 @@ function reply(sessionKey: string | undefined, sessionId: string | undefined): R
   history[id] = [...(history[id] ?? []), { role: "user", content: "Hey!" }, { role: "assistant", content: "Hello!" }];
   const frames = [
     `event: delta\ndata: ${JSON.stringify({ text: "Hello!" })}\n\n`,
-    `event: response\ndata: ${JSON.stringify({ content: "Hello!", sessionId: id, sessionKey: key })}\n\n`,
+    `event: response\ndata: ${JSON.stringify({ content: "Hello!", sessionId: id, sessionKey: key, ...(turnMedia.length ? { media: turnMedia } : {}) })}\n\n`,
   ];
   return new Response(frames.join(""));
 }
@@ -52,6 +54,7 @@ beforeEach(() => {
   messageFetches.length = 0;
   sessionRows = [];
   continuesById = true;
+  turnMedia = [];
   localStorage.clear();
   window.location.hash = "/chat";
   delete history["sess-new"];
@@ -180,5 +183,13 @@ describe("coming back to the chat", () => {
     // The old conversation is never loaded back over the new one.
     expect(messageFetches.filter((id) => id === "sess-1")).toEqual([]);
     expect(shown()).toContain("Hello!");
+  });
+
+  it("shows a picture the turn's tools made with the reply, as Discord sends it", async () => {
+    turnMedia = [{ id: "img-1", mimeType: "image/png", bytes: 100, name: "selfie.png" }];
+    await render();
+    await send("Send me a selfie");
+    const img = container.querySelector(".chat-messages .message-bubble.assistant img") as HTMLImageElement | null;
+    expect(img?.getAttribute("src")).toBe("/api/media/img-1");
   });
 });

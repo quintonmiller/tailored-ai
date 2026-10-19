@@ -260,6 +260,28 @@ and blocks, balls and cylinders of any size and colour. Seats, desks, the
 bookshelf, the TV, the fireplace and windows each bring a spot: add an
 armchair, and the agent can sit in it, and so can a click.
 
+#### Photos and selfies
+
+The agent can take a picture of its room and send it: `photo` with `view`
+`room` for the whole room or `selfie` for a portrait close-up, `at` a spot to
+be there ("the couch"), and a `gesture` to strike ("wave"). Ask on Discord for
+a selfie from the couch, and the reply arrives with one attached. On the chat
+page, the picture shows under the reply. Pictures any tool makes in a turn
+show there now, as Discord already attached them.
+
+The photo is the room as the page draws it, lit for the time of day.
+The server renders the page's bare `#/snapshot` view in headless Chromium and
+takes a screenshot: about five seconds a picture, on the CPU, with no
+GPU needed. The browser stays open for two minutes after a picture in case
+another follows. The page loads through the server's usual auth with a header
+the server makes at start, keeps in memory, and accepts for reads only. The
+camera adds it to requests for the server and refuses every other request the
+page makes.
+
+Photos need Playwright with Chromium (`npm install playwright && npx
+playwright install chromium`), as the browser tool does. Without it, the tool
+says so and the agent can pass that on.
+
 Rooms come from the built-in `builtin:places` plugin. It does nothing unless
 some agent has a body. An agent with its own `tools:` list needs `place`
 in it. The page asks for the room at `GET /api/ext/builtin:places/:agent`

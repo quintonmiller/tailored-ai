@@ -432,7 +432,8 @@ export function findItem(place: Place, words: string): PlaceItem | undefined {
   );
 }
 
-function findSpot(place: Place, words: string): PlaceSpot | undefined {
+/** The spot words refer to: its place ("the couch"), its name ("on the couch") or its id. */
+export function findSpot(place: Place, words: string): PlaceSpot | undefined {
   const t = bare(words);
   return place.spots.find((s) => [s.place, s.name, s.id].some((n) => bare(n) === t));
 }

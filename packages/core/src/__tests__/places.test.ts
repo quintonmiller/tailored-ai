@@ -7,6 +7,7 @@
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 import { anyAvatar, applyAction, homeId, PLACE_TYPE, PlaceTool, readHome } from "../plugins/places.js";
+import type { Shot } from "../plugins/places-camera.js";
 import {
   defaultPlace,
   findPlacement,
@@ -288,6 +289,77 @@ describe("the place tool", () => {
     const out = await tool().execute({ action: "look" }, context("planner"));
     expect(out.success).toBe(false);
     expect(out.error).toMatch(/no body/);
+  });
+});
+
+describe("photos", () => {
+  const types = [{ name: PLACE_TYPE, scope: "agent" as const }];
+  let state: StateService;
+  beforeEach(() => {
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+  });
+
+  /** A media store that keeps what it is given, in memory. */
+  function memoryStore() {
+    const kept: { bytes: Buffer; mimeType?: string; sessionId?: string }[] = [];
+    return {
+      kept,
+      put: async (bytes: Buffer, opts?: { mimeType?: string; sessionId?: string }) => {
+        kept.push({ bytes, mimeType: opts?.mimeType, sessionId: opts?.sessionId });
+        return { id: `img-${kept.length}`, mimeType: "image/png", bytes: bytes.length };
+      },
+    };
+  }
+
+  it("takes a selfie at a spot, striking a gesture, and hands it back as an image to send", async () => {
+    const shots: Shot[] = [];
+    const tool = new PlaceTool(
+      () => state,
+      () => true,
+      async (shot) => {
+        shots.push(shot);
+        return Buffer.from("png bytes");
+      },
+    );
+    const store = memoryStore();
+    const out = await tool.execute({ action: "photo", view: "selfie", at: "the couch", gesture: "wave" }, {
+      agentName: "assistant",
+      sessionId: "s1",
+      mediaStore: store,
+    } as unknown as ToolContext);
+    expect(out.success, out.error).toBe(true);
+    expect(shots).toEqual([{ agent: "assistant", view: "selfie", spot: "couch", gesture: "wave" }]);
+    expect(store.kept).toEqual([{ bytes: Buffer.from("png bytes"), mimeType: "image/png", sessionId: "s1" }]);
+    const parts = (out.output as { parts: { type: string; text?: string; media?: { id: string } }[] }).parts;
+    expect(parts[0].text).toMatch(/selfie, on the couch/);
+    expect(parts[1]).toMatchObject({ type: "media", media: { id: "img-1" } });
+  });
+
+  it("says why when it can't: no such spot, no camera, or the camera failed", async () => {
+    const ctx = { agentName: "assistant", mediaStore: memoryStore() } as unknown as ToolContext;
+    const working = new PlaceTool(
+      () => state,
+      () => true,
+      async () => Buffer.from("x"),
+    );
+    const nowhere = await working.execute({ action: "photo", at: "the attic" }, ctx);
+    expect(nowhere.error).toMatch(/no spot called "the attic".*the couch/);
+    const blind = new PlaceTool(
+      () => state,
+      () => true,
+    );
+    expect((await blind.execute({ action: "photo" }, ctx)).error).toMatch(/aren't available/);
+    const broken = new PlaceTool(
+      () => state,
+      () => true,
+      async () => {
+        throw new Error("Photos need Playwright");
+      },
+    );
+    expect((await broken.execute({ action: "photo" }, ctx)).error).toBe("Photos need Playwright");
   });
 });
 

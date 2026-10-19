@@ -81,6 +81,12 @@ export interface Message {
   // the folded tool log so they render under the reply. Populated by
   // groupTurns() for history and by the streaming loop for a live turn.
   components?: ComponentSpec[];
+  /**
+   * Pictures the turn's tools made (a photo, a screenshot), shown with the
+   * reply as Discord attaches them. From the `response` event for a live turn,
+   * and lifted from the tool results by groupTurns() for history.
+   */
+  turnMedia?: MediaRef[];
 }
 
 export interface HealthInfo {

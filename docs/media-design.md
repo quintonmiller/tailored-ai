@@ -32,6 +32,7 @@ phase, plus the docs. Nothing merged to `main` yet.
 | P5a | One sanitizing `renderMarkdown`; a server CSP; media rendered in user, assistant and tool-result bubbles; composer picker / paste / drop |
 | P5b | `SurfaceCapabilities` (required) on `Channel` **and** `OutboundNotifier`; one shared `renderForSurface` ladder; Discord `files:`, Slack `files.uploadV2`, the CLI's placeholder + `file://`; `collectTurnMedia` as the producer |
 | P5c | `media.delivery` — a deployment can prefer a link over an attachment for bytes that *would* fit, honoured by Discord and Slack |
+| — | The web chat shows a turn's tool media with the reply, as Discord attaches it: the `/api/chat` `response` event carries `media` (from `collectTurnMedia`), and `groupTurns` lifts tool-result media onto the reply for history |
 
 New modules worth knowing about: `core/src/content/{types,codec}.ts`,
 `core/src/media/{interface,disk,registry,queries,sniff,hydrate,turn}.ts`,

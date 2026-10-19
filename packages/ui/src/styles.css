@@ -8666,6 +8666,10 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .chat-stage .talk-stage.fill { position: absolute; inset: 0; }
 .talk-stage.fill .talk-avatar { height: 100%; }
 .talk-stage.fill .talk-view { top: 56px; left: 16px; right: auto; }
+/* A photo for the server's camera: the stage alone, filling the frame, on a soft backdrop. */
+.snapshot-stage { position: fixed; inset: 0; background: radial-gradient(ellipse at 50% 38%, #2b3048 0%, #171a26 70%); color: var(--text); font-family: var(--font); }
+.snapshot-stage .talk-stage.fill { position: absolute; inset: 0; }
+.snapshot-stage .talk-avatar { cursor: default; }
 .chat-with-stage > .chat-toolbar,
 .chat-with-stage > .chat-messages,
 .chat-with-stage > .chat-input-bar,

@@ -1025,7 +1025,7 @@ export {
   type ScheduledWakeOutcome,
 } from "./rooms/watcher.js";
 export type { RuntimeOptions } from "./runtime.js";
-export { AgentRuntime } from "./runtime.js";
+export { AgentRuntime, type SelfAccess } from "./runtime.js";
 export { ScheduleRunner, type ScheduleRunnerOptions } from "./schedules/runner.js";
 export {
   fromDbTime,
