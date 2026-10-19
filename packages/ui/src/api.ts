@@ -264,6 +264,12 @@ export function deleteSession(
 }
 
 const ACTIVE_CHAT_SESSION_KEY = "tai.chat.activeSessionId";
+/**
+ * The active chat's session key, kept beside its id. The key is what the
+ * server continues a conversation by: restoring the id alone sent the next
+ * message into a brand-new conversation.
+ */
+const ACTIVE_CHAT_KEY_KEY = "tai.chat.activeSessionKey";
 
 export function getStoredChatSessionId(): string | null {
   try {
@@ -273,10 +279,25 @@ export function getStoredChatSessionId(): string | null {
   }
 }
 
-export function setStoredChatSessionId(id: string | null): void {
+export function getStoredChatSessionKey(): string | null {
   try {
-    if (id === null) localStorage.removeItem(ACTIVE_CHAT_SESSION_KEY);
-    else localStorage.setItem(ACTIVE_CHAT_SESSION_KEY, id);
+    return localStorage.getItem(ACTIVE_CHAT_KEY_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the active chat. `key` left out keeps the stored key; `null` clears it. */
+export function setStoredChatSessionId(id: string | null, key?: string | null): void {
+  try {
+    if (id === null) {
+      localStorage.removeItem(ACTIVE_CHAT_SESSION_KEY);
+      localStorage.removeItem(ACTIVE_CHAT_KEY_KEY);
+      return;
+    }
+    localStorage.setItem(ACTIVE_CHAT_SESSION_KEY, id);
+    if (key) localStorage.setItem(ACTIVE_CHAT_KEY_KEY, key);
+    else if (key === null) localStorage.removeItem(ACTIVE_CHAT_KEY_KEY);
   } catch {
     // localStorage unavailable — ignore
   }

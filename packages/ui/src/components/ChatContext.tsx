@@ -7,6 +7,7 @@ import {
   fetchMessages,
   fetchSessions,
   getStoredChatSessionId,
+  getStoredChatSessionKey,
   type Message,
   resolveApproval,
   type SessionRow,
@@ -131,15 +132,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = getStoredChatSessionId();
     if (!stored) return;
+    // The key too: it is what the next message continues this conversation by.
+    const storedKey = getStoredChatSessionKey();
     fetchMessages(stored)
       .then((msgs) => {
         setSessionId(stored);
         setMessages(msgs);
+        if (storedKey) setSessionKey(storedKey);
       })
       .catch(() => {
         // Stored id is stale (db reset, etc.) — drop it silently.
         setStoredChatSessionId(null);
       });
+    // Stored before keys were kept: find this conversation's key in the session list.
+    if (!storedKey)
+      fetchSessions()
+        .then((rows) => {
+          const key = rows.find((r) => r.id === stored)?.key;
+          if (!key) return;
+          setSessionKey((current) => current ?? key);
+          setStoredChatSessionId(stored, key);
+        })
+        .catch(() => {});
   }, []);
 
   const refreshSessions = useCallback(() => {
@@ -275,7 +289,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               abortRef.current = null;
               setSessionKey(event.data.sessionKey as string);
               setSessionId(event.data.sessionId as string);
-              setStoredChatSessionId(event.data.sessionId as string);
+              setStoredChatSessionId(event.data.sessionId as string, (event.data.sessionKey as string) ?? null);
               setPendingTools((prev) => {
                 finalTools = prev;
                 return [];
@@ -367,7 +381,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     (s: SessionRow) => {
       setSessionId(s.id);
       setSessionKey(s.key ?? undefined);
-      setStoredChatSessionId(s.id);
+      setStoredChatSessionId(s.id, s.key ?? null);
       setMessages([]);
       fetchMessages(s.id)
         .then(setMessages)

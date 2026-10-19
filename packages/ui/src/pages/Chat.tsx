@@ -20,10 +20,18 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   // Honor an explicit ?session=… route param by loading that session into
   // the shared store. Without this, deep links would no-op on a cold load
   // because the provider already restored its own last-active session.
+  //
+  // Only when the route itself changes. Reacting to every store update made
+  // this fight the URL sync below: a reply that moved the store to another
+  // conversation had this load the old one back from the stale URL, the sync
+  // point the URL at the old one, and the two bounced, reloading each time.
+  const routed = useRef<string | undefined>(undefined);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the route alone decides; the store is read, not followed.
   useEffect(() => {
-    if (!props.sessionId) return;
+    if (!props.sessionId || props.sessionId === routed.current) return;
+    routed.current = props.sessionId;
     if (props.sessionId === store.sessionId) return;
-    setStoredChatSessionId(props.sessionId);
+    setStoredChatSessionId(props.sessionId, props.sessionKey ?? null);
     fetchMessages(props.sessionId)
       .then((msgs) => {
         // Touch the store via loadSession analogue: cheapest path is to
@@ -44,13 +52,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
         void msgs;
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    props.sessionId,
-    props.sessionKey, // Touch the store via loadSession analogue: cheapest path is to
-    // mimic by calling the store's own loadSession with a minimal row.
-    store,
-  ]);
+  }, [props.sessionId, props.sessionKey]);
 
   // Load sessions list when sidebar opens or project filter changes.
   useEffect(() => {
