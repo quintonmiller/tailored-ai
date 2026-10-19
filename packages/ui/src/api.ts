@@ -1485,7 +1485,9 @@ export interface ChatEvent {
     | "activity"
     | "approval_request"
     | "memory_recalled"
-    | "component";
+    | "component"
+    /** A cue for the agent's body on the page, taken out of the reply. */
+    | "cue";
   data: Record<string, unknown>;
 }
 
@@ -1516,11 +1518,14 @@ export function sendChat(
   onEvent: (event: ChatEvent) => void,
   agent?: string,
   mediaIds?: string[],
+  /** What the page shows the agent with, so it can move that body while it answers. */
+  agentBody?: unknown,
 ): AbortController {
   const controller = new AbortController();
   const body: Record<string, unknown> = { message, sessionKey };
   if (agent) body.agent = agent;
   if (mediaIds?.length) body.mediaIds = mediaIds;
+  if (agentBody) body.body = agentBody;
 
   fetch("/api/chat", {
     method: "POST",

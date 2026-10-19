@@ -398,6 +398,24 @@ describe("runVoiceTurn", () => {
     expect(() => startLiveSession(runtime, { transport: "web" })).toThrow("Live sessions are off");
   });
 
+  it("teaches a typed turn the body too, when the page shows one", () => {
+    const runtime = runtimeWith();
+    const session = newSession(db, "x", "openai_compatible");
+    const opts = runtime.buildLoopOptions({ session, agentName: "planner", body: { gestures: ["wave"] } });
+    expect(opts.extraInstructions).toContain("You have a body the person can see.");
+    expect(opts.extraInstructions).toContain("Gestures: <wave/>.");
+    expect(runtime.buildLoopOptions({ session, agentName: "planner" }).extraInstructions ?? "").not.toContain("body");
+  });
+
+  it("puts a session's turns into the chat its key names, so talking and typing are one conversation", () => {
+    const runtime = runtimeWith();
+    const a = startLiveSession(runtime, { transport: "web", sessionKey: "web:kitchen" });
+    const b = startLiveSession(runtime, { transport: "web", sessionKey: "web:kitchen" });
+    const fresh = startLiveSession(runtime, { transport: "web" });
+    expect(b.sessionId).toBe(a.sessionId);
+    expect(fresh.sessionId).not.toBe(a.sessionId);
+  });
+
   it("keeps the prompt prefix byte-identical from one turn to the next", async () => {
     const runtime = runtimeWith();
     const live = liveSession(runtime);

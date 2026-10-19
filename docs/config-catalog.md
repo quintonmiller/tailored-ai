@@ -24,7 +24,7 @@ Fields: **79** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `agent.defaultProvider` | string | `openai_compatible` | 13 | 13 |
-| `agent.extraInstructions` | string | `""` | 3 | 2 |
+| `agent.extraInstructions` | string | `""` | 4 | 2 |
 | `agent.maxContextTokens` | number | `32768` | 3 | 1 |
 | `agent.maxHistoryTokens` | number | `20000` | 3 | 3 |
 | `agent.maxToolOutputChars` | number | `32000` | 4 | 2 |
@@ -95,7 +95,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `live.enabled` | boolean | `false` | 40 | 1 |
+| `live.enabled` | boolean | `false` | 40 | 2 |
 | `live.limits.idleMinutes` | number | `10` | 4 | 2 |
 | `live.limits.maxMinutes` | number | `30` | 2 | 2 |
 | `live.limits.maxTurns` | number | `200` | 3 | 2 |

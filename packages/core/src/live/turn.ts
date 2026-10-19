@@ -8,7 +8,7 @@
  * which a voice reply can afford.
  */
 import { runAgentLoop } from "../agent/loop.js";
-import { loadSession, newSession } from "../agent/session.js";
+import { findOrCreateSession, loadSession, newSession } from "../agent/session.js";
 import { type AgentConfig, DEFAULT_CONFIG } from "../config.js";
 import type { AgentRuntime } from "../runtime.js";
 import { type Body, type Cue, type CuePiece, CueReader, withoutCues } from "./cues.js";
@@ -47,11 +47,13 @@ export interface VoiceTurnResult {
 
 /**
  * Open a live session for an agent: refused unless `live.enabled`, with the
- * configured limits, and a fresh conversation for its turns.
+ * configured limits. Its turns go into the conversation `sessionKey` names,
+ * so talking and typing on one page are one conversation; without a key, a
+ * fresh one.
  */
 export function startLiveSession(
   runtime: Pick<AgentRuntime, "getConfig" | "getLiveSessions" | "db" | "getModel">,
-  input: { agent?: string; transport: string; body?: Body },
+  input: { agent?: string; transport: string; body?: Body; sessionKey?: string },
 ): LiveSession {
   const config = runtime.getConfig();
   if (!config.live?.enabled) {
@@ -63,7 +65,9 @@ export function startLiveSession(
   // DEFAULT_CONFIG is the one place the defaults live; a config built by hand
   // (an embed, a test) may not have been merged with it.
   const defaults = DEFAULT_CONFIG.live?.limits as Required<NonNullable<NonNullable<AgentConfig["live"]>["limits"]>>;
-  const conversation = newSession(runtime.db, runtime.getModel(), config.agent.defaultProvider);
+  const conversation = input.sessionKey
+    ? findOrCreateSession(runtime.db, input.sessionKey, runtime.getModel(), config.agent.defaultProvider)
+    : newSession(runtime.db, runtime.getModel(), config.agent.defaultProvider);
   return runtime.getLiveSessions().start({
     ...(input.agent ? { agent: input.agent } : {}),
     ...(input.body ? { body: input.body } : {}),

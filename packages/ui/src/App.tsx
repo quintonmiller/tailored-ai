@@ -19,7 +19,6 @@ import { Projects } from "./pages/Projects";
 import { Resources } from "./pages/Resources";
 import { Sandboxes } from "./pages/Sandboxes";
 import { State } from "./pages/State";
-import { Talk } from "./pages/Talk";
 import { Tasks } from "./pages/Tasks";
 import { Tools } from "./pages/Tools";
 import { WorkflowAnalytics } from "./pages/WorkflowAnalytics";
@@ -41,7 +40,6 @@ type Route =
   | { page: "workflow-analytics" }
   | { page: "sandboxes" }
   | { page: "state"; stateType?: string; stateId?: string }
-  | { page: "talk" }
   | { page: "resources" }
   | { page: "memory" }
   | { page: "actions" }
@@ -139,8 +137,9 @@ function parseHash(): Route {
   if (hash.startsWith("/sandboxes")) {
     return { page: "sandboxes" };
   }
+  // Talking moved into the chat page; old links land there.
   if (hash.startsWith("/talk")) {
-    return { page: "talk" };
+    return { page: "chat" };
   }
   if (hash.startsWith("/state")) {
     const parts = hash.split("?")[0].split("/");
@@ -336,7 +335,6 @@ function AppShell({
           {route.page === "workflow-analytics" && <WorkflowAnalytics />}
           {route.page === "sandboxes" && <Sandboxes />}
           {route.page === "state" && <State type={route.stateType} id={route.stateId} />}
-          {route.page === "talk" && <Talk />}
           {route.page === "resources" && <Resources />}
           {route.page === "memory" && <Memory />}
           {route.page === "actions" && <Approvals initialTab="actions" />}

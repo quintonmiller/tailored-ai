@@ -71,9 +71,19 @@ export interface ChatStore {
   reject: (requestId: string) => void;
   approveAll: () => void;
   rejectAll: () => void;
+  /**
+   * What a page showing the agent's body adds to each typed turn: the body,
+   * so the agent may move it, and where its cues go. Cleared with `{}`.
+   */
+  setTurnExtras: (extras: TurnExtras) => void;
   // Request the floating dock open (optionally prefilled). ChatDock subscribes.
   dockSignal: DockSignal | null;
   requestDock: (text?: string) => void;
+}
+
+export interface TurnExtras {
+  body?: unknown;
+  onCue?: (cue: { name: string; target?: string }) => void;
 }
 
 const ChatContext = createContext<ChatStore | null>(null);
@@ -83,6 +93,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionKey, setSessionKey] = useState<string | undefined>();
+  // Read when a turn is sent, not rendered: a ref keeps the page from re-rendering the store.
+  const turnExtras = useRef<TurnExtras>({});
   const [sessionId, setSessionId] = useState<string | undefined>();
   const [sending, setSending] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
@@ -179,6 +191,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         sessionKey,
         (event: ChatEvent) => {
           switch (event.type) {
+            case "cue":
+              if (typeof event.data.name === "string")
+                turnExtras.current.onCue?.({
+                  name: event.data.name,
+                  ...(typeof event.data.target === "string" ? { target: event.data.target } : {}),
+                });
+              break;
             case "delta":
               setStreamText((prev) => prev + ((event.data.text as string) ?? ""));
               break;
@@ -305,6 +324,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         },
         selectedAgent || undefined,
         media?.map((m) => m.id),
+        turnExtras.current.body,
       );
     },
     [sending, sessionKey, selectedAgent, toast],
@@ -419,6 +439,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     for (const id of ids) resolveApproval(id, false, "rejected by user").catch(() => {});
   }, [approvals]);
 
+  const setTurnExtras = useCallback((extras: TurnExtras) => {
+    turnExtras.current = extras;
+  }, []);
+
   const value = useMemo<ChatStore>(
     () => ({
       messages,
@@ -451,6 +475,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       rejectAll,
       dockSignal,
       requestDock,
+      setTurnExtras,
     }),
     [
       messages,
@@ -482,6 +507,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       rejectAll,
       dockSignal,
       requestDock,
+      setTurnExtras,
     ],
   );
 

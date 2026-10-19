@@ -417,6 +417,9 @@ export const AgentDefinitionSchema = z.object({
   skillLoading: z.enum(["eager", "progressive"]).optional(),
   online: OnlineAgentConfigSchema.optional(),
   systemPrompt: SystemPromptOverrideSchema.optional(),
+  avatar: z
+    .union([z.literal(false), z.object({ model: z.string().optional(), animations: z.array(z.string()).optional() })])
+    .optional(),
   voice: z
     .object({
       instructions: z.string().optional(),
