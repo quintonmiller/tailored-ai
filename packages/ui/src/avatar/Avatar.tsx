@@ -190,15 +190,16 @@ export function Avatar({
   const doors = !!onDoor;
   const arriveRef = useRef(arriveFrom);
   arriveRef.current = arriveFrom;
-  // The place the stage shows. On a visit, a different one arriving is a place come into, through a door or by the
-  // map; anywhere else, and for the first room to arrive, it is the same stage's room changing.
+  // The place the stage shows. A different one arriving is a place come into: on a visit, through a door or by the
+  // map; otherwise, the agent gone somewhere else. For the first room to arrive, and any change to the same place,
+  // it is the same stage's room changing.
   const shownPlace = useRef(place);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the room and its place arrive together; the room says when.
   useEffect(() => {
     if (!room || !stage.current) return;
-    if (visitor && shownPlace.current !== undefined && place !== shownPlace.current)
-      stage.current.enter(room, arriveRef.current);
-    else stage.current.setRoom(room);
+    const moved = shownPlace.current !== undefined && place !== shownPlace.current;
+    if (visitor && moved) stage.current.enter(room, arriveRef.current);
+    else stage.current.setRoom(room, moved);
     shownPlace.current = place;
   }, [room]);
   const animationsRef = useRef(animations);

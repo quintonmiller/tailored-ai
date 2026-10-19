@@ -10,16 +10,21 @@ import { initDatabase } from "../db/schema.js";
 import {
   anyAvatar,
   applyAction,
+  bodyAt,
   buildWorld,
   homeId,
   PLACE_TYPE,
   PlaceTool,
+  Presence,
   readCurrent,
   readHome,
   roomPlaceId,
   scene,
   TRANSCRIPT_LINES,
   transcript,
+  VISIT_SCHEMA,
+  VISIT_TYPE,
+  visitOf,
   WHEREABOUTS_TYPE,
   whereIs,
   whoIsIn,
@@ -538,6 +543,150 @@ describe("shared places", () => {
   });
 });
 
+describe("bodies going where the talk is", () => {
+  const types = [
+    { name: PLACE_TYPE, scope: "agent" as const },
+    { name: WHEREABOUTS_TYPE, scope: "global" as const },
+    { name: VISIT_TYPE, scope: "global" as const, provider: "memory", schema: VISIT_SCHEMA as never },
+  ];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const bodies = new Set(["host", "guest", "other"]);
+  const hasBody = (agent: string | undefined) => bodies.has(agent ?? "default");
+  const rooms = [{ ref: "local:trip", name: "trip", members: ["host", "guest"] }];
+  const trip = roomPlaceId("local:trip");
+  const QUIET = 10 * 60_000;
+  let state: StateService;
+  let tool: PlaceTool;
+  let presence: Presence;
+  const as = (agentName: string) => ({ agentName }) as ToolContext;
+  const visit = async (agent: string) => state.get(owner, { type: VISIT_TYPE, id: agent });
+  const lives = async (agent: string) => state.get(owner, { type: WHEREABOUTS_TYPE, id: agent });
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-19T02:00:00Z"));
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    tool = new PlaceTool(() => state, hasBody);
+    presence = new Presence({ state: () => state, hasBody, quietMs: QUIET });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("puts a body in the meeting room of a room it talks in, out of its home, still living there", async () => {
+    await presence.visit("host", "local:trip");
+    expect(await bodyAt(state, owner, "host")).toBe(trip);
+    // The place tool still works on its home, and where it lives is never written for a visit.
+    expect(await whereIs(state, owner, "host")).toBe(homeId("host"));
+    expect(await lives("host")).toBeNull();
+    expect(await whoIsIn(state, owner, trip, hasBody)).toEqual(["host"]);
+    expect(await whoIsIn(state, owner, homeId("host"), hasBody)).toEqual([]);
+    expect((await scene(state, owner, trip, rooms, hasBody))?.agents).toEqual(["host"]);
+    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(map.find((p) => p.id === trip)?.agents).toEqual(["host"]);
+    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual([]);
+    expect(map.find((p) => p.id === homeId("guest"))?.agents).toEqual(["guest"]);
+  });
+
+  it("goes home after a quiet spell, and the sweep clears the visit away", async () => {
+    await presence.visit("host", "local:trip");
+    vi.setSystemTime(Date.now() + QUIET - 1000);
+    expect(await bodyAt(state, owner, "host")).toBe(trip);
+    vi.setSystemTime(Date.now() + 2000);
+    expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
+    expect(await whoIsIn(state, owner, homeId("host"), hasBody)).toEqual(["host"]);
+    expect(await visit("host")).not.toBeNull();
+    await presence.sweep();
+    expect(await visit("host")).toBeNull();
+  });
+
+  it("stays while the talk goes on, without writing every message", async () => {
+    await presence.visit("host", "local:trip");
+    const first = await visit("host");
+    vi.setSystemTime(Date.now() + 20_000);
+    await presence.visit("host", "local:trip");
+    expect((await visit("host"))?.version).toBe(first?.version);
+    vi.setSystemTime(Date.now() + 5 * 60_000);
+    await presence.visit("host", "local:trip");
+    const later = await visit("host");
+    expect(Date.parse(String(later?.data.until))).toBe(Date.now() + QUIET);
+    // Long after the first message, but not long after the last: still there.
+    vi.setSystemTime(Date.now() + QUIET - 1000);
+    expect(await bodyAt(state, owner, "host")).toBe(trip);
+  });
+
+  it("moves nobody for being woken, but keeps a body that is there a while longer", async () => {
+    // Woken and quiet: it stays where it was.
+    await presence.stay("host", "local:trip");
+    expect(await visit("host")).toBeNull();
+    expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
+    // Talking in one room, woken by another: it stays at the table it is at.
+    await presence.visit("host", "local:trip");
+    await presence.stay("host", "local:other");
+    expect(await bodyAt(state, owner, "host")).toBe(trip);
+    // Woken again where it is talking, after a while: it stays longer.
+    vi.setSystemTime(Date.now() + 5 * 60_000);
+    await presence.stay("host", "local:trip");
+    expect(Date.parse(String((await visit("host"))?.data.until))).toBe(Date.now() + QUIET);
+  });
+
+  it("never ends a visit that went on while the sweep was looking", async () => {
+    await presence.visit("host", "local:trip");
+    vi.setSystemTime(Date.now() + QUIET + 1000);
+    // The sweep finds the visit over; the host speaks again before the sweep gets to it.
+    const swept = presence.sweep();
+    const spoke = presence.visit("host", "local:trip");
+    await Promise.all([swept, spoke]);
+    expect(await bodyAt(state, owner, "host")).toBe(trip);
+    expect(Date.parse(String((await visit("host"))?.data.until))).toBe(Date.now() + QUIET);
+  });
+
+  it("goes back to the shared place it lives in, not home", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    await presence.visit("host", "local:trip");
+    // Even by way of another room.
+    await presence.visit("host", "local:other");
+    expect(await bodyAt(state, owner, "host")).toBe(roomPlaceId("local:other"));
+    expect(await whereIs(state, owner, "host")).toBe("shared:lounge");
+    expect((await tool.execute({ action: "look" }, as("host"))).output).toMatch(/You are in the lounge/);
+    vi.setSystemTime(Date.now() + QUIET + 1000);
+    expect(await bodyAt(state, owner, "host")).toBe("shared:lounge");
+    await presence.sweep();
+    expect(await visit("host")).toBeNull();
+    expect(await lives("host")).toMatchObject({ data: { place: "shared:lounge" } });
+  });
+
+  it("leaves a body that has none, and ends a visit when the place tool moves the body", async () => {
+    await presence.visit("bodiless", "local:trip");
+    expect(await visit("bodiless")).toBeNull();
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    await presence.visit("host", "local:trip");
+    await tool.execute({ action: "go", to: "home" }, as("host"));
+    expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
+    await presence.visit("host", "local:trip");
+    await tool.execute({ action: "go", to: "lounge" }, as("host"));
+    expect(await bodyAt(state, owner, "host")).toBe("shared:lounge");
+  });
+
+  it("never keeps a body in a meeting room on whereabouts alone", async () => {
+    await state.put(owner, { type: WHEREABOUTS_TYPE, id: "host", scope: "global", data: { place: trip } });
+    expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
+    expect(await whoIsIn(state, owner, trip, hasBody)).toEqual([]);
+    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(map.find((p) => p.id === trip)?.agents).toEqual([]);
+    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual(["host"]);
+  });
+
+  it("reads a visit's end from its record alone", () => {
+    const now = Date.parse("2026-10-19T02:00:00Z");
+    const record = { place: trip, until: "2026-10-19T02:10:00Z" };
+    expect(visitOf(record, now)).toBe(trip);
+    expect(visitOf(record, now + QUIET)).toBeUndefined();
+    expect(visitOf({ place: trip }, now)).toBeUndefined();
+    expect(visitOf(undefined, now)).toBeUndefined();
+  });
+});
+
 describe("the map, and any place on it", () => {
   const types = [
     { name: PLACE_TYPE, scope: "agent" as const },
@@ -570,10 +719,15 @@ describe("the map, and any place on it", () => {
       ["home:guest", "home", []],
       ["home:other", "home", ["other"]],
       ["shared:lounge", "shared", ["guest", "host"]],
-      // A room shows its members wherever their bodies are; one without a body isn't drawn.
-      ["room:local:trip", "room", ["guest", "host"]],
+      // Nobody is talking in the room, so nobody is in its meeting room.
+      ["room:local:trip", "room", []],
     ]);
-    expect(map.find((p) => p.kind === "room")).toMatchObject({ name: "trip", purpose: "Plan the trip" });
+    // A room lists its members wherever their bodies are; one without a body isn't drawn.
+    expect(map.find((p) => p.kind === "room")).toMatchObject({
+      name: "trip",
+      purpose: "Plan the trip",
+      members: ["guest", "host"],
+    });
     expect(new Set(map.map((p) => p.area))).toEqual(new Set(["main"]));
   });
 
@@ -648,7 +802,8 @@ describe("the map, and any place on it", () => {
 
   it("shows a room of conversation as a meeting room, a seat for each member with a body", async () => {
     const found = await scene(state, owner, roomPlaceId("local:trip"), rooms, hasBody);
-    expect(found?.agents).toEqual(["guest", "host"]);
+    // Only the members talking there now are in it.
+    expect(found?.agents).toEqual([]);
     expect(found?.place.name).toBe("trip");
     expect(found?.place.props.filter((p) => p.kind === "armchair")).toHaveLength(2);
     expect(placeProblems(found?.place as Place)).toEqual([]);

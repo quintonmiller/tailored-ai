@@ -215,6 +215,42 @@ describe("Director", () => {
   });
 });
 
+describe("Director, with something to do", () => {
+  it("goes where the pick says, and stays as long as the pick says", () => {
+    const picks: string[] = [];
+    const d = new Director(
+      DEFAULT_ROOM,
+      () => 0.5,
+      false,
+      (here) => {
+        picks.push(here);
+        return { spot: "bookshelf", stay: [100, 100] };
+      },
+    );
+    d.decide(0, "middle", false);
+    expect(d.decide(60, "middle", false)).toBe("bookshelf");
+    expect(picks).toEqual(["middle"]);
+    d.sent();
+    // There, it keeps at it for the pick's stay, far longer than a wander's.
+    d.decide(61, "bookshelf", false);
+    expect(d.decide(150, "bookshelf", false)).toBeUndefined();
+    expect(d.decide(162, "bookshelf", false)).toBe("bookshelf");
+  });
+
+  it("wanders at random when there is nothing to pick", () => {
+    const d = new Director(
+      DEFAULT_ROOM,
+      () => 0.5,
+      false,
+      () => undefined,
+    );
+    d.decide(0, "middle", false);
+    const next = d.decide(60, "middle", false);
+    expect(next).toBeDefined();
+    expect(next).not.toBe("middle");
+  });
+});
+
 describe("Director, when the agent chooses", () => {
   it("asks the agent every few minutes instead of picking a spot, and never during a conversation", () => {
     const d = new Director(DEFAULT_ROOM, () => 0.5, true);

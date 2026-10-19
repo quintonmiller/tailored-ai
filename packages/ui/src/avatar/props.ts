@@ -976,6 +976,25 @@ export function buildHeld(kind: string): THREE.Group {
       add(new THREE.CylinderGeometry(0.014, 0.011, 0.14, 10), own(0x2b2d33), 0, 0, 0).rotation.x = Math.PI / 2;
       add(new THREE.SphereGeometry(0.03, 12, 8), own(0x9aa0a8), 0, 0, 0.085);
       break;
+    case "mug": {
+      // Upright in the hand, its handle out to the side.
+      add(new THREE.CylinderGeometry(0.042, 0.036, 0.095, 14), own(0xe9e4da), 0, 0.045, 0);
+      add(new THREE.CylinderGeometry(0.036, 0.036, 0.004, 14), own(0x5a3a22), 0, 0.091, 0);
+      const handle = add(new THREE.TorusGeometry(0.024, 0.007, 6, 12), own(0xe9e4da), 0.05, 0.048, 0);
+      handle.rotation.y = Math.PI / 2;
+      break;
+    }
+    case "watering_can": {
+      // Held out ahead: the can at the hand, its spout reaching on and up, so tipped forward it pours.
+      add(new THREE.CylinderGeometry(0.065, 0.07, 0.12, 14), own(0x3f8f5a), 0, -0.03, 0.05);
+      const spout = add(new THREE.CylinderGeometry(0.009, 0.014, 0.16, 8), own(0x3f8f5a), 0, 0.0, 0.16);
+      spout.rotation.x = Math.PI / 2 - 0.55;
+      add(new THREE.CylinderGeometry(0.018, 0.018, 0.012, 10), own(0xb8bcc4), 0, 0.045, 0.225).rotation.x =
+        Math.PI / 2 - 0.55;
+      const grip = add(new THREE.TorusGeometry(0.04, 0.008, 6, 14, Math.PI), own(0x2f6e45), 0, 0.03, 0.02);
+      grip.rotation.y = Math.PI / 2;
+      break;
+    }
     case "magnifier": {
       add(new THREE.CylinderGeometry(0.012, 0.012, 0.11, 8), own(0x6b4a2f), 0, 0, -0.03).rotation.x = Math.PI / 2;
       const ring = add(new THREE.TorusGeometry(0.05, 0.008, 6, 20), own(0xc9a227), 0, 0, 0.075);

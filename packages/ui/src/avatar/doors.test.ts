@@ -9,6 +9,8 @@ import {
   doorTo,
   inDoorway,
   standsClear,
+  THRESHOLD,
+  threshold,
 } from "./doors";
 import type { RoomDoor } from "./scene";
 
@@ -25,6 +27,15 @@ const room = {
 const [back, left, front, right] = room.doors;
 
 describe("doors", () => {
+  it("have a threshold just inside, where agents come in and go out, facing in", () => {
+    expect(threshold(room, back)).toEqual({ at: [3, -3 + THRESHOLD], facing: 0 });
+    expect(threshold(room, left)).toEqual({ at: [-5 + THRESHOLD, 1], facing: Math.PI / 2 });
+    expect(threshold(room, front).at).toEqual([-2, 3 - THRESHOLD]);
+    expect(threshold(room, right).at).toEqual([5 - THRESHOLD, 0]);
+    // Inside the room, short of where you are put coming through: an agent walks on from it.
+    for (const door of room.doors) expect(inDoorway(room, door, threshold(room, door).at)).toBe(true);
+  });
+
   it("stand at their side of the room, facing in", () => {
     expect(doorFrame(room, back)).toEqual({ at: [3, -3], facing: 0 });
     expect(doorFrame(room, left)).toEqual({ at: [-5, 1], facing: 90 });

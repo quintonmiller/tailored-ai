@@ -291,21 +291,32 @@ const BETWEEN_ASKS: [number, number] = [120, 240];
 /** Time to ask the agent what it does next, instead of picking at random. */
 export const ASK = { ask: true } as const;
 
+/** Where to go next, picked by the stage, and how long to stay once there: [shortest, longest] seconds. */
+export interface Pick {
+  spot: string;
+  stay?: [number, number];
+}
+
 /**
  * When to go somewhere, and where. While nobody is talking to it, the avatar
- * wanders: it stays a while at a spot, then picks another. With `agentChooses`,
- * it asks the agent instead, less often, and the agent's cues say where it
- * goes, or that it stays. When a conversation starts, it comes back to the
- * middle to face you, and stays there until the conversation ends.
+ * wanders: it stays a while at a spot, then moves on, to whatever `pick`
+ * chooses (something to do, in `idle.ts`) or a spot at random without one.
+ * With `agentChooses`, it asks the agent instead, less often, and the agent's
+ * cues say where it goes, or that it stays. When a conversation starts, it
+ * comes back to the middle to face you, and stays there until the
+ * conversation ends.
  */
 export class Director {
   private leaveAt: number | undefined;
   private wasEngaged = false;
+  /** The last pick, so its stay is kept once it gets there. */
+  private planned: Pick | undefined;
 
   constructor(
     private room: Room,
     private readonly random: () => number = Math.random,
     private readonly agentChooses = false,
+    private readonly pick?: (here: string, taken?: ReadonlySet<string>) => Pick | undefined,
   ) {}
 
   /** The room changed: its spots are what it picks from now. */
@@ -334,15 +345,19 @@ export class Director {
     }
     if (here === undefined) return undefined;
     if (this.leaveAt === undefined) {
+      const planned = this.planned?.spot === here ? this.planned.stay : undefined;
       const [lo, hi] = this.agentChooses
         ? BETWEEN_ASKS
-        : STAY[spotById(this.room, here)?.activity === "sit" ? "sit" : "stand"];
+        : (planned ?? STAY[spotById(this.room, here)?.activity === "sit" ? "sit" : "stand"]);
       this.leaveAt = t + lo + this.random() * (hi - lo);
       return undefined;
     }
     if (t < this.leaveAt) return undefined;
     this.leaveAt = undefined;
     if (this.agentChooses) return ASK;
+    const picked = this.pick?.(here, taken);
+    this.planned = picked;
+    if (picked) return picked.spot;
     const elsewhere = this.room.spots.filter((s) => s.id !== here && !taken?.has(s.id));
     return elsewhere[Math.floor(this.random() * elsewhere.length)]?.id;
   }

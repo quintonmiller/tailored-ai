@@ -10,7 +10,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
 import type { Hold, Sign } from "./doing";
 import { armClearance, bodyPoints } from "./fit";
-import { Director, findPath, type Obstacle, route, slide, turnBetween, Walker } from "./locomotion";
+import { Director, findPath, type Obstacle, type Pick, route, slide, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
@@ -133,6 +133,8 @@ export class Figure {
       pace?: number;
       /** Radians a second it turns, instead of an agent's unhurried turn. */
       turn?: number;
+      /** What it goes to next while it wanders, instead of a spot at random: something to do (see `idle.ts`). */
+      pick?: (here: string, taken?: ReadonlySet<string>) => Pick | undefined;
       /**
        * It runs sometimes (you, holding Shift), so its run clip is made ready.
        * Agents never run: making theirs would retarget a clip per body that
@@ -164,7 +166,7 @@ export class Figure {
     if (opts.turn) this.walker.turnSpeed = opts.turn;
     this.stride = Math.max(0.15, this.hipsY * 1.1);
     this.radius = Math.min(0.3, Math.max(0.16, ((this.bounds.max.x - this.bounds.min.x) / 2) * 0.8));
-    this.director = new Director(room, Math.random, !!opts.agentChooses);
+    this.director = new Director(room, Math.random, !!opts.agentChooses, opts.pick);
     this.current = start?.id;
     this.currentAt = start?.at;
     this.motion = new Motion(opts);
@@ -340,14 +342,14 @@ export class Figure {
   }
 
   /**
-   * The tag over its head: its name, what it is doing, both, or neither.
-   * Redrawn only when the words change.
+   * The tag over its head: its name, what it is doing, both, or neither, and
+   * a line or two more when you come close. Redrawn only when the words change.
    */
-  label(name: string | undefined, status: string | undefined) {
-    const key = `${name ?? ""}\n${status ?? ""}`;
+  label(name: string | undefined, status: string | undefined, more: string[] = []) {
+    const key = `${name ?? ""}\n${status ?? ""}\n${more.join("\n")}`;
     if (key === this.shownTag.key) return;
     if (this.shownTag.sprite) disposeSprite(this.shownTag.sprite);
-    const sprite = tag({ ...(name ? { name } : {}), ...(status ? { status } : {}) });
+    const sprite = tag({ ...(name ? { name } : {}), ...(status ? { status } : {}), more });
     if (sprite) {
       sprite.position.y = this.bounds.max.y + 0.08 + sprite.scale.y / 2;
       this.body.add(sprite);

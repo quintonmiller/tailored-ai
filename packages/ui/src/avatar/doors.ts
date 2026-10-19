@@ -78,6 +78,24 @@ export function arrivalAt(
   return { at: point(found ?? want), facing: (facing * Math.PI) / 180 };
 }
 
+/** How far inside a door's opening a body stands on its threshold, coming in or about to go out. */
+export const THRESHOLD = 0.35;
+
+/**
+ * The point just inside a door, and the way into the room from it (radians):
+ * where an agent's body comes in, and the last place it walks to on its way
+ * out.
+ */
+export function threshold(
+  room: Pick<Room, "width" | "depth">,
+  door: Pick<RoomDoor, "wall" | "along">,
+): { at: [number, number]; facing: number } {
+  const { at, facing } = doorFrame(room, door);
+  const [ix, iz] = inward(facing);
+  const round = (n: number) => Math.round(n * 1000) / 1000;
+  return { at: [round(at[0] + ix * THRESHOLD), round(at[1] + iz * THRESHOLD)], facing: (facing * Math.PI) / 180 };
+}
+
 /** The door back to where you came from, if this room has one. */
 export function doorTo(room: Pick<Room, "doors">, from: string | undefined): RoomDoor | undefined {
   return from ? room.doors?.find((d) => d.to === from) : undefined;

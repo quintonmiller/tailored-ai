@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type ExploratoryAgent, type ExploratoryRun, fetchExploratoryAgents, fetchExploratoryRuns } from "../api";
 import type { AgentActivity } from "../avatar/doing";
 import { nameOf } from "../lib/conversations";
+import { asleepWords, clockTime as clock, lastDid, wakeWords } from "../lib/did";
 import { ago, lasting } from "../lib/tasks";
 import { nextTurn } from "../lib/wakes";
 import { agentColor } from "./WorldMap";
@@ -17,9 +18,6 @@ export interface Said {
   /** The room it was said in, as `<backend>:<id>`; absent for a direct message. */
   room?: string;
 }
-
-/** A time of day, the way the person's clock shows it. */
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** An interval in a few words: "45 min", "90 min", "3 h", "2.5 h". */
 const every = (ms: number) => {
@@ -158,9 +156,15 @@ export function WorldAgent({
         <dt>Now</dt>
         <dd className={`world-agent-doing doing-${activity?.doing ?? "idle"}`}>
           {doing ? doing.what : "Idle"}
-          {doing?.detail ? ` · ${doing.detail}` : ""}
+          {doing?.doing === "asleep" ? ` · ${asleepWords(doing)}` : doing?.detail ? ` · ${doing.detail}` : ""}
           {lasting(activity?.since) ? `${doing ? " ·" : ""} for ${lasting(activity?.since)}` : ""}
         </dd>
+        {lastDid(activity?.last) && (
+          <>
+            <dt>Last did</dt>
+            <dd>{lastDid(activity?.last)}</dd>
+          </>
+        )}
         <dt>Last said</dt>
         <dd>
           {said ? (
@@ -183,7 +187,9 @@ export function WorldAgent({
               : own?.agent
                 ? ownTurns(own.agent, own.allOn)
                 : "Runs on its own."
-            : `Doesn't run on its own. It works when you talk to it, or ${tasksWake ? "a room, a task" : "a room"} or a wake it booked calls it.`}
+            : `Doesn't run on its own. It works when you talk to it, or ${tasksWake ? "a room, a task" : "a room"} or a wake it booked calls it.${
+                wakeWords(activity?.next) ? ` Next wake: ${wakeWords(activity?.next)}.` : ""
+              }`}
           {lastRun && (
             <span className="world-agent-run">
               {" "}

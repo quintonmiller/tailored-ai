@@ -173,6 +173,19 @@ const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offs
       rightUpperArm: [-0.15, 0, 0],
     }),
   },
+  // Both arms up over the head and a lean back, looking up: a stretch after sitting a while.
+  stretch: {
+    seconds: 2.8,
+    owns: ["leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm"],
+    pose: () => ({
+      leftUpperArm: [0, 0, 2.55],
+      rightUpperArm: [0, 0, -2.55],
+      leftLowerArm: [0, -0.3, 0],
+      rightLowerArm: [0, 0.3, 0],
+      spine: [-0.08, 0, 0],
+      head: [-0.2, 0, 0],
+    }),
+  },
   // Right arm out straight ahead; the stage turns the body to face the target first.
   point: {
     seconds: 2.2,

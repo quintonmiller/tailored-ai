@@ -1,13 +1,16 @@
 /**
  * The 3D half of the avatar: a small room, lit for the time of day, with a
  * VRM model in it, moving every frame by the pose {@link Motion} computes.
- * It walks between the room's spots on its own while nobody is talking to
- * it, comes back to the middle when a session starts, and goes where you
- * click. Drag to look around; the close-up view follows the head and torso.
- * Other agents in the same room appear too, each with its own body, and
- * wander on their own. Every body shows what its agent is doing: a thing in
- * its hand, a sign over its head, a seat when it reads or sleeps. Imported
- * only when an avatar is configured, so three.js stays out of the main bundle.
+ * While nobody is talking to it, it passes the time with what the room has
+ * (`idle.ts`): a book at the shelf, a coffee at the sideboard, a nap late at
+ * night. It comes back to the middle when a session starts, and goes where
+ * you click. Drag to look around; the close-up view follows the head and
+ * torso. Other agents in the same room appear too, each with its own body,
+ * passing their own time. Every body shows what its agent is doing: a thing
+ * in its hand, a sign over its head, its desk or the task board while it
+ * works, a seat when it reads or sleeps. In a meeting room they sit at the
+ * table and turn to whoever speaks. Imported only when an avatar is
+ * configured, so three.js stays out of the main bundle.
  *
  * A stage can also be visited: the body on it is then yours, walked with the
  * arrow keys or WASD (or by clicking the floor), with the camera following;
@@ -20,12 +23,14 @@
 import { type VRM, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { aboutLines, asleepWords } from "../lib/did";
 import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
 import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
-import { arrivalAt, doorFrame, doorLight, doorReached, doorTo } from "./doors";
+import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
 import { Figure, loadModel } from "./figure";
-import type { Obstacle } from "./locomotion";
+import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, seeded } from "./idle";
+import type { Obstacle, Pick } from "./locomotion";
 import type { BodyState } from "./motion";
 import { nearestUse, type Use } from "./pick";
 import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
@@ -92,8 +97,13 @@ export interface Stage {
    * make sense of is ignored.
    */
   cue(cue: { name: string; target?: string }): void;
-  /** Show the room as it is now: what is new appears, what is gone goes, and the avatar stays where it can. */
-  setRoom(room: Room): void;
+  /**
+   * Show the room as it is now: what is new appears, what is gone goes, and
+   * the avatar stays where it can. `moved`, the avatar has gone to another
+   * place: whoever was round it stays behind, and whoever is in the new one
+   * is there already rather than coming in.
+   */
+  setRoom(room: Room, moved?: boolean): void;
   /** Who else is in the room: new arrivals appear at a free spot, and those who left go. */
   setCompany(company: Companion[]): void;
   /** What each agent is doing, by agent: every body in the room shows its own. */
@@ -196,6 +206,10 @@ const FLAT_KINDS = new Set(["rug", "round_rug"]);
 const BULBS: Partial<Record<string, number>> = { lamp: 1.45, table_lamp: 0.32 };
 /** The most lamps lit at once, for the frame rate: the rest glow, but light nothing. */
 const LIT_LAMPS = 4;
+/** Milliseconds after coming to a place within which whoever turns up was there already, rather than coming in. */
+const SETTLED_MS = 4000;
+/** Seconds a body walking out may take to reach the door before it is simply gone. */
+const LEAVING_SECONDS = 15;
 /** How far back the camera following a visitor may sit, however big the room: near enough to see who you are. */
 const VISIT_DISTANCE = 9;
 /** Milliseconds the picture takes to fade out as you go through a door, and in again. */
@@ -252,7 +266,9 @@ export async function createStage(
     arriveFrom?: string;
   } = {},
 ): Promise<Stage> {
-  let room = opts.room ?? DEFAULT_ROOM;
+  // The room as the page gave it, and as drawn: with spots added by things that bring none (see `idleSpots`).
+  let given = opts.room ?? DEFAULT_ROOM;
+  let room = given;
   // Throws where the browser has no WebGL; the caller shows why.
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -376,6 +392,8 @@ export async function createStage(
     }
     lightDoors();
     scene.add(furniture);
+    // Somewhere to stand by a plant, the task board, a sideboard: worked out once what is in the way is known.
+    room = { ...given, spots: [...given.spots, ...idleSpots(given, obstacles)] };
     drawBoards();
     for (const w of warm) scene.remove(w.light);
     warm.length = 0;
@@ -399,10 +417,52 @@ export async function createStage(
   // A photo holds still. A selfie faces the camera, sitting down if the spot is a seat.
   const selfie = !!opts.still && opts.view === "close";
   const stillActivity = opts.still && !(selfie && start?.activity !== "sit") ? start?.activity : undefined;
-  const me = new Figure(vrm, room, start, {
+  const self = opts.agent || "default";
+
+  // What each idle body is doing with its time, and whether it has got there yet.
+  const errands = new Map<Figure, { errand: Errand; arrived: boolean }>();
+  // A run of chances per agent, so two in one room don't do the same thing at once, and each keeps its own day.
+  const chances = new Map<string, () => number>();
+  const chanceFor = (agent: string) => {
+    let next = chances.get(agent);
+    if (!next) {
+      next = seeded(`${agent}\n${new Date().toDateString()}`);
+      chances.set(agent, next);
+    }
+    return next;
+  };
+  /** An errand over: eyes open again, unless it is asleep for real. */
+  const stopErrand = (f: Figure) => {
+    const e = errands.get(f);
+    if (!e) return;
+    errands.delete(f);
+    if (e.errand.doze) f.doze(!!shows.get(f)?.behavior.asleep);
+  };
+  /** Something to do next for an idle body: where it goes, and how long it stays once there. */
+  const pickFor =
+    (agent: string, figure: () => Figure | undefined) =>
+    (here: string, busy?: ReadonlySet<string>): Pick | undefined => {
+      const f = figure();
+      if (!f) return undefined;
+      const last = errands.get(f)?.errand.id;
+      stopErrand(f);
+      const next = chooseErrand(room, { hour: hourNow(), random: chanceFor(agent), last, here, taken: busy });
+      if (!next) return undefined;
+      errands.set(f, { errand: next, arrived: false });
+      return { spot: next.spot, stay: next.seconds };
+    };
+  /** What a body's errand has it doing where it stands, once it is there, for its pose. */
+  const errandHere = (f: Figure): { activity: Errand["activity"] } | undefined => {
+    const e = errands.get(f);
+    return e?.arrived && f.here === e.errand.spot ? { activity: e.errand.activity } : undefined;
+  };
+  const pickMine = opts.visitor || opts.still ? undefined : pickFor(self, (): Figure | undefined => me);
+
+  const me: Figure = new Figure(vrm, room, start, {
     reducedMotion: opts.reducedMotion,
     animations: opts.animations,
     agentChooses: !!opts.chooseIdle,
+    ...(pickMine ? { pick: pickMine } : {}),
     ...(selfie && start && start.activity !== "sit" ? { facing: 0.5 } : {}),
     hue: hueFor(opts.agent ?? "default"),
     // Your own body walks briskly and turns on the spot, whatever its size; the agents keep their own calmer pace.
@@ -416,7 +476,6 @@ export async function createStage(
   if (arrival) me.placeAt(arrival.at, arrival.facing);
   host.dataset.motion = "code";
 
-  const self = opts.agent || "default";
   // Other agents in the room, by agent; and those still loading.
   const companions = new Map<string, Figure & { name?: string }>();
   // What each body is showing of what its agent is doing.
@@ -426,6 +485,11 @@ export async function createStage(
   // Lines about to be said, for a visitor to hear when they start.
   let voices: { agent: string; text: string; at: number }[] = [];
   const arriving = new Set<string>();
+  // Bodies on their way out through the door, until they get there.
+  const departing: { fig: Figure; from: number }[] = [];
+  // When the stage came to the place it shows, and which place that is, counted: see `meet`.
+  let placedAt = performance.now();
+  let placeGen = 0;
   let wanted: Companion[] = [];
 
   /** Spots someone stands at or is walking to, except `who`. */
@@ -441,6 +505,12 @@ export async function createStage(
     const away = open.filter((s) => s.id !== room.start);
     const pool = away.length ? away : open;
     return pool[Math.floor(Math.random() * pool.length)];
+  };
+  /** Where someone arriving appears: at a free seat round the table in a meeting room, anywhere free elsewhere. */
+  const arrivalSpot = (): Spot | undefined => {
+    const busy = taken();
+    const seats = isMeeting(room) ? room.spots.filter((s) => /^seat-\d+$/.test(s.id) && !busy.has(s.id)) : [];
+    return seats.length ? seats[Math.floor(Math.random() * seats.length)] : freeSpot();
   };
   /** The agent you talk to goes somewhere; anyone already there makes room. */
   const go = (id: string) => {
@@ -694,12 +764,24 @@ export async function createStage(
   };
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
+    const who = agentAt(e);
+    if (who !== hovered) hover(who);
     const it = pick(e);
     canvas.style.cursor =
-      (opts.onPick && agentAt(e)) || it?.spot || (it?.action && opts.onUse) || (it?.door && opts.onDoor)
-        ? "pointer"
-        : "";
+      (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || (it?.door && opts.onDoor) ? "pointer" : "";
   };
+  /** The pointer is over a body now, or none: its tag says more, and the last one's goes back. */
+  const hover = (who: string | undefined) => {
+    const was = hovered;
+    hovered = who;
+    // For anyone inspecting the page, like `data-motion`: whose tag is saying more.
+    host.dataset.hovered = who ?? "";
+    for (const agent of [was, who]) {
+      const f = agent ? figureOf(agent) : undefined;
+      if (agent && f) show(agent, f);
+    }
+  };
+  const onLeave = () => hover(undefined);
 
   // Going through a door: the picture fades, the page brings the place behind it, and `enter` fades it back in.
   canvas.style.transition = opts.reducedMotion ? "" : `opacity ${FADE_MS}ms ease`;
@@ -758,10 +840,10 @@ export async function createStage(
   }
   // Agents who have noticed the visitor, until the visitor walks away.
   const noticed = new Set<string>();
-  let near: string | undefined;
   canvas.addEventListener("pointerdown", onDown);
   canvas.addEventListener("pointerup", onUp);
   canvas.addEventListener("pointermove", onHover);
+  canvas.addEventListener("pointerleave", onLeave);
 
   let disposed = false;
   let asking = false;
@@ -769,6 +851,7 @@ export async function createStage(
   let settleFrom: number | undefined;
   let gestureAt: number | undefined;
   let wasBusy = false;
+  let tagsAt = 0;
   let lastDragAt = Number.NEGATIVE_INFINITY;
   controls.addEventListener("start", () => {
     lastDragAt = clock;
@@ -817,6 +900,10 @@ export async function createStage(
     const at = clock + Math.max(0, delay) / 1000;
     f.say(line.text, at);
     if (opts.visitor && opts.onLine && f !== me) voices.push({ agent, text: line.text, at });
+    // Round a meeting table, everyone turns to whoever is speaking.
+    if (isMeeting(room))
+      for (const g of [me, ...companions.values()])
+        if (g !== f && !(g === me && opts.visitor) && !g.walker.busy) g.aim(f.head(), false, at);
   };
   /** Each frame, lines that have just started: heard if the visitor is near enough. */
   const sayAloud = (t: number) => {
@@ -835,18 +922,33 @@ export async function createStage(
   /** The body an agent has in this room, if it has one here. */
   const figureOf = (agent: string): Figure | undefined => (agent === self ? me : companions.get(agent));
 
-  /** Show on a body what its agent is doing now: its sign, its tag, how it sleeps; a gesture as it starts. */
+  // Whose tag says more: the body under the pointer, and the one a visitor stands next to.
+  let hovered: string | undefined;
+  let near: string | undefined;
+  const closeTo = (agent: string) => !opts.still && (agent === hovered || agent === near);
+
+  /**
+   * Show on a body what its agent is doing now: its sign, its tag, how it
+   * sleeps; a gesture as it starts. Come close, and an idle agent's tag says
+   * what it is up to, what it did last and when it next wakes; a sleeping
+   * one's, why and until when.
+   */
   function show(agent: string, f: Figure & { name?: string }) {
     const activity = opts.still ? undefined : activities[agent];
     const behavior = behaviorFor(activity);
     const was = shows.get(f);
+    const close = closeTo(agent) && !(f === me && opts.visitor);
     const status = behavior.label
-      ? behavior.detail
-        ? `${behavior.label} · ${behavior.detail}`
-        : behavior.label
-      : undefined;
+      ? close && activity?.doing === "asleep"
+        ? `asleep · ${asleepWords(activity)}`
+        : behavior.detail
+          ? `${behavior.label} · ${behavior.detail}`
+          : behavior.label
+      : close
+        ? (errands.get(f)?.errand.label ?? "idle")
+        : undefined;
     // The agent you talk to needs no name; the others always show theirs.
-    f.label(f === me ? (opts.visitor ? "you" : undefined) : f.name, status);
+    f.label(f === me ? (opts.visitor ? "you" : undefined) : f.name, status, close ? aboutLines(activity) : []);
     if (was && sameBehavior(was.behavior, behavior)) return;
     shows.set(f, {
       behavior,
@@ -861,24 +963,46 @@ export async function createStage(
 
   /**
    * Each frame, what a body's activity asks of where it is: hold its thing
-   * (not a laptop, at a desk — it types there), go to a seat or a desk when
-   * one is free and nothing else has it walking, and turn to whoever it is
-   * talking to when they are here.
+   * (not a laptop, at a desk — it types there), go to its desk, the task
+   * board or a seat when one is free and nothing else has it walking, and
+   * turn to whoever it is talking to when they are here. Idle and free, its
+   * time is its own: whatever it is doing with it, at the spot it went to.
    */
-  const attend = (f: Figure, t: number, free: boolean) => {
+  const attend = (f: Figure, agent: string, t: number, free: boolean) => {
     const s = shows.get(f);
     const b = s?.behavior;
     const spot = f.here ? spotById(room, f.here) : undefined;
+    let e = errands.get(f);
+    // Sent somewhere else, or busy now: whatever it was doing with its time is over.
+    const own = free && !b?.stays;
+    if (e && (!own || (f.current !== e.errand.spot && f.pending !== e.errand.spot))) {
+      stopErrand(f);
+      e = undefined;
+    }
+    // At a spot it went to some other way (put there, sent by a cue): something to do there.
+    if (!e && own && f.here) {
+      const found = errandAt(room, f.here, hourNow(), chanceFor(agent));
+      if (found) errands.set(f, (e = { errand: found, arrived: false }));
+    }
+    if (e && !e.arrived && f.here === e.errand.spot) {
+      e.arrived = true;
+      if (e.errand.gesture) f.gesture(e.errand.gesture, t);
+      if (e.errand.doze) f.doze(true);
+    }
     const partner = b?.face ? figureOf(b.face) : undefined;
     const held = heldFor(b, { spotActivity: spot?.activity, partnerHere: !!partner && partner !== f });
-    f.hold(held.prop, held.hold);
+    const errandHold = e?.arrived ? e.errand.hold : undefined;
+    if (held.prop) f.hold(held.prop, held.hold);
+    else f.hold(errandHold?.prop, errandHold?.how);
     if (!s || !b) return;
-    if (b.station && free && t - s.checked > 1.5 && !f.walker.busy && !f.pending) {
+    // In a meeting room everyone keeps their seat at the table: nobody leaves it for a desk to think at.
+    const station = isMeeting(room) && b.station !== "seat" ? undefined : b.station;
+    if (station && free && t - s.checked > 1.5 && !f.walker.busy && !f.pending) {
       s.checked = t;
       const to = stationSpot(
-        b.station,
+        station,
         room.spots,
-        { x: f.walker.place.x, z: f.walker.place.z, spotActivity: spot?.activity },
+        { x: f.walker.place.x, z: f.walker.place.z, spotActivity: spot?.activity, ...(f.here ? { spot: f.here } : {}) },
         taken(f),
       );
       if (to) {
@@ -892,15 +1016,36 @@ export async function createStage(
     }
   };
 
-  /** Bring the company in line with who should be here. */
+  /** The way in and out for agents coming and going: the threshold of the room's first door, when it has one. */
+  const doorway = () => (room.doors?.[0] ? threshold(room, room.doors[0]) : undefined);
+
+  /**
+   * Bring the company in line with who should be here. Whoever is here when
+   * you arrive is already about; anyone who comes later walks in through the
+   * door, and anyone who leaves walks out through it, when the room has one.
+   */
   const meet = (company: Companion[]) => {
     wanted = company;
     const ids = new Set(company.map((c) => c.agent));
+    const way = opts.still ? undefined : doorway();
     for (const [agent, fig] of companions) {
       if (ids.has(agent)) continue;
-      fig.dispose();
+      errands.delete(fig);
+      shows.delete(fig);
       companions.delete(agent);
+      // Gone home, or somewhere else: out through the door, or simply gone from a room without one.
+      if (!way) {
+        fig.dispose();
+        continue;
+      }
+      fig.doze(false);
+      fig.label(fig.name, undefined);
+      fig.goTo(room, way.at, obstacles);
+      departing.push({ fig, from: clock });
     }
+    // Arriving after the stage has settled in this place is coming in; any sooner, it was here already.
+    const coming = !opts.still && performance.now() - placedAt > SETTLED_MS;
+    const gen = placeGen;
     for (const c of company) {
       const fig = companions.get(c.agent);
       if (fig) {
@@ -918,17 +1063,26 @@ export async function createStage(
             VRMUtils.deepDispose(model.scene);
             return;
           }
-          const figure = new Figure(model, room, freeSpot(), {
+          const entrance = coming && gen === placeGen ? doorway() : undefined;
+          const seat = arrivalSpot();
+          const start = entrance
+            ? { id: "", name: "", place: "", at: entrance.at, facing: (entrance.facing * 180) / Math.PI }
+            : seat;
+          const figure = new Figure(model, room, start, {
             reducedMotion: opts.reducedMotion,
             animations: still.animations,
             hue: hueFor(c.agent),
+            ...(opts.still ? {} : { pick: pickFor(c.agent, () => companions.get(c.agent)) }),
           }) as Figure & { name?: string };
           figure.name = still.name;
           scene.add(figure.body, figure.gaze);
           companions.set(c.agent, figure);
           show(c.agent, figure);
-          // What it said before its body arrived is old news.
-          if (speech[c.agent]) heard.set(c.agent, speech[c.agent].at);
+          // In through the door, and on to somewhere free.
+          if (entrance && seat) figure.go(room, seat.id, obstacles);
+          // What brought it here may be what it just said, in the room it came to say it in: that shows. Anything
+          // older than a moment is old news, which `hear` leaves out.
+          hear(c.agent, speech[c.agent]);
         })
         .catch(() => {
           arriving.delete(c.agent);
@@ -1038,8 +1192,13 @@ export async function createStage(
       } else if (d > FORGET_AT) noticed.delete(agent);
     }
     if (nearest?.agent !== near) {
+      const was = near;
       near = nearest?.agent;
       opts.onNear?.(near);
+      for (const agent of [was, near]) {
+        const f = agent ? figureOf(agent) : undefined;
+        if (agent && f) show(agent, f);
+      }
     }
   }
 
@@ -1090,15 +1249,17 @@ export async function createStage(
           if (!disposed) for (const c of cues) handleCue(c);
         })
         .catch(() => {
-          const pick = freeSpot(me);
-          if (pick && !disposed) go(pick.id);
+          // Couldn't ask: something from the room to do instead, or a spot at random.
+          if (disposed) return;
+          const picked = pickMine?.(here ?? "", taken(me))?.spot ?? freeSpot(me)?.id;
+          if (picked) go(picked);
         })
         .finally(() => {
           asking = false;
           me.director.sent();
         });
     }
-    if (!opts.still && !opts.visitor) attend(me, t, !engaged);
+    if (!opts.still && !opts.visitor) attend(me, self, t, !engaged);
     if (opts.visitor) visit(dt);
     me.step(
       room,
@@ -1110,7 +1271,7 @@ export async function createStage(
         ? { state: "speaking", loudness: chatter(t) }
         : { state: state === "idle" && mine?.thinking ? "thinking" : state, loudness: loudness() },
       camera.position,
-      opts.still ? { activity: stillActivity } : undefined,
+      opts.still ? { activity: stillActivity } : opts.visitor ? undefined : errandHere(me),
     );
     if (opts.visitor) keepWithYou(dt);
     // Arrived somewhere: the close-up finds its best angle again, unless the
@@ -1137,12 +1298,12 @@ export async function createStage(
     }
     // The others wander on their own, and keep an eye on the agent you are talking to.
     const meHead = me.head();
-    for (const c of companions.values()) {
+    for (const [agent, c] of companions) {
       const theirs = shows.get(c)?.behavior;
       if (!opts.still) {
         const move = theirs?.stays ? undefined : c.director.decide(t, c.here, false, taken(c));
         if (typeof move === "string") c.go(room, move, obstacles);
-        attend(c, t, true);
+        attend(c, agent, t, true);
       }
       const talking = c.speaking(t);
       c.step(
@@ -1152,7 +1313,25 @@ export async function createStage(
         dt,
         { state: talking ? "speaking" : theirs?.thinking ? "thinking" : "idle", loudness: talking ? chatter(t) : 0 },
         meHead,
+        errandHere(c),
       );
+    }
+    // Those leaving walk on to the door, and are gone once they reach it.
+    for (let i = departing.length - 1; i >= 0; i--) {
+      const { fig, from } = departing[i];
+      fig.step(room, obstacles, poseAt, dt, { state: "idle", loudness: 0 }, meHead);
+      if ((t - from > 0.5 && !fig.walker.busy) || t - from > LEAVING_SECONDS) {
+        fig.dispose();
+        departing.splice(i, 1);
+      }
+    }
+    // The tags that say more keep up: what they are doing changes, and "40 min ago" goes on counting.
+    if (t - tagsAt > 1) {
+      tagsAt = t;
+      for (const agent of [hovered, near]) {
+        const f = agent ? figureOf(agent) : undefined;
+        if (agent && f) show(agent, f);
+      }
     }
     if (opts.visitor) {
       noticeVisitor(t);
@@ -1187,6 +1366,25 @@ export async function createStage(
     renderer.render(scene, camera);
   });
 
+  /** Leaving the place shown for another: everyone in it stays there, and whoever is in the next one was there already. */
+  const leavePlace = () => {
+    for (const c of companions.values()) {
+      shows.delete(c);
+      errands.delete(c);
+      c.dispose();
+    }
+    companions.clear();
+    for (const d of departing.splice(0)) d.fig.dispose();
+    placedAt = performance.now();
+    placeGen++;
+    noticed.clear();
+    voices = [];
+    if (near) {
+      near = undefined;
+      opts.onNear?.(undefined);
+    }
+  };
+
   return {
     setView(next) {
       if (next === view && !tween) return;
@@ -1200,13 +1398,15 @@ export async function createStage(
     },
     walkTo: go,
     cue: handleCue,
-    setRoom(next) {
-      if (next === room) return;
+    setRoom(next, moved = false) {
+      if (next === given && !moved) return;
+      if (moved) leavePlace();
       const before = new Set(room.props.map((p) => p.id));
       const resized = next.width !== room.width || next.depth !== room.depth || next.height !== room.height;
       scene.remove(furniture);
       disposeTree(furniture);
       appearing.length = 0;
+      given = next;
       room = next;
       camera.far = farFor(room);
       camera.updateProjectionMatrix();
@@ -1217,23 +1417,16 @@ export async function createStage(
       if (!opts.visitor) reseat(me, () => (spotById(room, room.start) ? room.start : undefined));
       for (const c of companions.values()) reseat(c, () => freeSpot(c)?.id);
       if (resized && !tween && !opts.visitor) moveCamera(framing(view));
+      // Whoever is in the new place, at free spots in it.
+      if (moved) meet(wanted);
     },
     enter(next, from) {
       // Everyone in the place you left stays there.
-      for (const c of companions.values()) {
-        shows.delete(c);
-        c.dispose();
-      }
-      companions.clear();
-      noticed.clear();
-      voices = [];
-      if (near) {
-        near = undefined;
-        opts.onNear?.(undefined);
-      }
+      leavePlace();
       scene.remove(furniture);
       disposeTree(furniture);
       appearing.length = 0;
+      given = next;
       room = next;
       camera.far = farFor(room);
       camera.updateProjectionMatrix();
@@ -1305,6 +1498,7 @@ export async function createStage(
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointermove", onHover);
+      canvas.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
@@ -1312,6 +1506,7 @@ export async function createStage(
       me.dispose();
       for (const c of companions.values()) c.dispose();
       companions.clear();
+      for (const d of departing.splice(0)) d.fig.dispose();
       shows.clear();
       disposeTree(scene);
       renderer.dispose();

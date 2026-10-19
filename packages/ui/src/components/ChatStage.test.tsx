@@ -49,6 +49,8 @@ const stage = vi.hoisted(() => ({
   arrivals: [] as (string | undefined)[],
   /** Where each place come into on the same stage was come from. */
   entered: [] as (string | undefined)[],
+  /** For each room shown in place of the last, whether the agent had gone to another place. */
+  moves: [] as boolean[],
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (
@@ -84,7 +86,10 @@ vi.mock("../avatar/stage", () => ({
       },
       setView: () => {},
       setInsets: ({ right }: { right: number }) => stage.insets.push(right),
-      setRoom: (room: { name?: string; props: { name: string }[] }) => stage.rooms.push(room),
+      setRoom: (room: { name?: string; props: { name: string }[] }, moved?: boolean) => {
+        stage.rooms.push(room);
+        stage.moves.push(!!moved);
+      },
       enter: (room: { name?: string; props: { name: string }[] }, from: string | undefined) => {
         stage.rooms.push(room);
         stage.entered.push(from);
@@ -171,6 +176,8 @@ let sessionStatus: number;
 let turnChunks: string[];
 const posts: { url: string; body: unknown }[] = [];
 const deleted: string[] = [];
+/** Records a DELETE finds nothing to remove at: answered 404. */
+let missing: string[] = [];
 const audios: { src: string; onended: (() => void) | null }[] = [];
 const spoken: [string | undefined, string][] = [];
 
@@ -220,6 +227,7 @@ beforeEach(() => {
   turnHeld = null;
   posts.length = 0;
   deleted.length = 0;
+  missing = [];
   audios.length = 0;
   spoken.length = 0;
   extras.length = 0;
@@ -229,6 +237,7 @@ beforeEach(() => {
   stage.rooms.length = 0;
   stage.arrivals.length = 0;
   stage.entered.length = 0;
+  stage.moves.length = 0;
   stage.company.length = 0;
   stage.activities.length = 0;
   stage.speech.length = 0;
@@ -394,6 +403,7 @@ beforeEach(() => {
         );
       if (init?.method === "DELETE") {
         deleted.push(url);
+        if (missing.includes(url)) return new Response(JSON.stringify({ error: "No record" }), { status: 404 });
         return new Response("{}");
       }
       if (url === "/api/live/sessions") {
@@ -542,11 +552,36 @@ describe("the chat page's scene", () => {
     const body = extras.at(-1)?.body as { looks: string; aimed: { verb: string; targets: string[] }[] };
     expect(body.looks).toMatch(/with planner/);
     expect(body.aimed.find((a) => a.verb === "look")?.targets).toContain("planner");
-    // Someone leaves: the room is asked again, and they go.
+    const drawn = stage.rooms.length;
+    // Someone leaves: the room is asked again, and they go, the room itself left standing rather than built again.
     company = [];
     await act(async () => FakeEventSource.last?.emit("change", { type: "whereabouts", id: "planner", op: "delete" }));
     await settle();
     expect(stage.company.at(-1)).toEqual([]);
+    expect(stage.rooms.length).toBe(drawn);
+    // Someone comes to talk: a visit is coming too.
+    company = [{ agent: "writer", name: "writer", avatar: "/api/live/avatar?agent=writer", animations: [] }];
+    await act(async () => FakeEventSource.last?.emit("change", { type: "visit", id: "writer", op: "create" }));
+    await settle();
+    expect(stage.company.at(-1)).toEqual(["writer"]);
+    expect(stage.rooms.length).toBe(drawn);
+  });
+
+  it("tells the stage when the agent has gone to another place, rather than its room changing", async () => {
+    await render();
+    const before = stage.moves.length;
+    // It goes to the lounge: a new place, whoever is there already about.
+    placeId = "shared:lounge";
+    await act(async () => FakeEventSource.last?.emit("change", { type: "whereabouts", id: "talker", op: "create" }));
+    await settle();
+    expect(stage.moves.slice(before)).toEqual([true]);
+    // The lounge changing round it is the same place.
+    const rearranged = { ...home, props: home.props.slice(0, 1) };
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "place", id: "shared:lounge", op: "update", after: rearranged }),
+    );
+    await settle();
+    expect(stage.moves.at(-1)).toBe(false);
   });
 
   it("shows what every agent is doing, and keeps up as that changes", async () => {
@@ -612,8 +647,12 @@ describe("the chat page's scene", () => {
       "Pause for 4 hours",
       "About planner",
     ]);
+    // Home from a meeting room it is visiting and from the shared place it went to, whichever it is in: nothing to
+    // end in one of them is no trouble.
+    missing = ["/api/state/visit/planner"];
     await press(buttons, "Send home");
-    expect(deleted).toContain("/api/state/whereabouts/planner");
+    expect(deleted).toEqual(["/api/state/visit/planner", "/api/state/whereabouts/planner"]);
+    expect(container.querySelector(".agent-menu-problem")).toBeNull();
     // Done, it closes.
     expect(container.querySelector(".agent-menu")).toBeNull();
     await press(await pick("planner"), "Pause for 4 hours");

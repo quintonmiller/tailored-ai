@@ -213,8 +213,10 @@ and the cues it writes back are played. It might go sit on the couch, look
 out of the window, or stay where it is. The ask is one small completion
 (60 tokens, reasoning off), and nothing is written to any conversation. The
 server takes at most one ask per agent every 45 seconds, whatever pages are
-open. With live sessions off, or when the ask fails, the avatar wanders on
-its own instead.
+open. Wherever its choice takes it, it does something there: a book at the
+shelf, a coffee on the couch (see [Passing the time](#passing-the-time)).
+With live sessions off, or when the ask fails, it picks something to do from
+its room on its own instead.
 
 ### Each agent its own body
 
@@ -350,6 +352,16 @@ with who is in each and a mark for anyone waiting on you (`!`), stuck (`?`) or
 asleep (`z`). Type to find a place or an agent. Click one to go there. Within
 a building, you can also walk from place to place through doors (see [Areas,
 halls and doors](#areas-halls-and-doors)).
+
+**Busy now**, at the top, lists every agent that is doing something, most
+pressing first: waiting on you, then stuck, then talking, working and
+thinking. Each line says what it is doing and where its body is ("writing
+code · in the commons", "has a question for you · in #trip"); click it to go
+straight there. When nobody is busy it says so, which tells you a quiet world
+is idle rather than broken. In each group, places where something is
+happening come first, with a coloured edge and a word for the most pressing
+thing there and how many are doing it, then how many others are busy
+("waiting on you · 2 more busy", "2 working").
 
 You arrive in your own body ("you"), in a colour of its own. **Walk** with
 WASD or the arrow keys, which move you the way the camera faces, at a brisk
@@ -491,9 +503,46 @@ The plugin also answers for the whole world: every agent's home, the shared
 places, and each room agents talk in (a Discord channel, a local room), with
 who is in each. A room of conversation is drawn as a meeting room with a
 seat for every member with a body: up to six round a round table, more at a
-long one, and the room grows with them. Its members are all shown in it,
-wherever their bodies are, because an agent can belong to several rooms at
-once.
+long one, and the room grows with them.
+
+Bodies go where the talk is. When an agent says something in a room, its
+body leaves where it was and takes a seat at that room's meeting table, so
+the bubbles of a conversation show up round the table it is having. Each
+thing it says there, and each time the room wakes it while it is there,
+keeps it a while longer; other people's messages don't. Being woken alone
+moves nobody, so an agent that reads a room and keeps quiet stays where it
+was. After a quiet spell (10 minutes) it goes back where it lives: home, or
+the shared place it was in. While it is away, its home is empty and the map
+shows it in the room. Round the table, everyone turns to whoever speaks. A
+quiet room shows its member count on the map ("quiet · 3 members").
+
+The agent you are chatting with is the exception on your own page: it stays
+in its own room with you while you talk, even while its body is at a
+meeting. The map, **Busy now** and anyone visiting see it at the table, and
+if you go to that meeting room you'll find it there too.
+
+A visit is a `visit` record, one per agent, naming the room's place and an
+`until`. It lives in the built-in `memory` state provider, apart from the
+`whereabouts` record that says where the agent lives, so a visit never
+changes where it lives, leaves no history behind, and ends on restart. The
+plugin clears visits that have run out every 20 seconds, so a page watching
+sees the body go. The `place` tool still works on the agent's own room (or
+the shared place it lives in) while its body is at a meeting, and moving
+with the `place` tool ends the visit. Sending it home from the menu ends the
+visit early too; its next message brings it back. Change the quiet spell, or
+turn this off with `0`:
+
+```yaml
+plugins:
+  - module: builtin:places
+    config:
+      quietMinutes: 5        # 0: bodies stay put while their agents talk
+```
+
+A body that turns up while you are there walks in through the room's door
+and on to a free seat; one that goes walks out through it. Whoever is
+already there when you arrive is simply about. The same goes for anyone
+coming or going anywhere else: a visitor to a home comes in at its door.
 
 A meeting room is dressed for what the room is for, read from its name and
 purpose: a trip or a vacation gets a beach (sand floor, sky-blue walls, palms
@@ -599,9 +648,12 @@ involved, and when it started. Open the State page to watch them change.
 The chat page draws it on every body in the room:
 
 - **Working**, it holds what the tool looks like: a camera up to its eyes, a
-  book or a tablet in front of its chest, a magnifier out ahead. It reads in a
-  free seat and codes at a free desk, where it puts the laptop down to type.
-- **Thinking**, a thought cloud floats over it and it looks up and away.
+  book or a tablet in front of its chest, a magnifier out ahead. It goes where
+  the work is, when it is free to: it reads in a free seat, works on tasks at
+  the task board, and does the rest at its desk, where it puts a laptop down
+  to type. A photo, a recording or a call is made where it stands.
+- **Thinking**, a thought cloud floats over it and it looks up and away, at
+  its desk if it has one. In a meeting room it keeps its seat at the table.
 - **Talking** to an agent in the same room, the two turn to face each other
   under speech bubbles; to one who isn't there, it's on the phone.
 - **Waiting** on you, an amber `!` hangs over it and it waves once. **Stuck**,
@@ -611,11 +663,32 @@ The chat page draws it on every body in the room:
 
 A tag over each head says what it is doing ("searching the web · hotels near
 Alfama") under its name; the agent you are talking to shows the status alone.
+Point at a body, or walk up to it on a visit, and the tag says more. An idle
+agent's says what it is up to ("watering the plant"), what it did last and
+how long ago ("last: searched the web, 40 min ago"), and when it next wakes
+on its own ("next: 07:00"). A sleeping agent's says why and until when
+("asleep · paused until 14:30").
 While it works, thinks or waits it stays put instead of wandering, and comes
 back to you when you talk to it. Each named agent's body is also turned round
 the colour wheel by an amount that comes from its name, so several agents
 sharing one model are told apart at a glance; the default agent keeps the
 model's own colours.
+
+While an agent is idle or asleep, its record also carries `last`, the last
+thing it did (`{what, look?, at}`), and `next`, when it next wakes on its
+own. `last` is the status line it showed for its last tool call ("posting in
+#trip", "reading #trip" for a room it read or passed on), or for a turn that
+used none, "talking to planner", "replying", or, for a turn a room woke,
+"talking in #trip" when its answer reached the room and "reading #trip" when
+it kept quiet. A reply that reaches the room after its tools is the last
+thing it did. `next` is the soonest wake it booked with the `schedule` tool,
+or its next turn when it runs on its own, worked out the way the worker does
+it: outside the hours it keeps to (`cadence.window`), or once it has had its
+turns for the day, it is when those come round again. A time that has passed
+stays as it was, and the tag says "any minute now" for a minute or so after,
+then leaves it off. While agents are paused, nothing wakes on its own and
+there is no `next`. An agent asleep because it was paused has `until`, when
+the pause runs out.
 
 Everything comes off the event bus — turns starting and ending, tool calls,
 approvals, stalls, the pause switch — so nothing here runs a model or slows a
@@ -657,14 +730,41 @@ open tasks it has (click for them in the task list). For an agent that runs
 on its own, it shows when its next turn is due, worked out the way the
 exploratory worker does from its last turn and the interval it is on now
 ("about every 45 min, next around 14:05"), or that it is paused until a
-time, or that every agent is paused, and what its last run said. Its buttons chat with it, go to where its
-body is, send it home from somewhere else, and pause it for four hours or
-wake it. **Open its page** at the bottom goes to the Agents page. Wakes an
-agent booked for itself with the `schedule` tool aren't shown: schedules have
-no HTTP route yet (see [schedules](./schedules.md#known-limits)).
+time, or that every agent is paused, and what its last run said. Idle or
+asleep, it says what the agent did last and how long ago, and for an agent
+that doesn't run on its own, the next wake it booked with the `schedule`
+tool (from its activity record's `next`). Its buttons chat with it, go to
+where its body is (a meeting room, while it is talking in one), send it home
+from somewhere else, and pause it for four hours or wake it. **Open its
+page** at the bottom goes to the Agents page.
 
 Activity comes from the built-in `builtin:activity` plugin, on by default. Like
 places, it does nothing unless some agent has a body.
+
+#### Passing the time
+
+Most of the time most agents are idle, so an idle body doesn't just stand
+about or wander. It picks small things to do with what its room actually
+has: reads by the bookshelf with a book in hand, waters a plant, looks out
+of a window, studies the task board, makes a coffee at the sideboard,
+watches the fish, paints at the easel, tidies the desk, warms up by the fire,
+stretches, sits on the couch with a coffee, and naps there late at night.
+Each lasts from a few seconds to several minutes, then it moves on to
+something else, and seldom the same thing twice running.
+
+What it picks depends on the hour (coffee in the morning, the task board in
+the working day, the fire and the TV in the evening, naps after 11 at night)
+and on a chance drawn per agent, so two agents in one room do different
+things, and nobody goes to a spot someone else has. In a meeting room an
+idle body mostly sits in at the table. No model is asked; it costs nothing.
+For the agent you are talking to, with live sessions on, the agent's own
+choice of where to go stands, and this only says what it does once there.
+
+Things that bring no spot of their own (a plant, the task board, a
+sideboard, a picture) get one on the page, in front of them and clear of the
+furniture, so there is somewhere to stand to water or read them. The agent's
+room, as its `place` tool keeps it, is untouched. The choices are a table in
+`packages/ui/src/avatar/idle.ts`.
 
 ## Cues: the agent moves its own body
 
@@ -722,10 +822,10 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` change means someone came or went |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `agents` is who is in it: a body is in one home or shared place at a time, while a room lists every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` or `visit` change means someone came or went |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there. A room also lists `members`, every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, and a hall a corridor with a door for each place off it, both made fresh each time. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, its `company` the members talking there now, and a hall a corridor with a door for each place off it, both made fresh each time. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/say` | a line in an agent's voice: `{agent?, text}` → the audio, from the live text-to-speech stage with the agent's `voice.voice` (else `live.tts.voice`). Markdown is stripped first. `400` for an empty line or one over 400 characters, `409` when live sessions are off, `502` when the voice can't be made |

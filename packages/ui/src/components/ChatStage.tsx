@@ -14,7 +14,7 @@ import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
 import { type Said, WorldAgent } from "./WorldAgent";
-import { useWorldMap, WorldMap } from "./WorldMap";
+import { comeOrGone, useWorldMap, WorldMap } from "./WorldMap";
 import { type ListView, TaskCard, TaskList } from "./WorldTasks";
 
 /**
@@ -83,7 +83,7 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
           owed = false;
           id = body?.id;
           const next = { room: roomOf(body), company: companyOf(body), ...(id ? { id } : {}), ...areaOf(body) };
-          setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : next));
+          setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
         })
         .catch(() => {
           if (!gone && n === asked && !doorsOnly) setScene({ room: DEFAULT_ROOM, company: [] });
@@ -92,7 +92,7 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
     void load();
     const off = subscribeStateChanges((change) => {
       // Someone came or went, maybe this agent itself: where it is and who is there are asked again.
-      if (change.type === "whereabouts") void load();
+      if (comeOrGone(change.type)) void load();
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -124,6 +124,17 @@ export function roomOf(info: PlaceInfo | null | undefined): Room {
 }
 
 const areaOf = (info: PlaceInfo | null | undefined) => (info?.area ? { area: info.area } : {});
+
+/**
+ * The place as asked for again, keeping the room it had when nothing in it
+ * changed: someone coming or going asks for the whole place, and a new room
+ * object would have the stage take down and build every piece of furniture
+ * again, and hang every photo afresh.
+ */
+export function steady(was: SceneInfo | null, next: SceneInfo): SceneInfo {
+  if (!was || was.id !== next.id || was.room === next.room) return next;
+  return JSON.stringify(was.room) === JSON.stringify(next.room) ? { ...next, room: was.room } : next;
+}
 
 /** Whether two lists of doors are the same doors in the same places. */
 export function sameDoors(a: RoomDoor[] | undefined, b: RoomDoor[] | undefined): boolean {
@@ -338,6 +349,15 @@ async function must(res: Promise<Response>, what: string): Promise<void> {
   }
 }
 
+/** An agent's body home: out of any meeting room it is visiting, and back from any shared place it went to. */
+async function sendHome(who: string): Promise<void> {
+  for (const type of ["visit", "whereabouts"]) {
+    const res = await fetch(`/api/state/${type}/${encodeURIComponent(who)}`, { method: "DELETE" });
+    // Nothing to delete is a body that wasn't there to begin with.
+    if (res.status !== 404) await must(Promise.resolve(res), "send it home");
+  }
+}
+
 /**
  * Any place, by id, as a visitor sees it: its room and everyone in it, asked
  * again when someone comes or goes, and redrawn as it changes.
@@ -364,7 +384,7 @@ export function useScene(id: string | null): SceneInfo | null {
           if (gone || n !== asked) return;
           owed = false;
           const next = { room: roomOf(body), company: companyOf(body), id, ...areaOf(body) };
-          setScene((s) => (doorsOnly && s && sameDoors(s.room.doors, next.room.doors) ? s : next));
+          setScene((s) => (doorsOnly && s && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
         })
         .catch(() => {
           if (!gone && n === asked && !doorsOnly) setScene({ room: DEFAULT_ROOM, company: [], id });
@@ -372,7 +392,7 @@ export function useScene(id: string | null): SceneInfo | null {
     };
     void load();
     const off = subscribeStateChanges((change) => {
-      if (change.type === "whereabouts") void load();
+      if (comeOrGone(change.type)) void load();
       // A place made, gone, or moved to another area elsewhere may add or take away a door here.
       if (
         change.type === "place" &&
@@ -537,8 +557,10 @@ export function useChatStage({
     showStage &&
       (panel?.kind === "task" || panel?.kind === "new-task" || panel?.kind === "tasks" || panel?.kind === "agent"),
   );
+  // A new place is a new stage, which says who you are next to from scratch: nobody, until you walk up to someone.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: arriving anywhere is what clears it.
   useEffect(() => {
-    if (!visiting) setNear(undefined);
+    setNear(undefined);
   }, [visiting]);
   const activities = useRecords<AgentActivity>("activity", showStage);
   const speech = useRecords<Said>("speech", showStage);
@@ -571,11 +593,11 @@ export function useChatStage({
     (who: string): AgentAction[] => {
       const actions: AgentAction[] = [];
       if (who !== talking && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => chatWith(who) });
-      if (placeId?.startsWith("shared:"))
+      // Gone to a shared place, or to a meeting room to talk: home is where it goes back to.
+      if (placeId?.startsWith("shared:") || placeId?.startsWith("room:"))
         actions.push({
           label: who === shown ? "Go home" : "Send home",
-          run: () =>
-            must(fetch(`/api/state/whereabouts/${encodeURIComponent(who)}`, { method: "DELETE" }), "send it home"),
+          run: () => sendHome(who),
         });
       if (online.has(who)) {
         const resting = activities[who]?.doing === "asleep" && activities[who]?.detail !== "agents are paused";
@@ -907,8 +929,13 @@ export function useChatStage({
     );
   else if (panel?.kind === "agent") {
     const who = panel.agent;
-    const spot = map.places.find((p) => (p.kind === "home" || p.kind === "shared") && p.agents.includes(who));
-    const where = spot && { id: spot.id, name: spot.name, home: spot.id === `home:${who}` };
+    // A body is in one place: its home, a shared place, or the meeting room of a room it is talking in.
+    const spot = map.places.find((p) => p.kind !== "lobby" && p.agents.includes(who));
+    const where = spot && {
+      id: spot.id,
+      name: spot.kind === "room" ? `#${spot.name}` : spot.name,
+      home: spot.id === `home:${who}`,
+    };
     overlay = (
       <WorldAgent
         key={who}
@@ -923,9 +950,7 @@ export function useChatStage({
         tasksWake={watcher ? watcher.created || watcher.updated : undefined}
         onChat={() => chatWith(who)}
         {...(where && where.id !== (visiting ?? own.id) ? { onVisit: () => go(where.id) } : {})}
-        onSendHome={() =>
-          must(fetch(`/api/state/whereabouts/${encodeURIComponent(who)}`, { method: "DELETE" }), "send it home")
-        }
+        onSendHome={() => sendHome(who)}
         onTasks={() => {
           setListView({ filter: "open", who });
           setPanel({ kind: "tasks" });

@@ -6,6 +6,7 @@
  * readable from any angle.
  */
 import * as THREE from "three";
+import { TAG_LINE_CHARS } from "../lib/did";
 import type { Sign } from "./doing";
 
 function sprite(canvas: HTMLCanvasElement, height: number): THREE.Sprite {
@@ -26,23 +27,32 @@ function disposeSprite(s: THREE.Sprite) {
 /** At most this many characters on a line, so a long status doesn't stretch across the room. */
 const LINE_CHARS = 34;
 
-function clip(text: string): string {
-  return text.length > LINE_CHARS ? `${text.slice(0, LINE_CHARS - 1)}…` : text;
+function clip(text: string, chars = LINE_CHARS): string {
+  return text.length > chars ? `${text.slice(0, chars - 1)}…` : text;
 }
+
+/** The smaller lines under a tag fit a few more characters in the same width. */
+const MORE_CHARS = TAG_LINE_CHARS;
 
 /**
  * A tag over the head: a name, a status, or both — the name on top, what it
- * is doing beneath in a lighter face.
+ * is doing beneath in a lighter face — and any lines `more` adds below, in a
+ * smaller one: what it did last, when it wakes.
  */
-export function tag(lines: { name?: string; status?: string }): THREE.Sprite | undefined {
+export function tag(lines: { name?: string; status?: string; more?: string[] }): THREE.Sprite | undefined {
   const rows = [
     ...(lines.name ? [{ text: clip(lines.name), font: "600 44px system-ui, sans-serif", color: "#f2f4fa" }] : []),
     ...(lines.status ? [{ text: clip(lines.status), font: "400 36px system-ui, sans-serif", color: "#cfd6ea" }] : []),
+    ...(lines.more ?? []).map((text) => ({
+      text: clip(text, MORE_CHARS),
+      font: "400 33px system-ui, sans-serif",
+      color: "#aeb8d4",
+    })),
   ];
   if (!rows.length) return undefined;
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
-  const lineHeight = (font: string) => (font.includes("44px") ? 54 : 46);
+  const lineHeight = (font: string) => (font.includes("44px") ? 54 : font.includes("36px") ? 46 : 42);
   let width = 0;
   for (const r of rows) {
     if (ctx) ctx.font = r.font;
