@@ -8,16 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateChangeInfo } from "../api";
 import type { AgentActivity } from "../avatar/doing";
-import {
-  awayWords,
-  busyAgents,
-  busyMark,
-  doingHere,
-  type MapPlace,
-  markWords,
-  useWorldMap,
-  WorldMap,
-} from "./WorldMap";
+import { busyAgents, busyMark, doingHere, type MapPlace, markWords, useWorldMap, WorldMap } from "./WorldMap";
 
 // Changes to the world, as the page hears of them.
 const heard = vi.hoisted(() => ({ listeners: new Set<(change: unknown) => void>() }));
@@ -256,7 +247,7 @@ describe("WorldMap", () => {
     expect(onGo).toHaveBeenCalledWith("room:local:trip");
   });
 
-  it("says who went to see whom, and where; and where an empty home's owner has gone", () => {
+  it("says who went to see whom, and where, in Busy now and the list of agents", () => {
     render({
       here: "home:planner",
       places: [
@@ -277,15 +268,12 @@ describe("WorldMap", () => {
     });
     const busy = [...container.querySelectorAll(".world-map-busy")] as HTMLButtonElement[];
     expect(busy.map((b) => b.textContent)).toEqual(["…plannertalking with writerin writer's room"]);
-    const home = tiles().find((t) => t.textContent?.startsWith("planner's room"));
-    expect(home?.querySelector(".world-map-nobody")?.textContent).toBe(
-      "nobody here · planner is out, talking with writer, in writer's room",
-    );
-    expect(
-      tiles()
-        .find((t) => t.textContent?.startsWith("writer's room"))
-        ?.classList.contains("busy-talking"),
-    ).toBe(true);
+    // In the list of agents too: talking, and where; the one it came to see is as it is.
+    const [planner, writer] = people();
+    expect(planner.classList.contains("doing-talking")).toBe(true);
+    expect(planner.querySelector(".world-map-who-doing")?.textContent).toBe("talking");
+    expect(planner.parentElement?.querySelector(".world-map-away")?.textContent).toBe("in writer's home");
+    expect(writer.classList.contains("doing-idle")).toBe(true);
   });
 
   it("marks where something is happening, and puts it first", () => {
@@ -381,20 +369,6 @@ describe("busyAgents", () => {
     expect(busyAgents([visit], { a: act("idle"), b: act("idle") }).map((b) => [b.agent, b.activity.what])).toEqual([
       ["a", "talking with b"],
     ]);
-  });
-
-  it("says where a home's owner is, when its body is somewhere else", () => {
-    const places: MapPlace[] = [
-      { id: "home:a", name: "a's room", kind: "home", owner: "a", agents: [] },
-      { id: "home:b", name: "b's room", kind: "home", owner: "b", agents: ["a", "b"], with: { a: "b" } },
-      { id: "home:c", name: "c's room", kind: "home", owner: "c", agents: [] },
-      { id: "room:local:trip", name: "trip", kind: "room", agents: ["c"] },
-      { id: "home:d", name: "d's room", kind: "home", owner: "d", agents: ["d"] },
-    ];
-    expect(awayWords(places[0], places)).toBe("talking with b, in b's room");
-    expect(awayWords(places[2], places)).toBe("in #trip");
-    expect(awayWords(places[4], places)).toBeUndefined();
-    expect(awayWords(places[3], places)).toBeUndefined();
   });
 
   it("says a mark in words a glance gets right", () => {

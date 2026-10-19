@@ -383,9 +383,9 @@ pressing first: waiting on you, then stuck, then talking, working and
 thinking. Each line says what it is doing and where its body is ("writing
 code · in the commons", "has a question for you · in #trip"); click it to go
 straight there. An agent that went to see one it messaged is talking with it
-for as long as it stays ("talking with editor · in editor's room"), and its
-empty home says where it went ("nobody here · writer is out, talking with
-editor, in editor's room"). When nobody is busy it says so, which tells you a
+for as long as it stays ("talking with editor · in editor's room"), and so is
+its line among the agents, with "in editor's home" beside it. When nobody is
+busy it says so, which tells you a
 quiet world is idle rather than broken. It steps aside while you search.
 Among the rooms and places, those where something is happening come first,
 with a coloured edge and a word for the most pressing thing there and how
@@ -587,8 +587,8 @@ unless it is at a meeting table, where everyone keeps their seat, or asleep.
 Several agents messaging the same one stand round it, each in a spot of its
 own. If you're in the sender's home, you see it get up and leave through its
 door. The map lists it in **Busy now** as "talking with editor · in
-editor's room", its empty home says where it went, and up close its tag says
-"talking with editor" too.
+editor's room", its line among the agents says it is talking, "in editor's
+home", and up close its tag says "talking with editor" too.
 
 The visitor stays for as long as the answer takes, however long that is.
 After a quiet spell (5 minutes since their last exchange) it walks back, and

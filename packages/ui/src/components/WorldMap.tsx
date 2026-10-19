@@ -60,17 +60,6 @@ export function doingHere(
   return partner ? { agent, doing: "talking", what: `talking with ${nameOf(partner)}`, with: partner } : own;
 }
 
-/** Where a home's owner has gone, when its body is somewhere else: "talking with writer, in writer's room", "in #trip". */
-export function awayWords(home: MapPlace, places: MapPlace[]): string | undefined {
-  const owner = home.owner;
-  if (!owner || home.agents.includes(owner)) return undefined;
-  const there = places.find((p) => p.id !== home.id && p.agents.includes(owner));
-  if (!there) return undefined;
-  const where = there.kind === "room" ? `#${there.name}` : there.name;
-  const partner = there.with?.[owner];
-  return partner ? `talking with ${nameOf(partner)}, in ${where}` : `in ${where}`;
-}
-
 /** Someone busy, what at, and the place their body is in. */
 export interface Busy {
   agent: string;
@@ -255,7 +244,6 @@ export function WorldMap({
 
   const tile = (p: MapPlace) => {
     const mark = busyMark(p, activities);
-    const away = p.kind === "home" ? awayWords(p, places) : undefined;
     return (
       <li key={p.id}>
         <button
@@ -279,9 +267,7 @@ export function WorldMap({
                 <span className="world-map-nobody">
                   {p.kind === "room" && p.members?.length
                     ? `quiet · ${p.members.length === 1 ? "1 member" : `${p.members.length} members`}`
-                    : away
-                      ? `nobody here · ${nameOf(p.owner ?? "")} is out, ${away}`
-                      : "nobody here"}
+                    : "nobody here"}
                 </span>
               )}
               {p.agents.map((a) => {
@@ -389,8 +375,9 @@ export function WorldMap({
           <section aria-label="Agents" className="world-map-people">
             <h3>Agents</h3>
             <ul>
-              {index.agents.map(({ agent, home, away, activity }) => {
-                const doing = activity?.doing ?? "idle";
+              {index.agents.map(({ agent, home, away }) => {
+                // Gone to see an agent it messaged, it is talking with it while it stays, as Busy now says.
+                const doing = doingHere(away ?? home, agent, activities)?.doing ?? "idle";
                 // Only what is worth a look is in words; idle and asleep are the dot's to say.
                 const calm = URGENCY[doing] === undefined;
                 return (

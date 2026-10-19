@@ -608,7 +608,7 @@ export async function createStage(
   // and when each body last looked to its company.
   let kept = new Map<string, string>();
   const standing = new Map<Figure, [number, number]>();
-  const lookedAt = new Map<Figure, number>();
+  const facedAt = new Map<Figure, number>();
   const rekeep = () => {
     const was = kept;
     kept = keeping(
@@ -662,8 +662,8 @@ export async function createStage(
    */
   const keepCompany = (f: Figure, partnerAgent: string, visitor: boolean, t: number) => {
     const partner = figureOf(partnerAgent);
-    if (!partner || t - (lookedAt.get(f) ?? Number.NEGATIVE_INFINITY) < 2 || f.moving) return;
-    lookedAt.set(f, t);
+    if (!partner || t - (facedAt.get(f) ?? Number.NEGATIVE_INFINITY) < 2 || f.moving) return;
+    facedAt.set(f, t);
     const apart = Math.hypot(partner.walker.place.x - f.walker.place.x, partner.walker.place.z - f.walker.place.z);
     if (visitor && apart > FOLLOW_AT && !partner.moving) joinUp(f, partner);
     else if (!visitor && f.seated > 0.05 && !partner.moving && apart <= FOLLOW_AT && !isMeeting(room)) {
@@ -1332,7 +1332,7 @@ export async function createStage(
       errands.delete(fig);
       shows.delete(fig);
       standing.delete(fig);
-      lookedAt.delete(fig);
+      facedAt.delete(fig);
       companions.delete(agent);
       // Gone home, or somewhere else: out through the door, or simply gone from a room without one.
       if (!way) {
@@ -1721,7 +1721,7 @@ export async function createStage(
     }
     companions.clear();
     standing.clear();
-    lookedAt.clear();
+    facedAt.clear();
     kept = new Map();
     for (const d of departing.splice(0)) d.fig.dispose();
     placedAt = performance.now();
