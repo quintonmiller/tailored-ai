@@ -5,7 +5,9 @@
  * hardware the cost is GPU time rather than money, but an unbounded session
  * is still a bug: a tab left open should not hold the speech stages forever.
  */
+
 import { randomBytes } from "node:crypto";
+import type { Body } from "./cues.js";
 
 export interface LiveSessionLimits {
   /** Longest a session runs, start to finish. */
@@ -28,6 +30,8 @@ export interface LiveSession {
   lastTurnAt?: string;
   turns: number;
   limits: LiveSessionLimits;
+  /** What the surface shows the agent with, if anything: the moves its cues can make. */
+  body?: Body;
   endedAt?: string;
   endReason?: string;
 }
@@ -46,10 +50,17 @@ export class LiveSessions {
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
-  start(input: { agent?: string; transport: string; sessionId: string; limits: LiveSessionLimits }): LiveSession {
+  start(input: {
+    agent?: string;
+    transport: string;
+    sessionId: string;
+    limits: LiveSessionLimits;
+    body?: Body;
+  }): LiveSession {
     const session: LiveSession = {
       id: `live-${randomBytes(4).toString("hex")}`,
       ...(input.agent ? { agent: input.agent } : {}),
+      ...(input.body ? { body: input.body } : {}),
       transport: input.transport,
       sessionId: input.sessionId,
       startedAt: this.now().toISOString(),

@@ -29,6 +29,7 @@ import {
 } from "./db/runtime-settings-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
+import type { Body } from "./live/cues.js";
 import { LiveSessions } from "./live/session.js";
 import { voiceMode } from "./live/voice-mode.js";
 import type { MediaStore } from "./media/interface.js";
@@ -1445,6 +1446,8 @@ export class AgentRuntime {
      * identity and history; a smaller, faster turn.
      */
     mode?: "voice";
+    /** In voice mode: what the session's surface shows the agent with, whose cues it may write. */
+    body?: Body;
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
@@ -1584,7 +1587,7 @@ export class AgentRuntime {
         this.resolveAgentProvider(resolved.provider, agentName),
       getModelChain: () => this.resolveModelChain(resolved.models, agentName),
     };
-    return opts.mode === "voice" ? voiceMode(built, resolved.voice) : built;
+    return opts.mode === "voice" ? voiceMode(built, resolved.voice, opts.body) : built;
   }
 
   /**

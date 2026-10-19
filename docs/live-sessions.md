@@ -136,8 +136,47 @@ the avatar adds no tokens and no delay. It is drawn in the browser with
 three.js, loaded only when an avatar is set, and it moves far less when the
 browser asks for reduced motion.
 
-Gestures and expressions the agent picks itself, written inline in its reply,
-come next.
+## Cues: the agent moves its own body
+
+A page that shows the agent with a body says what that body can do when it
+starts a session: its gestures, and the moves it can aim at something, such
+as walking to a place or looking at a thing. The agent learns this in one
+line at the end of its voice instructions. That line stays the same for the
+whole session, so the prompt stays cached. The agent then writes **cues**
+inline, right where the move should happen:
+
+```
+<wave/> Hi! Good to see you.
+Sure. <go to="the couch"/> Heading over.
+```
+
+The turn takes cues out of the reply before anything is spoken or shown. A
+cue goes to the page with the sentence it comes before, so the wave lands on
+"Hi". A cue after the last sentence plays once the speech is done. A cue the
+body can't do is dropped, never read aloud. A model that writes a stage
+direction instead, such as `*waves*` or `*walks to the couch*`, is understood
+too, and `*smiles*` is dropped. The reply the person reads has no cues in it.
+The conversation's history keeps them, so the agent sees its own.
+
+Why tags and not stage directions: measured on a 27B local model, with 40
+single turns and a 10-turn conversation in each format:
+
+| | `<wave/>` tags | `*waves*` directions | no body described |
+|---|---|---|---|
+| asked to walk somewhere, did | 9 of 10 | 8 of 10 | 0 of 10 (refused 7) |
+| replies left with nothing to say | 4 | 11 | 0 |
+| moves it made up | 0 | 1 | 0 |
+| malformed cues | 0 | 0 | — |
+| first words, median | 106 ms | 106 ms | 80 ms |
+
+With no body described, the agent told people it was "just a voice", even
+though they were looking at it. The voice style line changes with a body
+too: "only offer what your tools let you do" stopped it walking anywhere;
+"what your tools and your body let you do" did not.
+
+Cues need no configuration: the Talk page declares its body. A transport
+with no body, such as Discord, declares none. Its agent is never told about
+cues, and its text passes through untouched.
 
 ## HTTP API
 
@@ -145,10 +184,10 @@ come next.
 |---|---|
 | `GET /api/live` | what the Talk page needs before a session: `{avatar?}`, the URL of the avatar's model file when one is set |
 | `GET /api/live/avatar` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
-| `POST /api/live/sessions` | start: `{agent?}`; `201` with the session and its limits; `409` when live sessions are off |
+| `POST /api/live/sessions` | start: `{agent?, body?}`; `201` with the session and its limits; `400` when the body is not one that can go in a prompt (names must be short plain words); `409` when live sessions are off. `body` is `{looks?, gestures, aimed?}`, where each `aimed` move is `{verb, prep, does, targets}`, e.g. `{"verb": "go", "prep": "to", "does": "walk somewhere", "targets": ["the couch"]}` |
 | `GET /api/live/sessions/:id` | the session, with `endedAt` and `endReason` once it has ended |
 | `DELETE /api/live/sessions/:id` | end it |
-| `POST /api/live/sessions/:id/turn` | one turn. The body is the recorded audio (its `Content-Type` names the format), or `{"text": "..."}`. The reply is a server-sent stream: `transcript` `{text}`, `text` `{delta}` as the reply is written, `audio` `{seq, text, mimeType, data}` (base64, one per sentence, in order), then `done` `{transcript, reply, timings}`, or `error` `{message}`. `409` once the session has ended |
+| `POST /api/live/sessions/:id/turn` | one turn. The body is the recorded audio (its `Content-Type` names the format), or `{"text": "..."}`. The reply is a server-sent stream: `transcript` `{text}`, `text` `{delta}` as the reply is written, `audio` `{seq, text, mimeType, data}` (base64, one per sentence, in order), `cue` `{seq, name, target?}` with the `seq` of the sentence it comes before, then `done` `{transcript, reply, timings}`, or `error` `{message}`. `409` once the session has ended |
 
 ## Limits
 

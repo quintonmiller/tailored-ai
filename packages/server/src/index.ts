@@ -11,6 +11,7 @@ import {
   type AutopilotWorker,
   addTaskComment,
   avatarModelPath,
+  type Body,
   type Briefing,
   BUDGETED_TOKEN_SOURCES,
   type CollectionListFilter,
@@ -85,6 +86,7 @@ import {
   type MemoryFragment,
   NpmResourceSource,
   type ProjectQueryFilter,
+  parseBody,
   parseSkillMd,
   parseWorkflow,
   promoteNote,
@@ -1888,10 +1890,20 @@ export function createServer(opts: ServerOptions) {
   });
 
   app.post("/api/live/sessions", async (c) => {
-    const body = await c.req.json<{ agent?: string }>().catch(() => ({}) as { agent?: string });
+    const body = await c.req
+      .json<{ agent?: string; body?: unknown }>()
+      .catch(() => ({}) as { agent?: string; body?: unknown });
+    // A page that shows the agent with a body says what it can do; its cues go into the agent's instructions.
+    let declared: Body | undefined;
+    if (body.body !== undefined) {
+      const parsed = parseBody(body.body);
+      if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+      declared = parsed.body;
+    }
     try {
       const session = startLiveSession(runtime, {
         ...(typeof body.agent === "string" && body.agent ? { agent: body.agent } : {}),
+        ...(declared ? { body: declared } : {}),
         transport: "web",
       });
       return c.json(liveJson(session), 201);
@@ -1947,6 +1959,7 @@ export function createServer(opts: ServerOptions) {
             text: (delta) => send("text", { delta }),
             audio: (a) =>
               send("audio", { seq: a.seq, text: a.text, mimeType: a.mimeType, data: a.bytes.toString("base64") }),
+            cue: (cue) => send("cue", cue),
           },
           c.req.raw.signal,
         );

@@ -13,7 +13,9 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadSession, newSession } from "../agent/session.js";
 import type { AgentConfig } from "../config.js";
+import { getSessionMessages } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
+import type { Body } from "../live/cues.js";
 import { SentenceSplitter, speakable } from "../live/sentences.js";
 import { LiveSessionError, LiveSessions } from "../live/session.js";
 import {
@@ -23,7 +25,7 @@ import {
   textToSpeechRegistry,
 } from "../live/stages.js";
 import { runVoiceTurn, startLiveSession } from "../live/turn.js";
-import { DEFAULT_VOICE_INSTRUCTIONS, voiceMode } from "../live/voice-mode.js";
+import { DEFAULT_VOICE_INSTRUCTIONS, DEFAULT_VOICE_INSTRUCTIONS_WITH_BODY, voiceMode } from "../live/voice-mode.js";
 import type { AIProvider, ChatParams, ChatStreamEvent } from "../providers/interface.js";
 import { AgentRuntime } from "../runtime.js";
 import type { Tool } from "../tools/interface.js";
@@ -171,6 +173,21 @@ describe("voiceMode", () => {
     expect(v.extraInstructions).toBe("Talk like a pilot.");
     expect(v.maxTokens).toBe(120);
   });
+
+  it("with a body, offers what the body can do and teaches its cues last", () => {
+    const body: Body = { gestures: ["wave"] };
+    const v = voiceMode(base, {}, body);
+    expect(v.extraInstructions.startsWith(`${DEFAULT_VOICE_INSTRUCTIONS_WITH_BODY}\n\nYou are a planner.\n\n`)).toBe(
+      true,
+    );
+    expect(v.extraInstructions).toContain("your tools and your body let you do");
+    expect(v.extraInstructions.endsWith("Use a cue only when it fits; most replies need none or one.")).toBe(true);
+  });
+
+  it("teaches the body's cues after the agent's own voice prompt too", () => {
+    const v = voiceMode(base, { instructions: "Talk like a pilot." }, { gestures: ["wave"] });
+    expect(v.extraInstructions).toMatch(/^Talk like a pilot\.\n\nYou have a body the person can see\./);
+  });
 });
 
 describe("runVoiceTurn", () => {
@@ -178,7 +195,8 @@ describe("runVoiceTurn", () => {
   const requests: ChatParams[] = [];
   const spoken: string[] = [];
   const timeline: string[] = [];
-  let reply = "Done. I added water the plants to tomorrow's list. Anything else?";
+  const DEFAULT_REPLY = "Done. I added water the plants to tomorrow's list. Anything else?";
+  let reply = DEFAULT_REPLY;
 
   const streaming: AIProvider = {
     name: "fake",
@@ -196,6 +214,7 @@ describe("runVoiceTurn", () => {
 
   beforeEach(() => {
     db = initDatabase(":memory:");
+    reply = DEFAULT_REPLY;
     requests.length = 0;
     spoken.length = 0;
     timeline.length = 0;
@@ -255,15 +274,65 @@ describe("runVoiceTurn", () => {
     );
   }
 
-  function liveSession(runtime: AgentRuntime) {
+  function liveSession(runtime: AgentRuntime, body?: Body) {
     const session = newSession(db, "x", "openai_compatible");
     return runtime.getLiveSessions().start({
       agent: "planner",
       transport: "web",
       sessionId: session.id,
       limits: { maxMinutes: 30, idleMinutes: 10, maxTurns: 50 },
+      ...(body ? { body } : {}),
     });
   }
+
+  it("takes a body's cues out of the reply and hands each over with the sentence it comes before", async () => {
+    reply = 'Hi there, good to see you! <wave/> I\'ll head over now. <go to="couch"/>';
+    const body: Body = {
+      gestures: ["wave"],
+      aimed: [{ verb: "go", prep: "to", does: "walk somewhere", targets: ["the couch"] }],
+    };
+    const runtime = runtimeWith();
+    const live = liveSession(runtime, body);
+    const events: string[] = [];
+    let shown = "";
+    const result = await runVoiceTurn(
+      runtime,
+      live,
+      { text: "Come sit down." },
+      {
+        text: (d) => {
+          shown += d;
+        },
+        audio: (a) => events.push(`audio:${a.seq}:${a.text}`),
+        cue: (c) => events.push(`cue:${c.seq}:${c.name}${c.target ? `:${c.target}` : ""}`),
+      },
+    );
+    // The wave lands on the second sentence; the walk comes after the speech.
+    expect(events.filter((e) => e.startsWith("cue"))).toEqual(["cue:1:wave", "cue:2:go:the couch"]);
+    expect(events.filter((e) => e.startsWith("audio"))).toEqual([
+      "audio:0:Hi there, good to see you!",
+      "audio:1:I'll head over now.",
+    ]);
+    // Nothing of a cue is spoken or shown; history keeps them, so the agent sees its own.
+    expect(spoken.join(" ")).not.toMatch(/[<>]/);
+    expect(shown).not.toMatch(/[<>]/);
+    expect(result.reply).toBe("Hi there, good to see you! I'll head over now.");
+    const history = getSessionMessages(db, live.sessionId);
+    expect(String(history.at(-1)?.content)).toContain("<wave/>");
+    // The body is taught in the instructions, which stay the same turn to turn.
+    const system = String(requests[0]?.messages[0]?.content);
+    expect(system).toContain("your tools and your body let you do");
+    expect(system).toContain('To walk somewhere: <go to="the couch"/>.');
+  });
+
+  it("passes text through untouched when the surface has no body", async () => {
+    reply = "Use <b>bold</b> sparingly, and *really* mean it.";
+    const runtime = runtimeWith();
+    let shown = "";
+    const result = await runVoiceTurn(runtime, liveSession(runtime), { text: "Tips?" }, { text: (d) => (shown += d) });
+    expect(shown).toBe(reply);
+    expect(result.reply).toBe(reply);
+  });
 
   it("hears, runs the turn, and speaks each sentence in order while the reply streams", async () => {
     const runtime = runtimeWith({ voice: "am_adam" });
