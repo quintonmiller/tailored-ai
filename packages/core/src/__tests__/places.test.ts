@@ -6,7 +6,18 @@
  */
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
-import { anyAvatar, applyAction, homeId, PLACE_TYPE, PlaceTool, readHome } from "../plugins/places.js";
+import {
+  anyAvatar,
+  applyAction,
+  homeId,
+  PLACE_TYPE,
+  PlaceTool,
+  readCurrent,
+  readHome,
+  WHEREABOUTS_TYPE,
+  whereIs,
+  whoIsIn,
+} from "../plugins/places.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
   defaultPlace,
@@ -360,6 +371,75 @@ describe("photos", () => {
       },
     );
     expect((await broken.execute({ action: "photo" }, ctx)).error).toBe("Photos need Playwright");
+  });
+});
+
+describe("shared places", () => {
+  const types = [
+    { name: PLACE_TYPE, scope: "agent" as const },
+    { name: WHEREABOUTS_TYPE, scope: "global" as const },
+  ];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const bodies = new Set(["host", "guest", "other"]);
+  const hasBody = (agent: string | undefined) => bodies.has(agent ?? "default");
+  let state: StateService;
+  let tool: PlaceTool;
+  const as = (agentName: string) => ({ agentName }) as ToolContext;
+  beforeEach(() => {
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    tool = new PlaceTool(() => state, hasBody);
+  });
+
+  it("makes a shared place, goes there, and changes it instead of home", async () => {
+    const made = await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    expect(made.success, made.error).toBe(true);
+    expect(await whereIs(state, owner, "host")).toBe("shared:lounge");
+    const lounge = await state.get(owner, { type: PLACE_TYPE, id: "shared:lounge" });
+    expect(lounge).toMatchObject({ scope: "global", data: { name: "the lounge" } });
+    const added = await tool.execute({ action: "add", kind: "beanbag", corner: "front left" }, as("host"));
+    expect(added.success, added.error).toBe(true);
+    const after = await state.get(owner, { type: PLACE_TYPE, id: "shared:lounge" });
+    expect((after?.data as unknown as Place).props.some((p) => p.kind === "beanbag")).toBe(true);
+    const home = await readHome(state, owner, "host");
+    expect(home.place.props.some((p) => p.kind === "beanbag")).toBe(false);
+    expect(String((await tool.execute({ action: "look" }, as("host"))).output)).toMatch(/You are in the lounge/);
+  });
+
+  it("knows who else is there, and a home's owner is in it until they go out", async () => {
+    await tool.execute({ action: "new", name: "the lounge" }, as("host"));
+    const joined = await tool.execute({ action: "go", to: "lounge" }, as("guest"));
+    expect(String(joined.output)).toMatch(/Also here: host/);
+    expect(await whoIsIn(state, owner, "shared:lounge", hasBody)).toEqual(["guest", "host"]);
+    expect(String((await tool.execute({ action: "look" }, as("host"))).output)).toMatch(/Also here: guest/);
+    // "other" never left home; "host" did.
+    expect(await whoIsIn(state, owner, homeId("other"), hasBody)).toEqual(["other"]);
+    expect(await whoIsIn(state, owner, homeId("host"), hasBody)).toEqual([]);
+    const listed = String((await tool.execute({ action: "places" }, as("other"))).output);
+    expect(listed).toMatch(/the lounge: guest, host are there/);
+  });
+
+  it("goes home, and works on home again", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    expect((await tool.execute({ action: "go", to: "home" }, as("host"))).output).toBe("You're home.");
+    expect(await state.get(owner, { type: WHEREABOUTS_TYPE, id: "host" })).toBeNull();
+    expect((await readCurrent(state, owner, "host")).id).toBe(homeId("host"));
+  });
+
+  it("says why when it can't go somewhere or make a place twice", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    expect((await tool.execute({ action: "go", to: "the attic" }, as("guest"))).error).toMatch(
+      /no shared place called "the attic". There is: the lounge/,
+    );
+    expect((await tool.execute({ action: "new", name: "Lounge" }, as("guest"))).error).toMatch(/already a place/);
+  });
+
+  it("sends an agent home when the place it was in is gone", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
+    expect(await whereIs(state, owner, "host")).toBe(homeId("host"));
   });
 });
 

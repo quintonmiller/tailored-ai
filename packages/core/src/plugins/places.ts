@@ -110,11 +110,73 @@ export async function readHome(
   }
 }
 
+/** Where each agent's body has gone: no record means it is at home. */
+export const WHEREABOUTS_TYPE = "whereabouts";
+/** Shared places are `place` records everyone can see, named `shared:<slug>`. */
+const SHARED = "shared:";
+
+/** The place an agent's body is in: home, unless it has gone to a place that still exists. */
+export async function whereIs(service: StateService, caller: StateCaller, agent: string): Promise<string> {
+  // A store that keeps no whereabouts has everyone at home.
+  const found = await service.get(caller, { type: WHEREABOUTS_TYPE, id: agent }).catch(() => null);
+  const id = typeof found?.data.place === "string" ? found.data.place : undefined;
+  if (!id || id === homeId(agent)) return homeId(agent);
+  return (await service.get(caller, { type: PLACE_TYPE, id })) ? id : homeId(agent);
+}
+
+/** The place an agent is in now, with what a write needs: its id, version and scope. */
+export async function readCurrent(
+  service: StateService,
+  caller: StateCaller,
+  agent: string,
+): Promise<{ id: string; place: Place; version: number; scope: string }> {
+  const id = await whereIs(service, caller, agent);
+  const found = id === homeId(agent) ? undefined : await service.get(caller, { type: PLACE_TYPE, id });
+  if (found) return { id, place: found.data as unknown as Place, version: found.version, scope: found.scope };
+  return { id: homeId(agent), ...(await readHome(service, caller, agent)), scope: `agent:${agent}` };
+}
+
+/** Everyone whose body is in a place now, apart from `except`: those who went there, and the owner of a home. */
+export async function whoIsIn(
+  service: StateService,
+  caller: StateCaller,
+  id: string,
+  hasBody: (agent: string | undefined) => boolean,
+  except?: string,
+): Promise<string[]> {
+  const went = await service
+    .query(caller, { type: WHEREABOUTS_TYPE, where: { place: id }, limit: 50 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  const names = new Set(went.map((r) => r.id));
+  if (id.startsWith("home:")) {
+    const owner = id.slice("home:".length);
+    if ((await whereIs(service, caller, owner)) === id) names.add(owner);
+  }
+  if (except) names.delete(except);
+  return [...names].filter((name) => hasBody(name)).sort();
+}
+
+/** The shared places, by id and name. */
+async function sharedPlaces(service: StateService, caller: StateCaller): Promise<{ id: string; name: string }[]> {
+  const records = await service.query(caller, { type: PLACE_TYPE, scope: "global", limit: 50 });
+  return records
+    .filter((r) => r.id.startsWith(SHARED))
+    .map((r) => ({ id: r.id, name: String((r.data as unknown as Place).name ?? r.id) }));
+}
+
+const slug = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/^(the|a|an)\s+/, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48);
+
 // --------------------------------------------------------------------------
 // The tool's arguments
 // --------------------------------------------------------------------------
 
-const ACTIONS = ["look", "add", "move", "change", "remove", "room", "undo", "photo"] as const;
+const ACTIONS = ["look", "add", "move", "change", "remove", "room", "undo", "photo", "places", "go", "new"] as const;
 type Action = (typeof ACTIONS)[number];
 
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -430,7 +492,7 @@ const fail = (error: string): ToolResult => ({ success: false, output: "", error
 export class PlaceTool implements Tool {
   name = "place";
   description =
-    "Look at or change the 3D room your body lives in: add, move, restyle or remove things, resize and repaint the room, or take a photo or selfie to send. Start with look.";
+    "Look at or change the 3D room your body is in: add, move, restyle or remove things, resize and repaint the room, take a photo or selfie to send, or go to a shared place others can be in. Start with look.";
   parameters = {
     type: "object",
     properties: {
@@ -438,7 +500,7 @@ export class PlaceTool implements Tool {
         type: "string",
         enum: [...ACTIONS],
         description:
-          "look: the room, its things and what you can add. add / move / change / remove a thing. room: size, walls, floor. undo: the last change. photo: a picture to send.",
+          "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
       },
       item: { type: "string", description: "move, change, remove: the thing, by name or id." },
       kind: { type: "string", description: "add: what to add, e.g. armchair, rug, bookshelf, lamp, vase, block." },
@@ -472,6 +534,7 @@ export class PlaceTool implements Tool {
       view: { type: "string", enum: ["room", "selfie"], description: "photo: the whole room, or a selfie." },
       at: { type: "string", description: "photo: where you are in it, a spot like the couch." },
       gesture: { type: "string", description: 'photo: a gesture to make, e.g. "wave".' },
+      to: { type: "string", description: 'go: "home", or a shared place by name.' },
     },
     required: ["action"],
   };
@@ -488,11 +551,22 @@ export class PlaceTool implements Tool {
     const agent = context.agentName ?? "default";
     const service = this.getService();
     const caller = agentStateCaller(context, "place");
-    const ref = { type: PLACE_TYPE, id: homeId(agent) };
+    const action = text(args.action)?.toLowerCase();
     try {
-      if (text(args.action)?.toLowerCase() === "photo") return await this.photo(args, context, agent);
-      if (text(args.action)?.toLowerCase() === "undo") {
-        await readHome(service, caller, agent);
+      if (action === "photo") return await this.photo(args, context, agent);
+      if (action === "places") return { success: true, output: await this.places(service, caller, agent) };
+      if (action === "go") return await this.go(service, caller, agent, text(args.to) ?? text(args.name));
+      if (action === "new") return await this.open(service, caller, agent, text(args.name));
+      if (action === "look") {
+        const { id, place } = await readCurrent(service, caller, agent);
+        const others = await whoIsIn(service, caller, id, this.hasBody, agent);
+        const where = id === homeId(agent) ? "You are at home." : `You are in ${place.name}, a shared place.`;
+        const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
+        return { success: true, output: `${where}${company}\n\n${describe(place)}` };
+      }
+      if (action === "undo") {
+        const { id } = await readCurrent(service, caller, agent);
+        const ref = { type: PLACE_TYPE, id };
         const [last] = await service.history(caller, ref, { limit: 1 });
         if (!last?.before || last.op !== "update") return fail("There's nothing to undo.");
         await service.put(caller, { ...ref, data: last.before }, last.version);
@@ -502,14 +576,18 @@ export class PlaceTool implements Tool {
         };
       }
       for (let attempt = 0; ; attempt++) {
-        const { place, version } = await readHome(service, caller, agent);
+        const { id, place, version, scope } = await readCurrent(service, caller, agent);
         const outcome = applyAction(place, args);
         if (!outcome.place) return outcome.ok ? { success: true, output: outcome.text } : fail(outcome.text);
         try {
-          await service.put(caller, { ...ref, data: outcome.place as unknown as Record<string, unknown> }, version);
+          await service.put(
+            caller,
+            { type: PLACE_TYPE, id, scope, data: outcome.place as unknown as Record<string, unknown> },
+            version,
+          );
           return { success: true, output: outcome.text };
         } catch (err) {
-          // The room changed under us (the person, or another turn): read it again, once.
+          // The room changed under us (the person, another turn, another agent): read it again, once.
           if (err instanceof StateConflictError && attempt === 0) continue;
           throw err;
         }
@@ -520,12 +598,84 @@ export class PlaceTool implements Tool {
     }
   }
 
+  /** Where it can go, and who is in each place. */
+  private async places(service: StateService, caller: StateCaller, agent: string): Promise<string> {
+    const here = await whereIs(service, caller, agent);
+    const shared = await sharedPlaces(service, caller);
+    const hereName = shared.find((p) => p.id === here)?.name;
+    const lines = [hereName ? `You are in ${hereName}.` : "You are at home.", "Places you can go:"];
+    const describeOne = async (id: string, label: string) => {
+      const there = await whoIsIn(service, caller, id, this.hasBody, agent);
+      const mark = id === here ? " (you are here)" : "";
+      lines.push(
+        `- ${label}${mark}${there.length ? `: ${there.join(", ")} ${there.length > 1 ? "are" : "is"} there` : ""}`,
+      );
+    };
+    await describeOne(homeId(agent), "home, your own room");
+    for (const place of shared) await describeOne(place.id, place.name);
+    lines.push('Make a new shared place with action "new" and a name.');
+    return lines.join("\n");
+  }
+
+  /** Go home, or to a shared place. */
+  private async go(
+    service: StateService,
+    caller: StateCaller,
+    agent: string,
+    to: string | undefined,
+  ): Promise<ToolResult> {
+    if (!to) return fail('Say where with `to`: "home", or a shared place by name. `places` lists them.');
+    const ref = { type: WHEREABOUTS_TYPE, id: agent };
+    if (/^(home|my room|your room|back home)$/i.test(to) || to === homeId(agent)) {
+      if (await service.get(caller, ref)) await service.delete(caller, ref);
+      return { success: true, output: "You're home." };
+    }
+    const shared = await sharedPlaces(service, caller);
+    const wanted = slug(to);
+    const place = shared.find((p) => p.id === to || p.id === `${SHARED}${wanted}` || slug(p.name) === wanted);
+    if (!place) {
+      const known = shared.map((p) => p.name).join(", ");
+      return fail(`There's no shared place called "${to}".${known ? ` There is: ${known}.` : ""} Make one with "new".`);
+    }
+    await service.put(caller, { ...ref, scope: "global", data: { place: place.id } });
+    const there = await whoIsIn(service, caller, place.id, this.hasBody, agent);
+    return {
+      success: true,
+      output: `You're in ${place.name} now.${there.length ? ` Also here: ${there.join(", ")}.` : " Nobody else is here yet."}`,
+    };
+  }
+
+  /** Make a shared place, furnished like a new room, and go there. */
+  private async open(
+    service: StateService,
+    caller: StateCaller,
+    agent: string,
+    name: string | undefined,
+  ): Promise<ToolResult> {
+    if (!name || !slug(name)) return fail('Give the new place a name, like "the lounge".');
+    const id = `${SHARED}${slug(name)}`;
+    if (await service.get(caller, { type: PLACE_TYPE, id }))
+      return fail(`There's already a place called ${name}. Go there with action "go".`);
+    const named = /^(the|a|an)\s/i.test(name) ? name : `the ${name}`;
+    await service.put(caller, {
+      type: PLACE_TYPE,
+      id,
+      scope: "global",
+      data: defaultPlace(named.slice(0, 80)) as unknown as Record<string, unknown>,
+    });
+    await service.put(caller, { type: WHEREABOUTS_TYPE, id: agent, scope: "global", data: { place: id } });
+    return {
+      success: true,
+      output: `Made ${named}, a shared place furnished like a new room, and you're in it. Others can join with go. Change it like your own room.`,
+    };
+  }
+
   /** A picture of the room, or a selfie, kept in the media store so it can go out with the reply. */
   private async photo(args: Record<string, unknown>, context: ToolContext, agent: string): Promise<ToolResult> {
     if (!this.camera) return fail("Photos aren't available here.");
     const store = context.mediaStore;
     if (!store) return fail("There's nowhere to keep a photo (no media store), so none can be sent.");
-    const { place } = await readHome(this.getService(), agentStateCaller(context, "place"), agent);
+    const { place } = await readCurrent(this.getService(), agentStateCaller(context, "place"), agent);
     const view = text(args.view)?.toLowerCase() === "selfie" ? "selfie" : "room";
     const at = text(args.at);
     const spot = at ? findSpot(place, at) : undefined;
@@ -572,6 +722,14 @@ const plugin: Plugin = (ctx) => {
     schema: PLACE_SCHEMA as never,
   });
 
+  ctx.stateTypes.register({
+    name: WHEREABOUTS_TYPE,
+    description: "Where an agent's body has gone: the place it is in. No record means it is at home.",
+    scope: "global",
+    title: "place",
+    schema: { type: "object", required: ["place"], properties: { place: { type: "string", maxLength: 128 } } } as never,
+  });
+
   ctx.tools.register("place", (config, tctx) => {
     if (!anyAvatar(config) || !tctx.getStateService) return [];
     return [new PlaceTool(tctx.getStateService, hasBody, (shot) => camera.take(shot))];
@@ -584,8 +742,21 @@ const plugin: Plugin = (ctx) => {
     handler: async (req: TaiHttpRequest): Promise<TaiHttpResponse> => {
       const agent = req.params.agent || "default";
       if (!hasBody(agent)) return { status: 404, json: { error: `${agent} has no avatar, so no room.` } };
-      const { place, version } = await readHome(runtime.getStateService(), PLUGIN_CALLER, agent);
-      return { json: { type: PLACE_TYPE, id: homeId(agent), version, place } };
+      const service = runtime.getStateService();
+      const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent);
+      // Everyone else whose body is here, with what the page needs to draw them.
+      const company = (await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent)).map((name) => {
+        const own = runtime.avatarFor(name === "default" ? undefined : name);
+        const files = resolveAvatar(runtime.getConfig().live, own);
+        const q = name === "default" ? "" : `?agent=${encodeURIComponent(name)}`;
+        return {
+          agent: name,
+          name,
+          avatar: `/api/live/avatar${q}`,
+          animations: files.animations.map((_, i) => `/api/live/animations/${i}${q}`),
+        };
+      });
+      return { json: { type: PLACE_TYPE, id, version, place, company } };
     },
   });
 };

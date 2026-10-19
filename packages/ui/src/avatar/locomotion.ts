@@ -306,10 +306,16 @@ export class Director {
 
   /**
    * Called every frame. `here` is the spot it is standing at (undefined while
-   * walking), `engaged` whether someone is talking to it. Returns a spot to
+   * walking), `engaged` whether someone is talking to it, `taken` the spots
+   * others in the room are at, which it won't wander to. Returns a spot to
    * walk to now, if any.
    */
-  decide(t: number, here: string | undefined, engaged: boolean): string | typeof ASK | undefined {
+  decide(
+    t: number,
+    here: string | undefined,
+    engaged: boolean,
+    taken?: ReadonlySet<string>,
+  ): string | typeof ASK | undefined {
     const startedTalking = engaged && !this.wasEngaged;
     this.wasEngaged = engaged;
     if (engaged) {
@@ -327,7 +333,7 @@ export class Director {
     if (t < this.leaveAt) return undefined;
     this.leaveAt = undefined;
     if (this.agentChooses) return ASK;
-    const elsewhere = this.room.spots.filter((s) => s.id !== here);
+    const elsewhere = this.room.spots.filter((s) => s.id !== here && !taken?.has(s.id));
     return elsewhere[Math.floor(this.random() * elsewhere.length)]?.id;
   }
 

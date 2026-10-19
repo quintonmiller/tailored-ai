@@ -177,15 +177,18 @@ const VIEWER = new Set([
  * What the avatar's body can do in this room, as a live session declares it:
  * the agent is told these moves and names, and writes cues with them.
  */
-export function bodyFor(room: Room) {
+export function bodyFor(room: Room, company: string[] = []) {
   const things = [...new Set([...room.props.map((p) => p.name), ...room.spots.map((s) => s.place)])];
+  // Who else is here, in the plain words the body description allows: no commas.
+  const others = company.length > 1 ? `${company.slice(0, -1).join(" ")} and ${company.at(-1)}` : company[0];
+  const looks = `a small figure in a cozy room${others ? ` with ${others}` : ""}`;
   return {
-    looks: "a small figure in a cozy room",
+    looks: looks.length <= 80 ? looks : "a small figure in a cozy room with others",
     gestures: [...GESTURES],
     aimed: [
       { verb: "go", prep: "to", does: "walk somewhere", targets: room.spots.map((s) => s.place) },
-      { verb: "look", prep: "at", does: "look at something", targets: ["you", ...things] },
-      { verb: "point", prep: "at", does: "point at something", targets: things },
+      { verb: "look", prep: "at", does: "look at something", targets: ["you", ...company, ...things] },
+      { verb: "point", prep: "at", does: "point at something", targets: [...company, ...things] },
     ],
   };
 }

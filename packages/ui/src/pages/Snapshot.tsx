@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Avatar } from "../avatar/Avatar";
 import { DEFAULT_ROOM, type Room } from "../avatar/scene";
+import type { Companion } from "../avatar/stage";
+import { companyOf, type PlaceInfo } from "../components/ChatStage";
 
 /**
  * A photo of an agent's room, for the server's camera: the stage alone, with
@@ -16,7 +18,12 @@ export function Snapshot() {
   const view = query.get("view") === "selfie" ? "close" : "room";
   const spot = query.get("spot") ?? undefined;
   const gesture = query.get("gesture") ?? undefined;
-  const [scene, setScene] = useState<{ avatar: string; animations: string[]; room: Room } | null>(null);
+  const [scene, setScene] = useState<{
+    avatar: string;
+    animations: string[];
+    room: Room;
+    company: Companion[];
+  } | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [problem, setProblem] = useState("");
 
@@ -28,9 +35,14 @@ export function Snapshot() {
         .then((res) => (res.ok ? res.json() : null))
         .catch(() => null),
     ])
-      .then(([live, home]: [{ avatar?: string; animations?: string[] }, { place?: Room } | null]) => {
+      .then(([live, here]: [{ avatar?: string; animations?: string[] }, PlaceInfo | null]) => {
         if (!live.avatar) throw new Error(`${agent} has no avatar.`);
-        setScene({ avatar: live.avatar, animations: live.animations ?? [], room: home?.place ?? DEFAULT_ROOM });
+        setScene({
+          avatar: live.avatar,
+          animations: live.animations ?? [],
+          room: here?.place ?? DEFAULT_ROOM,
+          company: companyOf(here),
+        });
       })
       .catch((err: unknown) => {
         setProblem(err instanceof Error ? err.message : String(err));
@@ -47,6 +59,7 @@ export function Snapshot() {
             url={scene.avatar}
             animations={scene.animations}
             room={scene.room}
+            company={scene.company}
             view={view}
             state="idle"
             loudness={() => 0}

@@ -262,6 +262,27 @@ and blocks, balls and cylinders of any size and colour. Seats, desks, the
 bookshelf, the TV, the fireplace and windows each bring a spot: add an
 armchair, and the agent can sit in it, and so can a click.
 
+#### Shared places
+
+A room can be shared. An agent makes one with `new` and a name ("the
+lounge"), which starts furnished like a new room, and it goes there. Other
+agents join with `go` and `to: "the lounge"`, and anyone goes back with
+`to: "home"`. `places` lists where an agent can go and who is in each place.
+While an agent is in a shared place, the `place` tool changes that place, so
+everyone there sees the change.
+
+Where each agent is lives in world state too: a `whereabouts` record, one per
+agent, in the global scope. No record means it is at home. A shared place is
+a `place` record in the global scope, named `shared:<name>`. If one is
+deleted, whoever was in it is home again.
+
+The chat page shows the place the agent is in, with every other agent there
+in its own body and a name label over its head. They wander on their own,
+keep out of each other's spots, and look at the agent you are talking to.
+When you send that agent to a spot someone is in, they make room. The agent
+is told who is with it ("a small figure in a cozy room with planner"), and
+can look or point at them. A photo includes everyone who is there.
+
 #### Photos and selfies
 
 The agent can take a picture of its room and send it: `photo` with `view`
@@ -346,7 +367,7 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the agent's room: `{type, id, version, place}`, made from the starting room on first use; `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company}`, its home made from the starting room on first use. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` change means someone came or went |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/idle` | what the agent does with a quiet moment: `{agent?, body, here?, hour?}` → `{cues}`. `429` within 45 s of the last ask for that agent; `400` for a body that can't go in a prompt |

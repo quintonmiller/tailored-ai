@@ -24,7 +24,7 @@ vi.mock("../avatar/stage", () => ({
   ) => {
     stage.opts.push(opts);
     setTimeout(() => opts.onReady?.(), 0);
-    return { dispose() {}, setView() {}, setInsets() {}, setRoom() {}, cue() {} };
+    return { dispose() {}, setView() {}, setInsets() {}, setRoom() {}, setCompany() {}, cue() {} };
   },
 }));
 

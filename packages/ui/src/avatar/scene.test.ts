@@ -143,3 +143,19 @@ describe("spotFor and lookTarget", () => {
     expect(lookTarget(DEFAULT_ROOM, "the moon")).toBeUndefined();
   });
 });
+
+describe("bodyFor with company", () => {
+  it("says who else is here, and lets the agent look and point at them", () => {
+    const body = bodyFor(DEFAULT_ROOM, ["planner", "scout"]);
+    expect(body.looks).toBe("a small figure in a cozy room with planner and scout");
+    expect(body.aimed.find((a) => a.verb === "look")?.targets).toEqual(
+      expect.arrayContaining(["you", "planner", "scout"]),
+    );
+    expect(body.aimed.find((a) => a.verb === "point")?.targets).toContain("scout");
+  });
+
+  it("keeps the description short when the room is crowded", () => {
+    const many = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
+    expect(bodyFor(DEFAULT_ROOM, many).looks.length).toBeLessThanOrEqual(80);
+  });
+});

@@ -2,7 +2,7 @@ import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import type { Cue } from "./cues";
 import type { BodyState } from "./motion";
 import type { Room } from "./scene";
-import type { Stage, StageView } from "./stage";
+import type { Companion, Stage, StageView } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
 
@@ -38,6 +38,7 @@ export function Avatar({
   insetRight = 0,
   chooseIdle,
   room,
+  company,
   still,
   onReady,
   onProblem,
@@ -60,6 +61,8 @@ export function Avatar({
   chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
   /** The room it lives in; a new one is shown as it changes, without rebuilding the stage. */
   room?: Room;
+  /** Others in the room, each with a body of their own. */
+  company?: Companion[];
   /** Hold still for a photo, at a spot, striking a gesture; the view toggle is hidden. */
   still?: { spot?: string; gesture?: string };
   /** A still avatar is ready to photograph. */
@@ -89,6 +92,13 @@ export function Avatar({
   }, [insetRight]);
   const stillRef = useRef({ still, onReady, onProblem });
   stillRef.current = { still, onReady, onProblem };
+  const companyRef = useRef(company);
+  companyRef.current = company;
+  const companyKey = JSON.stringify(company ?? []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when the company changed; the ref holds it.
+  useEffect(() => {
+    stage.current?.setCompany(companyRef.current ?? []);
+  }, [companyKey]);
   const roomRef = useRef(room);
   roomRef.current = room;
   useEffect(() => {
@@ -113,6 +123,7 @@ export function Avatar({
           view: viewRef.current,
           animations: animationsRef.current,
           ...(roomRef.current ? { room: roomRef.current } : {}),
+          ...(companyRef.current?.length ? { company: companyRef.current } : {}),
           ...(stillRef.current.still
             ? { still: stillRef.current.still, onReady: () => stillRef.current.onReady?.() }
             : {}),
@@ -131,10 +142,11 @@ export function Avatar({
           return;
         }
         stage.current = s;
-        s.setInsets({ right: insetRef.current });
-        // The room may have arrived, or changed, while the stage was loading.
-        if (roomRef.current) s.setRoom(roomRef.current);
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
+        s.setInsets({ right: insetRef.current });
+        // The room, or who is in it, may have arrived or changed while the stage was loading.
+        if (roomRef.current) s.setRoom(roomRef.current);
+        s.setCompany(companyRef.current ?? []);
       })
       .catch((err: unknown) => {
         if (gone) return;
