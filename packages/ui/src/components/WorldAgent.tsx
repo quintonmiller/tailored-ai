@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { type ExploratoryAgent, type ExploratoryRun, fetchExploratoryAgents, fetchExploratoryRuns } from "../api";
 import type { AgentActivity } from "../avatar/doing";
+import { toggleWear, WEAR, wearWords } from "../avatar/wear";
 import { nameOf } from "../lib/conversations";
 import { asleepWords, clockTime as clock, lastDid, wakeWords } from "../lib/did";
 import { ago, lasting } from "../lib/tasks";
 import { nextTurn } from "../lib/wakes";
-import { agentColor } from "./WorldMap";
+import { agentColor, roleWord } from "./WorldMap";
 import { WorldPanel } from "./WorldPanel";
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** "a coder", "an artist". */
+const aOrAn = (word: string) => (/^[aeiou]/i.test(word) ? `an ${word}` : `a ${word}`);
 
 /** The last thing an agent said, as its `speech` record has it. */
 export interface Said {
@@ -39,13 +43,17 @@ function ownTurns(agent: ExploratoryAgent, allOn: boolean): string {
 }
 
 /**
- * An agent, in the world: who it is, what it is doing, what it last said and
- * where, when it next runs on its own, where its body is, and what you can do
- * about it, from talking to it to sending it home. Its full page is a link at
- * the bottom.
+ * An agent, in the world: who it is and what it is for, what it is doing,
+ * what it last said and where, when it next runs on its own, where its body
+ * is, what it wears, and what you can do about it, from talking to it to
+ * sending it home. Its full page is a link at the bottom.
  */
 export function WorldAgent({
   agent,
+  role,
+  wear,
+  chosen,
+  onWear,
   activity,
   said,
   roomName,
@@ -63,6 +71,14 @@ export function WorldAgent({
   onClose,
 }: {
   agent: string;
+  /** What it is for, in a word, when that can be read from what it is told to do. */
+  role?: string;
+  /** What its body wears, by name, as the map says; undefined until the map is in. */
+  wear?: string[];
+  /** Someone chose what it wears, rather than it being what suits its role. */
+  chosen?: boolean;
+  /** Dress it in these, or (null) in whatever suits its role again. */
+  onWear?: (wear: string[] | null) => Promise<void>;
   activity: AgentActivity | undefined;
   said: Said | undefined;
   /** A room's name, by the ref a line was said in. */
@@ -91,6 +107,13 @@ export function WorldAgent({
   const [lastRun, setLastRun] = useState<ExploratoryRun | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // What it wears as last asked for here, until the map catches up.
+  const [dressed, setDressed] = useState<string[] | undefined>(undefined);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: what the map says now is what is worn; asking is over.
+  useEffect(() => {
+    setDressed(undefined);
+  }, [(wear ?? []).join(",")]);
+  const worn = dressed ?? wear ?? [];
   const load = useCallback(async () => {
     if (!online) return;
     const [state, runs] = await Promise.all([
@@ -119,6 +142,11 @@ export function WorldAgent({
       setBusy(false);
     }
   };
+  const dress = (next: string[] | null) =>
+    void act("change what it wears", async () => {
+      setDressed(next ?? undefined);
+      await onWear?.(next);
+    });
   const post = (path: string, body?: unknown) =>
     fetch(`/api/exploratory/agents/${encodeURIComponent(agent)}/${path}`, {
       method: "POST",
@@ -144,6 +172,7 @@ export function WorldAgent({
         <span className="world-agent-name">
           <span className="world-agent-dot" style={{ background: agentColor(agent) }} aria-hidden="true" />
           {name}
+          {roleWord(agent, role) && <span className="world-agent-role">{role}</span>}
         </span>
       }
       className="world-agent"
@@ -222,6 +251,40 @@ export function WorldAgent({
             {openTasks === 0 ? "None open" : openTasks === 1 ? "1 open" : `${openTasks} open`} · see them
           </button>
         </dd>
+        {wear && onWear && (
+          <>
+            <dt>Wears</dt>
+            <dd className="world-agent-wear">
+              <span>
+                {wearWords(worn)[0].toUpperCase()}
+                {wearWords(worn).slice(1)}
+                {!chosen && role && <span className="world-agent-when"> · what suits {aOrAn(role)}</span>}
+                {chosen && role && (
+                  <>
+                    {" · "}
+                    <button type="button" className="world-panel-inline" disabled={busy} onClick={() => dress(null)}>
+                      back to what suits {aOrAn(role)}
+                    </button>
+                  </>
+                )}
+              </span>
+              <span className="world-wear" role="group" aria-label={`What ${name} wears`}>
+                {Object.keys(WEAR).map((thing) => (
+                  <button
+                    key={thing}
+                    type="button"
+                    className="world-wear-chip"
+                    aria-pressed={worn.includes(thing)}
+                    disabled={busy}
+                    onClick={() => dress(toggleWear(worn, thing))}
+                  >
+                    {thing}
+                  </button>
+                ))}
+              </span>
+            </dd>
+          </>
+        )}
       </dl>
       <div className="world-panel-row world-agent-actions">
         {talking ? (

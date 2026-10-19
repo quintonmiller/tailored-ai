@@ -25,6 +25,8 @@ export function Snapshot() {
     animations: string[];
     room: Room;
     company: Companion[];
+    /** What the agent wears, so a selfie shows it. */
+    wear: string[];
   } | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [problem, setProblem] = useState("");
@@ -46,6 +48,7 @@ export function Snapshot() {
           // With its doors, as the chat page draws it.
           room: roomOf(here),
           company: companyOf(here),
+          wear: here?.wear ?? [],
         });
       })
       .catch((err: unknown) => {
@@ -65,6 +68,9 @@ export function Snapshot() {
             room={scene.room}
             place={scene.id}
             company={scene.company}
+            // Its own colours and what it wears, as it looks in the world.
+            agent={agent}
+            wear={scene.wear}
             view={view}
             state="idle"
             loudness={() => 0}

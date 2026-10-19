@@ -281,6 +281,28 @@ export const KINDS: Record<string, Kind> = {
   screen: { noun: "screen", mount: "wall", footprint: [1.6, 0.06], height: 0.92, elevation: 1.25 },
   /** A calendar on the wall: the page fills it with its owner's day, and in the lobby everyone's next wakes. */
   calendar: { noun: "calendar", mount: "wall", footprint: [1.0, 0.03], height: 1.0, elevation: 1.1 },
+  // Things for the work an agent does: a traveller's globe and map, a producer's microphone, a coder's servers,
+  // a bookkeeper's ledgers, a game master's board.
+  globe: {
+    round: true,
+    noun: "globe",
+    mount: "floor",
+    footprint: [0.5, 0.5],
+    height: 1.05,
+    use: { activity: "look", offset: 0.55 },
+  },
+  map: { noun: "map", mount: "wall", footprint: [1.3, 0.03], height: 0.85, elevation: 1.45 },
+  mic_stand: { round: true, noun: "microphone stand", mount: "floor", footprint: [0.4, 0.4], height: 1.55 },
+  server_rack: {
+    noun: "server rack",
+    mount: "floor",
+    footprint: [0.6, 0.62],
+    height: 1.9,
+    wallward: true,
+    use: { activity: "look", offset: 0.6 },
+  },
+  ledger: { noun: "ledger", mount: "on", footprint: [0.34, 0.25], height: 0.05 },
+  chessboard: { noun: "chessboard", mount: "on", footprint: [0.4, 0.4], height: 0.09 },
 };
 
 export const LIMITS = {

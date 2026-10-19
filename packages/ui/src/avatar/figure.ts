@@ -9,7 +9,8 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
 import type { Hold, Sign } from "./doing";
-import { armClearance, bodyPoints } from "./fit";
+import { buildPiece, wearColors } from "./dress";
+import { armClearance, bodyPoints, measureWear, wearBone } from "./fit";
 import { Director, findPath, type Obstacle, type Pick, route, slide, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { BUBBLE_PX, GAP_PX, type Over, SETTLE_SECONDS, SIGN_PX, type Stacked, TAG_PX, TAIL_WIDTH_PX } from "./overhead";
@@ -18,6 +19,7 @@ import { type Activity, type Room, type Spot, spotById } from "./scene";
 import { bubbleTail, disposeSprite, fitSprite, liftSprite, SignPost, speechBubble, tag } from "./signs";
 import { tintModel } from "./tint";
 import { ease, gait } from "./travel";
+import { wearPieces, wearTop } from "./wear";
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 /** Seconds its pace takes to catch up with how fast it is really going: long enough to smooth a frame's hitch. */
@@ -118,6 +120,12 @@ export class Figure {
   private lifted: Stacked | undefined;
   /** Metres a screen pixel covers at its head, as of the last layout. */
   private perPixel = 0.005;
+  /** The body measured for what it wears, standing as made; none for a model with no head to measure. */
+  private readonly measured: ReturnType<typeof measureWear>;
+  /** What it wears, by name, and what holds it: a group on each bone it is fixed to. */
+  private worn: { key: string; groups: THREE.Group[] } = { key: "", groups: [] };
+  /** Its colours for what it wears. */
+  private readonly colors: ReturnType<typeof wearColors>;
 
   constructor(
     readonly vrm: VRM,
@@ -142,6 +150,8 @@ export class Figure {
       pace?: number;
       /** Radians a second it turns, instead of an agent's unhurried turn. */
       turn?: number;
+      /** What it wears, by name (see `wear.ts`). */
+      wear?: string[];
       /** What it goes to next while it wanders, instead of a spot at random: something to do (see `idle.ts`). */
       pick?: (here: string, taken?: ReadonlySet<string>) => Pick | undefined;
       /**
@@ -162,6 +172,9 @@ export class Figure {
     // Its own proportions, measured standing: speed, stride and the close-up all follow them.
     this.body.updateMatrixWorld(true);
     this.bounds = new THREE.Box3().setFromObject(this.body);
+    // Measured for what it wears while it still stands as made: the poses below move it.
+    this.measured = measureWear(vrm, this.body);
+    this.colors = wearColors(opts.hue);
     this.hipsY =
       vrm.humanoid.getNormalizedBoneNode("hips")?.getWorldPosition(new THREE.Vector3()).y ??
       this.bounds.min.y + (this.bounds.max.y - this.bounds.min.y) / 2;
@@ -196,6 +209,7 @@ export class Figure {
     this.crownPoint.add(this.signs.group);
     this.body.add(this.crownPoint);
     if (vrm.lookAt) vrm.lookAt.target = this.gaze;
+    this.dress(opts.wear);
     // Animation files take over the base pose once they load; until then, and if they can't, code moves it.
     this.clipsSettled = !opts.animations?.length;
     if (opts.animations?.length) {
@@ -376,6 +390,41 @@ export class Figure {
       disposeSprite(this.line.tail);
     }
     this.line = undefined;
+  }
+
+  /**
+   * Wear these things, by name, and nothing else: each fixed to the bone it
+   * goes with, so it moves with the body whatever pose it is in. What floats
+   * over the head stands over a hat.
+   */
+  dress(wear: string[] = []) {
+    const key = wear.join(",");
+    if (key === this.worn.key) return;
+    this.undress();
+    this.worn.key = key;
+    const measured = this.measured;
+    const pieces = measured ? wear.flatMap((w) => wearPieces(w, measured.fit)) : [];
+    for (const bone of ["head", "chest", "hips"] as const) {
+      const mine = pieces.filter((p) => p.bone === bone);
+      const node = wearBone(this.vrm, bone);
+      if (!mine.length || !node || !measured) continue;
+      // Laid out in the body's frame as made: the group undoes where the bone stood then, so on the bone it all
+      // starts where it was laid out, and from then on goes where the bone goes.
+      const group = new THREE.Group();
+      group.name = `wear:${bone}`;
+      measured.rest[bone].clone().invert().decompose(group.position, group.quaternion, group.scale);
+      for (const p of mine) group.add(buildPiece(p, this.colors));
+      node.add(group);
+      this.worn.groups.push(group);
+    }
+    const hat = wearTop(pieces);
+    this.crownPoint.position.y = Math.max(this.bounds.max.y, hat + 0.02);
+  }
+
+  /** Take off whatever it wears. The shapes and colours are shared by every body, so nothing is let go. */
+  private undress() {
+    for (const group of this.worn.groups) group.removeFromParent();
+    this.worn = { key: "", groups: [] };
   }
 
   /** Nod off, or wake up. */
@@ -595,6 +644,8 @@ export class Figure {
     this.hush();
     this.signs.dispose();
     this.clips?.dispose();
+    // Off first: what it wears is shared with every other body, and the model's own is let go below.
+    this.undress();
     this.body.removeFromParent();
     this.gaze.removeFromParent();
     VRMUtils.deepDispose(this.vrm.scene);

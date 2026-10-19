@@ -787,6 +787,138 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       box(g, 1.05, 0.04, 0.05, tint(wood, -0.4), 0, 0.12, 0).castShadow = false;
       return { group: g };
     }
+    case "globe": {
+      // A globe on a wooden stand, tilted on its axis, in a brass half ring.
+      const wood = main(0x6b4a33);
+      cylinder(g, 0.17, 0.2, 0.04, wood, 0, 0.02, 0, 14);
+      cylinder(g, 0.022, 0.03, 0.56, wood, 0, 0.3, 0, 8);
+      const ball = new THREE.Group();
+      ball.position.set(0, 0.8, 0);
+      ball.rotation.z = 0.41;
+      ball.add(solid(new THREE.IcosahedronGeometry(0.22, 2), paint(0x3f78b5), 0, 0, 0));
+      // Land, a few flat patches on the sea.
+      for (const [lat, lon, w, h, c] of [
+        [0.5, 0.3, 0.11, 0.09, 0x8fae6b],
+        [-0.3, 0.6, 0.08, 0.12, 0xc9b07a],
+        [0.2, 2.2, 0.13, 0.1, 0x8fae6b],
+        [-0.5, 2.9, 0.07, 0.07, 0xc9b07a],
+        [0.7, 4.2, 0.12, 0.06, 0x8fae6b],
+        [0.0, 5.0, 0.09, 0.11, 0xc9b07a],
+      ] as const) {
+        const at = new THREE.Vector3(Math.cos(lat) * Math.sin(lon), Math.sin(lat), Math.cos(lat) * Math.cos(lon));
+        const land = solid(new THREE.IcosahedronGeometry(1, 0), paint(c), at.x * 0.2, at.y * 0.2, at.z * 0.2);
+        land.lookAt(at.multiplyScalar(2));
+        land.scale.set(w, h, 0.03);
+        ball.add(land);
+      }
+      const ring = solid(new THREE.TorusGeometry(0.25, 0.01, 5, 20, Math.PI), paint(0xc9a24a), 0, 0, 0);
+      ring.rotation.z = -Math.PI / 2;
+      ball.add(ring);
+      g.add(ball);
+      return { group: g };
+    }
+    case "map": {
+      // A framed map of the world: blue sea, the land in greens and sands, and a route pinned across it.
+      box(g, 1.3, 0.85, 0.03, main(0x4a3426), 0, 0.425, 0).castShadow = false;
+      box(g, 1.22, 0.77, 0.01, 0x9cc3d5, 0, 0.425, 0.017).castShadow = false;
+      for (const [w, h, x, y, c] of [
+        [0.3, 0.26, -0.38, 0.58, 0x8fae6b],
+        [0.14, 0.24, -0.3, 0.3, 0xc9b07a],
+        [0.22, 0.2, 0.02, 0.6, 0xc9b07a],
+        [0.18, 0.26, 0.06, 0.32, 0x8fae6b],
+        [0.32, 0.22, 0.36, 0.58, 0x8fae6b],
+        [0.16, 0.1, 0.42, 0.2, 0xc9b07a],
+      ] as const)
+        box(g, w, h, 0.006, c, x, y, 0.024).castShadow = false;
+      for (const [x, y] of [
+        [-0.38, 0.6],
+        [0.06, 0.36],
+        [0.38, 0.55],
+      ]) {
+        const pin = cylinder(g, 0.016, 0.016, 0.02, 0xc0392b, x, y, 0.032, 8);
+        pin.rotation.x = Math.PI / 2;
+        pin.castShadow = false;
+      }
+      return { group: g };
+    }
+    case "mic_stand": {
+      // A floor stand with a boom out front, and a studio microphone on it behind a pop filter.
+      const metal = main(0x2f2f33);
+      cylinder(g, 0.15, 0.17, 0.03, metal, 0, 0.015, 0, 14);
+      cylinder(g, 0.013, 0.013, 1.25, metal, 0, 0.65, 0, 6);
+      const boom = cylinder(g, 0.01, 0.01, 0.34, metal, 0, 1.33, 0.12, 6);
+      boom.rotation.x = 1.0;
+      const mic = new THREE.Group();
+      mic.position.set(0, 1.42, 0.26);
+      mic.rotation.x = 0.35;
+      cylinder(mic, 0.032, 0.028, 0.13, 0x3a3a40, 0, 0, 0, 10);
+      mic.add(solid(new THREE.IcosahedronGeometry(0.04, 1), paint(0xb8bcc4), 0, 0.08, 0));
+      g.add(mic);
+      const filter = cylinder(g, 0.075, 0.075, 0.006, 0x1f1f24, 0, 1.47, 0.36, 16);
+      filter.rotation.x = Math.PI / 2 - 0.35;
+      return { group: g };
+    }
+    case "server_rack": {
+      // A tall black cabinet of servers, each with a row of lights that stay on day and night.
+      const frame = main(0x23262c);
+      box(g, 0.6, 1.9, 0.62, frame, 0, 0.95, 0);
+      const leds = glowing(0x55e08a);
+      for (let i = 0; i < 9; i++) {
+        const y = 0.28 + i * 0.17;
+        box(g, 0.52, 0.12, 0.012, tint(frame, i % 3 === 0 ? 0.18 : 0.1), 0, y, 0.312).castShadow = false;
+        for (let k = 0; k < 3; k++) {
+          const led = solid(
+            new THREE.BoxGeometry(0.018, 0.018, 0.006),
+            k === 2 && i % 2 ? glowing(0x5aa9ff) : leds,
+            -0.2 + k * 0.035,
+            y,
+            0.32,
+          );
+          led.castShadow = false;
+          g.add(led);
+        }
+      }
+      box(g, 0.56, 0.08, 0.6, tint(frame, -0.3), 0, 0.04, 0);
+      return { group: g, glow: leds };
+    }
+    case "ledger": {
+      // An open book of accounts: two pages with columns ruled in, and a pen across it.
+      const cover = main(0x2f4f3f);
+      box(g, 0.34, 0.02, 0.25, cover, 0, 0.01, 0);
+      for (const side of [-1, 1]) {
+        const page = box(g, 0.16, 0.012, 0.23, 0xf4efe1, side * 0.083, 0.026, 0);
+        page.rotation.z = side * -0.05;
+        for (let r = 0; r < 5; r++) box(g, 0.13, 0.002, 0.006, 0x8aa0b8, side * 0.083, 0.034, -0.08 + r * 0.04);
+      }
+      const pen = cylinder(g, 0.006, 0.006, 0.16, 0x1f1f24, 0.05, 0.04, 0.02, 6);
+      pen.rotation.set(0, 0, Math.PI / 2);
+      pen.rotation.y = 0.6;
+      return { group: g };
+    }
+    case "chessboard": {
+      // A board of light and dark squares, with a few pieces in play.
+      box(g, 0.4, 0.025, 0.4, main(0x5a3a26), 0, 0.0125, 0);
+      const squares = new THREE.InstancedMesh(new THREE.BoxGeometry(0.044, 0.004, 0.044), paint(0x3b2a20), 32);
+      const m = new THREE.Matrix4();
+      let n = 0;
+      for (let r = 0; r < 8; r++)
+        for (let c = 0; c < 8; c++)
+          if ((r + c) % 2) squares.setMatrixAt(n++, m.makeTranslation(-0.154 + c * 0.044, 0.026, -0.154 + r * 0.044));
+      g.add(squares);
+      box(g, 0.352, 0.002, 0.352, 0xe9dcc0, 0, 0.0255, 0).castShadow = false;
+      for (const [x, z, white, tall] of [
+        [-0.11, -0.11, false, 0.06],
+        [0.02, -0.07, false, 0.04],
+        [0.07, 0.11, true, 0.06],
+        [-0.02, 0.07, true, 0.04],
+        [0.11, 0.02, true, 0.05],
+      ] as const) {
+        const color = white ? 0xf2ece0 : 0x2a2a2e;
+        cylinder(g, 0.012, 0.016, tall, color, x, 0.028 + tall / 2, z, 8);
+        g.add(solid(new THREE.IcosahedronGeometry(0.013, 0), paint(color), x, 0.03 + tall, z));
+      }
+      return { group: g };
+    }
     case "sign": {
       // A dark plate with its words lit, so it reads from across a hall.
       box(g, 1.44, 0.4, 0.03, 0x2a2e38, 0, 0.18, 0).castShadow = false;

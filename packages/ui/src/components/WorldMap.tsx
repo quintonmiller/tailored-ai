@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type AgentActivity, hueFor } from "../avatar/doing";
+import { WEAR_TYPE } from "../avatar/wear";
 import { nameOf } from "../lib/conversations";
 import { byWait } from "../lib/needs";
 import { subscribeStateChanges } from "../lib/state-events";
@@ -15,6 +16,20 @@ export type { MapArea, MapPlace } from "../lib/wayfinding";
 export function agentColor(agent: string): string {
   const hue = hueFor(agent);
   return `hsl(${(145 + (hue ?? 0)) % 360} 52% 52%)`;
+}
+
+/**
+ * What an agent is for, in a word, unless its name says so already: a
+ * "coder" called coder, or a "producer" called podcast-producer, needs no
+ * telling twice.
+ */
+export function roleWord(agent: string, role: string | undefined): string | undefined {
+  if (!role) return undefined;
+  const words = ` ${nameOf(agent)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[-_.]+/g, " ")
+    .toLowerCase()} `;
+  return words.includes(` ${role.toLowerCase()} `) ? undefined : role;
 }
 
 /** A one-character mark for what an agent is doing, when it is worth a glance. */
@@ -157,11 +172,14 @@ export function useWorldMap(
     reload.current = load;
     load();
     const off = subscribeStateChanges((change) => {
-      // Someone came or went, a shared place came or went, or a place moved to another area or was given a new purpose.
+      // Someone came or went, a shared place came or went, a place moved to another area or was given a new purpose,
+      // or someone chose what a body wears, which the map says of each home's owner.
       const place = change.type === "place";
       const moved = place && change.before?.area !== change.after?.area;
       const repurposed = place && change.before?.purpose !== change.after?.purpose;
-      if (comeOrGone(change.type) || moved || repurposed || (place && change.id.startsWith("shared:"))) load();
+      const dressed = change.type === WEAR_TYPE;
+      if (comeOrGone(change.type) || moved || repurposed || dressed || (place && change.id.startsWith("shared:")))
+        load();
     });
     return () => {
       gone = true;
@@ -393,13 +411,17 @@ export function WorldMap({
                       type="button"
                       className={`world-map-who doing-${doing}${first(home.id)}`}
                       aria-current={current(home.id)}
-                      title={`${nameOf(agent)}, ${STATE_WORDS[doing]}: go to ${placeTitle(home)}`}
+                      title={`${nameOf(agent)}${home.role ? `, ${home.role}` : ""}, ${STATE_WORDS[doing]}: go to ${placeTitle(home)}`}
                       onClick={() => onGo(home.id)}
                     >
                       <span className="world-map-dot" aria-hidden="true">
                         {MARKS[doing]}
                       </span>
                       <span className="world-map-who-name">{nameOf(agent)}</span>
+                      <span className="world-map-who-role">
+                        <span className="world-map-hue" style={{ background: agentColor(agent) }} aria-hidden="true" />
+                        {roleWord(agent, home.role)}
+                      </span>
                       <span className={`world-map-who-doing${calm ? " calm" : ""}`}>{STATE_WORDS[doing]}</span>
                     </button>
                     {away && (

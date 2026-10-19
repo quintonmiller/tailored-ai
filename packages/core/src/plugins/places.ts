@@ -23,6 +23,11 @@
  * And now and then, if configured, agents are asked to look at their rooms in
  * the light of what they have been doing (`places-tend.ts`).
  *
+ * What an agent is for, read from its name, description, instructions and
+ * tools (`places-roles.ts`), picks the kind of home it starts with and what it
+ * wears. It can choose what it wears with the tool's `room` action, and a
+ * person from its card: a `wear` record, which no record leaves to its role.
+ *
  * Free when unused: with no avatar configured, it registers nothing. An agent
  * with its own `tools:` list needs `place` named in it, like any tool.
  */
@@ -83,6 +88,7 @@ import {
   withDoorwayHeld,
   withSpots,
 } from "./places-layout.js";
+import { aOrAn, homeFor, parseWear, type Role, readRole, WEAR, WEAR_MOST, wearWords } from "./places-roles.js";
 import {
   homePlace,
   LOBBY,
@@ -116,6 +122,7 @@ export const meta: PluginMeta = {
     "Gives each agent with an avatar a room it can change: a `place` world-state record, the `place` tool, and GET /api/ext/builtin:places/:agent for the page that draws it.",
   registers: [
     { kind: "stateType", id: "place" },
+    { kind: "stateType", id: "wear" },
     { kind: "tool", id: "place" },
     { kind: "httpRoutes", id: "places" },
     { kind: "httpRoutes", id: "map" },
@@ -203,27 +210,38 @@ function drawOnce(key: string, draw: () => Place): Place {
   return structuredClone(place);
 }
 
-const drawHome = (id: string, name: string) => drawOnce(`home\n${id}\n${name}`, () => homePlace(id, name));
+/** The kind of home that suits an agent, and what its work needs in it (see `places-roles.ts`). */
+export type HomeKind = { kind?: string; dressing?: string };
+/** What kind of home suits each agent, by name: nothing for one whose home is just the seed's. */
+export type HomeFor = (agent: string) => HomeKind | undefined;
+
+const drawHome = (id: string, name: string, home: HomeKind = {}) =>
+  drawOnce(`home\n${id}\n${name}\n${home.kind ?? ""}\n${home.dressing ?? ""}`, () =>
+    homePlace(id, name, home.kind, home.dressing),
+  );
 
 /**
  * An agent's home: its own room, drawn from its id the first time anyone
- * asks. A home nobody has changed is brought up to the room its id draws
- * now, so homes made before rooms were drawn from a seed get one too; a
- * home anyone has changed is left exactly as it is.
+ * asks, as the kind of home that suits what it is for (`homeFor`). A home
+ * nobody has changed is brought up to the room its id draws now, so homes
+ * made before rooms were drawn from a seed, or before they suited their
+ * agents, get one too; a home anyone has changed is left exactly as it is.
  */
 export async function readHome(
   service: StateService,
   caller: StateCaller,
   agent: string,
+  homes?: HomeFor,
 ): Promise<{ place: Place; version: number }> {
   const ref = { type: PLACE_TYPE, id: homeId(agent) };
   const name = agent === "default" ? "your room" : `${agent}'s room`;
+  const home = homes?.(agent);
   const found = await service.get(caller, ref);
   if (found) {
-    const fresh = await upgrade(service, found, name);
+    const fresh = await upgrade(service, found, name, home);
     return fresh ?? { place: found.data as unknown as Place, version: found.version };
   }
-  const place = drawHome(ref.id, name);
+  const place = drawHome(ref.id, name, home);
   try {
     // The system makes the room, whoever asked: so it is known to be untouched until someone changes it.
     // Only if there is still none (version 0): a room someone made a moment ago is never written over.
@@ -246,9 +264,10 @@ async function upgrade(
   service: StateService,
   record: StateRecord,
   name: string,
+  home?: HomeKind,
 ): Promise<{ place: Place; version: number } | undefined> {
   const stored = record.data as unknown as Place;
-  const place = drawHome(record.id, typeof stored.name === "string" ? stored.name : name);
+  const place = drawHome(record.id, typeof stored.name === "string" ? stored.name : name, home);
   if (JSON.stringify(stored) === JSON.stringify(place)) return undefined;
   if (!(await untouched(service, record))) return undefined;
   try {
@@ -266,6 +285,40 @@ async function upgrade(
 
 /** Where each agent's body has gone: no record means it is at home. */
 export const WHEREABOUTS_TYPE = "whereabouts";
+
+/**
+ * What each agent's body wears, a record in its own scope once the agent or
+ * a person has chosen: a few things by name (`WEAR` in `places-roles.ts`), or
+ * none. No record means whatever suits its role. Apart from its home, so
+ * choosing a hat never counts as changing the room, which would stop the room
+ * being brought up to date.
+ */
+export const WEAR_TYPE = "wear";
+
+export const WEAR_SCHEMA = {
+  type: "object",
+  required: ["wear"],
+  properties: {
+    wear: { type: "array", maxItems: WEAR_MOST, items: { type: "string", enum: Object.keys(WEAR) } },
+  },
+} as const;
+
+/** What a body wears: what was chosen, while that still makes sense, or else what suits its role. */
+export function wornBy(chosen: unknown, role: Role | undefined): string[] {
+  if (chosen !== undefined) {
+    const asked = parseWear(chosen);
+    if ("wear" in asked) return asked.wear;
+  }
+  return role?.wear ?? [];
+}
+
+/** Every choice of what to wear, by agent: one query for a room full of bodies. A store that keeps none has none. */
+export async function chosenWear(service: StateService, caller: StateCaller): Promise<Map<string, unknown>> {
+  const records = await service
+    .query(caller, { type: WEAR_TYPE, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  return new Map(records.map((r) => [r.id, r.data.wear]));
+}
 /** Shared places are `place` records everyone can see, named `shared:<slug>`. */
 const SHARED = "shared:";
 
@@ -434,13 +487,14 @@ export async function readCurrent(
   caller: StateCaller,
   agent: string,
   meetings?: Meetings,
+  homes?: HomeFor,
 ): Promise<{ id: string; place: Place; version: number; scope: string }> {
   const id = await whereIs(service, caller, agent, meetings?.rooms);
   const found = id === homeId(agent) ? undefined : await service.get(caller, { type: PLACE_TYPE, id });
   if (found) return { id, place: found.data as unknown as Place, version: found.version, scope: found.scope };
   const talk = talkRoomOf(meetings?.rooms, id);
   if (talk && meetings) return { id, place: drawMeeting(talk, meetings.hasBody).place, version: 0, scope: "global" };
-  return { id: homeId(agent), ...(await readHome(service, caller, agent)), scope: `agent:${agent}` };
+  return { id: homeId(agent), ...(await readHome(service, caller, agent, homes)), scope: `agent:${agent}` };
 }
 
 /**
@@ -550,6 +604,12 @@ export interface MapPlace {
   via?: string;
   /** Those here to see someone else here, by who they came to see: an agent visiting one it messaged directly. */
   with?: Record<string, string>;
+  /** A home's owner, in a word, when what it is for can be read (see `places-roles.ts`). */
+  role?: string;
+  /** What a home's owner wears. */
+  wear?: string[];
+  /** Someone chose that, rather than it being what suits its role. */
+  wearChosen?: boolean;
 }
 
 /** A room of conversation's place id. */
@@ -730,8 +790,9 @@ export async function scene(
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
   world?: World,
+  homes?: HomeFor,
 ): Promise<{ id: string; place: Place; agents: string[]; doors: PlaceDoor[]; with?: Record<string, string> } | null> {
-  const found = await sceneOf(service, caller, id, rooms, hasBody, world);
+  const found = await sceneOf(service, caller, id, rooms, hasBody, world, homes);
   if (!found) return null;
   const pairs = found.agents.length > 1 ? together(await seeing(service, caller), found.agents) : undefined;
   return { ...found, doors: world ? doorsIn(id, found.place, world) : [], ...(pairs ? { with: pairs } : {}) };
@@ -744,6 +805,7 @@ async function sceneOf(
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
   world: World | undefined,
+  homes: HomeFor | undefined,
 ): Promise<{ id: string; place: Place; agents: string[] } | null> {
   if (id === LOBBY) return { id, place: drawOnce(LOBBY, lobby), agents: [] };
   if (id.startsWith("hall:")) {
@@ -766,7 +828,7 @@ async function sceneOf(
   if (id.startsWith("home:")) {
     const owner = id.slice("home:".length);
     if (!hasBody(owner)) return null;
-    const { place } = await readHome(service, caller, owner);
+    const { place } = await readHome(service, caller, owner, homes);
     return { id, place, agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms) };
   }
   const found = await service.get(caller, { type: PLACE_TYPE, id });
@@ -1157,6 +1219,9 @@ const ACTIONS = ["look", "add", "move", "change", "remove", "room", "undo", "pho
 type Action = (typeof ACTIONS)[number];
 
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+
+/** What the `room` action changes about the room itself, apart from what the body wears. */
+const ROOM_FIELDS = ["width", "depth", "height", "walls", "floor", "color", "name", "theme", "purpose", "area"];
 function number(v: unknown): number | undefined {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : Number.NaN;
   return Number.isFinite(n) ? n : undefined;
@@ -1425,7 +1490,9 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       }
     }
     if (!changes.length)
-      return no("Say what to change about the room: width, depth, height, walls, floor, name, theme, purpose or area.");
+      return no(
+        "Say what to change about the room: width, depth, height, walls, floor, name, theme, purpose or area; or wear.",
+      );
     return { ok: true, text: `Changed the room: ${changes.join("; ")}.`, place: next, did: did.join(", ") };
   }
 
@@ -1620,7 +1687,7 @@ export class PlaceTool implements Tool {
         type: "string",
         enum: [...ACTIONS],
         description:
-          "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor, name, theme, purpose, area. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
+          "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor, name, theme, purpose, area, wear. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
       },
       item: { type: "string", description: "move, change, remove: the thing, by name or id." },
       kind: { type: "string", description: "add: what to add, e.g. armchair, rug, bookshelf, lamp, vase, block." },
@@ -1661,6 +1728,10 @@ export class PlaceTool implements Tool {
         description: "room: a look to dress it in. Chosen, it stays, whatever the room's name suggests.",
       },
       purpose: { type: "string", description: 'room: what it is for, in a line, e.g. "planning the Lisbon trip".' },
+      wear: {
+        type: "string",
+        description: `room: what your body wears, e.g. "glasses, scarf", or none: ${Object.keys(WEAR).join(", ")}.`,
+      },
       area: {
         type: "string",
         description:
@@ -1678,10 +1749,36 @@ export class PlaceTool implements Tool {
     /** The rooms agents talk in, each with a meeting room its members can go into and change. */
     private readonly rooms: () => TalkRoom[] = () => [],
     private readonly now: () => Date = () => new Date(),
+    /** What each agent is for (see `places-roles.ts`): the kind of home it starts with, and what it wears. */
+    private readonly roles: (agent: string) => Role | undefined = () => undefined,
   ) {}
 
   private meetings(): Meetings {
     return { rooms: this.rooms(), hasBody: this.hasBody };
+  }
+
+  /** The kind of home that suits each agent. */
+  private readonly homes: HomeFor = (agent) => homeFor(this.roles(agent), homeId(agent));
+
+  /** What an agent wears, and whether it chose that or its role did. */
+  private async wearing(service: StateService, caller: StateCaller, agent: string): Promise<string> {
+    const found = await service.get(caller, { type: WEAR_TYPE, id: agent }).catch(() => null);
+    const role = this.roles(agent);
+    const worn = wearWords(wornBy(found?.data.wear, role));
+    return found || !role ? `You wear ${worn}.` : `You wear ${worn}, as suits ${aOrAn(role.word)}.`;
+  }
+
+  /** Put on what was asked, or go back to what suits its role: what to tell the agent. */
+  private async dress(service: StateService, caller: StateCaller, agent: string, asked: unknown): Promise<string> {
+    const wanted = parseWear(asked);
+    if ("problem" in wanted) throw new StateError(wanted.problem);
+    const ref = { type: WEAR_TYPE, id: agent };
+    if ("suited" in wanted) {
+      if (await service.get(caller, ref)) await service.delete(caller, ref);
+      return `You wear ${wearWords(this.roles(agent)?.wear ?? [])} now, what suits your role.`;
+    }
+    await service.put(caller, { ...ref, scope: `agent:${agent}`, data: { wear: wanted.wear } });
+    return `You wear ${wearWords(wanted.wear)} now.`;
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -1697,7 +1794,7 @@ export class PlaceTool implements Tool {
       if (action === "go") return await this.go(service, caller, agent, text(args.to) ?? text(args.name), meetings);
       if (action === "new") return await this.open(service, caller, agent, text(args.name), text(args.area));
       if (action === "look") {
-        const { id, place } = await readCurrent(service, caller, agent, meetings);
+        const { id, place } = await readCurrent(service, caller, agent, meetings, this.homes);
         const others = await whoIsIn(service, caller, id, this.hasBody, agent, meetings.rooms);
         const talk = talkRoomOf(meetings.rooms, id);
         const where =
@@ -1707,6 +1804,7 @@ export class PlaceTool implements Tool {
               ? `You are in the meeting room of #${talk.name}, a room you talk in. Its members can change it.`
               : `You are in ${place.name}, a shared place.`;
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
+        const wear = await this.wearing(service, caller, agent);
         const door = await hasDoor(service, id, place, this.hasBody);
         const shown = describe(shownPurpose(place, talk));
         // A home someone changed keeps what it has, so one changed before homes had calendars has none: the agent
@@ -1717,11 +1815,11 @@ export class PlaceTool implements Tool {
             : "";
         return {
           success: true,
-          output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${shown}${calendar}`,
+          output: `${where}${company} ${whereaboutsWords(place, door)} ${wear}\n\n${shown}${calendar}`,
         };
       }
       if (action === "undo") {
-        const { id } = await readCurrent(service, caller, agent, meetings);
+        const { id } = await readCurrent(service, caller, agent, meetings, this.homes);
         const ref = { type: PLACE_TYPE, id };
         const [last] = await service.history(caller, ref, { limit: 1 }).catch(() => []);
         // A meeting room's first change made its record: taking that back is the room as it was drawn.
@@ -1741,8 +1839,18 @@ export class PlaceTool implements Tool {
           output: `Undone: the room is back as it was before the last change by ${last.actor.name}.`,
         };
       }
+      // What the body wears is its own record, not the room's (see `WEAR_TYPE`): checked before the room
+      // changes, put on once they have.
+      const { wear: wearAsked, ...roomArgs } = args;
+      const wears = action === "room" && wearAsked !== undefined && wearAsked !== null && wearAsked !== "";
+      if (wears) {
+        const wanted = parseWear(wearAsked);
+        if ("problem" in wanted) return fail(wanted.problem);
+        if (!ROOM_FIELDS.some((k) => roomArgs[k] !== undefined && roomArgs[k] !== null && roomArgs[k] !== ""))
+          return { success: true, output: await this.dress(service, caller, agent, wearAsked) };
+      }
       for (let attempt = 0; ; attempt++) {
-        const { id, place, version, scope } = await readCurrent(service, caller, agent, meetings);
+        const { id, place, version, scope } = await readCurrent(service, caller, agent, meetings, this.homes);
         const talk = talkRoomOf(meetings.rooms, id);
         if (talk && text(args.action)?.toLowerCase() === "room" && text(args.area))
           return fail(
@@ -1753,7 +1861,7 @@ export class PlaceTool implements Tool {
           talk && version === 0
             ? (theme: string) => ({ ...drawMeeting(talk, this.hasBody, theme).place, name: place.name })
             : undefined;
-        const outcome = applyAction(place, args, redraw ? { redraw } : {});
+        const outcome = applyAction(place, roomArgs, redraw ? { redraw } : {});
         if (!outcome.place) return outcome.ok ? { success: true, output: outcome.text } : fail(outcome.text);
         const data = outcome.did
           ? withChange(outcome.place, { who: agent, what: outcome.did, at: this.now().toISOString() })
@@ -1764,7 +1872,8 @@ export class PlaceTool implements Tool {
             { type: PLACE_TYPE, id, scope, data: data as unknown as Record<string, unknown> },
             version,
           );
-          return { success: true, output: outcome.text };
+          if (!wears) return { success: true, output: outcome.text };
+          return { success: true, output: `${outcome.text} ${await this.dress(service, caller, agent, wearAsked)}` };
         } catch (err) {
           // The room changed under us (the person, another turn, another agent): read it again, once.
           if (err instanceof StateConflictError && attempt === 0) continue;
@@ -1896,7 +2005,7 @@ export class PlaceTool implements Tool {
     const caller = agentStateCaller(context, "place");
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const { id, place, version, scope } = await readCurrent(service, caller, agent, this.meetings());
+        const { id, place, version, scope } = await readCurrent(service, caller, agent, this.meetings(), this.homes);
         const photos = [photo, ...(place.photos ?? [])].slice(0, PHOTOS_KEPT);
         const what = photo.what === "a selfie" ? "took a selfie" : "took a photo of the room";
         const data = withChange({ ...place, photos }, { who: agent, what, at: photo.at });
@@ -1913,7 +2022,13 @@ export class PlaceTool implements Tool {
     if (!this.camera) return fail("Photos aren't available here.");
     const store = context.mediaStore;
     if (!store) return fail("There's nowhere to keep a photo (no media store), so none can be sent.");
-    const { place } = await readCurrent(this.getService(), agentStateCaller(context, "place"), agent, this.meetings());
+    const { place } = await readCurrent(
+      this.getService(),
+      agentStateCaller(context, "place"),
+      agent,
+      this.meetings(),
+      this.homes,
+    );
     const view = text(args.view)?.toLowerCase() === "selfie" ? "selfie" : "room";
     const at = text(args.at);
     const spot = at ? findSpot(place, at) : undefined;
@@ -1975,6 +2090,14 @@ const plugin: Plugin = (ctx) => {
   });
 
   ctx.stateTypes.register({
+    name: WEAR_TYPE,
+    description:
+      "What an agent's body wears in the 3D world: a few things by name, or none. No record means what suits its role. Agents choose with the place tool; people on the agent's card.",
+    scope: "agent",
+    schema: WEAR_SCHEMA as never,
+  });
+
+  ctx.stateTypes.register({
     name: VISIT_TYPE,
     description:
       "An agent's body visiting somewhere for a while: the meeting room of a room it is talking in, or an agent it messaged directly (`with`), until a quiet spell ends it. Kept by the places plugin; gone on restart. People can end one; agents move with the place tool.",
@@ -1999,9 +2122,38 @@ const plugin: Plugin = (ctx) => {
     });
   };
 
+  // What each agent is for, read again only when what it is read from changes: a map of fifty homes asks for every
+  // one of them.
+  const read = new Map<string, Role | undefined>();
+  const roleOf = (agent: string): Role | undefined => {
+    const def = runtime.getAgentDefinition(agent);
+    const about = {
+      name: agent === "default" ? "" : agent,
+      ...(def?.description ? { description: def.description } : {}),
+      ...(def?.instructions ? { instructions: def.instructions } : {}),
+      ...(def?.tools ? { tools: def.tools } : {}),
+    };
+    const key = JSON.stringify(about);
+    if (!read.has(key)) {
+      if (read.size >= 256) read.clear();
+      read.set(key, readRole(about));
+    }
+    return read.get(key);
+  };
+  const homes: HomeFor = (agent) => homeFor(roleOf(agent), homeId(agent));
+
   ctx.tools.register("place", (config, tctx) => {
     if (!anyAvatar(config) || !tctx.getStateService) return [];
-    return [new PlaceTool(tctx.getStateService, hasBody, (shot) => camera.take(shot), talkRooms)];
+    return [
+      new PlaceTool(
+        tctx.getStateService,
+        hasBody,
+        (shot) => camera.take(shot),
+        talkRooms,
+        () => new Date(),
+        roleOf,
+      ),
+    ];
   });
 
   // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
@@ -2023,7 +2175,16 @@ const plugin: Plugin = (ctx) => {
       defaultBackend: config.defaultChannel,
     });
   };
-  const bodyOf = (name: string) => {
+  /** What an agent is, in a word, and what its body wears, given everyone's choices (`chosenWear`), and whether chosen. */
+  const looksOf = (name: string, chosen: Map<string, unknown>) => {
+    const role = roleOf(name);
+    return {
+      ...(role ? { role: role.word } : {}),
+      wear: wornBy(chosen.get(name), role),
+      ...(chosen.has(name) ? { wearChosen: true } : {}),
+    };
+  };
+  const bodyOf = (name: string, chosen: Map<string, unknown>) => {
     const own = runtime.avatarFor(name === "default" ? undefined : name);
     const files = resolveAvatar(runtime.getConfig().live, own);
     const q = name === "default" ? "" : `?agent=${encodeURIComponent(name)}`;
@@ -2032,6 +2193,7 @@ const plugin: Plugin = (ctx) => {
       name,
       avatar: `/api/live/avatar${q}`,
       animations: files.animations.map((_, i) => `/api/live/animations/${i}${q}`),
+      ...looksOf(name, chosen),
     };
   };
 
@@ -2042,7 +2204,11 @@ const plugin: Plugin = (ctx) => {
       const service = runtime.getStateService();
       const rooms = talkRooms();
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
-      const places = await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world);
+      const chosen = await chosenWear(service, PLUGIN_CALLER);
+      // Each home says what its owner is and wears, for the map's list of agents and each agent's card.
+      const places = (await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world)).map((p) =>
+        p.kind === "home" && p.owner ? { ...p, ...looksOf(p.owner, chosen) } : p,
+      );
       const areas: Area[] = world.areas;
       return { json: { places, areas } };
     },
@@ -2056,14 +2222,18 @@ const plugin: Plugin = (ctx) => {
       const service = runtime.getStateService();
       const rooms = talkRooms();
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
-      const found = await scene(service, PLUGIN_CALLER, id, rooms, hasBody, world);
+      const found = await scene(service, PLUGIN_CALLER, id, rooms, hasBody, world, homes);
       if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
+      const chosen = await chosenWear(service, PLUGIN_CALLER);
       return {
         json: {
           type: PLACE_TYPE,
           id: found.id,
           place: found.place,
-          company: found.agents.map((a) => ({ ...bodyOf(a), ...(found.with?.[a] ? { with: found.with[a] } : {}) })),
+          company: found.agents.map((a) => ({
+            ...bodyOf(a, chosen),
+            ...(found.with?.[a] ? { with: found.with[a] } : {}),
+          })),
           doors: found.doors,
           area: world.areaOf.get(found.id) ?? MAIN,
         },
@@ -2095,14 +2265,27 @@ const plugin: Plugin = (ctx) => {
       if (!hasBody(agent)) return { status: 404, json: { error: `${agent} has no avatar, so no room.` } };
       const service = runtime.getStateService();
       const rooms = talkRooms();
-      const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody });
+      const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody }, homes);
       // Everyone else whose body is here, with what the page needs to draw them, and who any of them came to see.
       const others = await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent, rooms);
       const pairs = others.length ? together(await seeing(service, PLUGIN_CALLER), [...others, agent]) : undefined;
-      const company = others.map((a) => ({ ...bodyOf(a), ...(pairs?.[a] ? { with: pairs[a] } : {}) }));
+      const chosen = await chosenWear(service, PLUGIN_CALLER);
+      const company = others.map((a) => ({ ...bodyOf(a, chosen), ...(pairs?.[a] ? { with: pairs[a] } : {}) }));
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const doors = doorsIn(id, place, world);
-      return { json: { type: PLACE_TYPE, id, version, place, company, doors, area: world.areaOf.get(id) ?? MAIN } };
+      return {
+        json: {
+          type: PLACE_TYPE,
+          id,
+          version,
+          place,
+          company,
+          doors,
+          area: world.areaOf.get(id) ?? MAIN,
+          // What the agent itself is, and wears: its body is drawn from /api/live, which says nothing of either.
+          ...looksOf(agent, chosen),
+        },
+      };
     },
   });
 
@@ -2202,8 +2385,8 @@ const plugin: Plugin = (ctx) => {
         const done = await gatherDone({ db: runtime.db, agent, since, rooms: mine, tasks, skip: key });
         if (quiet(done)) return "quiet";
         const service = runtime.getStateService();
-        const { place } = await readHome(service, PLUGIN_CALLER, agent);
-        const here = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody });
+        const { place } = await readHome(service, PLUGIN_CALLER, agent, homes);
+        const here = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody }, homes);
         const talk = talkRoomOf(rooms, here.id);
         const away =
           here.id === homeId(agent) ? undefined : talk ? `the meeting room of #${talk.name}` : here.place.name;

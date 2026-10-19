@@ -26,6 +26,7 @@ import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
 import type { Companion, UseSpot } from "../avatar/stage";
+import { WEAR_TYPE } from "../avatar/wear";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
 import { type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
@@ -108,7 +109,13 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
           if (gone || n !== asked) return;
           owed = false;
           id = body?.id;
-          const next = { room: roomOf(body), company: companyOf(body), ...(id ? { id } : {}), ...areaOf(body) };
+          const next = {
+            room: roomOf(body),
+            company: companyOf(body),
+            ...(id ? { id } : {}),
+            ...areaOf(body),
+            ...(body?.wear ? { wear: body.wear } : {}),
+          };
           setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
         })
         .catch(() => {
@@ -117,8 +124,9 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
     };
     void load();
     const off = subscribeStateChanges((change) => {
-      // Someone came or went, maybe this agent itself: where it is and who is there are asked again.
-      if (comeOrGone(change.type)) void load();
+      // Someone came or went, maybe this agent itself: where it is and who is there are asked again. And for
+      // someone choosing what a body here wears.
+      if (comeOrGone(change.type) || change.type === WEAR_TYPE) void load();
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -141,6 +149,8 @@ export interface SceneInfo {
   company: Companion[];
   id?: string;
   area?: string;
+  /** What the agent whose place this is wears, for its own body: an agent's own place only. */
+  wear?: string[];
 }
 
 /** The room the server sent, with its doors; the built-in room when it sent none. */
@@ -579,6 +589,28 @@ async function sendHome(who: string): Promise<void> {
 }
 
 /**
+ * What a person chose for an agent's body to wear, kept where the agent's own
+ * choice goes; null takes the choice away, back to what suits its role.
+ */
+async function dressAgent(who: string, wear: string[] | null): Promise<void> {
+  const path = `/api/state/${WEAR_TYPE}/${encodeURIComponent(who)}`;
+  if (wear === null) {
+    const res = await fetch(path, { method: "DELETE" });
+    // Nothing to take away is a body already in what suits it.
+    if (res.status !== 404) await must(Promise.resolve(res), "change what it wears");
+    return;
+  }
+  await must(
+    fetch(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: `agent:${who}`, data: { wear } }),
+    }),
+    "change what it wears",
+  );
+}
+
+/**
  * Any place, by id, as a visitor sees it: its room and everyone in it, asked
  * again when someone comes or goes, and redrawn as it changes.
  */
@@ -612,7 +644,7 @@ export function useScene(id: string | null): SceneInfo | null {
     };
     void load();
     const off = subscribeStateChanges((change) => {
-      if (comeOrGone(change.type)) void load();
+      if (comeOrGone(change.type) || change.type === WEAR_TYPE) void load();
       // A place made, gone, or moved to another area elsewhere may add or take away a door here.
       if (
         change.type === "place" &&
@@ -640,11 +672,22 @@ export interface PlaceInfo {
   id?: string;
   place?: Room;
   /** Everyone else in it; `with`, the one here an agent came to see, having messaged it directly. */
-  company?: { agent: string; name?: string; avatar?: string; animations?: string[]; with?: string }[];
+  company?: {
+    agent: string;
+    name?: string;
+    avatar?: string;
+    animations?: string[];
+    with?: string;
+    role?: string;
+    wear?: string[];
+  }[];
   /** Its doors to other places. */
   doors?: RoomDoor[];
   /** The area it is in, by id. */
   area?: string;
+  /** Asked for an agent's own place: what the agent is, in a word, and what it wears. */
+  role?: string;
+  wear?: string[];
 }
 
 /** The others in the place, as the stage takes them; anyone without a body file is left out. */
@@ -658,6 +701,7 @@ export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
             url: c.avatar,
             animations: c.animations ?? [],
             ...(c.with ? { with: c.with } : {}),
+            ...(c.wear?.length ? { wear: c.wear } : {}),
           },
         ]
       : [],
@@ -1454,10 +1498,20 @@ export function useChatStage({
       name: spot.kind === "room" ? `#${spot.name}` : spot.name,
       home: spot.id === `home:${who}`,
     };
+    // What it is and wears, as the map says of its home.
+    const homeOf = map.places.find((p) => p.kind === "home" && p.owner === who);
     overlay = (
       <WorldAgent
         key={who}
         agent={who}
+        {...(homeOf?.role ? { role: homeOf.role } : {})}
+        {...(homeOf
+          ? {
+              wear: homeOf.wear ?? [],
+              chosen: !!homeOf.wearChosen,
+              onWear: (wear: string[] | null) => dressAgent(who, wear),
+            }
+          : {})}
         activity={activities[who]}
         said={speech[who]}
         roomName={(ref) => map.places.find((p) => p.id === `room:${ref}`)?.name}
@@ -1501,6 +1555,8 @@ export function useChatStage({
         onDoor={onDoor}
         company={company}
         agent={showing.visiting ? "you" : shown}
+        // Your own body wears nothing of the agent's.
+        {...(!showing.visiting && own.wear ? { wear: own.wear } : {})}
         activities={activities}
         speech={said}
         menuFor={menuFor}

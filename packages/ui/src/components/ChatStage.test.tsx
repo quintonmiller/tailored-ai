@@ -44,6 +44,10 @@ const stage = vi.hoisted(() => ({
   rooms: [] as { name?: string; props: { name: string }[]; doors?: { to: string; along: number }[] }[],
   /** Who else the stage was told is in the room, each time. */
   company: [] as string[][],
+  /** What each of them wears, each time, by agent. */
+  companyWear: [] as Record<string, string[]>[],
+  /** What the stage's own body was told to wear: as it was made, and each time after. */
+  wears: [] as string[][],
   /** What the stage was told each agent is doing, each time. */
   activities: [] as Record<string, { doing: string }>[],
   /** The agent each stage was made for. */
@@ -78,6 +82,7 @@ vi.mock("../avatar/stage", () => ({
       onUse?: (action: string, on?: Record<string, string>) => void;
       onLine?: (agent: string, text: string, nearness: number) => void;
       company?: { agent: string }[];
+      wear?: string[];
       onDoor?: (door: { to: string }) => void;
       arriveFrom?: string;
       lights?: string;
@@ -86,6 +91,7 @@ vi.mock("../avatar/stage", () => ({
   ) => {
     stage.onLine = opts.onLine;
     stage.onDoor = opts.onDoor;
+    stage.wears.push(opts.wear ?? []);
     stage.onDoorHover = opts.onDoorHover;
     if (opts.lights) stage.lights.push(opts.lights);
     stage.arrivals.push(opts.arriveFrom);
@@ -109,7 +115,11 @@ vi.mock("../avatar/stage", () => ({
         stage.rooms.push(room);
         stage.entered.push(from);
       },
-      setCompany: (company: { agent: string }[]) => stage.company.push(company.map((c) => c.agent)),
+      setCompany: (company: { agent: string; wear?: string[] }[]) => {
+        stage.company.push(company.map((c) => c.agent));
+        stage.companyWear.push(Object.fromEntries(company.map((c) => [c.agent, c.wear ?? []])));
+      },
+      setWear: (wear: string[]) => stage.wears.push(wear),
       standBefore: (agent: string) => stage.greeted.push(agent),
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
@@ -143,7 +153,9 @@ class FakeEventSource {
 
 /** Where the agent is, and who else is there with a body, as the server says. */
 let placeId = "home:talker";
-let company: { agent: string; name: string; avatar: string; animations: string[] }[] = [];
+let company: { agent: string; name: string; avatar: string; animations: string[]; wear?: string[] }[] = [];
+/** What the agent whose home it is wears, as its place says. */
+let ownWear: string[] | undefined;
 /** Where the door of the agent's own place is, as the server says. */
 let homeDoorAlong = 1;
 /** The agents as configured: which run on their own. */
@@ -323,6 +335,9 @@ beforeEach(() => {
   ownAgents = [];
   placeId = "home:talker";
   company = [];
+  ownWear = undefined;
+  stage.wears.length = 0;
+  stage.companyWear.length = 0;
   homeDoorAlong = 1;
   stage.mounted = 0;
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -385,6 +400,8 @@ beforeEach(() => {
                 owner: "planner",
                 agents: ["planner"],
                 via: "hall:main:homes-1",
+                role: "travel agent",
+                wear: ["adventurer hat"],
               },
               { id: "room:local:trip", name: "trip", kind: "room", agents: ["planner", "writer"] },
               ...mapExtra,
@@ -465,8 +482,13 @@ beforeEach(() => {
             place: homeExtra.length ? { ...home, props: [...home.props, ...homeExtra] } : home,
             company,
             doors: [{ wall: "back", along: homeDoorAlong, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
+            ...(ownWear ? { wear: ownWear } : {}),
           }),
         );
+      if (url.startsWith("/api/state/wear/") && init?.method === "PUT") {
+        posts.push({ url, body: JSON.parse(String(init.body)) });
+        return new Response("{}");
+      }
       if (init?.method === "DELETE") {
         deleted.push(url);
         if (missing.includes(url)) return new Response(JSON.stringify({ error: "No record" }), { status: 404 });
@@ -1300,6 +1322,52 @@ describe("the chat page's scene", () => {
     await settle();
     expect(container.querySelector(".world-list-panel .world-panel-title")?.textContent).toBe("planner's tasks");
     expect([...container.querySelectorAll(".world-list-title")].map((r) => r.textContent)).toEqual(["Pack"]);
+  });
+
+  it("dresses each body in what it wears, yours in nothing of the agent's, and changes it from the agent's card", async () => {
+    ownWear = ["cap", "lanyard"];
+    company = [
+      {
+        agent: "planner",
+        name: "planner",
+        avatar: "/api/live/avatar?agent=planner",
+        animations: [],
+        wear: ["satchel"],
+      },
+    ];
+    await render();
+    await settle(60);
+    expect(stage.wears.at(-1)).toEqual(["cap", "lanyard"]);
+    expect(stage.companyWear.at(-1)).toEqual({ planner: ["satchel"] });
+    // Its card says what it is for and what it wears, with a chip for each thing a body can wear.
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    expect(card.querySelector(".world-agent-role")?.textContent).toBe("travel agent");
+    expect(card.querySelector(".world-agent-wear")?.textContent).toMatch(
+      /^An adventurer hat · what suits a travel agent/,
+    );
+    const chips = [...card.querySelectorAll(".world-wear-chip")] as HTMLButtonElement[];
+    expect(chips.filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.textContent)).toEqual([
+      "adventurer hat",
+    ]);
+    // A cap goes on in place of the hat, written where the agent's own choice goes.
+    await act(async () => chips.find((c) => c.textContent === "cap")?.click());
+    await settle(30);
+    expect(posts.find((p) => p.url === "/api/state/wear/planner")?.body).toEqual({
+      scope: "agent:planner",
+      data: { wear: ["cap"] },
+    });
+    // Visiting, the body is yours: it wears nothing of the agent's.
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Map").click());
+    await settle();
+    await act(async () => (container.querySelector(".world-map-place") as HTMLButtonElement).click());
+    await settle(60);
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.wears.at(-1)).toEqual([]);
   });
 
   it("shows what an agent just did to the room over its head, and every change on the room's card", async () => {

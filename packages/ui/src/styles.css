@@ -8724,6 +8724,9 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-map-who:focus-visible { outline: none; }
 .world-map-who-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .world-map-who-doing { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+/* What it is for, with its body's own colour: the dot by its name is what it is doing. */
+.world-map-who-role { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.world-map-hue { flex: none; width: 7px; height: 7px; border-radius: 50%; }
 .world-map-who.doing-waiting .world-map-who-doing { color: var(--doing-waiting); }
 .world-map-who.doing-stuck .world-map-who-doing { color: var(--doing-stuck); }
 /* Idle and asleep are said by the dot alone, and in words only to a screen reader. */
@@ -8848,6 +8851,15 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-agent-said { font-style: italic; }
 .world-agent-when, .world-agent-run { color: var(--text-dim); }
 .world-agent-actions { padding-top: 10px; border-top: 1px solid var(--border); }
+/* What it is for, in a word, by its name. */
+.world-agent-role { font-size: 12px; font-weight: 500; color: var(--text-dim); letter-spacing: 0.01em; }
+/* What it wears: in words, then a chip for each thing a body can wear, lit for what it has on. */
+.world-agent-wear { display: flex; flex-direction: column; gap: 6px; }
+.world-wear { display: flex; flex-wrap: wrap; gap: 4px; }
+.world-wear-chip { padding: 2px 8px; font-family: var(--font); font-size: 11px; line-height: 18px; color: var(--text-dim); background: var(--bg); border: 1px solid var(--border); border-radius: 999px; cursor: pointer; }
+.world-wear-chip:hover, .world-wear-chip:focus-visible { border-color: var(--accent); color: var(--text); outline: none; }
+.world-wear-chip[aria-pressed="true"] { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--bg)); }
+.world-wear-chip:disabled { opacity: 0.6; cursor: default; }
 /* What needs you: a button among the stage's tools while anything does, the list of it, and an agent's card. */
 .talk-tool.talk-needs { font-weight: 600; color: var(--doing-waiting); border-color: color-mix(in srgb, var(--doing-waiting) 70%, var(--border)); background: color-mix(in srgb, var(--doing-waiting) 10%, var(--bg-surface)); }
 .talk-tool.talk-needs:hover, .talk-tool.talk-needs:focus-visible, .talk-tool.talk-needs[aria-expanded="true"] { color: var(--doing-waiting); border-color: var(--doing-waiting); background: color-mix(in srgb, var(--doing-waiting) 18%, var(--bg-surface)); }

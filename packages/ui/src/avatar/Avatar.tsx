@@ -83,6 +83,7 @@ export function Avatar({
   greet,
   onGreeted,
   onBody,
+  wear,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -161,6 +162,8 @@ export function Avatar({
   onGreeted?: (n: number) => void;
   /** A click on a body that the page deals with itself, instead of opening the menu: true when it did. */
   onBody?: (agent: string) => boolean;
+  /** What the body wears, by name (see `wear.ts`). */
+  wear?: string[];
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -189,6 +192,13 @@ export function Avatar({
   useEffect(() => {
     stage.current?.setCompany(companyRef.current ?? []);
   }, [companyKey]);
+  const wearRef = useRef(wear);
+  wearRef.current = wear;
+  const wearKey = (wear ?? []).join(",");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when what it wears changed; the ref holds it.
+  useEffect(() => {
+    stage.current?.setWear(wearRef.current ?? []);
+  }, [wearKey]);
   const activitiesRef = useRef(activities);
   activitiesRef.current = activities;
   useEffect(() => {
@@ -296,6 +306,7 @@ export function Avatar({
           ...(roomRef.current ? { room: roomRef.current } : {}),
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
           ...(agentRef.current ? { agent: agentRef.current } : {}),
+          ...(wearRef.current?.length ? { wear: wearRef.current } : {}),
           ...(visitor
             ? {
                 visitor: true,
@@ -358,6 +369,7 @@ export function Avatar({
         if (roomRef.current) s.setRoom(roomRef.current);
         shownPlace.current = placeRef.current;
         s.setCompany(companyRef.current ?? []);
+        s.setWear(wearRef.current ?? []);
         if (activitiesRef.current) s.setActivities(activitiesRef.current);
         if (speechRef.current) s.setSpeech(speechRef.current);
         if (tasksRef.current) s.setTasks(tasksRef.current);

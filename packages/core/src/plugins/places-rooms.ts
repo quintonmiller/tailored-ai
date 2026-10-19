@@ -11,8 +11,9 @@
  * with a coffee table, two armchairs by a fire) comes as a group laid out
  * against a wall, and a preset (a study, a studio, a lounge, a workshop, a
  * reading nook, a garden room, a bedsit, a den) says which groups go on which
- * wall. The seed picks the preset, the room's proportions and colours, which
- * way each group runs, and where the doorway is. Every room keeps a stretch of
+ * wall. The seed picks the preset (unless what the agent is for asks for one,
+ * from `places-roles.ts`, with something in it for the work), the room's
+ * proportions and colours, which way each group runs, and where the doorway is. Every room keeps a stretch of
  * wall clear for a door, which `doorways` in `places-layout.ts` finds.
  *
  * Pure, like `places-layout.ts`: the same seed always gives the same room.
@@ -302,12 +303,54 @@ const GROUPS = {
       { kind: "cylinder", name: "the barrel", u: 0.45, size: [0.5, 0.75, 0.5], color: "#7a5236" },
     ],
   },
+  // For the work an agent does (see `ROLE_DRESSINGS`).
+  rack: {
+    width: 1.5,
+    pieces: () => [
+      { kind: "server_rack", u: -0.36 },
+      { kind: "server_rack", name: "the other server rack", u: 0.36 },
+      { kind: "clock", u: 0, elevation: 2.15 },
+    ],
+  },
+  booth: {
+    width: 2.1,
+    pieces: () => [
+      { key: "desk", kind: "desk", name: "the mixing desk", u: -0.2, color: "#3a3f4a" },
+      { kind: "laptop", on: "desk" },
+      { kind: "mic_stand", u: 0.75, v: 0.8, facing: -50 },
+      { kind: "poster", name: "the acoustic panel", u: -0.55, color: "#3f4654", elevation: 1.5 },
+      { kind: "poster", name: "the other acoustic panel", u: 0.15, color: "#3f4654", elevation: 1.5 },
+    ],
+  },
+  travel: {
+    width: 1.9,
+    pieces: (l) => [
+      { kind: "globe", u: -0.55, v: 0.4 },
+      { kind: "map", u: 0.1, elevation: 1.5 },
+      { kind: "block", name: "the suitcase", u: 0.65, size: [0.48, 0.62, 0.24], color: l.accent },
+    ],
+  },
+  accounts: {
+    width: 2.3,
+    pieces: (l) => [
+      { kind: "block", name: "the safe", u: -0.85, size: [0.5, 0.62, 0.45], color: "#4a4f57" },
+      { key: "desk", kind: "desk", name: "the bureau", u: 0.3, color: l.wood },
+      { kind: "ledger", on: "desk" },
+      { kind: "ledger", name: "the other ledger", on: "desk" },
+      { kind: "table_lamp", name: "the desk lamp", on: "desk" },
+      { kind: "chair", name: "the desk chair", u: -0.33, v: 0.9, facing: 200 },
+      { key: "shelf", kind: "shelf", u: 0.3, elevation: 1.5 },
+      { kind: "books", name: "the account books", on: "shelf" },
+    ],
+  },
 } satisfies Record<string, Group>;
 
 type GroupId = keyof typeof GROUPS;
 
 /** Groups a crowded wall drops last: what a room is built round, somewhere to work, and the task board. */
 const KEEP: GroupId[] = ["desk", "board", "workbench", "easel", "lounge", "media", "fireside", "bed", "hearth"];
+/** And later still: what the work its agent does needs (`ROLE_DRESSINGS`), which is what says whose room it is. */
+const FOR_WORK: GroupId[] = ["rack", "booth", "travel", "accounts"];
 
 // --------------------------------------------------------------------------
 // Putting pieces in a room
@@ -438,18 +481,17 @@ function furnish(start: Place, pieces: Placed[]): Place {
 /**
  * Frames for groups along a free stretch of wall, in order, the spare wall
  * shared out between them. When they don't all fit, groups go from the open
- * end first, keeping what the room is built round (`KEEP`) to the last.
+ * end first, keeping what the room is built round (`KEEP`), and what its
+ * agent's work needs (`FOR_WORK`), to the last.
  */
 function lineUp(ids: GroupId[], wall: "back" | "left", from: number, to: number, flips: () => boolean) {
   const chosen = [...ids];
   const total = () => chosen.reduce((sum, id) => sum + GROUPS[id].width, 0);
+  const worth = (id: GroupId) => (FOR_WORK.includes(id) ? 2 : KEEP.includes(id) ? 1 : 0);
   while (chosen.length && total() > to - from) {
+    // The least worth keeping, nearest the open end.
     let drop = chosen.length - 1;
-    for (let i = chosen.length - 1; i >= 0; i--)
-      if (!KEEP.includes(chosen[i])) {
-        drop = i;
-        break;
-      }
+    for (let i = chosen.length - 1; i >= 0; i--) if (worth(chosen[i]) < worth(chosen[drop])) drop = i;
     chosen.splice(drop, 1);
   }
   const gap = (to - from - total()) / (chosen.length + 1);
@@ -779,7 +821,7 @@ export const PRESETS: Preset[] = [
 ];
 
 /** What can stand out in the floor, away from the walls. */
-type Island = "chat" | "dining" | "rug" | "reading" | "worktable" | "play" | "greenery";
+type Island = "chat" | "dining" | "rug" | "reading" | "worktable" | "play" | "greenery" | "game";
 
 /**
  * Something standing out in the floor, round a middle point. Islands stand
@@ -850,6 +892,15 @@ function island(kind: Island, [x, z]: [number, number], look: Look, key: string)
           color: look.fabric2,
         },
       ];
+    case "game":
+      return [
+        { kind: "rug", at: at(0, 0), facing: 0, scale: 1.15, color: look.rug },
+        { key: `${key}:table`, kind: "table", name: "the game table", at: at(0, 0), facing: 0, color: look.wood },
+        { kind: "chessboard", on: `${key}:table`, at: at(0, 0), facing: 0 },
+        { kind: "books", name: "the rule books", on: `${key}:table`, at: at(0, 0), facing: 0 },
+        { kind: "chair", name: "the game chair", at: at(-0.3, -0.62), facing: 0, color: look.fabric2 },
+        { kind: "chair", name: "the other game chair", at: at(0.3, 0.62), facing: 180, color: look.fabric2 },
+      ];
     case "greenery":
       return [
         { kind: "round_rug", at: at(0, 0), facing: 0, scale: 0.8, color: "#9caf88" },
@@ -887,6 +938,52 @@ const SPREADS: [[number, number], [number, number]][] = [
   ],
 ];
 
+/**
+ * What a home has for the work its agent does (see `places-roles.ts`): a
+ * group of furniture for it, in place of the first of `instead` the room
+ * would have had, or else first along the left wall; groups that don't suit
+ * the work swapped for others; and an island for it, in place of the seed's
+ * first. Everything else is still the seed's.
+ */
+interface Dressing {
+  group?: GroupId;
+  instead?: GroupId[];
+  swap?: Partial<Record<GroupId, GroupId>>;
+  island?: Island;
+}
+
+export const ROLE_DRESSINGS: Record<string, Dressing> = {
+  // A coder's or an operator's servers, where a sideboard or a shelf would have gone.
+  rack: { group: "rack", instead: ["sideboard", "aquarium", "books", "plants"] },
+  // A producer's desk with a microphone by it, and no easel.
+  booth: { group: "booth", instead: ["desk"], swap: { easel: "sideboard" } },
+  // A travel agent's globe and map, and a suitcase.
+  travel: { group: "travel", instead: ["sideboard", "plants", "books"] },
+  // A bookkeeper's desk with its ledgers, and a safe.
+  accounts: { group: "accounts", instead: ["desk"] },
+  // A game master's or a player's table with a board on it.
+  game: { island: "game" },
+};
+
+/** A home's walls with what its work needs on them (see `ROLE_DRESSINGS`). */
+export function dress(back: GroupId[], left: GroupId[], dressing: Dressing | undefined): [GroupId[], GroupId[]] {
+  if (!dressing) return [back, left];
+  const swapped = (wall: GroupId[]) => wall.map((g) => dressing.swap?.[g] ?? g);
+  const walls = [swapped(back), swapped(left)];
+  const { group } = dressing;
+  if (!group) return [walls[0], walls[1]];
+  for (const wanted of dressing.instead ?? []) {
+    for (const wall of walls) {
+      const i = wall.indexOf(wanted);
+      if (i >= 0) {
+        wall[i] = group;
+        return [walls[0], walls[1]];
+      }
+    }
+  }
+  return [walls[0], [group, ...walls[1]]];
+}
+
 /** Fewer light sources than this and a room is dark after sunset: floor lamps go in wherever they fit. */
 const LAMPS = 3;
 
@@ -898,9 +995,10 @@ const lights = (p: Place) => p.props.filter((i) => ["lamp", "table_lamp", "firep
  * groups for each wall and which way each runs, two islands in the floor, and
  * where the doorway is kept. There is always somewhere to sit, somewhere to
  * work, a window, and lamps for the evening. `kind` asks for a preset by id
- * (a study, a workshop) in place of the seed's.
+ * (a study, a workshop) in place of the seed's, and `dressing` for what the
+ * work its agent does needs in it (`ROLE_DRESSINGS`).
  */
-export function homePlace(seed: string, name: string, kind?: string): Place {
+export function homePlace(seed: string, name: string, kind?: string, dressing?: string): Place {
   const rand = seeded(seed);
   const drawn = pick(rand, PRESETS);
   const preset = PRESETS.find((p) => p.id === kind) ?? drawn;
@@ -917,19 +1015,22 @@ export function homePlace(seed: string, name: string, kind?: string): Place {
   };
   const palette = pick(rand, preset.palettes);
   const choose = (list: Choice[]) => list.map((c) => (Array.isArray(c) ? pick(rand, c) : c));
-  const back = choose(preset.back);
-  const left = choose(preset.left);
+  const work = dressing ? ROLE_DRESSINGS[dressing] : undefined;
+  const [back, left] = dress(choose(preset.back), choose(preset.left), work);
   const span = DOORWAY.width + 0.2;
   // On the left wall only where it is long enough to keep a group or two beside the doorway.
   const door: Door =
     depth - 1.2 - 0.4 - span >= 3.4 && rand() < 0.5
       ? { wall: "left", at: round(depth / 2 - 0.4 - span / 2) }
       : { wall: "back", at: round(width / 2 - 0.4 - span / 2) };
-  const first = pick(rand, preset.islands);
-  const second = pick(
+  const drawnFirst = pick(rand, preset.islands);
+  const drawnSecond = pick(
     rand,
-    preset.islands.filter((i) => i !== first),
+    preset.islands.filter((i) => i !== drawnFirst),
   );
+  // The work's island in place of the first, unless the seed had it second.
+  const first = work?.island ?? drawnFirst;
+  const second = drawnSecond === first ? drawnFirst : drawnSecond;
   const [one, two] = pick(rand, SPREADS);
   // The corner piece stands at the back of the left wall, or at its front when the doorway isn't there.
   const front = rand() < 0.5 && door.wall !== "left";
