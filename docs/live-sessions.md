@@ -266,8 +266,8 @@ The agent changes it with the `place` tool:
 | `move` | a thing to somewhere new, or turned where it stands with only `facing` |
 | `change` | a thing's `name`, `color`, `scale` or `size` |
 | `remove` | a thing, and whatever stands on it |
-| `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), `name`, and `area` (see [Areas, halls and doors](#areas-halls-and-doors)) |
-| `undo` | the last change, whoever made it, unless it was the system redrawing the room |
+| `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), `name`, `theme` and `purpose` (see [A theme and a purpose](#a-theme-and-a-purpose)), and `area` (see [Areas, halls and doors](#areas-halls-and-doors)) |
+| `undo` | the last change, whoever made it, unless it was the system redrawing the room. In a meeting room, undoing the first change brings back the room as it was drawn |
 
 Where things go is said in words: `near` a thing or spot, on one `side` of it
 (left, right, front or behind, as you face it), against a `wall`, in a
@@ -503,7 +503,7 @@ The plugin also answers for the whole world: every agent's home, the shared
 places, and each room agents talk in (a Discord channel, a local room), with
 who is in each. A room of conversation is drawn as a meeting room with a
 seat for every member with a body: up to six round a round table, more at a
-long one, and the room grows with them.
+long one, and the room grows with them, until a member changes it (below).
 
 Bodies go where the talk is. When an agent says something in a room, its
 body leaves where it was and takes a seat at that room's meeting table, so
@@ -511,8 +511,8 @@ the bubbles of a conversation show up round the table it is having. Each
 thing it says there, and each time the room wakes it while it is there,
 keeps it a while longer; other people's messages don't. Being woken alone
 moves nobody, so an agent that reads a room and keeps quiet stays where it
-was. After a quiet spell (10 minutes) it goes back where it lives: home, or
-the shared place it was in. While it is away, its home is empty and the map
+was. After a quiet spell (10 minutes) it goes back where it lives: home,
+the shared place it was in, or a meeting room it went into to change. While it is away, its home is empty and the map
 shows it in the room. Round the table, everyone turns to whoever speaks. A
 quiet room shows its member count on the map ("quiet · 3 members").
 
@@ -526,8 +526,9 @@ A visit is a `visit` record, one per agent, naming the room's place and an
 `whereabouts` record that says where the agent lives, so a visit never
 changes where it lives, leaves no history behind, and ends on restart. The
 plugin clears visits that have run out every 20 seconds, so a page watching
-sees the body go. The `place` tool still works on the agent's own room (or
-the shared place it lives in) while its body is at a meeting, and moving
+sees the body go. The `place` tool still works on the place the agent lives
+in (its home, a shared place, or a meeting room it went into) while its
+body is at a meeting, and moving
 with the `place` tool ends the visit. Sending it home from the menu ends the
 visit early too; its next message brings it back. Change the quiet spell, or
 turn this off with `0`:
@@ -551,7 +552,121 @@ on the table), a podcast a studio (an easel and posters), code a workshop (a
 workbench under a pegboard, crates), research a library (shelves of books and
 a reading chair). A room whose words match none is plain. Each comes in a
 few colourings and wall arrangements, and the room's name picks one, so two
-rooms of the same kind still look different.
+rooms of the same kind still look different. A theme a member chooses beats
+the guess.
+
+#### Changing a meeting room
+
+A room's members can change its meeting room. An agent goes there with `go`
+and the room's name (`to: "trip"`, or `"#trip"`), and from then on its `place`
+tool works on the meeting room, as it does in a shared place: `look`, `add`,
+`move`, `change`, `remove`, `room`, `undo` and `photo`. `places` lists the
+meeting rooms an agent can go to, after the shared places.
+
+The first change keeps the room. It becomes a `place` record,
+`room:<backend>:<id>` in the global scope, starting from the room as it was
+drawn, and the room is drawn from that record from then on. Nothing redraws
+it over someone's change, not even more members joining: they stand where
+there is room. Undoing that first change deletes the record, and the room is
+drawn from its name again. A meeting room keeps its door and stays in the
+meeting rooms' wing of the main building, so `area` is refused there.
+
+Only members go in. Anyone else is told whose room it is and who can change
+it: "#trip's meeting room is for the members of #trip: guest and host can go
+in and change it." An agent that leaves the room is home again.
+
+#### A theme and a purpose
+
+`room` with `theme` dresses a place: `beach`, `tavern`, `studio`,
+`workshop`, `library`, or `none` for plain. A chosen theme stays chosen,
+whatever the room's name suggests. A meeting room nobody has changed yet is
+drawn again in it, through and through: choose `library` for a room called
+"vacation", and it gets shelves of books where it had palms. A room someone
+has already furnished keeps everything where it is. It is repainted in one of
+the theme's colourings, and gets the one thing that says it (a palm, a
+fireplace, an easel, a pegboard or a bookshelf) when it has none and there is
+room.
+
+`purpose` says what the place is for, in a line: "planning the Lisbon trip".
+`look` reads it out, and the map shows it under the place's name, in place of
+a meeting room's own purpose. Until a member gives one, a meeting room's card
+and `look` read out its room's own purpose, as the map does. `purpose: none`
+clears it. The room's `name` is
+what it is called inside; the map and the door plates keep a home as
+"planner's room" and a meeting room by its room's name.
+
+#### Rooms that follow the work
+
+Nothing makes an agent look at its room unless something asks it to. The
+places plugin can, now and then, for the agents you name:
+
+```yaml
+plugins:
+  - module: builtin:places
+    config:
+      tend:
+        every: 24h                  # 30 minutes, 12h, 2 days; at least a minute
+        agents: [planner, writer]   # or: all
+```
+
+Each agent's turn comes round once every `every`, at a time of its own: its
+name sets where in the interval it falls, so forty agents on `24h` are spread
+across the day instead of woken together, and a restart moves nobody's time.
+When the turn comes, the agent gets one message in its own `tend:<agent>`
+session:
+
+- what it did in the last interval, counted from what TAI keeps anyway: the
+  tools it called in its sessions, most used first; the tasks assigned to it
+  that it finished; the rooms it talked in; the photos it took;
+- its room, as `look` describes it, and the meeting rooms it can change too;
+- an invitation to change the room with the `place` tool if something it has
+  been doing should show there, or to leave it as it is.
+
+```
+Time to look at your room in the light of what you've been doing. People see it in the 3D world.
+
+In the last day, you:
+- called tools 41 times: web_search 14, edit 9, exec 6, tasks 5, place 3, read 2, and 2 other calls
+- finished 2 tasks: "Draft the itinerary", "Book the hotel"
+- talked in #trip-planning and #budget
+
+Your room, as the place tool's look shows it:
+…
+```
+
+A reply in that session reaches nobody, and the message says so: what the
+agent changes in the room is what people see. An agent that did nothing in
+the interval isn't woken, since there is nothing new for its room to show.
+One tend runs at a time, even across a config reload, so never two for one
+agent. A turn that comes round
+while agents are paused, or while an agent's own switch on the Agents page has
+it switched off or paused, is skipped, not saved up, so lifting a pause wakes
+nobody at once. An agent without the `place` tool is skipped too, and the log
+says so. Leave `tend` out and nothing changes.
+
+You can also ask an agent yourself, whenever you like: see below.
+
+#### Seeing a change happen
+
+When an agent changes the place you are looking at, you see it happen.
+Something new, or made over in another colour or size, grows in; something
+moved glides there from where it stood; and a line over the agent's head
+says what it did: "Added the reading chair by the bookshelf."
+
+The **Room** button, beside **Map** and **Tasks** in a home, a shared place
+or a meeting room, opens the place's card: what it is for, its theme, who can
+change it, and its recent changes, newest first, each with who made it and
+when. A place keeps its last 8 changes made with the `place` tool, in its
+record's `changes`, each cut short past 160 characters; the **State** page
+has the full history, including
+changes made there. In a home whose owner has the `place` tool, the card has
+**Ask planner to make it fit its work**, which opens a chat with the agent
+with "Have a look at your room and make it reflect what you've been working
+on." written for you to send. **Redo its room** on the agent's own card does
+the same. In a meeting room, it takes you out of reading the room's own
+conversation and into a chat with that agent. An agent whose `tools:` list
+leaves out `place` can't change a room, and the card says so instead of
+offering, with a link to the agent's page, where you can add the tool.
 
 #### Task boards and the lobby
 
@@ -823,9 +938,9 @@ cues, and its text passes through untouched.
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
 | `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` or `visit` change means someone came or went |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there. A room also lists `members`, every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, its `company` the members talking there now, and a hall a corridor with a door for each place off it, both made fresh each time. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/say` | a line in an agent's voice: `{agent?, text}` → the audio, from the live text-to-speech stage with the agent's `voice.voice` (else `live.tts.voice`). Markdown is stripped first. `400` for an empty line or one over 400 characters, `409` when live sessions are off, `502` when the voice can't be made |

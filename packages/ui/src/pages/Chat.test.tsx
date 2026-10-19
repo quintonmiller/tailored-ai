@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatProvider } from "../components/ChatContext";
 import type { ChatStageOptions } from "../components/ChatStage";
 import { ToastProvider } from "../components/Toast";
+import { ROOM_ASK } from "../components/WorldPlace";
 import { Chat } from "./Chat";
 
 /** When set, the page's scene is this instead of the real one: a meeting room, say, without a GPU. */
@@ -448,6 +449,21 @@ describe("talking to another agent", () => {
     expect(shown()).toContain("Alfama, near the river.");
     await act(async () => tab("Room").click());
     expect(bar().hidden).toBe(true);
+  });
+
+  it("leaves reading the room for a message written for someone, as Redo its room writes one", async () => {
+    let draft: ((name: string, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      draft = opts.onDraft;
+      return sceneAt("room:local:trip");
+    };
+    await render();
+    const bar = () => container.querySelector(".chat-input-bar") as HTMLElement;
+    expect(bar().hidden).toBe(true);
+    await act(async () => draft?.("planner", ROOM_ASK));
+    await settle();
+    expect(bar().hidden).toBe(false);
+    expect((container.querySelector(".chat-input-bar input[type=text]") as HTMLInputElement).value).toBe(ROOM_ASK);
   });
 
   it("goes on with the agent a reopened conversation was with", async () => {

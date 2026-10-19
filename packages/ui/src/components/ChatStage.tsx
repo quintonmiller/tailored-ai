@@ -15,6 +15,7 @@ import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
 import { type Said, WorldAgent } from "./WorldAgent";
 import { comeOrGone, useWorldMap, WorldMap } from "./WorldMap";
+import { ROOM_ASK, WorldPlace, withChangeLines } from "./WorldPlace";
 import { type ListView, TaskCard, TaskList } from "./WorldTasks";
 
 /**
@@ -318,19 +319,36 @@ export function tasksFor(place: string | undefined, agents: string[], tasks: Boa
   return tasks.filter((t) => !!t.assignee && who.includes(t.assignee));
 }
 
-/** What the agents themselves are configured as: whether one runs on its own, which is what can be paused. */
-function useAgentRoster(enabled: boolean): { online: Set<string>; names: string[] } {
-  const [roster, setRoster] = useState<{ online: Set<string>; names: string[] }>({ online: new Set(), names: [] });
+/** Agents whose own list of tools leaves out `place`: they can't change a room. */
+export function placeless(agents: Record<string, { tools?: unknown }>): Set<string> {
+  return new Set(
+    Object.entries(agents ?? {}).flatMap(([name, a]) =>
+      Array.isArray(a?.tools) && !a.tools.includes("place") ? [name] : [],
+    ),
+  );
+}
+
+interface Roster {
+  online: Set<string>;
+  names: string[];
+  /** Agents without the place tool. */
+  placeless: Set<string>;
+}
+
+/** What the agents themselves are configured as: whether one runs on its own, which is what can be paused, and whether it can change a room. */
+function useAgentRoster(enabled: boolean): Roster {
+  const [roster, setRoster] = useState<Roster>({ online: new Set(), names: [], placeless: new Set() });
   useEffect(() => {
     if (!enabled) return;
     let gone = false;
     fetch("/api/agents")
       .then((res) => (res.ok ? res.json() : {}))
-      .then((agents: Record<string, { online?: { enabled?: boolean } }>) => {
+      .then((agents: Record<string, { online?: { enabled?: boolean }; tools?: unknown }>) => {
         if (!gone)
           setRoster({
             online: new Set(Object.entries(agents ?? {}).flatMap(([name, a]) => (a?.online?.enabled ? [name] : []))),
             names: Object.keys(agents ?? {}).sort(),
+            placeless: placeless(agents),
           });
       })
       .catch(() => {});
@@ -439,6 +457,7 @@ type Panel =
   | { kind: "tasks" }
   | { kind: "task"; id: string; fromList?: boolean }
   | { kind: "agent"; agent: string }
+  | { kind: "place" }
   | { kind: "new-task" }
   | { kind: "new-room" };
 
@@ -564,7 +583,17 @@ export function useChatStage({
   }, [visiting]);
   const activities = useRecords<AgentActivity>("activity", showStage);
   const speech = useRecords<Said>("speech", showStage);
-  const { online, names: agentNames } = useAgentRoster(showStage);
+  const { online, names: agentNames, placeless: cantPlace } = useAgentRoster(showStage);
+  const canPlace = useCallback((who: string) => !cantPlace.has(who), [cantPlace]);
+  // What agents just did to the room on screen shows over their heads, like something they said.
+  const said = useMemo(() => withChangeLines(speech, room.changes), [speech, room.changes]);
+  const askRoom = useCallback(
+    (who: string) => {
+      setPanel(null);
+      onDraft?.(who, ROOM_ASK);
+    },
+    [onDraft],
+  );
   const shown = home || "default";
   const talking = agent || "default";
   // Where you are says who you talk to: an agent's own home is a conversation with it, and coming back to the
@@ -819,6 +848,8 @@ export function useChatStage({
     },
     [placeId, setVisiting],
   );
+  // Homes, shared places and meeting rooms are agents' to change; the lobby and the halls are the building's.
+  const changeable = !!placeId && /^(home|shared|room):/.test(placeId);
   const tools = (
     <>
       <button
@@ -843,6 +874,17 @@ export function useChatStage({
       >
         Tasks
       </button>
+      {changeable && (
+        <button
+          type="button"
+          className="talk-tool"
+          aria-expanded={panel?.kind === "place"}
+          title="What this place is for, who can change it, and what they changed lately"
+          onClick={() => setPanel(panel?.kind === "place" ? null : { kind: "place" })}
+        >
+          Room
+        </button>
+      )}
       {visiting && (
         <button type="button" className="talk-tool" onClick={() => setVisiting(null)}>
           Back to {nameOf(shown)}
@@ -927,6 +969,18 @@ export function useChatStage({
         onClose={closePanel}
       />
     );
+  else if (panel?.kind === "place" && placeId)
+    overlay = (
+      <WorldPlace
+        id={placeId}
+        room={room}
+        // A meeting room is its members' to change, wherever their bodies are: the map lists them all.
+        members={map.places.find((p) => p.id === placeId)?.members ?? []}
+        canPlace={canPlace}
+        {...(onDraft ? { onAsk: askRoom } : {})}
+        onClose={closePanel}
+      />
+    );
   else if (panel?.kind === "agent") {
     const who = panel.agent;
     // A body is in one place: its home, a shared place, or the meeting room of a room it is talking in.
@@ -955,6 +1009,7 @@ export function useChatStage({
           setListView({ filter: "open", who });
           setPanel({ kind: "tasks" });
         }}
+        {...(onDraft && canPlace(who) ? { onRedoRoom: () => askRoom(who) } : {})}
         onClose={closePanel}
       />
     );
@@ -980,7 +1035,7 @@ export function useChatStage({
         company={company}
         agent={showing.visiting ? "you" : shown}
         activities={activities}
-        speech={speech}
+        speech={said}
         menuFor={menuFor}
         visitor={!!showing.visiting}
         onNear={setNear}

@@ -35,6 +35,7 @@ import type { BodyState } from "./motion";
 import { nearestUse, type Use } from "./pick";
 import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
 import {
+  changesShown,
   DEFAULT_ROOM,
   farFor,
   type Lighting,
@@ -43,6 +44,7 @@ import {
   MIN_ASPECT,
   nearestWithin,
   OPEN_SIDES,
+  type Prop,
   ROOM_TARGET,
   ROOM_VIEW,
   type Room,
@@ -309,6 +311,14 @@ export async function createStage(
   };
   // Things that just appeared, growing into place.
   const appearing: { group: THREE.Group; started: number; scale: number }[] = [];
+  // Things that were just moved, on their way from where they stood.
+  const gliding: {
+    group: THREE.Group;
+    started: number;
+    from: THREE.Vector3;
+    to: THREE.Vector3;
+    turn: [number, number];
+  }[] = [];
   // The doors, each with the light by it that says what the agent behind it is doing.
   let doorLights: { occupant: string; light: THREE.MeshBasicMaterial }[] = [];
   const lightDoors = () => {
@@ -318,8 +328,8 @@ export async function createStage(
     }
   };
 
-  /** Build the room's shell and furniture; `fresh` names props to grow in, as just added. */
-  const furnish = (fresh: Set<string> = new Set()) => {
+  /** Build the room's shell and furniture; `fresh` names props to grow in, as just added, and `moved` where others were. */
+  const furnish = (fresh: Set<string> = new Set(), moved: Map<string, Prop> = new Map()) => {
     furniture = new THREE.Group();
     scenery.length = 0;
     clickable.length = 0;
@@ -371,6 +381,20 @@ export async function createStage(
       if (fresh.has(prop.id) && !opts.reducedMotion) {
         built.group.scale.setScalar(scale * 0.01);
         appearing.push({ group: built.group, started: performance.now(), scale });
+      }
+      const was = moved.get(prop.id);
+      if (was && !opts.reducedMotion) {
+        const to = built.group.position.clone();
+        const from = new THREE.Vector3(was.at[0], was.elevation ?? 0, was.at[1]);
+        built.group.position.copy(from);
+        built.group.rotation.y = rad(was.facing);
+        gliding.push({
+          group: built.group,
+          started: performance.now(),
+          from,
+          to,
+          turn: [rad(was.facing), rad(prop.facing)],
+        });
       }
     }
     // The doors to other places: on a wall, or standing at an open side.
@@ -1348,6 +1372,17 @@ export async function createStage(
       a.group.scale.setScalar(a.scale * Math.max(0.01, e));
       if (k >= 1) appearing.splice(i, 1);
     }
+    for (let i = gliding.length - 1; i >= 0; i--) {
+      const g = gliding[i];
+      const k = Math.min(1, (now - g.started) / 700);
+      // Eased both ways: it sets off and settles rather than snapping.
+      const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      g.group.position.lerpVectors(g.from, g.to, e);
+      const [a, b] = g.turn;
+      const turn = Math.atan2(Math.sin(b - a), Math.cos(b - a));
+      g.group.rotation.y = a + turn * e;
+      if (k >= 1) gliding.splice(i, 1);
+    }
     if (opts.still && !readyFired) {
       // Everyone in the picture, settled: animation files that never answer don't hold it forever.
       const settled = [me, ...companions.values()].every((f) => f.clipsSettled) && arriving.size === 0;
@@ -1401,16 +1436,18 @@ export async function createStage(
     setRoom(next, moved = false) {
       if (next === given && !moved) return;
       if (moved) leavePlace();
-      const before = new Set(room.props.map((p) => p.id));
+      // The same place changing shows what changed: new things pop in, moved ones glide over. Another place is simply there.
+      const changed = changesShown(given, next, !moved);
       const resized = next.width !== room.width || next.depth !== room.depth || next.height !== room.height;
       scene.remove(furniture);
       disposeTree(furniture);
       appearing.length = 0;
+      gliding.length = 0;
       given = next;
       room = next;
       camera.far = farFor(room);
       camera.updateProjectionMatrix();
-      furnish(new Set(next.props.filter((p) => !before.has(p.id)).map((p) => p.id)));
+      furnish(changed?.fresh, changed?.moved);
       if (lit) light(lit);
       fitShadows();
       // A visitor stays where they are standing: the room changing round them doesn't walk them anywhere.
@@ -1426,6 +1463,7 @@ export async function createStage(
       scene.remove(furniture);
       disposeTree(furniture);
       appearing.length = 0;
+      gliding.length = 0;
       given = next;
       room = next;
       camera.far = farFor(room);

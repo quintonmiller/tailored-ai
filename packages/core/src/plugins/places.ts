@@ -15,11 +15,23 @@
  * image, so it goes out with the agent's reply on any surface that shows one,
  * Discord included.
  *
+ * Each room agents talk in has a meeting room, drawn from its name and
+ * purpose, which its members can go into and change like their own: the
+ * first change keeps it as a record (`room:<ref>`), drawn from then on as
+ * they left it. Every change made with the tool is kept on the place in a few
+ * words ("planner added the bookshelf"), for the page to show as it happens.
+ * And now and then, if configured, agents are asked to look at their rooms in
+ * the light of what they have been doing (`places-tend.ts`).
+ *
  * Free when unused: with no avatar configured, it registers nothing. An agent
  * with its own `tools:` list needs `place` named in it, like any tool.
  */
+import { resolveAgent } from "../agent/agents.js";
+import { runAgentLoop } from "../agent/loop.js";
+import { findOrCreateSession } from "../agent/session.js";
 import type { AgentConfig } from "../config.js";
 import { mediaPart, textPart } from "../content/types.js";
+import { getExploratoryState } from "../db/exploratory-queries.js";
 import type { TaiHttpRequest, TaiHttpResponse } from "../http/registry.js";
 import { resolveAvatar } from "../live/avatar.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
@@ -31,8 +43,11 @@ import type { StateCaller, StateService } from "../state/service.js";
 import { type Actor, type StateChange, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
+import { whyAsleep } from "./activity.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
 import {
+  CHANGE_LENGTH,
+  CHANGES_KEPT,
   colorWord,
   describe,
   doorOf,
@@ -52,6 +67,7 @@ import {
   PHOTOS_KEPT,
   PLACE_SCHEMA,
   type Place,
+  type PlaceChange,
   type PlaceItem,
   type PlacePhoto,
   type Placing,
@@ -66,7 +82,18 @@ import {
   withDoorwayHeld,
   withSpots,
 } from "./places-layout.js";
-import { homePlace, LOBBY, lobby, meetingRoom, sharedPlace } from "./places-rooms.js";
+import {
+  homePlace,
+  LOBBY,
+  lobby,
+  meetingRoom,
+  NO_THEME,
+  retheme,
+  sharedPlace,
+  THEMES,
+  themeNamed,
+} from "./places-rooms.js";
+import { everyWords, gatherDone, parseTend, quiet, Tender, tendMessage } from "./places-tend.js";
 import {
   type Area,
   areaId,
@@ -257,33 +284,101 @@ export function visitOf(data: Record<string, unknown> | undefined, now: number):
   return place && Number.isFinite(until) && until > now ? place : undefined;
 }
 
+/** The rooms agents talk in, and who has a body: what a meeting room needs to be found and drawn. */
+export interface Meetings {
+  rooms: TalkRoom[];
+  hasBody: (agent: string | undefined) => boolean;
+}
+
+/** The room of conversation a meeting room's id is for, while there is one. */
+function talkRoomOf(rooms: TalkRoom[] | undefined, id: string): TalkRoom | undefined {
+  return id.startsWith("room:") ? rooms?.find((r) => roomPlaceId(r.ref) === id) : undefined;
+}
+
+/**
+ * Whether an agent may change a place: its own home, a meeting room of a
+ * room it talks in, and any shared place. The lobby and the halls are the
+ * building's, and nobody's to change.
+ */
+export function mayChange(id: string, agent: string, rooms: TalkRoom[]): boolean {
+  if (id.startsWith("home:")) return id === homeId(agent);
+  if (id.startsWith("room:")) return !!talkRoomOf(rooms, id)?.members.includes(agent);
+  return id.startsWith(SHARED);
+}
+
+/** Why an agent can't go into a meeting room, and who can: its room's members with bodies. */
+export function onlyMembers(room: TalkRoom, hasBody: (agent: string | undefined) => boolean): string {
+  const who = room.members.filter((m) => hasBody(m)).sort();
+  const names = who.length > 1 ? `${who.slice(0, -1).join(", ")} and ${who.at(-1)}` : who[0];
+  return `#${room.name}'s meeting room is for the members of #${room.name}: ${names ? `${names} can go in and change it` : "none of them has a body yet"}. Join the room first, or ask one of them.`;
+}
+
+/** A meeting room as drawn for its room of conversation, before anyone changes it: a seat for each member with a body. */
+function drawMeeting(room: TalkRoom, hasBody: Meetings["hasBody"], theme?: string): { place: Place; agents: string[] } {
+  const agents = room.members.filter((m) => hasBody(m)).sort();
+  const purpose = room.purpose ?? "";
+  const place = drawOnce(`room\n${room.name}\n${agents.length}\n${purpose}\n${theme ?? ""}`, () =>
+    meetingRoom(room.name, agents.length, purpose, theme),
+  );
+  return { place, agents };
+}
+
+/**
+ * A meeting room as people see it: what it is for is what its members said,
+ * or else its room's own purpose. Only for showing: kept out of the record,
+ * so a room whose purpose changes later isn't held to the old one.
+ */
+function shownPurpose(place: Place, room: TalkRoom | undefined): Place {
+  return room?.purpose && !place.purpose ? { ...place, purpose: room.purpose } : place;
+}
+
 /**
  * The place an agent lives in now: home, unless it has gone to a shared place
- * that still exists. A body visiting a meeting room still lives there, which
- * is the room the `place` tool changes.
+ * that still exists, or into the meeting room of a room it is still a member
+ * of. A body visiting a meeting room (see {@link Presence}) still lives there,
+ * which is the room the `place` tool changes.
  */
-export async function whereIs(service: StateService, caller: StateCaller, agent: string): Promise<string> {
+export async function whereIs(
+  service: StateService,
+  caller: StateCaller,
+  agent: string,
+  rooms?: TalkRoom[],
+): Promise<string> {
   // A store that keeps no whereabouts has everyone at home.
   const found = await service.get(caller, { type: WHEREABOUTS_TYPE, id: agent }).catch(() => null);
   const id = typeof found?.data.place === "string" ? found.data.place : undefined;
   if (!id || id === homeId(agent)) return homeId(agent);
+  // A meeting room is there while its room is, and only for its members: one who has left the room is home again.
+  if (id.startsWith("room:")) return mayChange(id, agent, rooms ?? []) ? id : homeId(agent);
   return (await service.get(caller, { type: PLACE_TYPE, id })) ? id : homeId(agent);
 }
 
 /** Where an agent's body is drawn: in a meeting room while it is talking there, otherwise where it lives. */
-export async function bodyAt(service: StateService, caller: StateCaller, agent: string): Promise<string> {
+export async function bodyAt(
+  service: StateService,
+  caller: StateCaller,
+  agent: string,
+  rooms?: TalkRoom[],
+): Promise<string> {
   const visit = await service.get(caller, { type: VISIT_TYPE, id: agent }).catch(() => null);
-  return visitOf(visit?.data, Date.now()) ?? whereIs(service, caller, agent);
+  return visitOf(visit?.data, Date.now()) ?? whereIs(service, caller, agent, rooms);
 }
 
-/** Every body that has gone somewhere, and where it is now: a meeting room it is visiting, or where it went. */
-async function goneTo(service: StateService, caller: StateCaller): Promise<Map<string, string>> {
+/**
+ * Every body that has gone somewhere, and where it is now: a meeting room it
+ * is visiting, or where it went. Whereabouts naming a meeting room stand only
+ * for a member of its room (one who went in to change it); without the rooms
+ * to check against, they don't.
+ */
+async function goneTo(service: StateService, caller: StateCaller, rooms?: TalkRoom[]): Promise<Map<string, string>> {
   const all = (type: string) =>
     service.query(caller, { type, limit: 500 }).catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
   const [went, visits] = await Promise.all([all(WHEREABOUTS_TYPE), all(VISIT_TYPE)]);
-  // A meeting room is only ever visited: whereabouts naming one is left over from before visits had a type of their own.
   const gone = new Map(
-    went.map((r) => [r.id, typeof r.data.place === "string" && !r.data.place.startsWith("room:") ? r.data.place : ""]),
+    went.map((r) => {
+      const place = typeof r.data.place === "string" ? r.data.place : "";
+      return [r.id, place.startsWith("room:") && !mayChange(place, r.id, rooms ?? []) ? "" : place];
+    }),
   );
   const now = Date.now();
   for (const v of visits) {
@@ -293,31 +388,42 @@ async function goneTo(service: StateService, caller: StateCaller): Promise<Map<s
   return gone;
 }
 
-/** The place an agent is in now, with what a write needs: its id, version and scope. */
+/**
+ * The place an agent is in now, with what a write needs: its id, version and
+ * scope. A meeting room nobody has changed yet is drawn for it at version 0,
+ * so the first change makes the record, and only if nobody made it first.
+ */
 export async function readCurrent(
   service: StateService,
   caller: StateCaller,
   agent: string,
+  meetings?: Meetings,
 ): Promise<{ id: string; place: Place; version: number; scope: string }> {
-  const id = await whereIs(service, caller, agent);
+  const id = await whereIs(service, caller, agent, meetings?.rooms);
   const found = id === homeId(agent) ? undefined : await service.get(caller, { type: PLACE_TYPE, id });
   if (found) return { id, place: found.data as unknown as Place, version: found.version, scope: found.scope };
+  const talk = talkRoomOf(meetings?.rooms, id);
+  if (talk && meetings) return { id, place: drawMeeting(talk, meetings.hasBody).place, version: 0, scope: "global" };
   return { id: homeId(agent), ...(await readHome(service, caller, agent)), scope: `agent:${agent}` };
 }
 
-/** Everyone whose body is in a place now, apart from `except`: those who went there, and the owner of a home. */
+/**
+ * Everyone whose body is in a place now, apart from `except`: those who went
+ * there, those visiting a meeting room to talk, and the owner of a home.
+ */
 export async function whoIsIn(
   service: StateService,
   caller: StateCaller,
   id: string,
   hasBody: (agent: string | undefined) => boolean,
   except?: string,
+  rooms?: TalkRoom[],
 ): Promise<string[]> {
-  const went = await goneTo(service, caller);
+  const went = await goneTo(service, caller, rooms);
   const names = new Set([...went].flatMap(([agent, place]) => (place === id ? [agent] : [])));
   if (id.startsWith("home:")) {
     const owner = id.slice("home:".length);
-    if ((await bodyAt(service, caller, owner)) === id) names.add(owner);
+    if ((await bodyAt(service, caller, owner, rooms)) === id) names.add(owner);
   }
   if (except) names.delete(except);
   return [...names].filter((name) => hasBody(name)).sort();
@@ -328,13 +434,21 @@ async function sharedPlaces(
   service: StateService,
   caller: StateCaller,
 ): Promise<{ id: string; name: string; area?: string }[]> {
-  const records = await service.query(caller, { type: PLACE_TYPE, scope: "global", limit: 50 });
+  const records = await service.query(caller, { type: PLACE_TYPE, scope: "global", limit: 200 });
   return records
     .filter((r) => r.id.startsWith(SHARED))
     .map((r) => {
       const data = r.data as unknown as Place;
       return { id: r.id, name: String(data.name ?? r.id), ...(data.area ? { area: data.area } : {}) };
     });
+}
+
+/** What each place someone gave a purpose is for, by id: one query for the map, however many places there are. */
+async function purposes(service: StateService, caller: StateCaller): Promise<Map<string, string>> {
+  const records = await service
+    .query(caller, { type: PLACE_TYPE, where: { purpose: { ne: null } }, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  return new Map(records.map((r) => [r.id, String((r.data as unknown as Place).purpose ?? "")]));
 }
 
 /**
@@ -488,8 +602,13 @@ export async function worldMap(
   const shared = await sharedPlaces(service, caller).catch(() => []);
   const sharedIds = new Set(shared.map((p) => p.id));
   const roomIds = new Set(rooms.map((r) => roomPlaceId(r.ref)));
-  const gone = await goneTo(service, caller);
-  // Where each body is: somewhere that still exists, or home.
+  const gone = await goneTo(service, caller, rooms);
+  const purposeOf = await purposes(service, caller);
+  const purpose = (id: string, fallback?: string) => {
+    const p = purposeOf.get(id) || fallback;
+    return p ? { purpose: p } : {};
+  };
+  // Where each body is: somewhere that still exists, or home. In a meeting room, it is out of its home.
   const where = (a: string) => {
     const id = gone.get(a);
     const there =
@@ -508,6 +627,7 @@ export async function worldMap(
       owner: a,
       agents: (inside.get(homeId(a)) ?? []).sort(),
       area: area(homeId(a)),
+      ...purpose(homeId(a)),
     })),
     ...shared.map((p) => ({
       id: p.id,
@@ -515,6 +635,7 @@ export async function worldMap(
       kind: "shared" as const,
       agents: (inside.get(p.id) ?? []).sort(),
       area: area(p.id),
+      ...purpose(p.id),
     })),
     ...rooms.map((r) => ({
       id: roomPlaceId(r.ref),
@@ -523,7 +644,8 @@ export async function worldMap(
       agents: (inside.get(roomPlaceId(r.ref)) ?? []).sort(),
       members: r.members.filter((m) => hasBody(m)).sort(),
       area: MAIN,
-      ...(r.purpose ? { purpose: r.purpose } : {}),
+      // The purpose its members gave its meeting room, over the room's own.
+      ...purpose(roomPlaceId(r.ref), r.purpose),
     })),
   ];
 }
@@ -531,9 +653,9 @@ export async function worldMap(
 /**
  * Any place, to look at: what it looks like, who is in it, and, given the
  * building, its doors. A room of conversation is a meeting room with a seat
- * for each member, and in it the members talking there now; a hall is a
- * corridor with a door for each place off it. Both are made fresh each time
- * rather than kept.
+ * for each member, and in it the members there now, drawn fresh until one of
+ * them changes it and kept from then on; a hall is a corridor with a door for
+ * each place off it, always drawn fresh.
  */
 export async function scene(
   service: StateService,
@@ -566,24 +688,23 @@ async function sceneOf(
     };
   }
   if (id.startsWith("room:")) {
-    const room = rooms.find((r) => roomPlaceId(r.ref) === id);
+    const room = talkRoomOf(rooms, id);
     if (!room) return null;
-    const members = room.members.filter((m) => hasBody(m)).sort();
-    const purpose = room.purpose ?? "";
-    const place = drawOnce(`room\n${room.name}\n${members.length}\n${purpose}`, () =>
-      meetingRoom(room.name, members.length, purpose),
-    );
-    return { id, place, agents: await whoIsIn(service, caller, id, hasBody) };
+    // Once a member has changed it, it is kept: drawn from the record, never from its name again.
+    const kept = await service.get(caller, { type: PLACE_TYPE, id }).catch(() => null);
+    const place = shownPurpose(kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place, room);
+    return { id, place, agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms) };
   }
   if (id.startsWith("home:")) {
     const owner = id.slice("home:".length);
     if (!hasBody(owner)) return null;
     const { place } = await readHome(service, caller, owner);
-    return { id, place, agents: await whoIsIn(service, caller, id, hasBody) };
+    return { id, place, agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms) };
   }
   const found = await service.get(caller, { type: PLACE_TYPE, id });
   if (!found) return null;
-  return { id, place: found.data as unknown as Place, agents: await whoIsIn(service, caller, id, hasBody) };
+  const agents = await whoIsIn(service, caller, id, hasBody, undefined, rooms);
+  return { id, place: found.data as unknown as Place, agents };
 }
 
 // --------------------------------------------------------------------------
@@ -832,18 +953,74 @@ export interface Outcome {
   text: string;
   /** The room after the change; absent when nothing changed. */
   place?: Place;
+  /** What was done, in a few words to follow the agent's name in the room's recent changes: "added the lamp". */
+  did?: string;
 }
 
 const no = (text: string): Outcome => ({ ok: false, text });
 
+/** The themes a place can be given, for the agent. */
+const THEME_WORDS = `${THEMES.map((t) => t.id).join(", ")}, or ${NO_THEME}`;
+
+/** Where the agent said to put a thing, in a few words: "by the window", "on the desk". */
+function whereSaid(where: Where): string {
+  if (where.on) return ` on ${where.on}`;
+  if (where.near) return ` by ${where.near}`;
+  if (where.corner) return ` in the ${where.corner} corner`;
+  if (where.wall) return ` against the ${where.wall} wall`;
+  return "";
+}
+
+/**
+ * A place with one more change in its recent changes, newest first, keeping
+ * the last few. What it says is cut short to fit: it carries the agent's own
+ * words (a purpose, a name, where it put something), and a change too long to
+ * keep would fail the very change it records.
+ */
+export function withChange(place: Place, change: PlaceChange): Place {
+  const what = change.what.length > CHANGE_LENGTH ? `${change.what.slice(0, CHANGE_LENGTH - 1)}…` : change.what;
+  return { ...place, changes: [{ ...change, what }, ...(place.changes ?? [])].slice(0, CHANGES_KEPT) };
+}
+
+export interface ApplyOptions {
+  /**
+   * The room drawn again in a theme: given for a room still as it was drawn
+   * (a meeting room nobody has changed), so a theme dresses it through and
+   * through, rather than repainting what is there.
+   */
+  redraw?: (theme: string) => Place;
+}
+
 /** One tool call against a room, without the store: what it becomes, and what to tell the agent. */
-export function applyAction(place: Place, args: Record<string, unknown>): Outcome {
+export function applyAction(place: Place, args: Record<string, unknown>, opts: ApplyOptions = {}): Outcome {
   const action = text(args.action)?.toLowerCase() as Action | undefined;
   if (!action || !ACTIONS.includes(action)) return no(`\`action\` is one of: ${ACTIONS.join(", ")}.`);
   if (action === "look") return { ok: true, text: describe(place) };
 
   if (action === "room") {
-    let next: Place | string = place;
+    let next: Place = place;
+    const changes: string[] = [];
+    const did: string[] = [];
+    // The theme first: a room still as it was drawn is drawn again in it, and everything else asked for goes on top.
+    const themeText = text(args.theme);
+    if (themeText) {
+      const theme = themeNamed(themeText);
+      if (!theme) return no(`"${themeText}" isn't a theme. The themes are ${THEME_WORDS}.`);
+      const id = theme === NO_THEME ? NO_THEME : theme.id;
+      if (opts.redraw) {
+        next = opts.redraw(id);
+        changes.push(
+          id === NO_THEME ? "it is plain now, with no theme" : `it is dressed as a ${id} through and through`,
+        );
+      } else {
+        const themed = retheme(place, theme);
+        next = themed.place;
+        changes.push(
+          `${id === NO_THEME ? "it is plain now, with no theme" : `its theme is ${id}, in its colours`}${themed.added ? `, with ${themed.added.name} added ${whereWords(themed.place, themed.added)}` : ""}`,
+        );
+      }
+      did.push(id === NO_THEME ? "took the theme away" : `gave it the ${id} theme`);
+    }
     const width = number(args.width);
     const depth = number(args.depth);
     const height = number(args.height);
@@ -856,15 +1033,16 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       const [lo, hi] = LIMITS[key];
       if (value < lo || value > hi) return no(`The room's ${key} must be ${lo} to ${hi} m.`);
     }
-    const changes: string[] = [];
     if (width !== undefined || depth !== undefined || height !== undefined) {
-      next = resize(place, {
+      const sized = resize(next, {
         ...(width !== undefined ? { width: Math.round(width * 100) / 100 } : {}),
         ...(depth !== undefined ? { depth: Math.round(depth * 100) / 100 } : {}),
         ...(height !== undefined ? { height: Math.round(height * 100) / 100 } : {}),
       });
-      if (typeof next === "string") return no(next);
+      if (typeof sized === "string") return no(sized);
+      next = sized;
       changes.push(`it is now ${next.width} × ${next.depth} m and ${next.height} m high`);
+      did.push(`made it ${next.width} × ${next.depth} m`);
     }
     const walls = text(args.walls);
     if (walls) {
@@ -872,18 +1050,19 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       if (!color) return no(`"${walls}" isn't a colour I know. Use a name like "sage" or "dark blue", or #rrggbb.`);
       next = { ...next, walls: color };
       changes.push(`the walls are ${walls}`);
+      did.push(`painted the walls ${walls}`);
     }
     const floor = text(args.floor)?.toLowerCase();
     if (floor) {
       if (FLOORS.includes(floor as Floor)) {
         next = { ...next, floor: floor as Floor };
-        changes.push(`the floor is ${floor}`);
       } else {
         const color = parseColor(floor);
         if (!color) return no(`\`floor\` is ${FLOORS.join(", ")}, or a colour.`);
         next = { ...next, floorColor: color };
-        changes.push(`the floor is ${floor}`);
       }
+      changes.push(`the floor is ${floor}`);
+      did.push(`made the floor ${floor}`);
     }
     const floorColor = text(args.color);
     if (floorColor && !floor) {
@@ -891,11 +1070,26 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       if (!color) return no(`"${floorColor}" isn't a colour I know.`);
       next = { ...next, floorColor: color };
       changes.push(`the floor is ${floorColor}`);
+      did.push(`made the floor ${floorColor}`);
     }
     const name = text(args.name);
     if (name) {
       next = { ...next, name: name.slice(0, 80) };
-      changes.push(`it is called ${name}`);
+      changes.push(`it is called ${next.name}`);
+      did.push(`named it ${next.name}`);
+    }
+    const purpose = text(args.purpose);
+    if (purpose) {
+      if (/^(none|nothing)$/i.test(purpose)) {
+        const { purpose: _was, ...rest } = next;
+        next = rest;
+        changes.push("it no longer says what it is for");
+        did.push("took its purpose away");
+      } else {
+        next = { ...next, purpose: purpose.replace(/\s+/g, " ").slice(0, 160) };
+        changes.push(`it is for: ${next.purpose}`);
+        did.push(`made it a place for ${next.purpose}`);
+      }
     }
     const area = text(args.area);
     if (area) {
@@ -903,14 +1097,16 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
         const { area: _left, ...rest } = next;
         next = rest;
         changes.push(`it is in ${MAIN_NAME}, with a door off its hall`);
+        did.push(`moved it to ${MAIN_NAME}`);
       } else {
         next = { ...next, area: area.slice(0, 60) };
         changes.push(`it is in ${area}: doors join it to the other places there, and the map to everywhere else`);
+        did.push(`moved it to ${area}`);
       }
     }
     if (!changes.length)
-      return no("Say what to change about the room: width, depth, height, walls, floor, name or area.");
-    return { ok: true, text: `Changed the room: ${changes.join("; ")}.`, place: next };
+      return no("Say what to change about the room: width, depth, height, walls, floor, name, theme, purpose or area.");
+    return { ok: true, text: `Changed the room: ${changes.join("; ")}.`, place: next, did: did.join(", ") };
   }
 
   const where = whereFrom(args);
@@ -965,6 +1161,7 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       ok: true,
       text: `Added ${say(added, next)}.${own ? ` You can go to it: "${added.name}".` : ""}`,
       place: next,
+      did: `added ${added.name}${whereSaid(where)}`,
     };
   }
 
@@ -979,6 +1176,7 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       ok: true,
       text: `Removed ${item.name}${removed.length ? `, and ${removed.join(", ")} on it` : ""}.`,
       place: next,
+      did: `removed ${item.name}`,
     };
   }
 
@@ -1003,11 +1201,17 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
     if (typeof spot === "string") return no(spot);
     const next = moveItem(place, item.id, spot);
     const moved = next.props.find((p) => p.id === item.id) as PlaceItem;
-    return { ok: true, text: `Moved ${say(moved, next)}.`, place: next };
+    return {
+      ok: true,
+      text: `Moved ${say(moved, next)}.`,
+      place: next,
+      did: hasPlacement(where) ? `moved ${moved.name}${whereSaid(where)}` : `turned ${moved.name}`,
+    };
   }
 
   // change
   const changes: string[] = [];
+  const did: string[] = [];
   let changed: PlaceItem = { ...item };
   const name = text(args.name);
   if (name) {
@@ -1019,6 +1223,7 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
     );
     if (item.kind === "sign") changed.label = signWords(name);
     changes.push(`it is now called ${changed.name}`);
+    did.push(`renamed ${item.name} ${changed.name}`);
   }
   const colorText = text(args.color);
   if (colorText) {
@@ -1026,6 +1231,7 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
     if (!color) return no(`"${colorText}" isn't a colour I know. Use a name like "navy" or "pale green", or #rrggbb.`);
     changed.color = color;
     changes.push(`it is ${colorText}`);
+    did.push(`made ${changed.name} ${colorText}`);
   }
   const scale = number(args.scale);
   if (scale !== undefined) {
@@ -1034,12 +1240,14 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
     changed.scale = scale;
     if (scale === 1) delete changed.scale;
     changes.push(`it is ${scale}× its normal size`);
+    did.push(`resized ${changed.name}`);
   }
   const size = KINDS[item.kind]?.shaped ? sizeFrom(args.size) : undefined;
   if (typeof size === "string") return no(size);
   if (size) {
     changed.size = size;
     changes.push(`it is ${size.join(" × ")} m`);
+    if (scale === undefined) did.push(`resized ${changed.name}`);
   }
   if (!changes.length) return no("Say what to change: name, color, scale, or size for a shape.");
   let next = withSpots({ ...place, props: place.props.map((p) => (p.id === item.id ? changed : p)) });
@@ -1072,7 +1280,7 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
   }
   const problems = placeProblems(next);
   if (problems.length) return no(`That doesn't work: ${problems[0]}`);
-  return { ok: true, text: `Changed ${changed.name}: ${changes.join(", ")}.`, place: next };
+  return { ok: true, text: `Changed ${changed.name}: ${changes.join(", ")}.`, place: next, did: did.join(" and ") };
 }
 
 // --------------------------------------------------------------------------
@@ -1084,7 +1292,7 @@ const fail = (error: string): ToolResult => ({ success: false, output: "", error
 export class PlaceTool implements Tool {
   name = "place";
   description =
-    "Look at or change the 3D room your body is in: add, move, restyle or remove things, resize and repaint the room, take a photo or selfie to send, or go to a shared place others can be in. Start with look.";
+    "Look at or change the 3D room your body is in: add, move, restyle or remove things, resize, repaint or theme the room, take a photo or selfie to send, or go to a shared place or the meeting room of a room you talk in. Start with look.";
   parameters = {
     type: "object",
     properties: {
@@ -1092,7 +1300,7 @@ export class PlaceTool implements Tool {
         type: "string",
         enum: [...ACTIONS],
         description:
-          "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor, area. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
+          "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor, name, theme, purpose, area. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
       },
       item: { type: "string", description: "move, change, remove: the thing, by name or id." },
       kind: { type: "string", description: "add: what to add, e.g. armchair, rug, bookshelf, lamp, vase, block." },
@@ -1126,7 +1334,13 @@ export class PlaceTool implements Tool {
       view: { type: "string", enum: ["room", "selfie"], description: "photo: the whole room, or a selfie." },
       at: { type: "string", description: "photo: where you are in it, a spot like the couch." },
       gesture: { type: "string", description: 'photo: a gesture to make, e.g. "wave".' },
-      to: { type: "string", description: 'go: "home", or a shared place by name.' },
+      to: { type: "string", description: 'go: "home", a shared place, or a room you talk in, by name.' },
+      theme: {
+        type: "string",
+        enum: [...THEMES.map((t) => t.id), NO_THEME],
+        description: "room: a look to dress it in. Chosen, it stays, whatever the room's name suggests.",
+      },
+      purpose: { type: "string", description: 'room: what it is for, in a line, e.g. "planning the Lisbon trip".' },
       area: {
         type: "string",
         description:
@@ -1141,7 +1355,14 @@ export class PlaceTool implements Tool {
     private readonly hasBody: (agent: string | undefined) => boolean,
     /** Takes a photo; without one, `photo` says photos aren't available. */
     private readonly camera?: (shot: Shot) => Promise<Buffer>,
+    /** The rooms agents talk in, each with a meeting room its members can go into and change. */
+    private readonly rooms: () => TalkRoom[] = () => [],
+    private readonly now: () => Date = () => new Date(),
   ) {}
+
+  private meetings(): Meetings {
+    return { rooms: this.rooms(), hasBody: this.hasBody };
+  }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     if (!this.hasBody(context.agentName)) return fail("You have no body, so there is no room of yours to change.");
@@ -1149,39 +1370,69 @@ export class PlaceTool implements Tool {
     const service = this.getService();
     const caller = agentStateCaller(context, "place");
     const action = text(args.action)?.toLowerCase();
+    const meetings = this.meetings();
     try {
       if (action === "photo") return await this.photo(args, context, agent);
-      if (action === "places") return { success: true, output: await this.places(service, caller, agent) };
-      if (action === "go") return await this.go(service, caller, agent, text(args.to) ?? text(args.name));
+      if (action === "places") return { success: true, output: await this.places(service, caller, agent, meetings) };
+      if (action === "go") return await this.go(service, caller, agent, text(args.to) ?? text(args.name), meetings);
       if (action === "new") return await this.open(service, caller, agent, text(args.name), text(args.area));
       if (action === "look") {
-        const { id, place } = await readCurrent(service, caller, agent);
-        const others = await whoIsIn(service, caller, id, this.hasBody, agent);
-        const where = id === homeId(agent) ? "You are at home." : `You are in ${place.name}, a shared place.`;
+        const { id, place } = await readCurrent(service, caller, agent, meetings);
+        const others = await whoIsIn(service, caller, id, this.hasBody, agent, meetings.rooms);
+        const talk = talkRoomOf(meetings.rooms, id);
+        const where =
+          id === homeId(agent)
+            ? "You are at home."
+            : talk
+              ? `You are in the meeting room of #${talk.name}, a room you talk in. Its members can change it.`
+              : `You are in ${place.name}, a shared place.`;
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
         const door = await hasDoor(service, id, place, this.hasBody);
-        return { success: true, output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${describe(place)}` };
+        const shown = describe(shownPurpose(place, talk));
+        return { success: true, output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${shown}` };
       }
       if (action === "undo") {
-        const { id } = await readCurrent(service, caller, agent);
+        const { id } = await readCurrent(service, caller, agent, meetings);
         const ref = { type: PLACE_TYPE, id };
-        const [last] = await service.history(caller, ref, { limit: 1 });
+        const [last] = await service.history(caller, ref, { limit: 1 }).catch(() => []);
+        // A meeting room's first change made its record: taking that back is the room as it was drawn.
+        if (last?.op === "create" && id.startsWith("room:") && !byPlugin(last.actor)) {
+          await service.delete(caller, ref);
+          return { success: true, output: "Undone: the meeting room is back as it was drawn for its room." };
+        }
         // The system giving an untouched home a newer room is not a change of anyone's to take back.
         if (!last?.before || last.op !== "update" || byPlugin(last.actor)) return fail("There's nothing to undo.");
-        await service.put(caller, { ...ref, data: last.before }, last.version);
+        const before = last.before as unknown as Place;
+        const undone = (last.after as unknown as Place | undefined)?.changes?.[0];
+        const what = undone && undone.at !== before.changes?.[0]?.at ? `took back "${undone.what}"` : "undid a change";
+        const data = withChange(before, { who: agent, what, at: this.now().toISOString() });
+        await service.put(caller, { ...ref, data: data as unknown as Record<string, unknown> }, last.version);
         return {
           success: true,
           output: `Undone: the room is back as it was before the last change by ${last.actor.name}.`,
         };
       }
       for (let attempt = 0; ; attempt++) {
-        const { id, place, version, scope } = await readCurrent(service, caller, agent);
-        const outcome = applyAction(place, args);
+        const { id, place, version, scope } = await readCurrent(service, caller, agent, meetings);
+        const talk = talkRoomOf(meetings.rooms, id);
+        if (talk && text(args.action)?.toLowerCase() === "room" && text(args.area))
+          return fail(
+            `A meeting room stays in the meeting rooms' wing of ${MAIN_NAME}, by the other rooms people talk in.`,
+          );
+        // A meeting room nobody has changed is drawn afresh in a theme, through and through.
+        const redraw =
+          talk && version === 0
+            ? (theme: string) => ({ ...drawMeeting(talk, this.hasBody, theme).place, name: place.name })
+            : undefined;
+        const outcome = applyAction(place, args, redraw ? { redraw } : {});
         if (!outcome.place) return outcome.ok ? { success: true, output: outcome.text } : fail(outcome.text);
+        const data = outcome.did
+          ? withChange(outcome.place, { who: agent, what: outcome.did, at: this.now().toISOString() })
+          : outcome.place;
         try {
           await service.put(
             caller,
-            { type: PLACE_TYPE, id, scope, data: outcome.place as unknown as Record<string, unknown> },
+            { type: PLACE_TYPE, id, scope, data: data as unknown as Record<string, unknown> },
             version,
           );
           return { success: true, output: outcome.text };
@@ -1198,13 +1449,16 @@ export class PlaceTool implements Tool {
   }
 
   /** Where it can go, and who is in each place. */
-  private async places(service: StateService, caller: StateCaller, agent: string): Promise<string> {
-    const here = await whereIs(service, caller, agent);
+  private async places(service: StateService, caller: StateCaller, agent: string, meetings: Meetings): Promise<string> {
+    const here = await whereIs(service, caller, agent, meetings.rooms);
     const shared = await sharedPlaces(service, caller);
-    const hereName = shared.find((p) => p.id === here)?.name;
+    const mine = meetings.rooms.filter((r) => r.members.includes(agent));
+    const meetingHere = mine.find((r) => roomPlaceId(r.ref) === here);
+    const hereName =
+      shared.find((p) => p.id === here)?.name ?? (meetingHere ? `the meeting room of #${meetingHere.name}` : undefined);
     const lines = [hereName ? `You are in ${hereName}.` : "You are at home.", "Places you can go:"];
     const describeOne = async (id: string, label: string) => {
-      const there = await whoIsIn(service, caller, id, this.hasBody, agent);
+      const there = await whoIsIn(service, caller, id, this.hasBody, agent, meetings.rooms);
       const mark = id === here ? " (you are here)" : "";
       lines.push(
         `- ${label}${mark}${there.length ? `: ${there.join(", ")} ${there.length > 1 ? "are" : "is"} there` : ""}`,
@@ -1216,18 +1470,21 @@ export class PlaceTool implements Tool {
         place.id,
         place.area && areaId(place.area) !== MAIN ? `${place.name} (in ${place.area})` : place.name,
       );
+    for (const room of mine)
+      await describeOne(roomPlaceId(room.ref), `#${room.name}, the meeting room of a room you talk in`);
     lines.push('Make a new shared place with action "new" and a name.');
     return lines.join("\n");
   }
 
-  /** Go home, or to a shared place. */
+  /** Go home, to a shared place, or to the meeting room of a room it talks in. */
   private async go(
     service: StateService,
     caller: StateCaller,
     agent: string,
     to: string | undefined,
+    meetings: Meetings,
   ): Promise<ToolResult> {
-    if (!to) return fail('Say where with `to`: "home", or a shared place by name. `places` lists them.');
+    if (!to) return fail('Say where with `to`: "home", a shared place, or a room you talk in. `places` lists them.');
     const ref = { type: WHEREABOUTS_TYPE, id: agent };
     if (/^(home|my room|your room|back home)$/i.test(to) || to === homeId(agent)) {
       if (await service.get(caller, ref)) await service.delete(caller, ref);
@@ -1237,13 +1494,38 @@ export class PlaceTool implements Tool {
     const shared = await sharedPlaces(service, caller);
     const wanted = slug(to);
     const place = shared.find((p) => p.id === to || p.id === `${SHARED}${wanted}` || slug(p.name) === wanted);
+    const talk = place
+      ? undefined
+      : meetings.rooms.find(
+          (r) =>
+            roomPlaceId(r.ref) === to ||
+            r.ref === to ||
+            slug(r.name) === wanted ||
+            `${slug(r.name)}-meeting-room` === wanted,
+        );
+    if (talk) {
+      if (!talk.members.includes(agent)) return fail(onlyMembers(talk, this.hasBody));
+      const id = roomPlaceId(talk.ref);
+      await service.put(caller, { ...ref, scope: "global", data: { place: id } });
+      await endVisit(service, agent);
+      const there = await whoIsIn(service, caller, id, this.hasBody, agent, meetings.rooms);
+      return {
+        success: true,
+        output: `You're in the meeting room of #${talk.name} now.${there.length ? ` Also here: ${there.join(", ")}.` : ""} Change it like your own room; its members see what you do.`,
+      };
+    }
     if (!place) {
-      const known = shared.map((p) => p.name).join(", ");
-      return fail(`There's no shared place called "${to}".${known ? ` There is: ${known}.` : ""} Make one with "new".`);
+      const known = [
+        ...shared.map((p) => p.name),
+        ...meetings.rooms.filter((r) => r.members.includes(agent)).map((r) => `#${r.name}`),
+      ].join(", ");
+      return fail(
+        `There's no place called "${to}".${known ? ` There is: ${known}.` : ""} Make a shared one with "new".`,
+      );
     }
     await service.put(caller, { ...ref, scope: "global", data: { place: place.id } });
     await endVisit(service, agent);
-    const there = await whoIsIn(service, caller, place.id, this.hasBody, agent);
+    const there = await whoIsIn(service, caller, place.id, this.hasBody, agent, meetings.rooms);
     return {
       success: true,
       output: `You're in ${place.name} now.${there.length ? ` Also here: ${there.join(", ")}.` : " Nobody else is here yet."}`,
@@ -1285,9 +1567,11 @@ export class PlaceTool implements Tool {
     const caller = agentStateCaller(context, "place");
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const { id, place, version, scope } = await readCurrent(service, caller, agent);
+        const { id, place, version, scope } = await readCurrent(service, caller, agent, this.meetings());
         const photos = [photo, ...(place.photos ?? [])].slice(0, PHOTOS_KEPT);
-        await service.put(caller, { type: PLACE_TYPE, id, scope, data: { ...place, photos } as never }, version);
+        const what = photo.what === "a selfie" ? "took a selfie" : "took a photo of the room";
+        const data = withChange({ ...place, photos }, { who: agent, what, at: photo.at });
+        await service.put(caller, { type: PLACE_TYPE, id, scope, data: data as never }, version);
         return;
       } catch (err) {
         if (!(err instanceof StateConflictError)) return;
@@ -1300,7 +1584,7 @@ export class PlaceTool implements Tool {
     if (!this.camera) return fail("Photos aren't available here.");
     const store = context.mediaStore;
     if (!store) return fail("There's nowhere to keep a photo (no media store), so none can be sent.");
-    const { place } = await readCurrent(this.getService(), agentStateCaller(context, "place"), agent);
+    const { place } = await readCurrent(this.getService(), agentStateCaller(context, "place"), agent, this.meetings());
     const view = text(args.view)?.toLowerCase() === "selfie" ? "selfie" : "room";
     const at = text(args.at);
     const spot = at ? findSpot(place, at) : undefined;
@@ -1319,7 +1603,7 @@ export class PlaceTool implements Tool {
     await this.hang(context, agent, {
       media: ref.id,
       what: view === "selfie" ? "a selfie" : place.name,
-      at: new Date().toISOString(),
+      at: this.now().toISOString(),
     });
     return {
       success: true,
@@ -1372,13 +1656,7 @@ const plugin: Plugin = (ctx) => {
     access: { write: ["user"] },
   });
 
-  ctx.tools.register("place", (config, tctx) => {
-    if (!anyAvatar(config) || !tctx.getStateService) return [];
-    return [new PlaceTool(tctx.getStateService, hasBody, (shot) => camera.take(shot))];
-  });
-
-  // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
-  // `map`, `scene/:id` and `transcript/:id` go first, so they aren't read as an agent's name.
+  // The rooms agents talk in, with their members: each has a meeting room, which its members can change.
   const talkRooms = (): TalkRoom[] => {
     const store = runtime.getRoomStore();
     return store.listRooms().map((r) => {
@@ -1391,6 +1669,14 @@ const plugin: Plugin = (ctx) => {
       };
     });
   };
+
+  ctx.tools.register("place", (config, tctx) => {
+    if (!anyAvatar(config) || !tctx.getStateService) return [];
+    return [new PlaceTool(tctx.getStateService, hasBody, (shot) => camera.take(shot), talkRooms)];
+  });
+
+  // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
+  // `map`, `scene/:id` and `transcript/:id` go first, so they aren't read as an agent's name.
   const agentNames = () => ["default", ...Object.keys(runtime.getConfig().agents ?? {}).filter((a) => a !== "default")];
   // Who is who in a room, rebuilt per read so a config reload takes effect at once: the same as the watcher's.
   const identities = () => {
@@ -1479,33 +1765,112 @@ const plugin: Plugin = (ctx) => {
       const agent = req.params.agent || "default";
       if (!hasBody(agent)) return { status: 404, json: { error: `${agent} has no avatar, so no room.` } };
       const service = runtime.getStateService();
-      const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent);
+      const rooms = talkRooms();
+      const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody });
       // Everyone else whose body is here, with what the page needs to draw them.
-      const company = (await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent)).map(bodyOf);
-      const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), talkRooms(), hasBody);
+      const company = (await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent, rooms)).map(bodyOf);
+      const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const doors = doorsIn(id, place, world);
       return { json: { type: PLACE_TYPE, id, version, place, company, doors, area: world.areaOf.get(id) ?? MAIN } };
     },
   });
 
+  // What the plugin leaves running, each stopped when it is unloaded.
+  const stops: (() => void)[] = [];
+  const cfg = (ctx.config ?? {}) as { quietMinutes?: number; tend?: unknown };
+
   // Bodies go where the talk is: to a room's meeting room while they talk there, home after a quiet spell.
-  const cfg = (ctx.config ?? {}) as { quietMinutes?: number };
-  const quiet = typeof cfg.quietMinutes === "number" ? cfg.quietMinutes : QUIET_MINUTES;
-  if (quiet <= 0) return;
-  const presence = new Presence({ state: () => runtime.getStateService(), hasBody, quietMs: quiet * 60_000 });
-  const subs = [
-    ctx.events.on("room.woke", (e) => void presence.stay(e.agent, e.roomRef)),
-    ctx.events.on("room.message", (e) => {
-      // Only an agent has a body to go with; a label that isn't an agent's name is a person.
-      if (e.speaker && agentNames().includes(e.speaker)) void presence.visit(e.speaker, e.roomRef);
-    }),
-  ];
-  void presence.sweep();
-  const timer = setInterval(() => void presence.sweep(), SWEEP_MS);
-  timer.unref?.();
+  const quietMinutes = typeof cfg.quietMinutes === "number" ? cfg.quietMinutes : QUIET_MINUTES;
+  if (quietMinutes > 0) {
+    const presence = new Presence({ state: () => runtime.getStateService(), hasBody, quietMs: quietMinutes * 60_000 });
+    const subs = [
+      ctx.events.on("room.woke", (e) => void presence.stay(e.agent, e.roomRef)),
+      ctx.events.on("room.message", (e) => {
+        // Only an agent has a body to go with; a label that isn't an agent's name is a person.
+        if (e.speaker && agentNames().includes(e.speaker)) void presence.visit(e.speaker, e.roomRef);
+      }),
+    ];
+    void presence.sweep();
+    const timer = setInterval(() => void presence.sweep(), SWEEP_MS);
+    timer.unref?.();
+    stops.push(() => {
+      clearInterval(timer);
+      for (const sub of subs) sub.dispose();
+    });
+  }
+
+  // Now and then, agents look at their rooms in the light of what they've been doing (`places-tend.ts`). Off unless set.
+  const tend = parseTend(cfg.tend);
+  if (typeof tend === "string") console.warn(`[places] tend is off: ${tend}`);
+  if (tend && typeof tend !== "string") {
+    const resolve = (agent: string) =>
+      resolveAgent(
+        agent === "default" ? undefined : agent,
+        runtime.getConfig(),
+        runtime.getResolvableTools(),
+        undefined,
+        runtime.contextDir,
+        undefined,
+        runtime.buildResolveOptions(),
+      );
+    if (tend.agents !== "all")
+      for (const agent of tend.agents)
+        if (!hasBody(agent)) console.warn(`[places] ${agent} is set to tend its room, but has no body, so no room.`);
+    const tender = new Tender({
+      settings: tend,
+      agents: () => agentNames().filter((a) => hasBody(a)),
+      unready: (agent) => {
+        // The switches that put an agent to sleep in the world: the global pause, and an online agent's own.
+        const online = agent !== "default" && !!runtime.getConfig().agents?.[agent]?.online?.enabled;
+        const asleep = whyAsleep({
+          paused: runtime.isAgentsPaused("autonomous"),
+          own: online ? getExploratoryState(runtime.db, agent) : null,
+          now: new Date(),
+        });
+        if (asleep) return asleep;
+        return resolve(agent).tools.some((t) => t.name === "place")
+          ? null
+          : "it has no place tool (name place in its tools)";
+      },
+      tend: async (agent, since) => {
+        const rooms = talkRooms();
+        const mine = rooms.filter((r) => r.members.includes(agent));
+        const key = `tend:${agent}`;
+        let tasks: ReturnType<AgentRuntime["getTaskBackend"]> | undefined;
+        try {
+          tasks = runtime.getTaskBackend();
+        } catch {
+          // No task backend to ask: the summary goes without tasks.
+        }
+        const done = await gatherDone({ db: runtime.db, agent, since, rooms: mine, tasks, skip: key });
+        if (quiet(done)) return "quiet";
+        const service = runtime.getStateService();
+        const { place } = await readHome(service, PLUGIN_CALLER, agent);
+        const here = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody });
+        const talk = talkRoomOf(rooms, here.id);
+        const away =
+          here.id === homeId(agent) ? undefined : talk ? `the meeting room of #${talk.name}` : here.place.name;
+        const message = tendMessage({
+          every: everyWords(tend.everyMs),
+          done,
+          room: describe(place),
+          ...(away ? { away } : {}),
+          meetings: mine.map((r) => r.name),
+        });
+        const resolved = resolve(agent);
+        const session = findOrCreateSession(runtime.db, key, resolved.model, resolved.provider);
+        await runAgentLoop(
+          message,
+          runtime.buildLoopOptions({ session, ...(agent === "default" ? {} : { agentName: agent }) }),
+        );
+        return "woken";
+      },
+    });
+    tender.start();
+    stops.push(() => tender.stop());
+  }
   return () => {
-    clearInterval(timer);
-    for (const sub of subs) sub.dispose();
+    for (const stop of stops) stop();
   };
 };
 

@@ -105,6 +105,8 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       store.setSelectedAgent(name === "default" ? "" : name);
     },
     onDraft: (name, text) => {
+      // A message written for someone is a chat with them, out of a meeting room's own conversation too.
+      setReading(false);
       store.setSelectedAgent(name === "default" ? "" : name, { fresh: true });
       setInput(text);
       setPanelOpen(true);

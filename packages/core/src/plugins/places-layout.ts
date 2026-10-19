@@ -81,7 +81,27 @@ export interface Place {
    * are joined by doors, and areas by the map. None is the main building.
    */
   area?: string;
+  /** The look it was dressed in, by id (`THEMES` in `places-rooms.ts`), or "none" for plain. Chosen beats guessed. */
+  theme?: string;
+  /** What it is for, in a line: shown on the map and to whoever looks round it. */
+  purpose?: string;
+  /** What was done to it lately with the `place` tool, newest first: who, what, when. */
+  changes?: PlaceChange[];
 }
+
+/** One change to a place, as the room's recent changes list it: "planner added the bookshelf". */
+export interface PlaceChange {
+  /** The agent that made it. */
+  who: string;
+  /** What it did, in a few words that follow its name: "added the bookshelf by the window". */
+  what: string;
+  at: string;
+}
+
+/** Changes a place remembers: enough for a glance at who has been at it lately. */
+export const CHANGES_KEPT = 8;
+/** The most a recorded change says, in characters: it is a glance, and the agent's own words can run long. */
+export const CHANGE_LENGTH = 160;
 
 /** A photo taken in a place, kept in the media store. */
 export interface PlacePhoto {
@@ -1499,6 +1519,16 @@ function sizeWords(item: PlaceItem): string {
 export function describe(place: Place): string {
   const lines = [
     `${place.name}: ${place.width} m wide, ${place.depth} m deep, ${place.height} m high, ${place.walls ?? "plain"} walls, ${place.floor ?? "wood"} floor${place.floorColor ? ` (${place.floorColor})` : ""}. The back and left walls are solid; the front and right sides are open to the viewer.`,
+    ...(place.purpose ? [`It is for: ${place.purpose}`] : []),
+    ...(place.theme ? [`Its theme: ${place.theme === "none" ? "none, plain" : place.theme}.`] : []),
+    ...(place.changes?.length
+      ? [
+          `Lately: ${place.changes
+            .slice(0, 3)
+            .map((c) => `${c.who} ${c.what}`)
+            .join("; ")}.`,
+        ]
+      : []),
     "",
     "Things (id: name, where):",
     ...place.props.map(
@@ -1544,6 +1574,21 @@ export const PLACE_SCHEMA = {
     floorColor: { type: "string", pattern: "^#[0-9a-f]{6}$" },
     start: { type: "string" },
     area: { type: "string", maxLength: 60 },
+    theme: { type: "string", maxLength: 40 },
+    purpose: { type: "string", maxLength: 160 },
+    changes: {
+      type: "array",
+      maxItems: CHANGES_KEPT,
+      items: {
+        type: "object",
+        required: ["who", "what", "at"],
+        properties: {
+          who: { type: "string", maxLength: 80 },
+          what: { type: "string", maxLength: CHANGE_LENGTH },
+          at: { type: "string" },
+        },
+      },
+    },
     photos: {
       type: "array",
       maxItems: PHOTOS_KEPT,

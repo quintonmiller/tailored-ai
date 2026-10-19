@@ -13,6 +13,8 @@ import {
   bodyAt,
   buildWorld,
   homeId,
+  mayChange,
+  onlyMembers,
   PLACE_TYPE,
   PlaceTool,
   Presence,
@@ -28,14 +30,19 @@ import {
   WHEREABOUTS_TYPE,
   whereIs,
   whoIsIn,
+  withChange,
   worldMap,
 } from "../plugins/places.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
+  CHANGE_LENGTH,
+  CHANGES_KEPT,
+  describe as describeRoom,
   doorOf,
   doorProblems,
   findPlacement,
   firstHome,
+  PLACE_SCHEMA,
   type Place,
   type PlaceItem,
   parseColor,
@@ -43,7 +50,18 @@ import {
   resize,
   spotOf,
 } from "../plugins/places-layout.js";
-import { homePlace, LOBBY, lobby, meetingRoom, sharedPlace, THEMES, themeFor } from "../plugins/places-rooms.js";
+import {
+  homePlace,
+  LOBBY,
+  lobby,
+  meetingRoom,
+  NO_THEME,
+  retheme,
+  sharedPlace,
+  THEMES,
+  themeFor,
+  themeNamed,
+} from "../plugins/places-rooms.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { RoomStore } from "../rooms/store.js";
@@ -531,7 +549,7 @@ describe("shared places", () => {
   it("says why when it can't go somewhere or make a place twice", async () => {
     await tool.execute({ action: "new", name: "lounge" }, as("host"));
     expect((await tool.execute({ action: "go", to: "the attic" }, as("guest"))).error).toMatch(
-      /no shared place called "the attic". There is: the lounge/,
+      /no place called "the attic". There is: the lounge/,
     );
     expect((await tool.execute({ action: "new", name: "Lounge" }, as("guest"))).error).toMatch(/already a place/);
   });
@@ -668,13 +686,20 @@ describe("bodies going where the talk is", () => {
     expect(await bodyAt(state, owner, "host")).toBe("shared:lounge");
   });
 
-  it("never keeps a body in a meeting room on whereabouts alone", async () => {
+  it("keeps a body in a meeting room on whereabouts only for a member of its room", async () => {
+    // host went in to change it; other, who isn't a member, has whereabouts naming it all the same.
     await state.put(owner, { type: WHEREABOUTS_TYPE, id: "host", scope: "global", data: { place: trip } });
+    await state.put(owner, { type: WHEREABOUTS_TYPE, id: "other", scope: "global", data: { place: trip } });
+    expect(await bodyAt(state, owner, "host", rooms)).toBe(trip);
+    expect(await bodyAt(state, owner, "other", rooms)).toBe(homeId("other"));
+    expect(await whoIsIn(state, owner, trip, hasBody, undefined, rooms)).toEqual(["host"]);
+    const map = await worldMap(state, owner, ["host", "guest", "other"], rooms, hasBody);
+    expect(map.find((p) => p.id === trip)?.agents).toEqual(["host"]);
+    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual([]);
+    expect(map.find((p) => p.id === homeId("other"))?.agents).toEqual(["other"]);
+    // Without the rooms to check membership against, nobody is kept there on whereabouts.
     expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
     expect(await whoIsIn(state, owner, trip, hasBody)).toEqual([]);
-    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
-    expect(map.find((p) => p.id === trip)?.agents).toEqual([]);
-    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual(["host"]);
   });
 
   it("reads a visit's end from its record alone", () => {
@@ -1082,6 +1107,334 @@ describe("homes made before rooms were drawn from a seed", () => {
     });
     await other.put(owner, { ...ref, scope: "agent:assistant", data: firstHome("assistant's room") as never });
     expect((await readHome(other, owner, "assistant")).place).toEqual(firstHome("assistant's room"));
+  });
+});
+
+describe("meeting rooms its members can change", () => {
+  const types = [
+    { name: PLACE_TYPE, scope: "agent" as const },
+    { name: WHEREABOUTS_TYPE, scope: "global" as const },
+  ];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const bodies = new Set(["host", "guest", "other"]);
+  const hasBody = (agent: string | undefined) => bodies.has(agent ?? "default");
+  const id = roomPlaceId("local:trip");
+  let rooms: { ref: string; name: string; purpose?: string; members: string[] }[];
+  let state: StateService;
+  let tool: PlaceTool;
+  const as = (agentName: string) => ({ agentName }) as ToolContext;
+  const kept = async () => (await state.get(owner, { type: PLACE_TYPE, id }))?.data as unknown as Place | undefined;
+  beforeEach(() => {
+    rooms = [{ ref: "local:trip", name: "trip", purpose: "Plan the trip", members: ["host", "guest", "nobody"] }];
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    tool = new PlaceTool(
+      () => state,
+      hasBody,
+      undefined,
+      () => rooms,
+    );
+  });
+
+  it("lets only a home's owner, a room's members, and anyone in a shared place change them", () => {
+    expect(mayChange(homeId("host"), "host", rooms)).toBe(true);
+    expect(mayChange(homeId("host"), "guest", rooms)).toBe(false);
+    expect(mayChange(id, "guest", rooms)).toBe(true);
+    expect(mayChange(id, "other", rooms)).toBe(false);
+    expect(mayChange(roomPlaceId("local:gone"), "host", rooms)).toBe(false);
+    expect(mayChange("shared:lounge", "other", rooms)).toBe(true);
+    expect(mayChange(LOBBY, "host", rooms)).toBe(false);
+    expect(mayChange("hall:main:homes-1", "host", rooms)).toBe(false);
+  });
+
+  it("turns a non-member away, saying who can go in", async () => {
+    const refused = await tool.execute({ action: "go", to: "#trip" }, as("other"));
+    expect(refused.success).toBe(false);
+    expect(refused.error).toMatch(/guest and host can go in and change it/);
+    expect(onlyMembers(rooms[0], hasBody)).not.toMatch(/nobody/);
+    expect(await whereIs(state, owner, "other", rooms)).toBe(homeId("other"));
+  });
+
+  it("is drawn from its room until a member changes it, and kept as they left it from then on", async () => {
+    const drawn = (await scene(state, owner, id, rooms, hasBody))?.place as Place;
+    expect(await kept()).toBeUndefined();
+    const went = await tool.execute({ action: "go", to: "trip" }, as("host"));
+    expect(went.success, went.error).toBe(true);
+    expect(String(went.output)).toMatch(/meeting room of #trip/);
+    expect(await whereIs(state, owner, "host", rooms)).toBe(id);
+    // Out of its home while it is there, on the map and in the home itself.
+    expect((await scene(state, owner, homeId("host"), rooms, hasBody))?.agents).toEqual([]);
+    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual([]);
+    // Only who is there now: guest is a member, but hasn't come in.
+    const looked = String((await tool.execute({ action: "look" }, as("host"))).output);
+    expect(looked).toMatch(/meeting room of #trip, a room you talk in/);
+    expect(looked).not.toMatch(/Also here/);
+    // Going there changes nothing: the room is still the one drawn for it.
+    expect(await kept()).toBeUndefined();
+
+    const added = await tool.execute({ action: "add", kind: "aquarium", name: "the fish tank" }, as("host"));
+    expect(added.success, added.error).toBe(true);
+    const record = await state.get(owner, { type: PLACE_TYPE, id });
+    expect(record?.scope).toBe("global");
+    expect(record?.updatedBy).toEqual({ kind: "agent", name: "host" });
+    const place = record?.data as unknown as Place;
+    expect(place.props.length).toBe(drawn.props.length + 1);
+    // Its home is untouched.
+    expect((await readHome(state, owner, "host")).place.props.some((p) => p.id === place.props.at(-1)?.id)).toBe(false);
+
+    // Drawn from the record now, with whoever is in it and its doors, even when the room gains a member.
+    rooms[0].members.push("other");
+    const world = await buildWorld(state, owner, ["host", "guest", "other"], rooms, hasBody);
+    const now = await scene(state, owner, id, rooms, hasBody, world);
+    expect(now?.place).toEqual({ ...place, purpose: "Plan the trip" });
+    expect(now?.agents).toEqual(["host"]);
+    expect(now?.doors.length).toBeGreaterThan(0);
+    expect(doorProblems(now?.place as Place, now?.doors ?? [])).toEqual([]);
+
+    // Another member works from what the first left.
+    await tool.execute({ action: "go", to: "trip" }, as("guest"));
+    const more = await tool.execute({ action: "add", kind: "cactus" }, as("guest"));
+    expect(more.success, more.error).toBe(true);
+    const both = (await kept()) as Place;
+    expect(both.props.length).toBe(drawn.props.length + 2);
+    expect(both.changes?.map((c) => c.who)).toEqual(["guest", "host"]);
+  });
+
+  it("says what it is for, as the map does: its members' word, or else its room's own, never kept for it", async () => {
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.purpose).toBe("Plan the trip");
+    await tool.execute({ action: "go", to: "trip" }, as("host"));
+    expect(String((await tool.execute({ action: "look" }, as("host"))).output)).toMatch(/It is for: Plan the trip/);
+    await tool.execute({ action: "add", kind: "plant" }, as("host"));
+    // Kept, but without the room's purpose: a room that says something else later is read afresh.
+    expect((await kept())?.purpose).toBeUndefined();
+    rooms[0].purpose = "Plan the trip to Porto";
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.purpose).toBe("Plan the trip to Porto");
+    await tool.execute({ action: "room", purpose: "packing lists" }, as("host"));
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.purpose).toBe("packing lists");
+    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(map.find((p) => p.id === id)?.purpose).toBe("packing lists");
+  });
+
+  it("takes back the first change by going back to the room as drawn", async () => {
+    await tool.execute({ action: "go", to: "trip" }, as("host"));
+    await tool.execute({ action: "add", kind: "aquarium", name: "the fish tank" }, as("host"));
+    expect(await kept()).toBeDefined();
+    const undone = await tool.execute({ action: "undo" }, as("host"));
+    expect(undone.success, undone.error).toBe(true);
+    expect(await kept()).toBeUndefined();
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.props.some((p) => p.name === "the fish tank")).toBe(
+      false,
+    );
+  });
+
+  it("sends a member who has left the room home, and keeps the meeting room in its wing", async () => {
+    await tool.execute({ action: "go", to: "trip" }, as("guest"));
+    const moved = await tool.execute({ action: "room", area: "the summer house" }, as("guest"));
+    expect(moved.success).toBe(false);
+    expect(moved.error).toMatch(/meeting rooms' wing/);
+    rooms[0].members = ["host"];
+    expect(await whereIs(state, owner, "guest", rooms)).toBe(homeId("guest"));
+    expect((await readCurrent(state, owner, "guest", { rooms, hasBody })).id).toBe(homeId("guest"));
+  });
+
+  it("lists the meeting rooms an agent can go to with the places it knows", async () => {
+    await tool.execute({ action: "go", to: "trip" }, as("guest"));
+    const listed = String((await tool.execute({ action: "places" }, as("host"))).output);
+    expect(listed).toMatch(/#trip, the meeting room of a room you talk in: guest is there/);
+    expect(String((await tool.execute({ action: "places" }, as("other"))).output)).not.toMatch(/#trip/);
+  });
+});
+
+describe("a theme and a purpose, by choice", () => {
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const palettes = (id: string) => THEMES.find((t) => t.id === id)?.palettes ?? [];
+  const paint = (p: Place) => ({
+    walls: p.walls,
+    floor: p.floor,
+    ...(p.floorColor ? { floorColor: p.floorColor } : {}),
+  });
+
+  it("reads a theme from its id, its words, or none", () => {
+    expect(themeNamed("Beach")).toMatchObject({ id: "beach" });
+    expect(themeNamed("the seaside")).toMatchObject({ id: "beach" });
+    expect(themeNamed("library")).toMatchObject({ id: "library" });
+    expect(themeNamed("none")).toBe(NO_THEME);
+    expect(themeNamed("plain")).toBe(NO_THEME);
+    expect(themeNamed("disco")).toBeUndefined();
+  });
+
+  it("dresses a meeting room in the theme chosen for it, whatever its name says", () => {
+    const guessed = meetingRoom("summer", 4, "Plan the family vacation");
+    expect(guessed.theme).toBe("beach");
+    const chosen = meetingRoom("summer", 4, "Plan the family vacation", "tavern");
+    expect(chosen.theme).toBe("tavern");
+    expect(palettes("tavern")).toContainEqual(paint(chosen));
+    expect(chosen.props.some((p) => p.kind === "palm" || p.kind === "umbrella")).toBe(false);
+    expect(chosen.props.some((p) => p.kind === "candle")).toBe(true);
+    const plain = meetingRoom("summer", 4, "Plan the family vacation", NO_THEME);
+    expect(plain.theme).toBe(NO_THEME);
+    expect(plain.props.some((p) => p.kind === "palm" || p.kind === "umbrella")).toBe(false);
+    for (const room of [chosen, plain]) expect(placeProblems(room)).toEqual([]);
+    // A room nobody chose for, that its words don't dress, says nothing about a theme.
+    expect(meetingRoom("standup", 3).theme).toBeUndefined();
+  });
+
+  it("repaints a room someone furnished in the theme, adds the one thing that says it, and moves nothing", () => {
+    const home = homePlace("home:host", "host's room", "study");
+    const { place, added } = retheme(home, themeNamed("beach") as (typeof THEMES)[number]);
+    expect(place.theme).toBe("beach");
+    expect(palettes("beach")).toContainEqual(paint(place));
+    expect(added?.kind).toBe("palm");
+    expect(placeProblems(place)).toEqual([]);
+    for (const before of home.props) expect(place.props.find((p) => p.id === before.id)?.at).toEqual(before.at);
+    const plain = retheme(place, NO_THEME);
+    expect(plain.place.theme).toBe(NO_THEME);
+    expect(plain.added).toBeUndefined();
+  });
+
+  it("sets a theme, a purpose and a name with the room action, and refuses a theme there isn't", () => {
+    const home = homePlace("home:host", "host's room");
+    const themed = applyAction(home, {
+      action: "room",
+      theme: "library",
+      purpose: "reading up on Lisbon",
+      name: "the den",
+    });
+    expect(themed.ok, themed.text).toBe(true);
+    expect(themed.place).toMatchObject({ theme: "library", purpose: "reading up on Lisbon", name: "the den" });
+    expect(themed.did).toBe("gave it the library theme, named it the den, made it a place for reading up on Lisbon");
+    expect(describeRoom(themed.place as Place)).toMatch(/It is for: reading up on Lisbon\nIts theme: library\./);
+    const cleared = applyAction(themed.place as Place, { action: "room", purpose: "none" });
+    expect(cleared.place?.purpose).toBeUndefined();
+    const refused = applyAction(home, { action: "room", theme: "disco" });
+    expect(refused.ok).toBe(false);
+    expect(refused.text).toMatch(/isn't a theme. The themes are beach, tavern, studio, workshop, library, or none/);
+  });
+
+  it("draws an untouched meeting room again in a chosen theme, and keeps it so: the guess never comes back", async () => {
+    const types = [
+      { name: PLACE_TYPE, scope: "agent" as const },
+      { name: WHEREABOUTS_TYPE, scope: "global" as const },
+    ];
+    const state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    const rooms = [
+      { ref: "local:summer", name: "summer", purpose: "Plan the family vacation", members: ["host", "guest"] },
+    ];
+    const hasBody = (a: string | undefined) => a === "host" || a === "guest";
+    const tool = new PlaceTool(
+      () => state,
+      hasBody,
+      undefined,
+      () => rooms,
+    );
+    const id = roomPlaceId("local:summer");
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.theme).toBe("beach");
+    await tool.execute({ action: "go", to: "summer" }, { agentName: "host" } as ToolContext);
+    const done = await tool.execute({ action: "room", theme: "studio", purpose: "recording the trip podcast" }, {
+      agentName: "host",
+    } as ToolContext);
+    expect(done.success, done.error).toBe(true);
+    const shown = (await scene(state, owner, id, rooms, hasBody))?.place as Place;
+    expect(shown).toMatchObject({ theme: "studio", purpose: "recording the trip podcast", name: "summer" });
+    expect(palettes("studio")).toContainEqual(paint(shown));
+    expect(shown.props.some((p) => p.kind === "palm" || p.kind === "umbrella")).toBe(false);
+    expect(shown.props.some((p) => p.kind === "easel")).toBe(true);
+    // The map says what its members say it is for.
+    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(map.find((p) => p.id === id)?.purpose).toBe("recording the trip podcast");
+  });
+});
+
+describe("what was done to a room lately", () => {
+  const types = [{ name: PLACE_TYPE, scope: "agent" as const }];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  let state: StateService;
+  let clock: number;
+  let tool: PlaceTool;
+  const as = { agentName: "assistant" } as ToolContext;
+  beforeEach(() => {
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    clock = Date.parse("2026-10-19T09:00:00Z");
+    tool = new PlaceTool(
+      () => state,
+      (a) => a === "assistant",
+      undefined,
+      () => [],
+      () => new Date((clock += 60_000)),
+    );
+  });
+  const changes = async () => (await readHome(state, owner, "assistant")).place.changes ?? [];
+
+  it("keeps who did what and when, newest first, in a few words", async () => {
+    await tool.execute({ action: "add", kind: "beanbag", name: "the reading beanbag", near: "the bookshelf" }, as);
+    await tool.execute({ action: "room", walls: "sage" }, as);
+    await tool.execute({ action: "change", item: "the reading beanbag", color: "teal" }, as);
+    await tool.execute({ action: "remove", item: "the reading beanbag" }, as);
+    await tool.execute({ action: "look" }, as);
+    expect((await changes()).map((c) => `${c.who} ${c.what}`)).toEqual([
+      "assistant removed the reading beanbag",
+      "assistant made the reading beanbag teal",
+      "assistant painted the walls sage",
+      "assistant added the reading beanbag by the bookshelf",
+    ]);
+    expect((await changes()).map((c) => c.at)).toEqual([
+      "2026-10-19T09:04:00.000Z",
+      "2026-10-19T09:03:00.000Z",
+      "2026-10-19T09:02:00.000Z",
+      "2026-10-19T09:01:00.000Z",
+    ]);
+    expect(String((await tool.execute({ action: "look" }, as)).output)).toMatch(
+      /Lately: assistant removed the reading beanbag; assistant made the reading beanbag teal; assistant painted the walls sage\./,
+    );
+  });
+
+  it("keeps only the last few, and an undo says what it took back", async () => {
+    for (let i = 0; i < CHANGES_KEPT + 2; i++)
+      await tool.execute({ action: "room", walls: i % 2 ? "sage" : "navy" }, as);
+    expect(await changes()).toHaveLength(CHANGES_KEPT);
+    await tool.execute({ action: "add", kind: "plant", name: "the fern", corner: "front right" }, as);
+    await tool.execute({ action: "undo" }, as);
+    const [last, before] = await changes();
+    expect(last.what).toBe('took back "added the fern in the front right corner"');
+    expect(before.what).toBe("painted the walls sage");
+    const place = (await readHome(state, owner, "assistant")).place;
+    expect(withChange(place, { who: "planner", what: "added a lamp", at: "x" }).changes?.[0].who).toBe("planner");
+  });
+
+  it("cuts a change short to fit, so a long purpose or name, or undoing a long change, still works", async () => {
+    // The schema the plugin registers, which caps what a change says.
+    state = new StateService({
+      getConfig: () => ({
+        state: { backend: "sqlite", types: [{ name: PLACE_TYPE, scope: "agent", schema: PLACE_SCHEMA as never }] },
+      }),
+      db: new Database(":memory:"),
+    });
+    const purpose = "reading up on the old town, its trams and its tiles, ".repeat(3).slice(0, 140);
+    const set = await tool.execute({ action: "room", theme: "library", purpose, name: "n".repeat(120) }, as);
+    expect(set.success, set.error).toBe(true);
+    const [made] = await changes();
+    expect(made.what).toHaveLength(CHANGE_LENGTH);
+    expect(made.what).toMatch(/^gave it the library theme, named it n{80}, made it a place for reading up/);
+    expect(made.what.endsWith("…")).toBe(true);
+    // Taking back a change as long as one can be: the undo's own words go over, and are cut short too.
+    const undone = await tool.execute({ action: "undo" }, as);
+    expect(undone.success, undone.error).toBe(true);
+    const [took] = await changes();
+    expect(took.what).toMatch(/^took back "gave it the library theme/);
+    expect(took.what).toHaveLength(CHANGE_LENGTH);
+    expect(
+      withChange((await readHome(state, owner, "assistant")).place, { who: "a", what: "short", at: "x" }).changes?.[0]
+        .what,
+    ).toBe("short");
   });
 });
 

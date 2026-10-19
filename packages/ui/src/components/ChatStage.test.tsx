@@ -1078,6 +1078,7 @@ describe("the chat page's scene", () => {
     expect(buttonsIn(".world-agent-actions").map((b) => b.textContent)).toEqual([
       "Chat with planner",
       "Go to it",
+      "Redo its room",
       "Pause for 4 hours",
     ]);
     await press(buttonsIn(".world-agent-actions"), "Pause for 4 hours");
@@ -1087,6 +1088,40 @@ describe("the chat page's scene", () => {
     await settle();
     expect(container.querySelector(".world-list-panel .world-panel-title")?.textContent).toBe("planner's tasks");
     expect([...container.querySelectorAll(".world-list-title")].map((r) => r.textContent)).toEqual(["Pack"]);
+  });
+
+  it("shows what an agent just did to the room over its head, and every change on the room's card", async () => {
+    await render();
+    await settle(60);
+    const at = new Date().toISOString();
+    const changed = {
+      ...home,
+      purpose: "planning trips",
+      changes: [{ who: "talker", what: "added the fish tank", at }],
+    };
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "place", id: "home:talker", op: "update", after: changed }),
+    );
+    await settle();
+    expect(stage.speech.at(-1)?.talker).toEqual({ text: "Added the fish tank.", at });
+    await press(buttonsIn(".talk-tools"), "Room");
+    const card = container.querySelector(".world-place") as HTMLElement;
+    expect(card.textContent).toMatch(/planning trips/);
+    expect([...card.querySelectorAll(".world-changes li")].map((li) => li.textContent)).toEqual([
+      "talker added the fish tankjust now",
+    ]);
+    await press(buttonsIn(".world-place"), "Ask talker to make it fit its work");
+    expect(drafts.at(-1)).toEqual(["talker", expect.stringMatching(/reflect what you've been working on/)]);
+  });
+
+  it("offers to have an agent redo its room only when it has the place tool", async () => {
+    agentsInfo = { planner: { tools: ["read", "room"] } as never };
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    expect(buttonsIn(".world-agent-actions").map((b) => b.textContent)).not.toContain("Redo its room");
   });
 
   it("says on an agent's card when every agent is paused, and that a task calls one only with the watcher on", async () => {
