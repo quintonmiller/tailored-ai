@@ -17,7 +17,10 @@ const stage = vi.hoisted(() => ({
     input: StageInput;
     animations?: string[];
     chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown>;
+    onPick?: (agent: string, at: { x: number; y: number }) => void;
   }[],
+  /** What the stage was told each agent last said, each time. */
+  speech: [] as Record<string, { text: string; at: string }>[],
   cues: [] as string[],
   insets: [] as number[],
   /** Every room the stage was shown, first to last. */
@@ -40,9 +43,10 @@ vi.mock("../avatar/stage", () => ({
       animations?: string[];
       chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown>;
       agent?: string;
+      onPick?: (agent: string, at: { x: number; y: number }) => void;
     },
   ) => {
-    stage.calls.push({ url, input, animations: opts.animations, chooseIdle: opts.chooseIdle });
+    stage.calls.push({ url, input, animations: opts.animations, chooseIdle: opts.chooseIdle, onPick: opts.onPick });
     stage.agents.push(opts.agent);
     stage.mounted++;
     return {
@@ -54,6 +58,7 @@ vi.mock("../avatar/stage", () => ({
       setRoom: (room: { name?: string; props: { name: string }[] }) => stage.rooms.push(room),
       setCompany: (company: { agent: string }[]) => stage.company.push(company.map((c) => c.agent)),
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
+      setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
     };
   },
@@ -80,6 +85,12 @@ class FakeEventSource {
 /** Where the agent is, and who else is there with a body, as the server says. */
 let placeId = "home:talker";
 let company: { agent: string; name: string; avatar: string; animations: string[] }[] = [];
+/** The agents as configured: which run on their own. */
+let agentsInfo: Record<string, { online?: { enabled?: boolean } }> = {};
+/** The last thing each agent said, as the server's speech records say. */
+let speechRecords: { id: string; data: { agent: string; text: string; at: string } }[] = [];
+/** Agents the page was asked to switch to. */
+const chattedWith: string[] = [];
 /** What every agent is doing, as the server's activity records say. */
 let activityRecords: { id: string; data: { agent: string; doing: string; what: string } }[] = [];
 
@@ -163,6 +174,10 @@ beforeEach(() => {
   stage.rooms.length = 0;
   stage.company.length = 0;
   stage.activities.length = 0;
+  stage.speech.length = 0;
+  chattedWith.length = 0;
+  agentsInfo = {};
+  speechRecords = [];
   stage.agents.length = 0;
   activityRecords = [];
   placeId = "home:talker";
@@ -206,6 +221,12 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith("/api/live?")) return new Response(JSON.stringify(liveInfo));
       if (url.startsWith("/api/state/activity")) return new Response(JSON.stringify({ records: activityRecords }));
+      if (url.startsWith("/api/state/speech")) return new Response(JSON.stringify({ records: speechRecords }));
+      if (url === "/api/agents") return new Response(JSON.stringify(agentsInfo));
+      if (url.startsWith("/api/exploratory/agents/")) {
+        posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response("{}");
+      }
       if (url === "/api/ext/builtin:places/talker")
         return new Response(JSON.stringify({ type: "place", id: placeId, version: 1, place: home, company }));
       if (init?.method === "DELETE") {
@@ -247,6 +268,7 @@ function Harness(props: Partial<ChatStageOptions>) {
     panelOpen: true,
     onSpoken: (conversation, key) => spoken.push([conversation, key]),
     setTurnExtras: (e) => extras.push(e),
+    onChatWith: (name) => chattedWith.push(name),
     ...props,
   });
   return (
@@ -358,6 +380,81 @@ describe("the chat page's scene", () => {
     expect(stage.activities.length).toBe(before);
     await act(async () => FakeEventSource.last?.emit("change", { type: "activity", id: "planner", op: "delete" }));
     expect(Object.keys(stage.activities.at(-1) ?? {})).toEqual(["talker"]);
+  });
+
+  it("hands the stage what each agent last said, and each new line as it is said", async () => {
+    speechRecords = [
+      { id: "planner", data: { agent: "planner", text: "Flights booked.", at: "2026-10-18T10:00:00Z" } },
+    ];
+    await render();
+    expect(stage.speech.at(-1)?.planner?.text).toBe("Flights booked.");
+    const line = { agent: "writer", text: "Draft is up.", at: "2026-10-18T10:00:05Z" };
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "speech", id: "writer", op: "update", after: line }),
+    );
+    expect(stage.speech.at(-1)).toMatchObject({
+      planner: { text: "Flights booked." },
+      writer: { text: "Draft is up." },
+    });
+  });
+
+  async function pick(agent: string) {
+    const onPick = stage.calls.at(-1)?.onPick;
+    expect(onPick).toBeDefined();
+    await act(async () => onPick?.(agent, { x: 200, y: 150 }));
+    await settle();
+    return [...container.querySelectorAll(".agent-menu button")] as HTMLButtonElement[];
+  }
+
+  async function press(buttons: HTMLButtonElement[], label: string) {
+    const button = buttons.find((b) => b.textContent === label);
+    expect(button, `no "${label}" in ${buttons.map((b) => b.textContent).join(", ")}`).toBeDefined();
+    await act(async () => button?.click());
+    await settle();
+  }
+
+  it("opens a menu on an agent's body: what it is doing, and what you can do about it", async () => {
+    placeId = "shared:lounge";
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    agentsInfo = { planner: { online: { enabled: true } } };
+    activityRecords = [{ id: "planner", data: { agent: "planner", doing: "working", what: "taking a photo" } }];
+    await render();
+    const buttons = await pick("planner");
+    expect(container.querySelector(".agent-menu-head")?.textContent).toMatch(/planner.*taking a photo/);
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Chat with planner",
+      "Send home",
+      "Pause for 4 hours",
+      "Open its page",
+    ]);
+    await press(buttons, "Send home");
+    expect(deleted).toContain("/api/state/whereabouts/planner");
+    // Done, it closes.
+    expect(container.querySelector(".agent-menu")).toBeNull();
+    await press(await pick("planner"), "Pause for 4 hours");
+    expect(posts.find((p) => p.url === "/api/exploratory/agents/planner/pause")?.body).toEqual({ hours: 4 });
+    await press(await pick("planner"), "Chat with planner");
+    expect(chattedWith).toEqual(["planner"]);
+  });
+
+  it("wakes a paused agent, and offers nothing that doesn't apply to the agent you are talking to at home", async () => {
+    agentsInfo = { talker: { online: { enabled: true } } };
+    activityRecords = [
+      { id: "talker", data: { agent: "talker", doing: "asleep", what: "asleep", detail: "paused" } as never },
+    ];
+    await render();
+    const buttons = await pick("talker");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Wake up", "Open its page"]);
+    await press(buttons, "Wake up");
+    expect(posts.some((p) => p.url === "/api/exploratory/agents/talker/resume")).toBe(true);
+  });
+
+  it("offers no pause for an agent that doesn't run on its own, and closes on Escape", async () => {
+    await render();
+    const buttons = await pick("talker");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Open its page"]);
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(container.querySelector(".agent-menu")).toBeNull();
   });
 
   it("has no 3D view for an agent without a body, but can still talk", async () => {

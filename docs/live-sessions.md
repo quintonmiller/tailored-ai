@@ -370,6 +370,20 @@ plugins:
         place.photo: { what: "taking a picture" }
 ```
 
+What agents say shows too. The plugin keeps a `speech` record per agent, the
+last thing it said in a room or to another agent directly, and the page puts
+it in a bubble over the speaker's head as it is said, mouth moving, for long
+enough to read. Both halves of a direct message show, the answer just after
+the question. Only people can read speech records: the type is closed to
+agents, so a direct message stays as private from other agents as it was.
+`speech: false` in the plugin's config keeps none. A room post shows when its
+speaker's room name is the agent's own name.
+
+Click an agent's body, or its tag, for a menu: what it is doing and since
+when, and what you can do about it. Chat with it, send it home from a shared
+place, or open its page; an online agent can be paused for four hours or
+woken, with the same switch as the Agents page.
+
 Activity comes from the built-in `builtin:activity` plugin, on by default. Like
 places, it does nothing unless some agent has a body.
 

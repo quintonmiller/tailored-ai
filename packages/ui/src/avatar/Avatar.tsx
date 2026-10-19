@@ -3,9 +3,15 @@ import type { Cue } from "./cues";
 import type { AgentActivity } from "./doing";
 import type { BodyState } from "./motion";
 import type { Room } from "./scene";
-import type { Companion, Stage, StageView } from "./stage";
+import type { Companion, Line, Stage, StageView } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
+
+/** One thing the menu on an agent's body offers. */
+export interface AgentAction {
+  label: string;
+  run: () => void | Promise<void>;
+}
 
 /** What the page can tell the avatar to do once it is on screen. */
 export interface AvatarControls {
@@ -46,6 +52,8 @@ export function Avatar({
   view: fixedView,
   agent,
   activities,
+  speech,
+  menuFor,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -78,6 +86,10 @@ export function Avatar({
   agent?: string;
   /** What each agent is doing, by agent; every body in the room shows its own. */
   activities?: Record<string, AgentActivity>;
+  /** The last thing each agent said, by agent; a new line shows in a bubble. */
+  speech?: Record<string, Line>;
+  /** What clicking an agent's body offers; without it, bodies aren't clickable. */
+  menuFor?: (agent: string) => AgentAction[];
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -111,6 +123,15 @@ export function Avatar({
   useEffect(() => {
     if (activities) stage.current?.setActivities(activities);
   }, [activities]);
+  const speechRef = useRef(speech);
+  speechRef.current = speech;
+  useEffect(() => {
+    if (speech) stage.current?.setSpeech(speech);
+  }, [speech]);
+  const menuRef = useRef(menuFor);
+  menuRef.current = menuFor;
+  const picking = !!menuFor;
+  const [picked, setPicked] = useState<{ agent: string; x: number; y: number } | null>(null);
   const agentRef = useRef(agent);
   agentRef.current = agent;
   const roomRef = useRef(room);
@@ -139,6 +160,19 @@ export function Avatar({
           ...(roomRef.current ? { room: roomRef.current } : {}),
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
           ...(agentRef.current ? { agent: agentRef.current } : {}),
+          ...(picking
+            ? {
+                onPick: (who: string, at: { x: number; y: number }) => {
+                  const box = host.current?.getBoundingClientRect();
+                  const w = box?.width ?? 0;
+                  const h = box?.height ?? 0;
+                  // Below the click, kept inside the stage.
+                  const x = Math.min(Math.max(at.x - (box?.left ?? 0), 130), Math.max(130, w - 130));
+                  const y = Math.min(at.y - (box?.top ?? 0) + 10, Math.max(10, h - 220));
+                  setPicked({ agent: who, x, y });
+                },
+              }
+            : {}),
           ...(stillRef.current.still
             ? { still: stillRef.current.still, onReady: () => stillRef.current.onReady?.() }
             : {}),
@@ -163,6 +197,7 @@ export function Avatar({
         if (roomRef.current) s.setRoom(roomRef.current);
         s.setCompany(companyRef.current ?? []);
         if (activitiesRef.current) s.setActivities(activitiesRef.current);
+        if (speechRef.current) s.setSpeech(speechRef.current);
       })
       .catch((err: unknown) => {
         if (gone) return;
@@ -176,7 +211,7 @@ export function Avatar({
       stage.current = null;
       if (controlsRef.current) controlsRef.current.current = null;
     };
-  }, [url, animationsKey, choosing]);
+  }, [url, animationsKey, choosing, picking]);
 
   const choose = (next: StageView) => {
     setView(next);
@@ -197,6 +232,15 @@ export function Avatar({
         aria-hidden="true"
         title="Drag to look around. Click furniture to send it there."
       />
+      {picked && (
+        <AgentMenu
+          agent={picked.agent}
+          at={picked}
+          activity={activities?.[picked.agent]}
+          actions={menuRef.current?.(picked.agent) ?? []}
+          onClose={() => setPicked(null)}
+        />
+      )}
       {!fixedView && (
         <fieldset className="talk-view" aria-label="Avatar view">
           {(["room", "close"] as const).map((v) => (
@@ -206,6 +250,93 @@ export function Avatar({
           ))}
         </fieldset>
       )}
+    </div>
+  );
+}
+
+/** Seconds, minutes or hours since, in a few words. */
+function since(at: string | undefined): string | undefined {
+  const ms = at ? Date.now() - Date.parse(at) : Number.NaN;
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  if (ms < 60_000) return "just now";
+  if (ms < 3_600_000) return `for ${Math.round(ms / 60_000)} min`;
+  return `for ${Math.round(ms / 3_600_000)} h`;
+}
+
+/**
+ * What clicking an agent's body opens: who it is, what it is doing and since
+ * when, and what you can do about it. Escape or a click elsewhere closes it.
+ */
+function AgentMenu({
+  agent,
+  at,
+  activity,
+  actions,
+  onClose,
+}: {
+  agent: string;
+  at: { x: number; y: number };
+  activity: AgentActivity | undefined;
+  actions: AgentAction[];
+  onClose: () => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const away = (e: PointerEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) onClose();
+    };
+    window.addEventListener("keydown", key);
+    window.addEventListener("pointerdown", away);
+    box.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("pointerdown", away);
+    };
+  }, [onClose]);
+  const status = activity && activity.doing !== "idle" ? activity.what : "idle";
+  const when = activity?.doing !== "idle" ? since(activity?.since) : undefined;
+  return (
+    <div
+      ref={box}
+      className="agent-menu"
+      role="dialog"
+      aria-label={`${agent === "default" ? "This agent" : agent}: what you can do`}
+      style={{ left: at.x, top: at.y }}
+    >
+      <div className="agent-menu-head">
+        <strong>{agent === "default" ? "Default agent" : agent}</strong>
+        <span className={`agent-menu-status agent-menu-${activity?.doing ?? "idle"}`}>
+          {status}
+          {activity?.detail ? ` · ${activity.detail}` : ""}
+          {when ? ` · ${when}` : ""}
+        </span>
+      </div>
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setProblem(null);
+            try {
+              await a.run();
+              onClose();
+            } catch (err) {
+              setProblem(err instanceof Error ? err.message : String(err));
+              setBusy(false);
+            }
+          }}
+        >
+          {a.label}
+        </button>
+      ))}
+      {problem && <p className="agent-menu-problem">{problem}</p>}
     </div>
   );
 }

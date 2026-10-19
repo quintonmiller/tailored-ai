@@ -12,6 +12,9 @@ import plugin, {
   ACTIVITY_TYPE,
   type Activity,
   ActivityTracker,
+  SPEECH_SCHEMA,
+  SPEECH_TYPE,
+  type Speech,
   whyAsleep,
 } from "../plugins/activity.js";
 import "../state/builtin.js";
@@ -51,6 +54,13 @@ beforeEach(() => {
             provider: "memory",
             schema: ACTIVITY_SCHEMA as never,
             access: { write: [] },
+          },
+          {
+            name: SPEECH_TYPE,
+            scope: "global",
+            provider: "memory",
+            schema: SPEECH_SCHEMA as never,
+            access: { read: ["user"], write: [] },
           },
         ],
       },
@@ -275,6 +285,78 @@ describe("activity", () => {
     started("planner");
     await tracker.settled();
     expect(await state.get(PERSON, { type: ACTIVITY_TYPE, id: "planner" })).toBeNull();
+  });
+});
+
+describe("speech", () => {
+  async function said(agent: string): Promise<Speech | undefined> {
+    await tracker.settled();
+    return (await state.get(PERSON, { type: SPEECH_TYPE, id: agent }))?.data as unknown as Speech | undefined;
+  }
+  const post = (speaker: string | undefined, body: string) =>
+    events.emit("room.message", {
+      roomRef: "local:trip",
+      messageId: "m",
+      speaker,
+      to: ["writer"],
+      body,
+      fromSelf: true,
+    });
+
+  it("keeps the last thing an agent said in a room, for a bubble over its head", async () => {
+    make();
+    post("planner", "Flights are booked.\n\nHotel next.");
+    expect(await said("planner")).toMatchObject({
+      text: "Flights are booked. Hotel next.",
+      to: ["writer"],
+      room: "local:trip",
+    });
+  });
+
+  it("keeps nothing for a speaker that isn't an agent", async () => {
+    make();
+    post("owner", "hello");
+    post(undefined, "hello");
+    expect(await said("owner")).toBeUndefined();
+  });
+
+  it("keeps both halves of a direct message, the answer timed to follow it", async () => {
+    make();
+    events.emit("agent.messaged", {
+      from: "planner",
+      to: "writer",
+      body: "Draft the intro?",
+      reply: "On it.",
+      via: "dm",
+    });
+    const asked = await said("planner");
+    const answered = await said("writer");
+    expect(asked).toMatchObject({ text: "Draft the intro?", to: ["writer"] });
+    expect(answered).toMatchObject({ text: "On it.", to: ["planner"] });
+    expect(Date.parse(answered?.at ?? "")).toBeGreaterThan(Date.parse(asked?.at ?? ""));
+    expect(asked?.room).toBeUndefined();
+  });
+
+  it("is for people only: an agent can't read what another said", async () => {
+    make();
+    post("planner", "secret plans");
+    await tracker.settled();
+    const agent: StateCaller = { actor: { kind: "agent", name: "writer" } };
+    await expect(state.get(agent, { type: SPEECH_TYPE, id: "planner" })).rejects.toThrow(StateError);
+  });
+
+  it("keeps nothing when told not to", async () => {
+    make({ speech: false });
+    post("planner", "hello");
+    events.emit("agent.messaged", { from: "planner", to: "writer", body: "hi", reply: "hey", via: "dm" });
+    expect(await said("planner")).toBeUndefined();
+    expect(await said("writer")).toBeUndefined();
+  });
+
+  it("cuts a long line short", async () => {
+    make();
+    post("planner", "word ".repeat(200));
+    expect((await said("planner"))?.text.length).toBeLessThanOrEqual(280);
   });
 });
 

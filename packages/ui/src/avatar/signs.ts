@@ -69,6 +69,75 @@ export function tag(lines: { name?: string; status?: string }): THREE.Sprite | u
   return sprite(canvas, 0.16 * (canvas.height / 72));
 }
 
+/** Lines of a bubble, and characters on each: a glimpse of what was said, not the transcript. */
+const BUBBLE_LINES = 3;
+const BUBBLE_CHARS = 30;
+
+/** Words wrapped into at most a few short lines, the last cut short with an ellipsis when there is more. */
+export function wrap(text: string, width = BUBBLE_CHARS, lines = BUBBLE_LINES): string[] {
+  const out: string[] = [];
+  let line = "";
+  const words = text.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    let word = words[i];
+    if (word.length > width) word = `${word.slice(0, width - 1)}…`;
+    const next = line ? `${line} ${word}` : word;
+    if (next.length <= width) {
+      line = next;
+      continue;
+    }
+    out.push(line);
+    line = word;
+    if (out.length === lines) {
+      // Out of room: the last line ends in an ellipsis.
+      const last = out[lines - 1];
+      out[lines - 1] = last.length >= width ? `${last.slice(0, width - 1)}…` : `${last}…`;
+      return out;
+    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+/** A speech bubble with what was said in it, the tail pointing down to the speaker. */
+export function speechBubble(text: string): THREE.Sprite {
+  const lines = wrap(text);
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const font = "500 38px system-ui, sans-serif";
+  let width = 0;
+  if (ctx) ctx.font = font;
+  for (const l of lines) width = Math.max(width, ctx?.measureText(l).width ?? l.length * 20);
+  const lineHeight = 48;
+  const pad = 26;
+  const tail = 30;
+  canvas.width = Math.ceil(width + pad * 2);
+  canvas.height = lines.length * lineHeight + pad * 2 + tail;
+  if (ctx) {
+    const h = canvas.height - tail;
+    ctx.fillStyle = "rgba(252, 252, 255, 0.96)";
+    ctx.beginPath();
+    ctx.roundRect(0, 0, canvas.width, h, 30);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width / 2 - 18, h - 2);
+    ctx.lineTo(canvas.width / 2, canvas.height);
+    ctx.lineTo(canvas.width / 2 + 18, h - 2);
+    ctx.fill();
+    ctx.font = font;
+    ctx.fillStyle = "#1d2230";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    lines.forEach((l, i) => {
+      ctx.fillText(l, canvas.width / 2, pad + lineHeight * i + lineHeight / 2 + 2);
+    });
+  }
+  const bubble = sprite(canvas, 0.12 * (canvas.height / 72));
+  // Over every tag and sign: what is being said is what to read.
+  bubble.renderOrder = 12;
+  return bubble;
+}
+
 function drawSign(sign: Sign): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = 128;

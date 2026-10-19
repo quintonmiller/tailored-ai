@@ -25,6 +25,12 @@
  * Asleep reuses the switches that already exist: the global pause, and an
  * online agent's own enabled/paused state from the Agents page.
  *
+ * It also keeps a `speech` record per agent: the last thing it said, in a
+ * room or to another agent directly, for the page to show in a bubble over
+ * its head. Only people can read those — the type is closed to agents — so a
+ * direct message stays as private from other agents as it was. `speech:
+ * false` in plugin config keeps none.
+ *
  * Free when unused: with no avatar configured — nothing to draw it on — it
  * registers nothing.
  */
@@ -37,12 +43,16 @@ import type { StateCaller, StateService } from "../state/service.js";
 import { anyAvatar } from "./places.js";
 
 export const ACTIVITY_TYPE = "activity";
+export const SPEECH_TYPE = "speech";
 
 export const meta: PluginMeta = {
   name: "Activity",
   description:
     "Keeps an `activity` world-state record per agent — thinking, working, talking, waiting on you, stuck, idle or asleep — for pages that show what agents are doing.",
-  registers: [{ kind: "stateType", id: ACTIVITY_TYPE }],
+  registers: [
+    { kind: "stateType", id: ACTIVITY_TYPE },
+    { kind: "stateType", id: SPEECH_TYPE },
+  ],
 };
 
 export type Doing = "thinking" | "working" | "talking" | "waiting" | "stuck" | "idle" | "asleep";
@@ -64,6 +74,21 @@ export interface Activity {
   /** When it started doing this. */
   since: string;
 }
+
+/** A `speech` record: the last thing an agent said, and to whom. */
+export interface Speech {
+  agent: string;
+  text: string;
+  /** Who it was said to; nobody in particular when empty. */
+  to?: string[];
+  /** The room it was said in, as `<backend>:<id>`; absent for a direct message. */
+  room?: string;
+  /** When to show it: a reply is timed to follow the message it answers. */
+  at: string;
+}
+
+/** Characters of a line kept: a bubble is a glimpse, not the transcript. */
+const SPEECH_CHARS = 280;
 
 /** How a tool call looks from outside. */
 export interface Look {
@@ -149,6 +174,8 @@ export interface ActivityOptions {
   tools?: Record<string, Partial<Look>>;
   /** Changes within this many ms are written as one, so a quick tool call doesn't flicker. 0 writes each. */
   settleMs?: number;
+  /** Keep what agents say, in rooms and to each other. Default on. */
+  speech?: boolean;
   now?: () => Date;
 }
 
@@ -201,6 +228,49 @@ export class ActivityTracker {
       on.on("agent.stalled", (e) => this.change(nameOf(e.agentName), (t) => (t.stuck = stuckWords(e.stallReason)))),
       on.on("agents.pause_changed", () => this.refresh()),
     );
+    if (opts.speech !== false) {
+      this.subs.push(
+        on.on("room.message", (e) => {
+          // Only an agent has a body to say it with; a label that isn't an agent's name is a person.
+          if (e.speaker && this.opts.agents().includes(e.speaker)) this.say(e.speaker, e.body, e.to, e.roomRef);
+        }),
+        on.on("agent.messaged", (e) => {
+          this.say(e.from, e.body, [e.to]);
+          // The answer follows the message, after about as long as it takes to read it.
+          const readMs = Math.min(6000, Math.max(1500, 1200 + 50 * e.body.length));
+          this.say(e.to, e.reply, [e.from], undefined, readMs);
+        }),
+      );
+    }
+  }
+
+  /** Record what an agent said, for a bubble over its head. */
+  private say(agent: string, text: string, to: string[] = [], room?: string, laterMs = 0): void {
+    const line = text.replace(/\s+/g, " ").trim();
+    if (!line || this.stopped) return;
+    const speech: Speech = {
+      agent,
+      text: line.length > SPEECH_CHARS ? `${line.slice(0, SPEECH_CHARS - 1)}…` : line,
+      ...(to.length ? { to } : {}),
+      ...(room ? { room } : {}),
+      at: new Date(this.now().getTime() + laterMs).toISOString(),
+    };
+    this.queue(`${SPEECH_TYPE}:${agent}`, () =>
+      this.opts.state().put(CALLER, { type: SPEECH_TYPE, id: agent, scope: "global", data: { ...speech } }),
+    );
+  }
+
+  /** Writes for one record, in order: a later write never lands under an earlier one. */
+  private queue(key: string, write: () => Promise<unknown>, failed?: () => void): void {
+    const prior = this.chains.get(key) ?? Promise.resolve();
+    const chain = prior.then(write).then(
+      () => {},
+      (err: unknown) => {
+        failed?.();
+        console.warn(`[activity] could not record ${key}: ${(err as Error).message}`);
+      },
+    );
+    this.chains.set(key, chain);
   }
 
   /** Write every agent's starting record. */
@@ -347,20 +417,14 @@ export class ActivityTracker {
     if (last && same(last, next)) return;
     const record: Activity = { ...next, since: this.now().toISOString() };
     this.written.set(agent, record);
-    const prior = this.chains.get(agent) ?? Promise.resolve();
-    const chain = prior
-      .then(() =>
-        this.opts.state().put(CALLER, { type: ACTIVITY_TYPE, id: agent, scope: "global", data: { ...record } }),
-      )
-      .then(
-        () => {},
-        (err: unknown) => {
-          // Forget it, so the next change tries again rather than thinking this landed.
-          if (this.written.get(agent) === record) this.written.delete(agent);
-          console.warn(`[activity] could not record what ${agent} is doing: ${(err as Error).message}`);
-        },
-      );
-    this.chains.set(agent, chain);
+    this.queue(
+      `${ACTIVITY_TYPE}:${agent}`,
+      () => this.opts.state().put(CALLER, { type: ACTIVITY_TYPE, id: agent, scope: "global", data: { ...record } }),
+      // Forget it, so the next change tries again rather than thinking this landed.
+      () => {
+        if (this.written.get(agent) === record) this.written.delete(agent);
+      },
+    );
   }
 }
 
@@ -414,13 +478,25 @@ export function whyAsleep(at: {
   return null;
 }
 
+export const SPEECH_SCHEMA = {
+  type: "object",
+  required: ["agent", "text", "at"],
+  properties: {
+    agent: { type: "string" },
+    text: { type: "string", maxLength: SPEECH_CHARS },
+    to: { type: "array", items: { type: "string" } },
+    room: { type: "string" },
+    at: { type: "string" },
+  },
+} as const;
+
 /** How often idle agents are looked at again, for the per-agent pause, which announces nothing. */
-const SLEEP_CHECK_MS = 20_000;
+const SLEEP_CHECK_MS = 5_000;
 
 const plugin: Plugin = (ctx) => {
   const runtime = ctx.runtime;
   if (!runtime || !anyAvatar(runtime.getConfig())) return;
-  const cfg = (ctx.config ?? {}) as { tools?: Record<string, Partial<Look>>; settleMs?: number };
+  const cfg = (ctx.config ?? {}) as { tools?: Record<string, Partial<Look>>; settleMs?: number; speech?: boolean };
 
   ctx.stateTypes.register({
     name: ACTIVITY_TYPE,
@@ -432,6 +508,19 @@ const plugin: Plugin = (ctx) => {
     schema: ACTIVITY_SCHEMA as never,
     access: { write: [] },
   });
+
+  if (cfg.speech !== false) {
+    ctx.stateTypes.register({
+      name: SPEECH_TYPE,
+      description:
+        "The last thing an agent said, in a room or to another agent, for a bubble over its head. People only: closed to agents.",
+      scope: "global",
+      title: "text",
+      provider: "memory",
+      schema: SPEECH_SCHEMA as never,
+      access: { read: ["user"], write: [] },
+    });
+  }
 
   const tracker = new ActivityTracker({
     events: ctx.events,
@@ -447,6 +536,7 @@ const plugin: Plugin = (ctx) => {
     },
     ...(cfg.tools ? { tools: cfg.tools } : {}),
     ...(typeof cfg.settleMs === "number" ? { settleMs: cfg.settleMs } : {}),
+    speech: cfg.speech !== false,
   });
   void tracker.start();
   const timer = setInterval(() => tracker.refresh(), SLEEP_CHECK_MS);

@@ -14,7 +14,7 @@ import { Director, findPath, type Obstacle, route, turnBetween, Walker } from ".
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
-import { disposeSprite, SignPost, tag } from "./signs";
+import { disposeSprite, SignPost, speechBubble, tag } from "./signs";
 import { tintModel } from "./tint";
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
@@ -95,6 +95,8 @@ export class Figure {
   private readonly size: number;
   private held: { kind: string; how: Hold; thing: THREE.Group } | undefined;
   private dozing = false;
+  /** Something it said, shown in a bubble from `from` to `until` on the stage's clock. */
+  private line: { bubble: THREE.Sprite; from: number; until: number } | undefined;
   private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
   /** The sign over its head. */
   readonly signs = new SignPost();
@@ -222,6 +224,28 @@ export class Figure {
     if (point) this.motion.gesture("point", clock);
   }
 
+  /**
+   * Say something: a bubble over its head from `from` (the stage's clock)
+   * for long enough to read, replacing whatever it was saying before.
+   */
+  say(text: string, from: number) {
+    this.hush();
+    const bubble = speechBubble(text);
+    bubble.visible = false;
+    this.body.add(bubble);
+    this.line = { bubble, from, until: from + Math.min(12, 3 + 0.06 * text.length) };
+  }
+
+  /** Whether it is saying something right now: its mouth moves while it is. */
+  speaking(clock: number): boolean {
+    return !!this.line && clock >= this.line.from && clock < this.line.until;
+  }
+
+  private hush() {
+    if (this.line) disposeSprite(this.line.bubble);
+    this.line = undefined;
+  }
+
   /** Nod off, or wake up. */
   doze(asleep: boolean) {
     this.dozing = asleep;
@@ -332,6 +356,17 @@ export class Figure {
     this.body.position.set(x, y, z);
     this.body.rotation.y = this.walker.place.facing;
     this.signs.update(t);
+    // A bubble while it speaks, over the tag, with the sign put away until it's done.
+    if (this.line) {
+      const on = this.speaking(t);
+      this.line.bubble.visible = on;
+      this.signs.group.visible = !on;
+      if (on) this.line.bubble.position.y = this.signs.group.position.y + this.line.bubble.scale.y / 2 - 0.08;
+      if (t >= this.line.until) {
+        this.hush();
+        this.signs.group.visible = true;
+      }
+    }
     const size = Math.max(0.05, this.bounds.max.y - this.hipsY) * 0.5;
     this.gaze.position.set(eyesOn.x + pose.gaze[0] * size, eyesOn.y + pose.gaze[1] * size, eyesOn.z);
     this.vrm.update(dt);
@@ -354,6 +389,7 @@ export class Figure {
     this.disposed = true;
     this.hold(undefined, undefined);
     this.label(undefined, undefined);
+    this.hush();
     this.signs.dispose();
     this.clips?.dispose();
     this.body.removeFromParent();
