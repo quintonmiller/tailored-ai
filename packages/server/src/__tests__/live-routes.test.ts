@@ -60,6 +60,8 @@ function buildConfig(live: boolean): AgentConfig {
   } as AgentConfig;
 }
 
+/** The voice each line was spoken in. */
+const voices: (string | undefined)[] = [];
 let db: ReturnType<typeof initDatabase>;
 let runtime: AgentRuntime;
 let app: ReturnType<typeof createServer>["app"];
@@ -71,8 +73,10 @@ function setup(
   live = true,
   avatar?: { model: string; animations?: string[] },
   agentAvatar?: false | { model?: string; animations?: string[] },
+  voice?: string,
 ) {
   const cfg = buildConfig(live);
+  if (voice && cfg.agents?.talker) cfg.agents.talker.voice = { voice };
   if (avatar && cfg.live) cfg.live.avatar = avatar;
   if (agentAvatar !== undefined && cfg.agents?.talker) cfg.agents.talker.avatar = agentAvatar;
   runtime = new AgentRuntime(
@@ -100,8 +104,12 @@ beforeEach(() => {
   speechToTextRegistry.register("fake-stt", () => ({
     transcribe: async (audio: Buffer) => ({ text: `heard ${audio.length} bytes` }),
   }));
+  voices.length = 0;
   textToSpeechRegistry.register("fake-tts", () => ({
-    synthesize: async (text: string) => ({ bytes: Buffer.from(`audio:${text}`), mimeType: "audio/mpeg" }),
+    synthesize: async (text: string, opts: { voice?: string }) => {
+      voices.push(opts.voice);
+      return { bytes: Buffer.from(`audio:${text}`), mimeType: "audio/mpeg" };
+    },
   }));
   setup();
 });
@@ -390,6 +398,47 @@ describe("typed turns on a page that shows the agent's body", () => {
     const { events } = await chat({});
     expect(events.some((e) => e.event === "cue")).toBe(false);
     expect(events.find((e) => e.event === "response")?.data.content).toBe(reply);
+  });
+});
+
+describe("/api/live/say", () => {
+  const say = (body: unknown) =>
+    app.fetch(
+      new Request("http://t/api/live/say", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  it("speaks a line in the agent's own voice, or the deployment's", async () => {
+    setup(true, undefined, undefined, "bf_emma");
+    const res = await say({ agent: "talker", text: "On it — the itinerary by **noon**." });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("audio/mpeg");
+    // What is said is what can be spoken: no markdown read out.
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe("audio:On it — the itinerary by noon.");
+    await say({ agent: "default", text: "Hello." });
+    expect(voices).toEqual(["bf_emma", "af_heart"]);
+  });
+
+  it("refuses an empty line, a long one, and any while live sessions are off", async () => {
+    expect((await say({ text: "  " })).status).toBe(400);
+    expect((await say({ text: "word ".repeat(100) })).status).toBe(400);
+    setup(false);
+    expect((await say({ text: "hi" })).status).toBe(409);
+  });
+
+  it("says why when the voice can't be made", async () => {
+    textToSpeechRegistry.unregister("fake-tts");
+    textToSpeechRegistry.register("fake-tts", () => ({
+      synthesize: async () => {
+        throw new Error("speech server is down");
+      },
+    }));
+    const res = await say({ text: "hi" });
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: string }).error).toMatch(/speech server is down/);
   });
 });
 

@@ -120,6 +120,8 @@ import {
   StateError,
   type Suggestions,
   setSecret,
+  speakable,
+  speechStages,
   startLiveSession,
   summarizeSession,
   TaiRegistrySource,
@@ -1996,6 +1998,9 @@ export function createServer(opts: ServerOptions) {
   // A quiet moment: the page asks what the agent does with it, every few
   // minutes while nobody is talking. Spaced out per agent, whatever a page sends.
   const lastIdle = new Map<string, number>();
+  /** The longest line `/api/live/say` speaks: a bubble's worth, not a reading. */
+  const SAY_MAX_CHARS = 400;
+
   app.post("/api/live/idle", async (c) => {
     const req = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
     const parsed = parseBody(req.body);
@@ -2017,6 +2022,30 @@ export function createServer(opts: ServerOptions) {
       return c.json({ cues });
     } catch (err) {
       return c.json({ error: `The agent couldn't decide: ${(err as Error).message}` }, 502);
+    }
+  });
+
+  /**
+   * A line in an agent's own voice: what the page plays when you walk up to an
+   * agent saying something. The live text-to-speech stage, with the voice the
+   * agent talks in, so it sounds as it does in a live session.
+   */
+  app.post("/api/live/say", async (c) => {
+    if (!runtime.getConfig().live?.enabled) return c.json({ error: "Live sessions are off." }, 409);
+    const body = await c.req.json<{ agent?: unknown; text?: unknown }>().catch(() => ({}) as Record<string, unknown>);
+    const text = typeof body.text === "string" ? speakable(body.text).trim() : "";
+    if (!text) return c.json({ error: "text is required" }, 400);
+    if (text.length > SAY_MAX_CHARS) return c.json({ error: `text is longer than ${SAY_MAX_CHARS} characters` }, 400);
+    const agent = typeof body.agent === "string" && body.agent && body.agent !== "default" ? body.agent : undefined;
+    try {
+      const { tts, voice: configured } = speechStages(runtime.getConfig());
+      const voice = runtime.voiceModeFor(agent)?.voice ?? configured;
+      const audio = await tts.synthesize(text, voice ? { voice } : {});
+      return new Response(new Uint8Array(audio.bytes), {
+        headers: { "content-type": audio.mimeType, "cache-control": "no-store" },
+      });
+    } catch (err) {
+      return c.json({ error: `The voice couldn't be made: ${(err as Error).message}` }, 502);
     }
   });
 

@@ -61,6 +61,7 @@ export function Avatar({
   overlay,
   tasks,
   onUse,
+  onLine,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -109,6 +110,8 @@ export function Avatar({
   tasks?: BoardTask[];
   /** A kiosk or a board was clicked: what it does. */
   onUse?: (action: string) => void;
+  /** A visitor is near an agent as it starts saying something, nearness 0–1. */
+  onLine?: (agent: string, text: string, nearness: number) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -158,6 +161,8 @@ export function Avatar({
   }, [tasks]);
   const onUseRef = useRef(onUse);
   onUseRef.current = onUse;
+  const lineRef = useRef(onLine);
+  lineRef.current = onLine;
   const nearRef = useRef(onNear);
   nearRef.current = onNear;
   const [travel, setTravel] = useState<Travel>("walk");
@@ -189,7 +194,13 @@ export function Avatar({
           ...(roomRef.current ? { room: roomRef.current } : {}),
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
           ...(agentRef.current ? { agent: agentRef.current } : {}),
-          ...(visitor ? { visitor: true, onNear: (who: string | undefined) => nearRef.current?.(who) } : {}),
+          ...(visitor
+            ? {
+                visitor: true,
+                onNear: (who: string | undefined) => nearRef.current?.(who),
+                onLine: (who: string, text: string, nearness: number) => lineRef.current?.(who, text, nearness),
+              }
+            : {}),
           onUse: (action: string) => onUseRef.current?.(action),
           ...(picking
             ? {

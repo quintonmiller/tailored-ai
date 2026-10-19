@@ -75,6 +75,8 @@ const FLY_SPEED = 2.2;
 /** How near an agent you have to be for it to notice you, and how far to go before it forgets. */
 const NOTICE_AT = 1.5;
 const FORGET_AT = 2.4;
+/** How near a visitor has to be to hear what an agent says. */
+const HEAR_AT = 3.5;
 
 /** Another agent in the same room: who, what to call it, and its body. */
 export interface Companion {
@@ -181,6 +183,8 @@ export async function createStage(
     onNear?: (agent: string | undefined) => void;
     /** Something made to be used was clicked: a kiosk, a task board. Its action. */
     onUse?: (action: string) => void;
+    /** A visitor is within earshot of an agent as it starts saying something: who, what, and how near (0–1, 1 beside it). */
+    onLine?: (agent: string, text: string, nearness: number) => void;
   } = {},
 ): Promise<Stage> {
   let room = opts.room ?? DEFAULT_ROOM;
@@ -304,6 +308,8 @@ export async function createStage(
   const shows = new Map<Figure, { behavior: Behavior; doing?: string; checked: number; faced: number }>();
   // The last line of each agent's that has been shown, by its time, so a line shows once.
   const heard = new Map<string, string>();
+  // Lines about to be said, for a visitor to hear when they start.
+  let voices: { agent: string; text: string; at: number }[] = [];
   const arriving = new Set<string>();
   let wanted: Companion[] = [];
 
@@ -651,7 +657,21 @@ export async function createStage(
     heard.set(agent, line.at);
     const delay = Date.parse(line.at) - Date.now();
     if (!Number.isFinite(delay) || delay < -STALE_LINE_MS) return;
-    f.say(line.text, clock + Math.max(0, delay) / 1000);
+    const at = clock + Math.max(0, delay) / 1000;
+    f.say(line.text, at);
+    if (opts.visitor && opts.onLine && f !== me) voices.push({ agent, text: line.text, at });
+  };
+  /** Each frame, lines that have just started: heard if the visitor is near enough. */
+  const sayAloud = (t: number) => {
+    if (!voices.length) return;
+    const due = voices.filter((v) => v.at <= t);
+    voices = voices.filter((v) => v.at > t);
+    for (const v of due) {
+      const f = companions.get(v.agent);
+      if (!f) continue;
+      const d = Math.hypot(f.walker.place.x - me.walker.place.x, f.walker.place.z - me.walker.place.z);
+      if (travel === "walk" && d <= HEAR_AT) opts.onLine?.(v.agent, v.text, 1 - d / HEAR_AT);
+    }
   };
   let speech: Record<string, Line> = {};
 
@@ -949,7 +969,10 @@ export async function createStage(
         meHead,
       );
     }
-    if (opts.visitor) noticeVisitor(t);
+    if (opts.visitor) {
+      noticeVisitor(t);
+      sayAloud(t);
+    }
     for (const w of warm)
       if (w.fire && lit)
         w.light.intensity = (lit.lamp.on ? 1.8 : 0.9) * (0.85 + 0.15 * Math.sin(t * 9) * Math.sin(t * 3.7));

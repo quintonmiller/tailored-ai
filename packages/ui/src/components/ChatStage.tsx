@@ -19,6 +19,9 @@ import { useWorldMap, WorldMap } from "./WorldMap";
  */
 
 const STAGE_KEY = "tai.chat.stage";
+const VOICES_KEY = "tai.world.voices";
+/** Lines waiting to be spoken at most: past this, the oldest are let go rather than heard late. */
+const VOICE_QUEUE = 2;
 /** How wide the chat panel laid over the scene is, on a screen wide enough for one. */
 export const PANEL_WIDTH = 440;
 /**
@@ -119,6 +122,55 @@ export function useRecords<T>(type: string, enabled: boolean): Record<string, T>
     };
   }, [type, enabled]);
   return records;
+}
+
+/**
+ * What agents say, out loud, when you are near them on a visit: each line
+ * spoken in the agent's own voice, quieter the further away you stand, one at
+ * a time. Off until switched on, because the voice may be made on a GPU.
+ */
+export function useVoicesNearby(on: boolean) {
+  const queue = useRef<{ agent: string; text: string; nearness: number }[]>([]);
+  const playing = useRef(false);
+  const next = useCallback(async () => {
+    if (playing.current) return;
+    const line = queue.current.shift();
+    if (!line) return;
+    playing.current = true;
+    try {
+      const res = await fetch("/api/live/say", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent: line.agent, text: line.text }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const url = URL.createObjectURL(await res.blob());
+      const audio = new Audio(url);
+      audio.volume = Math.max(0.15, Math.min(1, line.nearness));
+      await new Promise<void>((done) => {
+        audio.onended = () => done();
+        audio.play().catch(() => done());
+      });
+      URL.revokeObjectURL(url);
+    } catch {
+      // A line that can't be voiced is still in its bubble.
+    } finally {
+      playing.current = false;
+      void next();
+    }
+  }, []);
+  useEffect(() => {
+    if (!on) queue.current = [];
+  }, [on]);
+  return useCallback(
+    (agent: string, text: string, nearness: number) => {
+      if (!on) return;
+      queue.current.push({ agent, text, nearness });
+      if (queue.current.length > VOICE_QUEUE) queue.current.splice(0, queue.current.length - VOICE_QUEUE);
+      void next();
+    },
+    [on, next],
+  );
 }
 
 /** How often the boards ask for tasks again. */
@@ -307,6 +359,8 @@ export function useChatStage({
   const { room, company, id: placeId } = visited ?? own;
   const map = useWorldMap(mapOpen && showStage);
   const [taskForm, setTaskForm] = useState(false);
+  const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
+  const hearLine = useVoicesNearby(voicesOn && !!visiting);
   const allTasks = useBoardTasks(showStage);
   useEffect(() => {
     if (!visiting) setNear(undefined);
@@ -524,6 +578,20 @@ export function useChatStage({
           Back to {shown === "default" ? "the agent" : shown}
         </button>
       )}
+      {visiting && (
+        <button
+          type="button"
+          className="talk-tool"
+          aria-pressed={voicesOn}
+          title="Hear what agents say when you're near them"
+          onClick={() => {
+            setVoicesOn(!voicesOn);
+            remember(VOICES_KEY, !voicesOn);
+          }}
+        >
+          {voicesOn ? "Voices on" : "Voices off"}
+        </button>
+      )}
       {visiting && near && near !== shown && onChatWith && (
         <button type="button" className="talk-tool talk-near" onClick={() => onChatWith(near)}>
           Talk to {near}
@@ -555,6 +623,7 @@ export function useChatStage({
         tools={tools}
         tasks={boardTasks}
         onUse={onUse}
+        onLine={hearLine}
         overlay={
           taskForm ? (
             <NewTask agents={agentNames} onClose={() => setTaskForm(false)} />

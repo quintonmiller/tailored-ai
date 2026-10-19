@@ -21,6 +21,8 @@ const stage = vi.hoisted(() => ({
   }[],
   /** Whether each stage made was a visitor's. */
   visitors: [] as boolean[],
+  /** The last visitor stage's way to say a line started near you. */
+  onLine: undefined as ((agent: string, text: string, nearness: number) => void) | undefined,
   /** The last stage's way to say a kiosk or a board was clicked. */
   onUse: undefined as ((action: string) => void) | undefined,
   /** What the boards were told to show, each time. */
@@ -55,9 +57,11 @@ vi.mock("../avatar/stage", () => ({
       visitor?: boolean;
       onNear?: (agent: string | undefined) => void;
       onUse?: (action: string) => void;
+      onLine?: (agent: string, text: string, nearness: number) => void;
       company?: { agent: string }[];
     },
   ) => {
+    stage.onLine = opts.onLine;
     stage.visitors.push(!!opts.visitor);
     stage.onNear = opts.onNear;
     stage.onUse = opts.onUse;
@@ -290,6 +294,10 @@ beforeEach(() => {
         if (sessionStatus !== 201)
           return new Response(JSON.stringify({ error: "Live sessions are off." }), { status: sessionStatus });
         return new Response(JSON.stringify({ id: `live-${posts.length}`, conversation: "conv-1" }), { status: 201 });
+      }
+      if (url === "/api/live/say") {
+        posts.push({ url, body: JSON.parse(String(init?.body)) });
+        return new Response(new Blob(["voice"], { type: "audio/mpeg" }));
       }
       if (url === "/api/live/idle") {
         posts.push({ url, body: JSON.parse(String(init?.body)) });
@@ -537,6 +545,27 @@ describe("the chat page's scene", () => {
     await settle(60);
     expect(stage.visitors.at(-1)).toBe(false);
     expect(extras.at(-1)?.body).toBeDefined();
+  });
+
+  it("speaks what agents say near you, once you turn voices on, quieter further away", async () => {
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Map").click());
+    await settle();
+    await act(async () => (container.querySelector(".world-map-place") as HTMLButtonElement).click());
+    await settle(60);
+    // Off to start with: a line said nearby is only a bubble.
+    await act(async () => stage.onLine?.("writer", "Draft is up.", 0.8));
+    expect(posts.some((p) => p.url === "/api/live/say")).toBe(false);
+    await act(async () => tool("Voices off").click());
+    await act(async () => stage.onLine?.("writer", "Draft is up.", 0.5));
+    await settle();
+    expect(posts.find((p) => p.url === "/api/live/say")?.body).toEqual({ agent: "writer", text: "Draft is up." });
+    const played = audios.at(-1) as unknown as { volume: number };
+    expect(played.volume).toBeCloseTo(0.5);
+    // Remembered for next time.
+    expect(localStorage.getItem("tai.world.voices")).toBe("on");
   });
 
   it("opens and closes the map with M, unless you are typing", async () => {

@@ -8659,7 +8659,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .talk-tools { position: absolute; top: 8px; left: 8px; z-index: 4; display: flex; flex-wrap: wrap; gap: 6px; max-width: calc(100% - 200px); }
 .talk-tool { font-family: var(--font); font-size: 12px; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-surface); color: var(--text); cursor: pointer; }
 .talk-tool:hover, .talk-tool:focus-visible { border-color: var(--accent); outline: none; }
-.talk-tool[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.talk-tool[aria-expanded="true"], .talk-tool[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .talk-near { border-color: var(--accent-dim); }
 .talk-keys { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); margin: 0; padding: 4px 10px; font-family: var(--font); font-size: 11px; color: var(--text-dim); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 
