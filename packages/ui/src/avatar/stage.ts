@@ -37,6 +37,15 @@ import {
   spotFor,
 } from "./scene";
 
+/** Something an agent said, and when it said it (an ISO time; a reply can be timed to follow). */
+export interface Line {
+  text: string;
+  at: string;
+}
+
+/** A line older than this when it arrives was said before anyone was looking: no bubble. */
+const STALE_LINE_MS = 15_000;
+
 /** The whole room, or the avatar's head and torso. */
 export type StageView = "room" | "close";
 
@@ -67,6 +76,8 @@ export interface Stage {
   setCompany(company: Companion[]): void;
   /** What each agent is doing, by agent: every body in the room shows its own. */
   setActivities(activities: Record<string, AgentActivity>): void;
+  /** The last thing each agent said, by agent: a new line shows in a bubble over its head. */
+  setSpeech(speech: Record<string, Line>): void;
   dispose(): void;
 }
 
@@ -131,6 +142,8 @@ export async function createStage(
     company?: Companion[];
     /** The agent this stage shows, for its activity and its colour. */
     agent?: string;
+    /** Someone clicked an agent's body (or its tag): which agent, and where on the page. */
+    onPick?: (agent: string, at: { x: number; y: number }) => void;
   } = {},
 ): Promise<Stage> {
   let room = opts.room ?? DEFAULT_ROOM;
@@ -241,6 +254,8 @@ export async function createStage(
   // What each agent is doing, and what each body is showing of it.
   let activities: Record<string, AgentActivity> = {};
   const shows = new Map<Figure, { behavior: Behavior; doing?: string; checked: number; faced: number }>();
+  // The last line of each agent's that has been shown, by its time, so a line shows once.
+  const heard = new Map<string, string>();
   const arriving = new Set<string>();
   let wanted: Companion[] = [];
 
@@ -434,6 +449,23 @@ export async function createStage(
     }
     return undefined;
   };
+  /** The agent whose body (or tag, or sign) is under the pointer, if any. */
+  const agentAt = (e: PointerEvent): string | undefined => {
+    const r = canvas.getBoundingClientRect();
+    ray.setFromCamera(
+      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
+      camera,
+    );
+    const bodies = new Map<THREE.Object3D, string>([[me.body, self]]);
+    for (const [agent, c] of companions) bodies.set(c.body, agent);
+    for (const hit of ray.intersectObjects([...bodies.keys()], true)) {
+      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
+        const agent = bodies.get(o);
+        if (agent) return agent;
+      }
+    }
+    return undefined;
+  };
   let downAt: [number, number] | null = null;
   const onDown = (e: PointerEvent) => {
     downAt = [e.clientX, e.clientY];
@@ -442,12 +474,18 @@ export async function createStage(
     const moved = downAt ? Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) : Infinity;
     downAt = null;
     if (moved > 6) return;
+    // An agent first: a body stands in front of the furniture it is at.
+    const who = opts.onPick ? agentAt(e) : undefined;
+    if (who) {
+      opts.onPick?.(who, { x: e.clientX, y: e.clientY });
+      return;
+    }
     const id = spotAt(e);
     if (id) go(id);
   };
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
-    canvas.style.cursor = spotAt(e) ? "pointer" : "";
+    canvas.style.cursor = (opts.onPick && agentAt(e)) || spotAt(e) ? "pointer" : "";
   };
   canvas.addEventListener("pointerdown", onDown);
   canvas.addEventListener("pointerup", onUp);
@@ -493,6 +531,20 @@ export async function createStage(
       me.gesture(c.name, clock);
     }
   }
+
+  /** A mouth moving as if to words, with no voice to follow: syllables and the gaps between them. */
+  const chatter = (t: number) => Math.max(0, Math.sin(t * 11) * Math.sin(t * 3.3 + 1) + 0.15);
+
+  /** Show what an agent said, once, over its head: now, or when a reply is timed to follow. */
+  const hear = (agent: string, line: Line | undefined) => {
+    const f = figureOf(agent);
+    if (!f || !line || heard.get(agent) === line.at) return;
+    heard.set(agent, line.at);
+    const delay = Date.parse(line.at) - Date.now();
+    if (!Number.isFinite(delay) || delay < -STALE_LINE_MS) return;
+    f.say(line.text, clock + Math.max(0, delay) / 1000);
+  };
+  let speech: Record<string, Line> = {};
 
   /** The body an agent has in this room, if it has one here. */
   const figureOf = (agent: string): Figure | undefined => (agent === self ? me : companions.get(agent));
@@ -589,6 +641,8 @@ export async function createStage(
           scene.add(figure.body, figure.gaze);
           companions.set(c.agent, figure);
           show(c.agent, figure);
+          // What it said before its body arrived is old news.
+          if (speech[c.agent]) heard.set(c.agent, speech[c.agent].at);
         })
         .catch(() => {
           arriving.delete(c.agent);
@@ -674,8 +728,10 @@ export async function createStage(
       obstacles,
       poseAt,
       dt,
-      // Thinking somewhere else — a Discord message, a schedule — shows here too, when the page has no turn of its own.
-      { state: state === "idle" && mine?.thinking ? "thinking" : state, loudness: loudness() },
+      // Thinking or speaking somewhere else — a Discord message, a room — shows here too, when the page has no turn of its own.
+      state === "idle" && me.speaking(t)
+        ? { state: "speaking", loudness: chatter(t) }
+        : { state: state === "idle" && mine?.thinking ? "thinking" : state, loudness: loudness() },
       camera.position,
       opts.still ? { activity: stillActivity } : undefined,
     );
@@ -702,7 +758,15 @@ export async function createStage(
         if (typeof move === "string") c.go(room, move, obstacles);
         attend(c, t, true);
       }
-      c.step(room, obstacles, poseAt, dt, { state: theirs?.thinking ? "thinking" : "idle", loudness: 0 }, meHead);
+      const talking = c.speaking(t);
+      c.step(
+        room,
+        obstacles,
+        poseAt,
+        dt,
+        { state: talking ? "speaking" : theirs?.thinking ? "thinking" : "idle", loudness: talking ? chatter(t) : 0 },
+        meHead,
+      );
     }
     for (const w of warm)
       if (w.fire && lit)
@@ -766,6 +830,10 @@ export async function createStage(
       activities = next;
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
+    },
+    setSpeech(next) {
+      speech = next;
+      for (const [agent, line] of Object.entries(next)) hear(agent, line);
     },
     dispose() {
       disposed = true;

@@ -1,10 +1,10 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Avatar, type AvatarControls } from "../avatar/Avatar";
+import { type AgentAction, Avatar, type AvatarControls } from "../avatar/Avatar";
 import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
-import type { Companion } from "../avatar/stage";
+import type { Companion, Line } from "../avatar/stage";
 import { subscribeStateChanges } from "../lib/state-events";
 import { useVoice } from "./voice";
 
@@ -46,8 +46,11 @@ function remember(key: string, on: boolean) {
  * change with its `place` tool, redrawn the moment it does. The built-in
  * room until it arrives, and when the server keeps none.
  */
-export function useRoom(agent: string, enabled: boolean): { room: Room; company: Companion[] } {
-  const [scene, setScene] = useState<{ room: Room; company: Companion[] }>({ room: DEFAULT_ROOM, company: [] });
+export function useRoom(agent: string, enabled: boolean): { room: Room; company: Companion[]; id?: string } {
+  const [scene, setScene] = useState<{ room: Room; company: Companion[]; id?: string }>({
+    room: DEFAULT_ROOM,
+    company: [],
+  });
   useEffect(() => {
     if (!enabled) return;
     let gone = false;
@@ -58,7 +61,7 @@ export function useRoom(agent: string, enabled: boolean): { room: Room; company:
         .then((body) => {
           if (gone) return;
           id = body?.id;
-          setScene({ room: body?.place ?? DEFAULT_ROOM, company: companyOf(body) });
+          setScene({ room: body?.place ?? DEFAULT_ROOM, company: companyOf(body), ...(id ? { id } : {}) });
         })
         .catch(() => {
           if (!gone) setScene({ room: DEFAULT_ROOM, company: [] });
@@ -80,29 +83,29 @@ export function useRoom(agent: string, enabled: boolean): { room: Room; company:
 }
 
 /**
- * What every agent is doing, by agent, as the server's `activity` records say
- * (from `builtin:activity`), kept current as they change. Empty when the
- * server keeps none.
+ * Every record of one world-state type, by id, kept current as they change:
+ * what every agent is doing (`activity`) and the last thing each said
+ * (`speech`), both from `builtin:activity`. Empty when the server keeps none.
  */
-export function useActivities(enabled: boolean): Record<string, AgentActivity> {
-  const [activities, setActivities] = useState<Record<string, AgentActivity>>({});
+export function useRecords<T>(type: string, enabled: boolean): Record<string, T> {
+  const [records, setRecords] = useState<Record<string, T>>({});
   useEffect(() => {
     if (!enabled) return;
     let gone = false;
-    fetch("/api/state/activity?limit=500")
-      .then((res) => (res.ok ? (res.json() as Promise<{ records?: { id: string; data: AgentActivity }[] }>) : null))
+    fetch(`/api/state/${type}?limit=500`)
+      .then((res) => (res.ok ? (res.json() as Promise<{ records?: { id: string; data: T }[] }>) : null))
       .then((body) => {
         if (gone || !body?.records) return;
         // Changes heard while this was loading are newer: they win.
-        setActivities((heard) => ({ ...Object.fromEntries(body.records?.map((r) => [r.id, r.data]) ?? []), ...heard }));
+        setRecords((heard) => ({ ...Object.fromEntries(body.records?.map((r) => [r.id, r.data]) ?? []), ...heard }));
       })
       .catch(() => {});
     const off = subscribeStateChanges((change) => {
-      if (change.type !== "activity") return;
-      setActivities((all) => {
+      if (change.type !== type) return;
+      setRecords((all) => {
         const next = { ...all };
         if (change.op === "delete" || !change.after) delete next[change.id];
-        else next[change.id] = change.after as unknown as AgentActivity;
+        else next[change.id] = change.after as unknown as T;
         return next;
       });
     });
@@ -110,8 +113,36 @@ export function useActivities(enabled: boolean): Record<string, AgentActivity> {
       gone = true;
       off();
     };
+  }, [type, enabled]);
+  return records;
+}
+
+/** What the agents themselves are configured as: whether one runs on its own, which is what can be paused. */
+function useOnlineAgents(enabled: boolean): Set<string> {
+  const [online, setOnline] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!enabled) return;
+    let gone = false;
+    fetch("/api/agents")
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((agents: Record<string, { online?: { enabled?: boolean } }>) => {
+        if (!gone)
+          setOnline(new Set(Object.entries(agents ?? {}).flatMap(([name, a]) => (a?.online?.enabled ? [name] : []))));
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
   }, [enabled]);
-  return activities;
+  return online;
+}
+
+async function must(res: Promise<Response>, what: string): Promise<void> {
+  const r = await res;
+  if (!r.ok) {
+    const body = (await r.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Couldn't ${what} (${r.status}).`);
+  }
 }
 
 /** What the server says about the place an agent is in. */
@@ -146,9 +177,19 @@ export interface ChatStageOptions {
   onSpoken: (conversation: string | undefined, sessionKey: string) => void;
   /** Hand typed turns the body and a place for their cues, while the body is on screen. */
   setTurnExtras?: (extras: { body?: unknown; onCue?: (cue: { name: string; target?: string }) => void }) => void;
+  /** Talk to another agent instead: clicked on in the room. */
+  onChatWith?: (agent: string) => void;
 }
 
-export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, setTurnExtras }: ChatStageOptions) {
+export function useChatStage({
+  agent,
+  sessionKey,
+  sending,
+  panelOpen,
+  onSpoken,
+  setTurnExtras,
+  onChatWith,
+}: ChatStageOptions) {
   const [info, setInfo] = useState<LiveInfo>({});
   useEffect(() => {
     let gone = false;
@@ -177,8 +218,54 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
     return () => q.removeEventListener?.("change", on);
   }, []);
 
-  const { room, company } = useRoom(agent, has3d);
-  const activities = useActivities(showStage);
+  const { room, company, id: placeId } = useRoom(agent, has3d);
+  const activities = useRecords<AgentActivity>("activity", showStage);
+  const speech = useRecords<Line>("speech", showStage);
+  const online = useOnlineAgents(showStage);
+  const shown = agent || "default";
+  // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it.
+  const menuFor = useCallback(
+    (who: string): AgentAction[] => {
+      const actions: AgentAction[] = [];
+      if (who !== shown && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => onChatWith(who) });
+      if (placeId?.startsWith("shared:"))
+        actions.push({
+          label: who === shown ? "Go home" : "Send home",
+          run: () =>
+            must(fetch(`/api/state/whereabouts/${encodeURIComponent(who)}`, { method: "DELETE" }), "send it home"),
+        });
+      if (online.has(who)) {
+        const resting = activities[who]?.doing === "asleep" && activities[who]?.detail !== "agents are paused";
+        actions.push(
+          resting
+            ? {
+                label: "Wake up",
+                run: () =>
+                  must(
+                    fetch(`/api/exploratory/agents/${encodeURIComponent(who)}/resume`, { method: "POST" }),
+                    "wake it",
+                  ),
+              }
+            : {
+                label: "Pause for 4 hours",
+                run: () =>
+                  must(
+                    fetch(`/api/exploratory/agents/${encodeURIComponent(who)}/pause`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ hours: 4 }),
+                    }),
+                    "pause it",
+                  ),
+              },
+        );
+      }
+      if (who !== "default")
+        actions.push({ label: "Open its page", run: () => void (window.location.hash = `/agents/${who}`) });
+      return actions;
+    },
+    [shown, onChatWith, placeId, online, activities],
+  );
   // What the body can do in this room: its moves, the things it can go to, look at and point at, and who is with it.
   const body = useMemo(
     () =>
@@ -306,8 +393,10 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
         insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
         room={room}
         company={company}
-        agent={agent || "default"}
+        agent={shown}
         activities={activities}
+        speech={speech}
+        menuFor={menuFor}
         {...(info.enabled ? { chooseIdle } : {})}
       />
     ) : null;

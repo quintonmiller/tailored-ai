@@ -89,6 +89,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     sending: store.sending,
     panelOpen,
     setTurnExtras: store.setTurnExtras,
+    onChatWith: (name) => store.setSelectedAgent(name === "default" ? "" : name),
     onSpoken: (conversation, key) => {
       if (!conversation) return;
       // Loading the conversation shows the spoken turn with the rest, and
