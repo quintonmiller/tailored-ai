@@ -781,6 +781,9 @@ export const DEFAULT_PLUGIN_MODULES = [
   // Free when unused: with no avatar configured it registers nothing. With one,
   // each agent's room becomes a `place` record the agent can change.
   "builtin:places",
+  // Same terms: nothing without an avatar. With one, an in-memory record per
+  // agent of what it is doing, kept from the bus, for the page to draw.
+  "builtin:activity",
 ] as const;
 
 /**

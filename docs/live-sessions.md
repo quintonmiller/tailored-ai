@@ -311,6 +311,47 @@ in it. The page asks for the room at `GET /api/ext/builtin:places/:agent`
 (`default` for the default agent). Without the plugin, the page shows the
 starting room, and the agent can't change it.
 
+### What it is doing
+
+Each agent also has an `activity` record saying what it is doing right now:
+thinking, working with a tool, talking to another agent, waiting on you,
+stuck, idle or asleep. It holds a few words for a status line ("searching
+the web", "talking to planner"), a `look` the page can draw it holding (a
+camera for a photo, a laptop for code, a book for reading), who else is
+involved, and when it started. Open the State page to watch them change.
+
+| doing | when |
+|---|---|
+| `thinking` | a turn is running and no tool is: any surface, from the web chat to a room wake |
+| `working` | a tool call is running; `what`, `look` and sometimes `detail` (the search, the page's host) say which |
+| `talking` | it sent a direct message or handed off work, or it is answering one (`with` names the other agent) |
+| `waiting` | it asked you something (`ask_user`, or a choice, form or confirmation) and its next turn hasn't come; a task needs you; or a call is waiting for your approval |
+| `stuck` | its last turn ran out of steps, went round in circles, or failed |
+| `asleep` | it has nothing to do and agents are paused, or it's an online agent switched off or paused on the Agents page |
+| `idle` | none of the above |
+
+Everything comes off the event bus — turns starting and ending, tool calls,
+approvals, stalls, the pause switch — so nothing here runs a model or slows a
+turn. A quick call that settles back within a quarter of a second isn't
+written at all, so a status line doesn't flicker. The records live in the
+built-in `memory` state provider: gone on restart, and written by the plugin
+alone.
+
+Which tool looks like what is a table in the plugin. Say how your own tools
+look, or change ours, in its config, by tool or `tool.action`:
+
+```yaml
+plugins:
+  - module: builtin:activity
+    config:
+      tools:
+        flights: { what: "looking up flights", look: "tablet" }
+        place.photo: { what: "taking a picture" }
+```
+
+Activity comes from the built-in `builtin:activity` plugin, on by default. Like
+places, it does nothing unless some agent has a body.
+
 ## Cues: the agent moves its own body
 
 A page that shows the agent with a body says what that body can do when it
