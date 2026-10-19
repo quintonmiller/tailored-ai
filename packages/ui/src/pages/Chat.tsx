@@ -252,7 +252,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       )}
 
       <div
-        className={`chat${scene.showStage ? " chat-with-stage" : ""}${scene.showStage && !panelOpen ? " chat-panel-hidden" : ""}`}
+        className={`chat${scene.showStage ? " chat-with-stage" : ""}${scene.showStage && !panelOpen ? " chat-panel-hidden" : ""}${scene.showStage && scene.worldPanel ? " chat-world-open" : ""}${scene.showStage && scene.sidePanel ? " chat-side-open" : ""}`}
       >
         {scene.stage && <div className="chat-stage">{scene.stage}</div>}
         <div className="chat-toolbar">

@@ -24,7 +24,7 @@ const stage = vi.hoisted(() => ({
   /** The last visitor stage's way to say a line started near you. */
   onLine: undefined as ((agent: string, text: string, nearness: number) => void) | undefined,
   /** The last stage's way to say a kiosk or a board was clicked. */
-  onUse: undefined as ((action: string) => void) | undefined,
+  onUse: undefined as ((action: string, on?: Record<string, string>) => void) | undefined,
   /** What the boards were told to show, each time. */
   tasks: [] as { id: string }[][],
   /** The last visitor stage's report of who you are standing next to. */
@@ -56,7 +56,7 @@ vi.mock("../avatar/stage", () => ({
       onPick?: (agent: string, at: { x: number; y: number }) => void;
       visitor?: boolean;
       onNear?: (agent: string | undefined) => void;
-      onUse?: (action: string) => void;
+      onUse?: (action: string, on?: Record<string, string>) => void;
       onLine?: (agent: string, text: string, nearness: number) => void;
       company?: { agent: string }[];
     },
@@ -115,6 +115,14 @@ const chattedWith: string[] = [];
 const drafts: [string, string][] = [];
 /** What every agent is doing, as the server's activity records say. */
 let activityRecords: { id: string; data: { agent: string; doing: string; what: string } }[] = [];
+/** The tasks the server keeps; a PATCH changes them, as the server would. */
+let taskRows: Record<string, unknown>[] = [];
+/** Every change sent to a task, in order. */
+const patches: { id: string; body: Record<string, unknown> }[] = [];
+/** The task watcher, as the server says it runs. */
+let watcherInfo = { enabled: true, triggers: ["created", "updated"] };
+/** Agents that run on their own, as the exploratory worker keeps them. */
+let ownAgents: Record<string, unknown>[] = [];
 
 /** The agent's own room, as the server keeps it. */
 const home = {
@@ -212,6 +220,35 @@ beforeEach(() => {
   speechRecords = [];
   stage.agents.length = 0;
   activityRecords = [];
+  taskRows = [
+    {
+      id: "t1",
+      title: "Book flights",
+      description: "Out Friday, back Monday.",
+      status: "backlog",
+      assignee: "talker",
+      author: "sam",
+      tags: [],
+      project_id: "p1",
+      created_at: "2026-10-01 09:00:00",
+      updated_at: "2026-10-02 09:00:00",
+    },
+    {
+      id: "t2",
+      title: "Pack",
+      description: "",
+      status: "in_progress",
+      assignee: "someone-else",
+      author: "sam",
+      tags: [],
+      project_id: "p1",
+      created_at: "2026-10-03 09:00:00",
+      updated_at: "2026-10-03 09:00:00",
+    },
+  ];
+  patches.length = 0;
+  watcherInfo = { enabled: true, triggers: ["created", "updated"] };
+  ownAgents = [];
   placeId = "home:talker";
   company = [];
   stage.mounted = 0;
@@ -285,16 +322,24 @@ beforeEach(() => {
         posts.push({ url: "/api/project-tasks", body: JSON.parse(String(init.body)) });
         return new Response(JSON.stringify({ id: "t9" }), { status: 201 });
       }
-      if (url.startsWith("/api/project-tasks"))
-        return new Response(
-          JSON.stringify({
-            tasks: [
-              { id: "t1", title: "Book flights", status: "backlog", assignee: "talker" },
-              { id: "t2", title: "Pack", status: "in_progress", assignee: "someone-else" },
-            ],
-            total: 2,
-          }),
-        );
+      const one = url.match(/^\/api\/project-tasks\/([^/?]+)$/);
+      if (one && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        patches.push({ id: one[1], body });
+        taskRows = taskRows.map((t) => (t.id === one[1] ? { ...t, ...body, updated_at: "2026-10-04 09:00:00" } : t));
+        return new Response(JSON.stringify(taskRows.find((t) => t.id === one[1])));
+      }
+      if (one) return new Response(JSON.stringify({ ...taskRows.find((t) => t.id === one[1]), comments: [] }));
+      if (url.startsWith("/api/project-tasks")) {
+        const statuses = new URL(url, "http://t").searchParams.get("status")?.split(",") ?? [];
+        const tasks = taskRows.filter((t) => statuses.includes(String(t.status)));
+        return new Response(JSON.stringify({ tasks, total: tasks.length }));
+      }
+      if (url === "/api/projects/p1") return new Response(JSON.stringify({ id: "p1", title: "Lisbon trip" }));
+      if (url === "/api/task-watcher") return new Response(JSON.stringify(watcherInfo));
+      if (url === "/api/exploratory/agents")
+        return new Response(JSON.stringify({ enabled: true, activity: null, agents: ownAgents }));
+      if (url.startsWith("/api/exploratory/runs")) return new Response(JSON.stringify({ runs: [] }));
       if (url.startsWith("/api/exploratory/agents/")) {
         posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
         return new Response("{}");
@@ -507,7 +552,7 @@ describe("the chat page's scene", () => {
       "Chat with planner",
       "Send home",
       "Pause for 4 hours",
-      "Open its page",
+      "About planner",
     ]);
     await press(buttons, "Send home");
     expect(deleted).toContain("/api/state/whereabouts/planner");
@@ -526,7 +571,7 @@ describe("the chat page's scene", () => {
     ];
     await render();
     const buttons = await pick("talker");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Wake up", "Open its page"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["Wake up", "About talker"]);
     await press(buttons, "Wake up");
     expect(posts.some((p) => p.url === "/api/exploratory/agents/talker/resume")).toBe(true);
   });
@@ -534,7 +579,7 @@ describe("the chat page's scene", () => {
   it("offers no pause for an agent that doesn't run on its own, and closes on Escape", async () => {
     await render();
     const buttons = await pick("talker");
-    expect(buttons.map((b) => b.textContent)).toEqual(["Open its page"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["About talker"]);
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(container.querySelector(".agent-menu")).toBeNull();
   });
@@ -685,15 +730,213 @@ describe("the chat page's scene", () => {
     expect(container.querySelector(".new-task-made")?.textContent).toBe('Made "Book the ferry" for writer.');
   });
 
-  it("starts a chat with the default agent to make an agent or a room, and opens the task list from a board", async () => {
+  /** Set a field's value the way typing would, so React hears it. */
+  const fill = async (el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string) => {
+    const proto =
+      el instanceof HTMLSelectElement
+        ? HTMLSelectElement.prototype
+        : el instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
+      el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+    });
+  };
+  const buttonsIn = (selector: string) => [...container.querySelectorAll(`${selector} button`)] as HTMLButtonElement[];
+  const shownOnBoard = () => stage.tasks.at(-1)?.map((t) => `${t.id}:${(t as { status?: string }).status}`);
+
+  it("opens a task's card from its note on a board, and every change is on the board at once", async () => {
+    await render();
+    await settle(60);
+    expect(shownOnBoard()).toEqual(["t1:backlog"]);
+    await act(async () => stage.onUse?.("tasks", { task: "t1" }));
+    await settle();
+    const card = container.querySelector(".world-task") as HTMLElement;
+    expect(card.querySelector(".world-panel-title")?.textContent).toBe("Book flights");
+    expect(card.textContent).toMatch(/Out Friday, back Monday\./);
+    expect(card.querySelector(".world-facts")?.textContent).toMatch(
+      /Who\s*talker.*Project\s*Lisbon trip.*Made.*by sam/,
+    );
+    expect(card.querySelector('a[href="#/tasks/t1"]')).not.toBeNull();
+    expect(window.location.hash).not.toMatch(/tasks/);
+
+    // One click moves it, and the board shows it moved without waiting for its next look.
+    await press(buttonsIn(".world-task-status"), "Doing");
+    expect(patches.at(-1)).toEqual({ id: "t1", body: { status: "in_progress" } });
+    expect(shownOnBoard()).toEqual(["t1:in_progress"]);
+    expect(card.querySelector('.world-task-status button[aria-pressed="true"]')?.textContent).toBe("Doing");
+
+    // Its words, edited in place; Escape in a box lets go of the edit, not the card.
+    await press(buttonsIn(".world-task-words"), "Edit");
+    const title = card.querySelector(".world-task-edit input") as HTMLInputElement;
+    await act(async () => title.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(card.querySelector(".world-task-edit")).toBeNull();
+    expect(container.querySelector(".world-task")).not.toBeNull();
+    await press(buttonsIn(".world-task-words"), "Edit");
+    await fill(card.querySelector(".world-task-edit input") as HTMLInputElement, "Book the flights");
+    await fill(card.querySelector(".world-task-edit textarea") as HTMLTextAreaElement, "TAP, Friday 09:40.");
+    await act(async () => (card.querySelector(".world-task-edit") as HTMLFormElement).requestSubmit());
+    await settle();
+    expect(patches.at(-1)).toEqual({
+      id: "t1",
+      body: { title: "Book the flights", description: "TAP, Friday 09:40." },
+    });
+    expect(card.querySelector(".world-panel-title")?.textContent).toBe("Book the flights");
+
+    // Archived, it's off the boards.
+    await press(buttonsIn(".world-task"), "Archive");
+    expect(patches.at(-1)).toEqual({ id: "t1", body: { status: "archived" } });
+    expect(shownOnBoard()).toEqual([]);
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(container.querySelector(".world-task")).toBeNull();
+  });
+
+  it("gives a task to an agent, saying first whether that wakes it", async () => {
+    agentsInfo = { planner: {}, writer: {} };
+    await render();
+    await act(async () => stage.onUse?.("tasks", { task: "t1" }));
+    await settle();
+    const card = container.querySelector(".world-task") as HTMLElement;
+    await fill(card.querySelector(".world-task-assign select") as HTMLSelectElement, "planner");
+    expect(card.querySelector(".world-task-assign")?.textContent).toMatch(
+      /Assigning wakes planner: the task watcher starts it on this task/,
+    );
+    await press(buttonsIn(".world-task-assign"), "Assign");
+    expect(patches.at(-1)).toEqual({ id: "t1", body: { assignee: "planner" } });
+    expect(card.querySelector(".world-facts")?.textContent).toMatch(/Who\s*planner/);
+
+    // With the watcher off, it says nobody is woken.
+    watcherInfo = { enabled: false, triggers: ["created", "updated"] };
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => stage.onUse?.("tasks", { task: "t2" }));
+    await settle();
+    await fill(container.querySelector(".world-task-assign select") as HTMLSelectElement, "writer");
+    expect(container.querySelector(".world-task-assign")?.textContent).toMatch(
+      /task watcher is off, so writer isn't woken/,
+    );
+  });
+
+  it("opens the task list from a board, at the column clicked, and a row opens its card with a way back", async () => {
+    agentsInfo = { planner: {}, talker: {} };
+    await render();
+    await settle(60);
+    // At an agent's home, away from any note: that agent's open tasks.
+    await act(async () => stage.onUse?.("tasks", {}));
+    await settle();
+    const list = () => container.querySelector(".world-list-panel") as HTMLElement;
+    expect(list().querySelector(".world-panel-title")?.textContent).toBe("talker's tasks");
+    const rows = () => [...list().querySelectorAll(".world-list-title")].map((r) => r.textContent);
+    expect(rows()).toEqual(["Book flights"]);
+    expect(list().querySelector('a[href="#/tasks"]')?.textContent).toBe("Open the Tasks page");
+    // Anyone's, newest first.
+    await fill(list().querySelector(".world-list-who select") as HTMLSelectElement, ":anyone");
+    expect(rows()).toEqual(["Pack", "Book flights"]);
+    await press(buttonsIn(".world-list-filters"), "To do1");
+    expect(rows()).toEqual(["Book flights"]);
+    // A column of the board opens the list at that column.
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => stage.onUse?.("tasks", { column: "doing" }));
+    await settle();
+    expect(list().querySelector('.world-list-filters button[aria-pressed="true"]')?.textContent).toBe("Doing0");
+    await press(buttonsIn(".world-list-filters"), "Open1");
+    await act(async () => (list().querySelector(".world-list-row") as HTMLButtonElement).click());
+    await settle();
+    expect(container.querySelector(".world-task .world-panel-title")?.textContent).toBe("Book flights");
+    await press(buttonsIn(".world-task .world-panel-head"), "← All tasks");
+    expect(list()).not.toBeNull();
+    await press(buttonsIn(".world-list-tools"), "+ New task");
+    expect(container.querySelector(".new-task")).not.toBeNull();
+    expect(container.querySelector(".world-list-panel")).toBeNull();
+  });
+
+  it("opens every task from the Tasks button, wherever you are", async () => {
+    await render();
+    await settle(60);
+    const tool = [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === "Tasks") as HTMLElement;
+    await act(async () => tool.click());
+    await settle();
+    expect(container.querySelector(".world-list-panel .world-panel-title")?.textContent).toBe("Every task");
+    await act(async () => tool.click());
+    expect(container.querySelector(".world-list-panel")).toBeNull();
+  });
+
+  it("opens an agent's card from its menu: what it's doing, what it said, when it next runs, and what you can do", async () => {
+    agentsInfo = { planner: { online: { enabled: true } } };
+    activityRecords = [{ id: "planner", data: { agent: "planner", doing: "working", what: "taking a photo" } }];
+    speechRecords = [
+      {
+        id: "planner",
+        data: {
+          agent: "planner",
+          text: "Flights are booked.",
+          at: new Date().toISOString(),
+          room: "local:trip",
+        } as never,
+      },
+    ];
+    ownAgents = [
+      {
+        name: "planner",
+        enabled_in_state: true,
+        paused_until: null,
+        last_tick_at: new Date().toISOString(),
+        current_interval_ms: 30 * 60_000,
+        cadence: null,
+      },
+    ];
+    taskRows = taskRows.map((t) => (t.id === "t2" ? { ...t, assignee: "planner" } : t));
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    const facts = card.querySelector(".world-facts")?.textContent;
+    expect(facts).toMatch(/Now\s*taking a photo/);
+    expect(facts).toMatch(/Flights are booked\. in #trip · just now/);
+    expect(facts).toMatch(/Runs on its own about every 30 min\. Next around/);
+    expect(facts).toMatch(/Where\s*At home/);
+    expect(card.querySelector('a[href="#/agents/planner"]')?.textContent).toBe("Open its page");
+    // Its own home is somewhere else: go to it.
+    expect(buttonsIn(".world-agent-actions").map((b) => b.textContent)).toEqual([
+      "Chat with planner",
+      "Go to it",
+      "Pause for 4 hours",
+    ]);
+    await press(buttonsIn(".world-agent-actions"), "Pause for 4 hours");
+    expect(posts.find((p) => p.url === "/api/exploratory/agents/planner/pause")?.body).toEqual({ hours: 4 });
+    // Its tasks, in the list.
+    await act(async () => (card.querySelector(".world-panel-inline") as HTMLButtonElement).click());
+    await settle();
+    expect(container.querySelector(".world-list-panel .world-panel-title")?.textContent).toBe("planner's tasks");
+    expect([...container.querySelectorAll(".world-list-title")].map((r) => r.textContent)).toEqual(["Pack"]);
+  });
+
+  it("leaves keys pressed in a panel to the panel: Space there doesn't start talking", async () => {
+    await render();
+    await act(async () => stage.onUse?.("new-room"));
+    const button = container.querySelector(".world-new-room button") as HTMLButtonElement;
+    await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true })));
+    await settle();
+    expect(posts.some((p) => p.url === "/api/live/sessions")).toBe(false);
+  });
+
+  it("starts a chat with the default agent to make an agent, and says what will happen before it does for a room", async () => {
     await render();
     await act(async () => stage.onUse?.("new-agent"));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toEqual(["default", expect.stringMatching(/new agent/)]);
     await act(async () => stage.onUse?.("new-room"));
-    expect(drafts.map(([agent]) => agent)).toEqual(["default", "default"]);
-    expect(drafts[0][1]).toMatch(/new agent/);
-    expect(drafts[1][1]).toMatch(/new room/);
-    await act(async () => stage.onUse?.("tasks"));
-    expect(window.location.hash).toBe("#/tasks");
+    const panel = container.querySelector(".world-new-room") as HTMLElement;
+    // Nothing is written to anyone until the person says so, and the panel says where a room is made.
+    expect(drafts).toHaveLength(1);
+    expect(panel.textContent).toMatch(/Nothing is sent until you send it/);
+    expect(panel.textContent).toMatch(/on Discord, that's a new channel/);
+    await press([...panel.querySelectorAll("button")] as HTMLButtonElement[], "Write the message");
+    expect(drafts[1]).toEqual(["default", expect.stringMatching(/new room.*wait for my go-ahead/)]);
+    expect(container.querySelector(".world-new-room")).toBeNull();
+    expect(window.location.hash).not.toBe("#/tasks");
   });
 
   it("has no 3D view for an agent without a body, but can still talk", async () => {

@@ -427,17 +427,61 @@ A **task board** (`board`) hangs on the wall and shows tasks as sticky notes
 in four columns (to do, doing, blocked, done): in a home, its owner's; in a
 shared place or a meeting room, those of whoever is there. Every meeting room
 has one on its back wall, some homes start with one, and an agent can put one
-in its own room ("add a task board on the back wall"). Click a board to open
-the Tasks page.
+in its own room ("add a task board on the back wall").
+
+**Click a note** to open that task's card, right there in the world. The card
+shows the title, the details, the status, who has it, its project and tags,
+who made it and when, when it last changed, and its latest few comments. From
+the card you can:
+
+- move it to another status with one click (to do, doing, in review,
+  blocked, done);
+- give it to an agent, or to nobody. Before you press **Assign**, the card
+  says whether that wakes the agent: with the task watcher on
+  (`taskWatcher.enabled`), the agent is woken to start on the task; with it
+  off, the card says nobody is woken and the task waits on the agent's list;
+- edit the title and details (Escape while editing drops the edit);
+- archive it, which takes it off the boards.
+
+Every change shows on the board the moment it is saved, without waiting for
+the board's half-minute refresh. **Open on the Tasks page** at the bottom of
+the card is there for anything the card doesn't do.
+
+**Click a board away from any note** to open the **task list**. Clicking in a
+column opens it at that column; in a home it starts on the owner's tasks. The
+list filters by status (open, to do, doing, blocked, done, archived, all, with
+a count on each) and by whose tasks they are (anyone's, nobody's yet, or one
+agent's), newest first. Click a row for its card, and **← All tasks** on the
+card goes back to the list. **+ New task** opens the new-task form. The
+**Tasks** button beside **Map** opens the same list from anywhere. The list
+keeps the 300 most recently changed tasks; when there are more it says so,
+and **Open the Tasks page** at the bottom has the rest.
+
+These panels, and an agent's card (below), take the chat's column while they
+are open: the chat steps aside, the scene stays in view beside the panel, and
+closing the panel (× or Escape) brings the chat back. On a phone they open as
+a sheet over the lower part of the screen, where the chat sits, and scroll
+inside. Keys pressed in a panel are the panel's: typing never walks your
+body, and Space there presses the button instead of starting to talk.
 
 **The lobby** is first on the map, and the biggest room. Its three kiosks
-start things: **New agent** and **New room** open a fresh chat with the
-default agent, a request already written for you to send ("I'd like a new
-agent. Ask me what it should do…"), so the agent asks what it needs and sets
-it up. **New task** opens a
-small form: a title, details, and who should do it. An agent picked there
-starts on the task as soon as it's made. The lobby's board shows every open
-task.
+start things. **New
+agent** opens a fresh chat with the default agent, a request already written
+for you to send ("I'd like a new agent. Ask me what it should do…"), so the
+agent asks what it needs and sets it up. **New room** first says what will
+happen: a message to the default agent is written into the chat and nothing
+is sent until you send it; the agent asks the room's name, what it's for and
+who should be in it; and the message asks it to say where the room will be
+made and wait for your go-ahead, because rooms go on your default room
+transport, and on Discord that is a new channel in your server. **Write the
+message** puts it in the chat. **New task** opens a small form: a title,
+details, and who should do it, saying as the card does whether the agent you
+pick is woken to start on it. The lobby's board shows every open task.
+
+The card asks `GET /api/task-watcher` whether the watcher is on and which
+changes it reacts to (`created`, `updated`), as the server runs it now. Every
+change goes through the project-tasks API (`PATCH /api/project-tasks/:id`),
+the same one the Tasks page uses.
 
 Rooms come from the built-in `builtin:places` plugin. It does nothing unless
 some agent has a body. An agent with its own `tools:` list needs `place`
@@ -515,8 +559,21 @@ speaker's room name is the agent's own name.
 
 Click an agent's body, or its tag, for a menu: what it is doing and since
 when, and what you can do about it. Chat with it, send it home from a shared
-place, or open its page; an online agent can be paused for four hours or
+place, or open **About** it; an online agent can be paused for four hours or
 woken, with the same switch as the Agents page.
+
+**About** opens the agent's card, in the world. It shows the agent's name in
+its body's colour, what it is doing now and for how long, the last thing it
+said and where (from its `speech` record), where its body is, and how many
+open tasks it has (click for them in the task list). For an agent that runs
+on its own, it shows when its next turn is due, worked out the way the
+exploratory worker does from its last turn and the interval it is on now
+("about every 45 min, next around 14:05"), or that it is paused until a
+time, and what its last run said. Its buttons chat with it, go to where its
+body is, send it home from somewhere else, and pause it for four hours or
+wake it. **Open its page** at the bottom goes to the Agents page. Wakes an
+agent booked for itself with the `schedule` tool aren't shown: schedules have
+no HTTP route yet (see [schedules](./schedules.md#known-limits)).
 
 Activity comes from the built-in `builtin:activity` plugin, on by default. Like
 places, it does nothing unless some agent has a body.

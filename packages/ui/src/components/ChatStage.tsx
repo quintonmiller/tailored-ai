@@ -1,17 +1,21 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchProjectTasks } from "../api";
+import { fetchProjectTasks, fetchTaskWatcher, type ProjectTask } from "../api";
 import { type AgentAction, Avatar, type AvatarControls } from "../avatar/Avatar";
-import type { BoardTask } from "../avatar/boards";
+import type { BoardSpot, BoardTask } from "../avatar/boards";
 import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
-import type { Companion, Line } from "../avatar/stage";
+import type { Companion } from "../avatar/stage";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { subscribeStateChanges } from "../lib/state-events";
+import { countTasks, LIVE_STATUSES } from "../lib/tasks";
+import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
+import { type Said, WorldAgent } from "./WorldAgent";
 import { useWorldMap, WorldMap } from "./WorldMap";
+import { type ListView, TaskCard, TaskList } from "./WorldTasks";
 
 /**
  * The chat page's scene and voice: the agent's 3D body behind the
@@ -176,18 +180,31 @@ export function useVoicesNearby(on: boolean) {
 
 /** How often the boards ask for tasks again. */
 const BOARD_REFRESH_MS = 30_000;
+/** Tasks kept for the boards and the list: the most recently changed, which is what the server sends first. */
+const TASKS_KEPT = 300;
 
-/** Tasks for the boards on the walls: the open ones and the latest done, asked again every half minute. */
-export function useBoardTasks(enabled: boolean): BoardTask[] {
-  const [tasks, setTasks] = useState<BoardTask[]>([]);
+/**
+ * Tasks for the boards on the walls and the task list: every one that isn't
+ * archived, asked again every half minute. A change made here goes on the
+ * boards the moment it is saved (`put`), and they ask again straight after
+ * (`reload`) for anything else that changed with it.
+ */
+export function useBoardTasks(enabled: boolean): {
+  tasks: ProjectTask[];
+  total: number;
+  reload: () => void;
+  put: (task: ProjectTask) => void;
+} {
+  const [state, setState] = useState<{ tasks: ProjectTask[]; total: number }>({ tasks: [], total: 0 });
+  const [asked, setAsked] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `asked` is how a reload asks again.
   useEffect(() => {
     if (!enabled) return;
     let gone = false;
     const load = () =>
-      fetchProjectTasks({ status: "backlog,in_progress,in_review,blocked,done", limit: 120 })
+      fetchProjectTasks({ status: LIVE_STATUSES.join(","), limit: TASKS_KEPT })
         .then((res) => {
-          if (!gone)
-            setTasks(res.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee })));
+          if (!gone) setState({ tasks: res.tasks, total: res.total ?? res.tasks.length });
         })
         .catch(() => {});
     void load();
@@ -196,8 +213,47 @@ export function useBoardTasks(enabled: boolean): BoardTask[] {
       gone = true;
       clearInterval(timer);
     };
+  }, [enabled, asked]);
+  const reload = useCallback(() => setAsked((n) => n + 1), []);
+  const put = useCallback(
+    (task: ProjectTask) =>
+      setState(({ tasks, total }) => {
+        const old = tasks.find((t) => t.id === task.id);
+        const rest = tasks.filter((t) => t.id !== task.id);
+        // Just changed is the most recently changed: first, as the server would send it. Archived is off the boards.
+        if (!LIVE_STATUSES.includes(task.status)) return { tasks: rest, total: old ? total - 1 : total };
+        return { tasks: [{ ...old, ...task }, ...rest], total: old ? total : total + 1 };
+      }),
+    [],
+  );
+  return { ...state, reload, put };
+}
+
+/**
+ * Whether making or assigning a task wakes its agent: per kind of change,
+ * whether the task watcher is on and reacts to it. Asked again each time a
+ * task panel opens, since the config can change under the page; undefined
+ * until first asked.
+ */
+function useTaskWatcher(enabled: boolean): { created: boolean; updated: boolean } | undefined {
+  const [watcher, setWatcher] = useState<{ created: boolean; updated: boolean } | undefined>(undefined);
+  useEffect(() => {
+    if (!enabled) return;
+    let gone = false;
+    fetchTaskWatcher()
+      .then((w) => {
+        if (!gone)
+          setWatcher({
+            created: w.enabled && w.triggers.includes("created"),
+            updated: w.enabled && w.triggers.includes("updated"),
+          });
+      })
+      .catch(() => {});
+    return () => {
+      gone = true;
+    };
   }, [enabled]);
-  return tasks;
+  return watcher;
 }
 
 /** Which tasks a place's boards show: everyone's in the lobby, otherwise those of whoever is there. */
@@ -289,6 +345,15 @@ export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
   );
 }
 
+/** What can be open over the stage. A task opened from the list goes back to it. */
+type Panel =
+  | { kind: "map" }
+  | { kind: "tasks" }
+  | { kind: "task"; id: string; fromList?: boolean }
+  | { kind: "agent"; agent: string }
+  | { kind: "new-task" }
+  | { kind: "new-room" };
+
 interface LiveInfo {
   enabled?: boolean;
   avatar?: string;
@@ -371,20 +436,30 @@ export function useChatStage({
   }, []);
 
   const own = useRoom(home, has3d);
-  const [mapOpen, setMapOpen] = useState(false);
+  // What is open over the stage, one thing at a time: the map, a task, the task list, an agent, a form.
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const mapOpen = panel?.kind === "map";
+  // Everything but the map sits in the chat's column while it is open, so the scene stays in view beside it.
+  const side = !!panel && panel.kind !== "map";
+  const closePanel = useCallback(() => setPanel(null), []);
+  const [listView, setListView] = useState<ListView>({ filter: "open", who: undefined });
   const [near, setNear] = useState<string | undefined>(undefined);
   const visited = useScene(visiting);
   const { room, company, id: placeId } = visited ?? own;
-  const map = useWorldMap(mapOpen && showStage);
-  const [taskForm, setTaskForm] = useState(false);
+  // The map also says where an agent's body is, for its card.
+  const map = useWorldMap((mapOpen || panel?.kind === "agent") && showStage);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
-  const allTasks = useBoardTasks(showStage);
+  const board = useBoardTasks(showStage);
+  const allTasks = board.tasks;
+  const watcher = useTaskWatcher(
+    showStage && (panel?.kind === "task" || panel?.kind === "new-task" || panel?.kind === "tasks"),
+  );
   useEffect(() => {
     if (!visiting) setNear(undefined);
   }, [visiting]);
   const activities = useRecords<AgentActivity>("activity", showStage);
-  const speech = useRecords<Line>("speech", showStage);
+  const speech = useRecords<Said>("speech", showStage);
   const { online, names: agentNames } = useAgentRoster(showStage);
   const shown = home || "default";
   const talking = agent || "default";
@@ -437,8 +512,11 @@ export function useChatStage({
               },
         );
       }
-      if (who !== "default")
-        actions.push({ label: "Open its page", run: () => void (window.location.hash = `/agents/${who}`) });
+      // Everything else about it, without leaving the world; its page is a link in there.
+      actions.push({
+        label: who === "default" ? "About the default agent" : `About ${who}`,
+        run: () => setPanel({ kind: "agent", agent: who }),
+      });
       return actions;
     },
     [shown, talking, onChatWith, placeId, online, activities],
@@ -522,18 +600,19 @@ export function useChatStage({
     if (!showStage) return;
     const toggle = (e: KeyboardEvent) => {
       const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
-      if (e.code === "KeyM" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) setMapOpen((open) => !open);
+      if (e.code === "KeyM" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey)
+        setPanel((open) => (open?.kind === "map" ? null : { kind: "map" }));
     };
     window.addEventListener("keydown", toggle);
     return () => window.removeEventListener("keydown", toggle);
   }, [showStage]);
 
-  // Space to talk, like a walkie-talkie, unless the person is typing.
+  // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel.
   const { hold, release } = voice;
   useEffect(() => {
     if (!info.enabled) return;
     const typing = (e: KeyboardEvent) =>
-      (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
+      (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']");
     const down = (e: KeyboardEvent) => {
       if (e.code === "Space" && !e.repeat && !typing(e)) {
         e.preventDefault();
@@ -585,23 +664,29 @@ export function useChatStage({
     () => tasksFor(placeId, [...(visiting ? [] : [shown]), ...company.map((c) => c.agent)], allTasks),
     [placeId, visiting, shown, company, allTasks],
   );
-  // What the lobby's kiosks and the boards do when clicked.
+  // What the lobby's kiosks and the boards do when clicked. A note on a board opens its task; anywhere else on a
+  // board opens the list, at that column when it was one, and at the owner's tasks in a home.
   const onUse = useCallback(
-    (action: string) => {
-      if (action === "tasks") window.location.hash = "/tasks";
-      else if (action === "new-task") setTaskForm(true);
+    (action: string, on?: BoardSpot) => {
+      if (action === "tasks") {
+        if (on && "task" in on) {
+          setPanel({ kind: "task", id: on.task });
+          return;
+        }
+        setListView({
+          filter: on && "column" in on ? on.column : "open",
+          who: placeId?.startsWith("home:") ? placeId.slice("home:".length) : undefined,
+        });
+        setPanel({ kind: "tasks" });
+      } else if (action === "new-task") setPanel({ kind: "new-task" });
       else if (action === "new-agent")
         onDraft?.(
           "default",
           "I'd like a new agent. Ask me what it should do and how it should come across, then set it up.",
         );
-      else if (action === "new-room")
-        onDraft?.(
-          "default",
-          "I'd like a new room for agents to talk in. Ask me its name, what it's for and who should be in it, then make it.",
-        );
+      else if (action === "new-room") setPanel({ kind: "new-room" });
     },
-    [onDraft],
+    [onDraft, placeId],
   );
   const tools = (
     <>
@@ -610,9 +695,22 @@ export function useChatStage({
         className="talk-tool"
         aria-expanded={mapOpen}
         title="Every place there is (M)"
-        onClick={() => setMapOpen((open) => !open)}
+        onClick={() => setPanel(mapOpen ? null : { kind: "map" })}
       >
         Map
+      </button>
+      <button
+        type="button"
+        className="talk-tool"
+        aria-expanded={panel?.kind === "tasks"}
+        title="Every task, without leaving the world"
+        onClick={() => {
+          if (panel?.kind === "tasks") return setPanel(null);
+          setListView({ filter: "open", who: undefined });
+          setPanel({ kind: "tasks" });
+        }}
+      >
+        Tasks
       </button>
       {visiting && (
         <button type="button" className="talk-tool" onClick={() => setVisiting(null)}>
@@ -640,6 +738,94 @@ export function useChatStage({
       )}
     </>
   );
+  // Going somewhere: to the agent you came from is back with it.
+  const go = (id: string) => {
+    setVisiting(id === own.id ? null : id);
+    setPanel(null);
+  };
+  let overlay: ReactNode;
+  if (panel?.kind === "map")
+    overlay = (
+      <WorldMap
+        places={map.places}
+        problem={map.problem}
+        here={visiting ?? own.id}
+        activities={activities}
+        onGo={go}
+        onClose={closePanel}
+      />
+    );
+  else if (panel?.kind === "new-task")
+    overlay = <NewTask agents={agentNames} wakes={watcher?.created} onMade={board.reload} onClose={closePanel} />;
+  else if (panel?.kind === "new-room")
+    overlay = (
+      <NewRoom
+        onAsk={() => {
+          setPanel(null);
+          onDraft?.("default", NEW_ROOM_ASK);
+        }}
+        onClose={closePanel}
+      />
+    );
+  else if (panel?.kind === "tasks")
+    overlay = (
+      <TaskList
+        tasks={allTasks}
+        total={board.total}
+        agents={agentNames}
+        view={listView}
+        onView={setListView}
+        onOpen={(id) => setPanel({ kind: "task", id, fromList: true })}
+        onNew={() => setPanel({ kind: "new-task" })}
+        onClose={closePanel}
+      />
+    );
+  else if (panel?.kind === "task")
+    overlay = (
+      <TaskCard
+        key={panel.id}
+        id={panel.id}
+        agents={agentNames}
+        wakes={watcher?.updated}
+        onSaved={(task) => {
+          board.put(task);
+          board.reload();
+        }}
+        {...(panel.fromList ? { onBack: () => setPanel({ kind: "tasks" }) } : {})}
+        onClose={closePanel}
+      />
+    );
+  else if (panel?.kind === "agent") {
+    const who = panel.agent;
+    const spot = map.places.find((p) => (p.kind === "home" || p.kind === "shared") && p.agents.includes(who));
+    const where = spot && { id: spot.id, name: spot.name, home: spot.id === `home:${who}` };
+    overlay = (
+      <WorldAgent
+        key={who}
+        agent={who}
+        activity={activities[who]}
+        said={speech[who]}
+        roomName={(ref) => map.places.find((p) => p.id === `room:${ref}`)?.name}
+        where={where}
+        openTasks={countTasks(allTasks, who).open}
+        online={online.has(who)}
+        talking={who === talking}
+        onChat={() => {
+          setPanel(null);
+          onChatWith?.(who);
+        }}
+        {...(where && where.id !== (visiting ?? own.id) ? { onVisit: () => go(where.id) } : {})}
+        onSendHome={() =>
+          must(fetch(`/api/state/whereabouts/${encodeURIComponent(who)}`, { method: "DELETE" }), "send it home")
+        }
+        onTasks={() => {
+          setListView({ filter: "open", who });
+          setPanel({ kind: "tasks" });
+        }}
+        onClose={closePanel}
+      />
+    );
+  }
   const stage: ReactNode =
     showStage && info.avatar ? (
       <Avatar
@@ -652,7 +838,7 @@ export function useChatStage({
         loudness={visiting ? () => 0 : voice.loudness}
         engaged={visiting ? false : busy || conversing}
         controls={controls}
-        insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
+        insetRight={(panelOpen || side) && wide ? PANEL_WIDTH : 0}
         room={room}
         company={company}
         agent={visiting ? "you" : shown}
@@ -665,24 +851,7 @@ export function useChatStage({
         tasks={boardTasks}
         onUse={onUse}
         onLine={hearLine}
-        overlay={
-          taskForm ? (
-            <NewTask agents={agentNames} onClose={() => setTaskForm(false)} />
-          ) : mapOpen ? (
-            <WorldMap
-              places={map.places}
-              problem={map.problem}
-              here={visiting ?? own.id}
-              activities={activities}
-              onGo={(id) => {
-                // Where the agent you came from is, is back with it.
-                setVisiting(id === own.id ? null : id);
-                setMapOpen(false);
-              }}
-              onClose={() => setMapOpen(false)}
-            />
-          ) : undefined
-        }
+        overlay={overlay}
         {...(info.enabled && !visiting ? { chooseIdle } : {})}
       />
     ) : null;
@@ -708,6 +877,10 @@ export function useChatStage({
     activities,
     /** The name of the place on screen, when it has one. */
     placeName: room.name,
+    /** Something is open over the stage: on a phone it needs the screen the chat would take. */
+    worldPanel: !!panel,
+    /** What is open sits in the chat's column: the chat steps aside until it closes. */
+    sidePanel: side,
   };
 }
 

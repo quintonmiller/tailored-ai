@@ -573,6 +573,11 @@ export function updateProjectTask(
   });
 }
 
+/** Whether a change to a task wakes its agent: the task watcher's switch, and the changes it reacts to. */
+export function fetchTaskWatcher(): Promise<{ enabled: boolean; triggers: string[] }> {
+  return jsonFetch("/api/task-watcher");
+}
+
 export function deleteProjectTask(id: string): Promise<{ ok: boolean }> {
   return jsonFetch(`/api/project-tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
