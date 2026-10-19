@@ -55,6 +55,7 @@ export function WorldAgent({
   openTasks,
   online,
   talking,
+  tasksWake,
   onChat,
   onVisit,
   onSendHome,
@@ -73,6 +74,8 @@ export function WorldAgent({
   online: boolean;
   /** It is the agent the chat is with now. */
   talking: boolean;
+  /** Whether a task given to it wakes it, as the task watcher runs; undefined until the server has said. */
+  tasksWake: boolean | undefined;
   onChat: () => void;
   /** Go to where its body is; undefined when you are there already. */
   onVisit?: () => void;
@@ -125,6 +128,9 @@ export function WorldAgent({
   const doing = activity && activity.doing !== "idle" ? activity : undefined;
   const room = said?.room ? roomName(said.room) : undefined;
   const name = nameOf(agent);
+  // The switch that pauses every agent, as its activity says while it has nothing to do: the worker then skips
+  // them all, whatever each one's own turns say.
+  const allPaused = activity?.detail === "agents are paused";
 
   return (
     <WorldPanel
@@ -172,10 +178,12 @@ export function WorldAgent({
         <dt>On its own</dt>
         <dd>
           {online
-            ? own?.agent
-              ? ownTurns(own.agent, own.allOn)
-              : "Runs on its own."
-            : "Doesn't run on its own. It works when you talk to it, or a room, a task or a wake it booked calls it."}
+            ? allPaused
+              ? "Every agent is paused, so it doesn't run on its own until that is lifted."
+              : own?.agent
+                ? ownTurns(own.agent, own.allOn)
+                : "Runs on its own."
+            : `Doesn't run on its own. It works when you talk to it, or ${tasksWake ? "a room, a task" : "a room"} or a wake it booked calls it.`}
           {lastRun && (
             <span className="world-agent-run">
               {" "}

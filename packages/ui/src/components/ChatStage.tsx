@@ -453,7 +453,8 @@ export function useChatStage({
   const board = useBoardTasks(showStage);
   const allTasks = board.tasks;
   const watcher = useTaskWatcher(
-    showStage && (panel?.kind === "task" || panel?.kind === "new-task" || panel?.kind === "tasks"),
+    showStage &&
+      (panel?.kind === "task" || panel?.kind === "new-task" || panel?.kind === "tasks" || panel?.kind === "agent"),
   );
   useEffect(() => {
     if (!visiting) setNear(undefined);
@@ -466,6 +467,14 @@ export function useChatStage({
   // Where you are says who you talk to: an agent's own home is a conversation with it, and coming back to the
   // agent you came from is one with it again. Anywhere else, the conversation you had goes on.
   const host = visiting ? (visiting.startsWith("home:") ? visiting.slice("home:".length) : undefined) : shown;
+  // Talking to someone is the chat: a panel in its column steps aside, or the click would seem to do nothing.
+  const chatWith = useCallback(
+    (who: string) => {
+      setPanel((open) => (open && open.kind !== "map" ? null : open));
+      onChatWith?.(who);
+    },
+    [onChatWith],
+  );
   // On every arrival, even at the agent you are talking to already: that calls off a switch still waiting for a
   // reply, so coming back before it is done keeps you where you came back to.
   const arrived = useRef(host);
@@ -473,13 +482,13 @@ export function useChatStage({
   useEffect(() => {
     if (host === arrived.current) return;
     arrived.current = host;
-    if (host) onChatWith?.(host);
+    if (host) chatWith(host);
   }, [host]);
   // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it.
   const menuFor = useCallback(
     (who: string): AgentAction[] => {
       const actions: AgentAction[] = [];
-      if (who !== talking && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => onChatWith(who) });
+      if (who !== talking && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => chatWith(who) });
       if (placeId?.startsWith("shared:"))
         actions.push({
           label: who === shown ? "Go home" : "Send home",
@@ -519,7 +528,7 @@ export function useChatStage({
       });
       return actions;
     },
-    [shown, talking, onChatWith, placeId, online, activities],
+    [shown, talking, onChatWith, chatWith, placeId, online, activities],
   );
   // What the body can do in this room: its moves, the things it can go to, look at and point at, and who is with it.
   // Always the agent's own place: its cues move its own body, which a visit doesn't change.
@@ -609,6 +618,10 @@ export function useChatStage({
 
   // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel.
   const { hold, release } = voice;
+  // Whether Space started talking. Letting it go ends that wherever the key comes up: clicking a body while
+  // holding it puts the focus in that body's menu, which would otherwise keep the microphone open, and the key
+  // coming up there isn't a press of the menu's first button. A ref, so it outlasts the listeners being redone.
+  const bySpace = useRef(false);
   useEffect(() => {
     if (!info.enabled) return;
     const typing = (e: KeyboardEvent) =>
@@ -616,11 +629,15 @@ export function useChatStage({
     const down = (e: KeyboardEvent) => {
       if (e.code === "Space" && !e.repeat && !typing(e)) {
         e.preventDefault();
+        bySpace.current = true;
         void hold();
       }
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !typing(e)) release();
+      if (e.code !== "Space" || !bySpace.current) return;
+      bySpace.current = false;
+      e.preventDefault();
+      release();
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
@@ -732,7 +749,7 @@ export function useChatStage({
         </button>
       )}
       {visiting && near && near !== talking && onChatWith && (
-        <button type="button" className="talk-tool talk-near" onClick={() => onChatWith(near)}>
+        <button type="button" className="talk-tool talk-near" onClick={() => chatWith(near)}>
           Talk to {near}
         </button>
       )}
@@ -810,10 +827,8 @@ export function useChatStage({
         openTasks={countTasks(allTasks, who).open}
         online={online.has(who)}
         talking={who === talking}
-        onChat={() => {
-          setPanel(null);
-          onChatWith?.(who);
-        }}
+        tasksWake={watcher ? watcher.created || watcher.updated : undefined}
+        onChat={() => chatWith(who)}
         {...(where && where.id !== (visiting ?? own.id) ? { onVisit: () => go(where.id) } : {})}
         onSendHome={() =>
           must(fetch(`/api/state/whereabouts/${encodeURIComponent(who)}`, { method: "DELETE" }), "send it home")
@@ -881,6 +896,10 @@ export function useChatStage({
     worldPanel: !!panel,
     /** What is open sits in the chat's column: the chat steps aside until it closes. */
     sidePanel: side,
+    /** The chat is out of sight for what is open: a panel in its column, or on a phone anything at all. */
+    chatCovered: showStage && (side || (!wide && !!panel)),
+    /** Close what is open over the stage. */
+    closePanel,
   };
 }
 

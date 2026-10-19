@@ -63,14 +63,18 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sidebarOpen, store]);
 
-  // Escape interrupts an in-flight turn (page-only — dock has its own Esc behavior).
+  // Escape interrupts an in-flight turn (page-only — dock has its own Esc behavior). Not while something is open
+  // over the scene: there Escape closes it, and a panel in the chat's column hides the turn it would cut off. Which
+  // window listener hears the key first depends on which was added first, so all three are asked: a panel or menu
+  // that closed on it says so, one still open is in `overStage`, and focus in a menu is inside its dialog.
+  const overStage = useRef(false);
   useEffect(() => {
     if (!store.sending) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        store.interrupt();
-      }
+      if (e.key !== "Escape" || e.defaultPrevented || overStage.current) return;
+      if ((e.target as HTMLElement | null)?.closest?.("[role='dialog']")) return;
+      e.preventDefault();
+      store.interrupt();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -112,6 +116,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       store.loadSession(rowFor(conversation, key));
     },
   });
+  overStage.current = scene.showStage && !!scene.worldPanel;
 
   // In a meeting room there is nobody in particular to talk to: the panel reads out the room's own
   // conversation, until you pick one of its members to talk to.
@@ -299,8 +304,14 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
             <button
               type="button"
               className="chat-toolbar-btn"
-              aria-pressed={panelOpen}
-              onClick={() => setPanelOpen(!panelOpen)}
+              aria-pressed={panelOpen && !scene.chatCovered}
+              onClick={() => {
+                // Asked for while a panel has its place, the chat comes back: the panel closes.
+                if (scene.chatCovered) {
+                  scene.closePanel();
+                  setPanelOpen(true);
+                } else setPanelOpen(!panelOpen);
+              }}
               title="Show or hide the conversation over the scene"
             >
               Chat

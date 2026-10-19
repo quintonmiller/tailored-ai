@@ -119,6 +119,8 @@ let activityRecords: { id: string; data: { agent: string; doing: string; what: s
 let taskRows: Record<string, unknown>[] = [];
 /** Every change sent to a task, in order. */
 const patches: { id: string; body: Record<string, unknown> }[] = [];
+/** When set, the boards' next look at the tasks waits for this: the server slow to answer. */
+let tasksHeld: Promise<void> | null = null;
 /** The task watcher, as the server says it runs. */
 let watcherInfo = { enabled: true, triggers: ["created", "updated"] };
 /** Agents that run on their own, as the exploratory worker keeps them. */
@@ -247,6 +249,7 @@ beforeEach(() => {
     },
   ];
   patches.length = 0;
+  tasksHeld = null;
   watcherInfo = { enabled: true, triggers: ["created", "updated"] };
   ownAgents = [];
   placeId = "home:talker";
@@ -331,6 +334,7 @@ beforeEach(() => {
       }
       if (one) return new Response(JSON.stringify({ ...taskRows.find((t) => t.id === one[1]), comments: [] }));
       if (url.startsWith("/api/project-tasks")) {
+        await tasksHeld;
         const statuses = new URL(url, "http://t").searchParams.get("status")?.split(",") ?? [];
         const tasks = taskRows.filter((t) => statuses.includes(String(t.status)));
         return new Response(JSON.stringify({ tasks, total: tasks.length }));
@@ -761,9 +765,18 @@ describe("the chat page's scene", () => {
     expect(card.querySelector('a[href="#/tasks/t1"]')).not.toBeNull();
     expect(window.location.hash).not.toMatch(/tasks/);
 
-    // One click moves it, and the board shows it moved without waiting for its next look.
+    // One click moves it, and the board shows it moved without waiting for its next look, even one asked straight
+    // after the change and slow to come back.
+    let answer = () => {};
+    tasksHeld = new Promise<void>((r) => {
+      answer = r;
+    });
     await press(buttonsIn(".world-task-status"), "Doing");
     expect(patches.at(-1)).toEqual({ id: "t1", body: { status: "in_progress" } });
+    expect(shownOnBoard()).toEqual(["t1:in_progress"]);
+    tasksHeld = null;
+    await act(async () => answer());
+    await settle();
     expect(shownOnBoard()).toEqual(["t1:in_progress"]);
     expect(card.querySelector('.world-task-status button[aria-pressed="true"]')?.textContent).toBe("Doing");
 
@@ -788,8 +801,11 @@ describe("the chat page's scene", () => {
     await press(buttonsIn(".world-task"), "Archive");
     expect(patches.at(-1)).toEqual({ id: "t1", body: { status: "archived" } });
     expect(shownOnBoard()).toEqual([]);
-    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    // Escape closes it, and says so, so the chat page doesn't take it as stopping a reply too.
+    const esc = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    await act(async () => window.dispatchEvent(esc));
     expect(container.querySelector(".world-task")).toBeNull();
+    expect(esc.defaultPrevented).toBe(true);
   });
 
   it("gives a task to an agent, saying first whether that wakes it", async () => {
@@ -799,8 +815,9 @@ describe("the chat page's scene", () => {
     await settle();
     const card = container.querySelector(".world-task") as HTMLElement;
     await fill(card.querySelector(".world-task-assign select") as HTMLSelectElement, "planner");
+    // Not a promise: the watcher doesn't start the agent it last started on a task again.
     expect(card.querySelector(".world-task-assign")?.textContent).toMatch(
-      /Assigning wakes planner: the task watcher starts it on this task/,
+      /Assigning wakes planner: the task watcher starts it on this task, unless planner was the last agent it started on it\./,
     );
     await press(buttonsIn(".world-task-assign"), "Assign");
     expect(patches.at(-1)).toEqual({ id: "t1", body: { assignee: "planner" } });
@@ -861,6 +878,37 @@ describe("the chat page's scene", () => {
     expect(container.querySelector(".world-list-panel")).toBeNull();
   });
 
+  it("opens the list at the default agent's tasks in its home, though it isn't one of the configured agents", async () => {
+    agentsInfo = { planner: {} };
+    placeId = "home:default";
+    await render();
+    await settle(60);
+    await act(async () => stage.onUse?.("tasks", {}));
+    await settle();
+    const list = container.querySelector(".world-list-panel") as HTMLElement;
+    const whose = list.querySelector(".world-list-who select") as HTMLSelectElement;
+    expect(list.querySelector(".world-panel-title")?.textContent).toBe("Default agent's tasks");
+    // The picker says whose they are, so picking anyone's is a change it hears.
+    expect(whose.value).toBe("default");
+    expect(list.querySelectorAll(".world-list-title")).toHaveLength(0);
+    await fill(whose, ":anyone");
+    expect([...list.querySelectorAll(".world-list-title")].map((r) => r.textContent)).toEqual(["Pack", "Book flights"]);
+  });
+
+  it("brings the chat back when you pick someone to talk to while a panel has its place", async () => {
+    placeId = "shared:lounge";
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    await render();
+    await settle(60);
+    const tool = [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === "Tasks") as HTMLElement;
+    await act(async () => tool.click());
+    await settle();
+    expect(container.querySelector(".world-list-panel")).not.toBeNull();
+    await press(await pick("planner"), "Chat with planner");
+    expect(chattedWith).toEqual(["planner"]);
+    expect(container.querySelector(".world-list-panel")).toBeNull();
+  });
+
   it("opens an agent's card from its menu: what it's doing, what it said, when it next runs, and what you can do", async () => {
     agentsInfo = { planner: { online: { enabled: true } } };
     activityRecords = [{ id: "planner", data: { agent: "planner", doing: "working", what: "taking a photo" } }];
@@ -911,6 +959,63 @@ describe("the chat page's scene", () => {
     await settle();
     expect(container.querySelector(".world-list-panel .world-panel-title")?.textContent).toBe("planner's tasks");
     expect([...container.querySelectorAll(".world-list-title")].map((r) => r.textContent)).toEqual(["Pack"]);
+  });
+
+  it("says on an agent's card when every agent is paused, and that a task calls one only with the watcher on", async () => {
+    placeId = "shared:lounge";
+    agentsInfo = { planner: { online: { enabled: true } }, writer: {} };
+    activityRecords = [
+      {
+        id: "planner",
+        data: { agent: "planner", doing: "asleep", what: "asleep", detail: "agents are paused" } as never,
+      },
+    ];
+    ownAgents = [
+      {
+        name: "planner",
+        enabled_in_state: true,
+        paused_until: null,
+        last_tick_at: new Date().toISOString(),
+        current_interval_ms: 30 * 60_000,
+        cadence: null,
+      },
+    ];
+    company = ["planner", "writer"].map((a) => ({
+      agent: a,
+      name: a,
+      avatar: `/api/live/avatar?agent=${a}`,
+      animations: [],
+    }));
+    await render();
+    await settle(60);
+    const facts = () => container.querySelector(".world-agent .world-facts")?.textContent ?? "";
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    expect(facts()).toMatch(/Every agent is paused, so it doesn't run on its own until that is lifted\./);
+    expect(facts()).not.toMatch(/Next around/);
+
+    await press(await pick("writer"), "About writer");
+    await settle(60);
+    expect(facts()).toMatch(/when you talk to it, or a room, a task or a wake it booked calls it/);
+    watcherInfo = { enabled: false, triggers: ["created", "updated"] };
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await press(await pick("writer"), "About writer");
+    await settle(60);
+    expect(facts()).toMatch(/when you talk to it, or a room or a wake it booked calls it/);
+  });
+
+  it("stops talking when Space comes up in a menu that opened while it was held", async () => {
+    await render();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" })));
+    await settle();
+    // Clicking a body while holding Space: its menu has the focus when the key comes up.
+    const [first] = await pick("talker");
+    const up = new KeyboardEvent("keyup", { code: "Space", bubbles: true, cancelable: true });
+    await act(async () => first.dispatchEvent(up));
+    await settle();
+    expect(posts.some((p) => p.url.endsWith("/turn"))).toBe(true);
+    // Coming up there isn't a press of the menu's button.
+    expect(up.defaultPrevented).toBe(true);
   });
 
   it("leaves keys pressed in a panel to the panel: Space there doesn't start talking", async () => {

@@ -357,7 +357,10 @@ function AgentMenu({
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Claimed, so the chat page doesn't take the same Escape as stopping a reply.
+      e.preventDefault();
+      onClose();
     };
     const away = (e: PointerEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) onClose();

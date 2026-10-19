@@ -29,11 +29,14 @@ const COMMENTS = 3;
 /**
  * What assigning says before you do it: that the agent is woken to start on
  * the task when the task watcher is on, and that nobody is when it is off.
+ * The watcher doesn't start the agent it last started on a task again when
+ * the task comes back to it, and the page can't see which one that was, so
+ * the note says so rather than promise.
  */
 export function wakeNote(agent: string, wakes: boolean | undefined): string | undefined {
   if (wakes === undefined) return undefined;
   return wakes
-    ? `Assigning wakes ${agent}: the task watcher starts it on this task.`
+    ? `Assigning wakes ${agent}: the task watcher starts it on this task, unless ${agent} was the last agent it started on it.`
     : `The task watcher is off, so ${agent} isn't woken. The task waits on its list.`;
 }
 
@@ -362,10 +365,18 @@ export function TaskList({
   );
   const counts = useMemo(() => countTasks(all, view.who), [all, view.who]);
   const shown = useMemo(() => listTasks(all, view.filter, view.who), [all, view.filter, view.who]);
-  // Anyone a task is given to can be picked, an agent since removed included.
+  // Anyone a task is given to can be picked, an agent since removed included, and whoever the list was opened
+  // for: the default agent's home, say, when the default agent isn't one of the configured ones.
   const people = useMemo(
-    () => [...new Set([...agents, ...all.flatMap((t) => (t.assignee ? [t.assignee] : []))])].sort(),
-    [agents, all],
+    () =>
+      [
+        ...new Set([
+          ...agents,
+          ...(typeof view.who === "string" ? [view.who] : []),
+          ...all.flatMap((t) => (t.assignee ? [t.assignee] : [])),
+        ]),
+      ].sort(),
+    [agents, view.who, all],
   );
   const title =
     view.who === undefined ? "Every task" : view.who === null ? "Nobody's yet" : `${nameOf(view.who)}'s tasks`;

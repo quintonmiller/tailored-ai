@@ -438,8 +438,10 @@ the card you can:
   blocked, done);
 - give it to an agent, or to nobody. Before you press **Assign**, the card
   says whether that wakes the agent: with the task watcher on
-  (`taskWatcher.enabled`), the agent is woken to start on the task; with it
-  off, the card says nobody is woken and the task waits on the agent's list;
+  (`taskWatcher.enabled`), the agent is woken to start on the task, unless
+  it was the last agent the watcher started on that task (the watcher
+  doesn't start the same agent on a task twice in a row); with it off, the
+  card says nobody is woken and the task waits on the agent's list;
 - edit the title and details (Escape while editing drops the edit);
 - archive it, which takes it off the boards.
 
@@ -459,10 +461,13 @@ and **Open the Tasks page** at the bottom has the rest.
 
 These panels, and an agent's card (below), take the chat's column while they
 are open: the chat steps aside, the scene stays in view beside the panel, and
-closing the panel (× or Escape) brings the chat back. On a phone they open as
-a sheet over the lower part of the screen, where the chat sits, and scroll
-inside. Keys pressed in a panel are the panel's: typing never walks your
-body, and Space there presses the button instead of starting to talk.
+closing the panel (× or Escape) brings the chat back. So does anything that
+asks for the chat: the toolbar's **Chat** button, or **Chat with** on an
+agent's menu. Escape on a panel only closes it: a reply on its way in the
+hidden chat goes on. On a phone they open as a sheet over the lower part of
+the screen, where the chat sits, and scroll inside. Keys pressed in a panel
+are the panel's: typing never walks your body, and Space there presses the
+button instead of starting to talk.
 
 **The lobby** is first on the map, and the biggest room. Its three kiosks
 start things. **New
@@ -569,7 +574,7 @@ open tasks it has (click for them in the task list). For an agent that runs
 on its own, it shows when its next turn is due, worked out the way the
 exploratory worker does from its last turn and the interval it is on now
 ("about every 45 min, next around 14:05"), or that it is paused until a
-time, and what its last run said. Its buttons chat with it, go to where its
+time, or that every agent is paused, and what its last run said. Its buttons chat with it, go to where its
 body is, send it home from somewhere else, and pause it for four hours or
 wake it. **Open its page** at the bottom goes to the Agents page. Wakes an
 agent booked for itself with the `schedule` tool aren't shown: schedules have
