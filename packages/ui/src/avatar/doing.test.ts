@@ -43,6 +43,15 @@ describe("behaviorFor", () => {
     expect(behaviorFor(act({ doing: "working", what: "coding", look: "laptop" })).station).toBe("desk");
   });
 
+  it("goes where the work is: the desk to think and to work, the task board for tasks", () => {
+    expect(behaviorFor(act({ doing: "thinking", what: "thinking" })).station).toBe("desk");
+    expect(behaviorFor(act({ doing: "working", what: "using flights" })).station).toBe("desk");
+    expect(behaviorFor(act({ doing: "working", what: "updating tasks", look: "clipboard" })).station).toBe("board");
+    // A photo or a recording is made where it stands.
+    expect(behaviorFor(act({ doing: "working", what: "taking a photo", look: "camera" })).station).toBeUndefined();
+    expect(behaviorFor(act({ doing: "idle", what: "idle" })).station).toBeUndefined();
+  });
+
   it("holds nothing for a look it can't draw, but still says what it is doing", () => {
     const b = behaviorFor(act({ doing: "working", what: "using flights", look: "airplane" }));
     expect(b.prop).toBeUndefined();
@@ -112,6 +121,17 @@ describe("stationSpot", () => {
   it("stays put when it is already at one, and when every one is taken", () => {
     expect(stationSpot("seat", spots, { x: 0, z: 0, spotActivity: "sit" }, new Set())).toBeUndefined();
     expect(stationSpot("seat", spots, { x: 0, z: 0 }, new Set(["couch", "armchair"]))).toBeUndefined();
+  });
+
+  it("finds the task board by the spot in front of it, and stays there once it is", () => {
+    const withBoard = [
+      ...spots,
+      { id: "idle:board", at: [0, -1.8] as [number, number], activity: "look", for: "board" },
+    ];
+    expect(stationSpot("board", withBoard, { x: 1, z: 1 }, new Set())?.id).toBe("idle:board");
+    expect(stationSpot("board", withBoard, { x: 0, z: -1.8, spot: "idle:board" }, new Set())).toBeUndefined();
+    // A window is somewhere to look too, but not the board.
+    expect(stationSpot("board", spots, { x: 0, z: 0 }, new Set())).toBeUndefined();
   });
 });
 

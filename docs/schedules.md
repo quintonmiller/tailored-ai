@@ -202,4 +202,6 @@ actually ran), `schedule.cancelled`.
   hour across a transition by design.
 - **No operator surface yet.** `list` and `cancel` are agent-facing only; there
   is no HTTP route, CLI command or dashboard widget. Inspect the table directly
-  until there is.
+  until there is. The one place a booked wake shows is an idle agent's
+  `activity` record, whose `next` is its soonest wake (see
+  [what it is doing](./live-sessions.md#what-it-is-doing)).

@@ -537,8 +537,10 @@ export function useChatStage({
     showStage &&
       (panel?.kind === "task" || panel?.kind === "new-task" || panel?.kind === "tasks" || panel?.kind === "agent"),
   );
+  // A new place is a new stage, which says who you are next to from scratch: nobody, until you walk up to someone.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: arriving anywhere is what clears it.
   useEffect(() => {
-    if (!visiting) setNear(undefined);
+    setNear(undefined);
   }, [visiting]);
   const activities = useRecords<AgentActivity>("activity", showStage);
   const speech = useRecords<Said>("speech", showStage);
@@ -571,7 +573,8 @@ export function useChatStage({
     (who: string): AgentAction[] => {
       const actions: AgentAction[] = [];
       if (who !== talking && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => chatWith(who) });
-      if (placeId?.startsWith("shared:"))
+      // Gone to a shared place, or to a meeting room to talk: home is where it goes back to.
+      if (placeId?.startsWith("shared:") || placeId?.startsWith("room:"))
         actions.push({
           label: who === shown ? "Go home" : "Send home",
           run: () =>
@@ -907,8 +910,13 @@ export function useChatStage({
     );
   else if (panel?.kind === "agent") {
     const who = panel.agent;
-    const spot = map.places.find((p) => (p.kind === "home" || p.kind === "shared") && p.agents.includes(who));
-    const where = spot && { id: spot.id, name: spot.name, home: spot.id === `home:${who}` };
+    // A body is in one place: its home, a shared place, or the meeting room of a room it is talking in.
+    const spot = map.places.find((p) => p.kind !== "lobby" && p.agents.includes(who));
+    const where = spot && {
+      id: spot.id,
+      name: spot.kind === "room" ? `#${spot.name}` : spot.name,
+      home: spot.id === `home:${who}`,
+    };
     overlay = (
       <WorldAgent
         key={who}

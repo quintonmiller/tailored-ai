@@ -1,0 +1,6 @@
+---
+'@tailored-ai/core': patch
+'@tailored-ai/ui': patch
+---
+
+Idle agents look alive, and work shows up where it happens. An idle body passes the time with what its room has, weighted by the hour and drawn per agent: it reads by the bookshelf, waters a plant, looks out of a window, studies the task board, makes a coffee at the sideboard, stretches, tidies the desk, and naps on the couch late at night. Point at a body, or walk up to it, and its tag says what it is up to, what it did last ("last: searched the web, 40 min ago") and when it next wakes ("next: 07:00"); a sleeping one's says why and until when. The activity plugin keeps `last`, `next` (the soonest wake booked with `schedule`, or an online agent's next turn) and `until` on idle and sleeping agents' records. A working agent goes to its desk, or the task board for tasks. When a room wakes an agent or it talks in one, its body takes a seat in that room's meeting room, with its speech bubbles, and goes back where it came from after a quiet spell (`quietMinutes` in the places plugin's config, 10 by default, 0 to turn off). The map lists who is busy at the top, most pressing first, with where each is, and marks the places where something is happening.

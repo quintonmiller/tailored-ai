@@ -105,6 +105,11 @@ export interface Spot {
   seat?: { at: [number, number]; height: number };
   /** The prop this spot belongs to. */
   item?: string;
+  /**
+   * What an idle body goes there for, on a spot the page adds by something
+   * that brings none of its own (see `idleSpots` in `idle.ts`).
+   */
+  for?: "plant" | "board" | "counter" | "fish" | "picture";
 }
 
 export type Floor = "wood" | "carpet" | "tile" | "concrete";

@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 36 | 111 |
+| `agents` | object | {} | 36 | 112 |
 
 ### `autopilot`
 
@@ -202,7 +202,7 @@ Fields: **79** · with no read site found: **0**
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |
 | `tools.recall.enabled` | boolean | `true` | 41 | 1 |
 | `tools.room.enabled` | boolean | `true` | 41 | 1 |
-| `tools.state.enabled` | boolean | `true` | 41 | 3 |
+| `tools.state.enabled` | boolean | `true` | 41 | 4 |
 | `tools.tasks.enabled` | boolean | `true` | 41 | 1 |
 | `tools.web_fetch.enabled` | boolean | `true` | 41 | 1 |
 | `tools.web_search.apiKey` | string | `""` | 23 | 1 |

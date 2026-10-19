@@ -12,6 +12,7 @@ import plugin, {
   ACTIVITY_TYPE,
   type Activity,
   ActivityTracker,
+  nextWake,
   SPEECH_SCHEMA,
   SPEECH_TYPE,
   type Speech,
@@ -279,6 +280,65 @@ describe("activity", () => {
     ).rejects.toThrow(StateError);
   });
 
+  it("remembers the last thing it did after it goes idle: the last tool it used, and when", async () => {
+    make();
+    started("planner");
+    await tool("planner", "recall", { query: "the trip" });
+    await tool("planner", "web_search", { query: "ferries" });
+    ended("planner", { stop: { kind: "complete" } });
+    const idle = await activity("planner");
+    expect(idle.doing).toBe("idle");
+    expect(idle.last).toMatchObject({ what: "searching the web", look: "magnifier" });
+    expect(Date.parse(idle.last?.at ?? "")).not.toBeNaN();
+  });
+
+  it("says a turn without a tool talked: to the agent that started it, in the room that woke it, or back", async () => {
+    make({ roomName: (ref) => (ref === "local:trip" ? "trip" : undefined) });
+    events.emit("room.woke", { roomRef: "local:trip", agent: "writer", messageCount: 2 });
+    started("writer");
+    ended("writer", { stop: { kind: "complete" } });
+    expect((await activity("writer")).last?.what).toBe("talking in #trip");
+    await tool("planner", "room", { action: "dm", agent: "writer" }, false);
+    started("writer", "dm");
+    ended("writer", { stop: { kind: "complete" } }, "dm");
+    expect((await activity("writer")).last?.what).toBe("talking to planner");
+    started("default");
+    ended("default", { stop: { kind: "complete" } });
+    expect((await activity("default")).last?.what).toBe("replying");
+  });
+
+  it("says when an idle or sleeping agent next wakes, and when a pause runs out", async () => {
+    const wakes = new Map([["planner", "2026-10-19T07:00:00.000Z"]]);
+    sleeping.set("writer", "paused");
+    make({
+      next: (agent) => wakes.get(agent) ?? null,
+      asleep: (agent) => (agent === "writer" ? { why: "paused", until: "2026-10-19T09:30:00.000Z" } : null),
+    });
+    await tracker.start();
+    expect(await activity("planner")).toMatchObject({ doing: "idle", next: "2026-10-19T07:00:00.000Z" });
+    expect(await activity("writer")).toMatchObject({
+      doing: "asleep",
+      detail: "paused",
+      until: "2026-10-19T09:30:00.000Z",
+    });
+    expect((await activity("default")).next).toBeUndefined();
+    // Busy, it says nothing about its next wake.
+    started("planner");
+    expect((await activity("planner")).next).toBeUndefined();
+  });
+
+  it("writes a new next wake as it is booked, keeping when it went idle", async () => {
+    const wakes = new Map<string, string>();
+    make({ next: (agent) => wakes.get(agent) ?? null });
+    await tracker.start();
+    const before = await activity("planner");
+    wakes.set("planner", "2026-10-19T07:00:00.000Z");
+    tracker.refresh();
+    const after = await activity("planner");
+    expect(after.next).toBe("2026-10-19T07:00:00.000Z");
+    expect(after.since).toBe(before.since);
+  });
+
   it("stops listening when stopped", async () => {
     make();
     tracker.stop();
@@ -374,6 +434,32 @@ describe("whyAsleep", () => {
   it("wakes once a pause has run out, and for an agent with no switch", () => {
     expect(whyAsleep({ paused: false, own: { enabled: true, paused_until: "2026-10-18T11:00:00Z" }, now })).toBeNull();
     expect(whyAsleep({ paused: false, own: null, now })).toBeNull();
+  });
+});
+
+describe("nextWake", () => {
+  const now = new Date("2026-10-19T02:00:00.000Z");
+  it("is the wake it booked", () => {
+    expect(nextWake({ booked: "2026-10-19T07:00:00.000Z", own: null, now })).toBe("2026-10-19T07:00:00.000Z");
+  });
+  it("is its own next turn: the last one plus the interval it is on", () => {
+    const own = { last: "2026-10-19T01:30:00.000Z", intervalMs: 60 * 60_000 };
+    expect(nextWake({ booked: null, own, now })).toBe("2026-10-19T02:30:00.000Z");
+  });
+  it("is whichever comes first", () => {
+    const own = { last: "2026-10-19T01:30:00.000Z", intervalMs: 60 * 60_000 };
+    expect(nextWake({ booked: "2026-10-19T02:10:00.000Z", own, now })).toBe("2026-10-19T02:10:00.000Z");
+    expect(nextWake({ booked: "2026-10-19T07:00:00.000Z", own, now })).toBe("2026-10-19T02:30:00.000Z");
+  });
+  it("is now when a turn is already due, or it has never run", () => {
+    expect(nextWake({ booked: null, own: { last: "2026-10-18T20:00:00.000Z", intervalMs: 60_000 }, now })).toBe(
+      now.toISOString(),
+    );
+    expect(nextWake({ booked: null, own: { last: null, intervalMs: null }, now })).toBe(now.toISOString());
+  });
+  it("is nothing when nothing will wake it", () => {
+    expect(nextWake({ booked: null, own: null, now })).toBeNull();
+    expect(nextWake({ booked: null, own: { last: "2026-10-19T01:00:00.000Z", intervalMs: null }, now })).toBeNull();
   });
 });
 
