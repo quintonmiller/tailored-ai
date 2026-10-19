@@ -22,15 +22,35 @@ export function agentOfKey(key: string | null | undefined): string | undefined {
 }
 
 /**
- * Your latest web conversation with an agent, if there is one. Keys from
- * before they named the agent (`web:<when>`) were nearly all with the
- * default agent, the one the chat started on, so they count as its.
+ * Your latest web conversation with an agent, if there is one. Only a key
+ * that names the agent counts. One from before keys did (`web:<when>`) could
+ * be with anyone, since switching agents used to keep the conversation, so
+ * picking it up would carry on someone else's; it stays in the Sessions list.
  */
 export function latestWith(sessions: SessionRow[], agent: string): SessionRow | undefined {
   let latest: SessionRow | undefined;
   for (const s of sessions) {
-    const theirs = agentOfKey(s.key) === agent || (agent === "" && /^web:\d+$/.test(s.key ?? ""));
-    if (theirs && (!latest || s.updated_at > latest.updated_at)) latest = s;
+    if (agentOfKey(s.key) === agent && (!latest || s.updated_at > latest.updated_at)) latest = s;
   }
   return latest;
+}
+
+/** A session row with only what opening a conversation needs: its id and key. */
+export function rowFor(id: string, key: string | null): SessionRow {
+  return {
+    id,
+    key,
+    model: "",
+    provider: "",
+    project_id: null,
+    title: null,
+    pinned: 0,
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+/** An agent's name as people see it: the default agent ("" or "default") says so. */
+export function nameOf(agent: string): string {
+  return agent && agent !== DEFAULT ? agent : "Default agent";
 }

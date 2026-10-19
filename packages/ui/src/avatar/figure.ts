@@ -133,6 +133,12 @@ export class Figure {
       pace?: number;
       /** Radians a second it turns, instead of an agent's unhurried turn. */
       turn?: number;
+      /**
+       * It runs sometimes (you, holding Shift), so its run clip is made ready.
+       * Agents never run: making theirs would retarget a clip per body that
+       * never plays.
+       */
+      runs?: boolean;
     } = {},
   ) {
     this.flip = vrm.meta.metaVersion === "0" ? -1 : 1;
@@ -184,7 +190,7 @@ export class Figure {
       loadClipLibrary(opts.animations, vrm)
         .then((library) => {
           if (this.disposed) return;
-          const player = clipPlayer(library, vrm);
+          const player = clipPlayer(library, vrm, !!opts.runs);
           if (!player) return;
           this.motion.armClearance = armClearance(vrm, points, (extra) => player.sample("idle", extra, this.flip));
           if (player.walkSpeed && !this.paceSet) this.walker.speed = player.walkSpeed;
@@ -475,8 +481,10 @@ interface ClipPlayer {
 
 const FADE = 0.35;
 
-function clipPlayer(library: ClipLibrary, vrm: VRM): ClipPlayer | undefined {
+function clipPlayer(library: ClipLibrary, vrm: VRM, runs: boolean): ClipPlayer | undefined {
   const roles = rolesFor(library.names());
+  // A body that never runs has no run to play, so its run clip is never made.
+  if (!runs) delete roles.run;
   if (!roles.idle) return undefined;
   const mixer = new THREE.AnimationMixer(vrm.scene);
   const clipFor = (role: ClipRole) => {

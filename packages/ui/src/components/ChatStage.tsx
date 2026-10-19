@@ -7,7 +7,7 @@ import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
 import type { Companion, Line } from "../avatar/stage";
-import { newChatKey } from "../lib/conversations";
+import { nameOf, newChatKey } from "../lib/conversations";
 import { subscribeStateChanges } from "../lib/state-events";
 import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
@@ -308,6 +308,8 @@ export interface ChatStageOptions {
   onSpoken: (conversation: string | undefined, sessionKey: string) => void;
   /** Hand typed turns the body and a place for their cues, while the body is on screen. */
   setTurnExtras?: (extras: { body?: unknown; onCue?: (cue: { name: string; target?: string }) => void }) => void;
+  /** Say when a spoken turn is on its way and when it is done, so switching agents waits for it. */
+  setSpeaking?: (speaking: boolean) => void;
   /**
    * Talk to another agent instead: clicked on in the room, stood next to, or
    * gone to. Going to an agent's home is going to talk to it; coming back to
@@ -325,6 +327,7 @@ export function useChatStage({
   panelOpen,
   onSpoken,
   setTurnExtras,
+  setSpeaking,
   onChatWith,
   onDraft,
 }: ChatStageOptions) {
@@ -388,9 +391,14 @@ export function useChatStage({
   // Where you are says who you talk to: an agent's own home is a conversation with it, and coming back to the
   // agent you came from is one with it again. Anywhere else, the conversation you had goes on.
   const host = visiting ? (visiting.startsWith("home:") ? visiting.slice("home:".length) : undefined) : shown;
+  // On every arrival, even at the agent you are talking to already: that calls off a switch still waiting for a
+  // reply, so coming back before it is done keeps you where you came back to.
+  const arrived = useRef(host);
   // biome-ignore lint/correctness/useExhaustiveDependencies: arriving decides; who you talk to there is yours to change.
   useEffect(() => {
-    if (host && host !== talking) onChatWith?.(host);
+    if (host === arrived.current) return;
+    arrived.current = host;
+    if (host) onChatWith?.(host);
   }, [host]);
   // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it.
   const menuFor = useCallback(
@@ -449,12 +457,14 @@ export function useChatStage({
   const controls = useRef<AvatarControls | null>(null);
   // The conversation a voice session talks in. A new chat gets a key on its
   // first spoken turn; the chat adopts it, so what is typed next joins it.
-  const minted = useRef<string | null>(null);
+  const minted = useRef<{ agent: string; key: string } | null>(null);
   const inUse = useRef<string | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
   const [replying, setReplying] = useState("");
   const keyFor = () => {
-    const key = sessionKey ?? (minted.current ??= newChatKey(agent));
+    // A key made for one agent's new chat is never another's.
+    if (!sessionKey && minted.current?.agent !== agent) minted.current = { agent, key: newChatKey(agent) };
+    const key = sessionKey ?? (minted.current as { key: string }).key;
     inUse.current = key;
     return key;
   };
@@ -471,10 +481,12 @@ export function useChatStage({
     },
     onText: (delta) => setReplying((r) => r + delta),
     onDone: (turn) => {
-      const key = inUse.current ?? keyFor();
+      // The conversation the turn was spoken in. None when the page has gone on to another one since: the turn
+      // is saved in its own, and the page stays where the person took it.
+      const key = inUse.current;
       setHeard(null);
       setReplying("");
-      if (turn.transcript) onSpoken(turn.conversation, key);
+      if (turn.transcript && key) onSpoken(turn.conversation, key);
     },
   });
 
@@ -485,6 +497,12 @@ export function useChatStage({
     setTurnExtras(showStage && !visiting ? { body, onCue: (cue) => controls.current?.cue(cue) } : {});
     return () => setTurnExtras({});
   }, [showStage, setTurnExtras, body, visiting]);
+
+  // A spoken turn is a reply on its way too: going to another agent waits for it.
+  useEffect(() => {
+    setSpeaking?.(voice.phase !== "idle");
+  }, [voice.phase, setSpeaking]);
+  useEffect(() => () => setSpeaking?.(false), [setSpeaking]);
 
   // Another conversation on the page, or a new chat: the voice session is for the old one.
   const end = voice.end;
@@ -598,7 +616,7 @@ export function useChatStage({
       </button>
       {visiting && (
         <button type="button" className="talk-tool" onClick={() => setVisiting(null)}>
-          Back to {shown === "default" ? "the agent" : shown}
+          Back to {nameOf(shown)}
         </button>
       )}
       {visiting && (

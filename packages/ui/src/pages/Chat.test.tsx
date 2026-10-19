@@ -11,8 +11,38 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatProvider } from "../components/ChatContext";
+import type { ChatStageOptions } from "../components/ChatStage";
 import { ToastProvider } from "../components/Toast";
 import { Chat } from "./Chat";
+
+/** When set, the page's scene is this instead of the real one: a meeting room, say, without a GPU. */
+let fakeScene: ((opts: ChatStageOptions) => unknown) | null = null;
+vi.mock("../components/ChatStage", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../components/ChatStage")>();
+  return {
+    ...real,
+    // One or the other for a whole test, so the hooks a render calls never change order.
+    // biome-ignore lint/correctness/useHookAtTopLevel: fixed per test, never switched between renders.
+    useChatStage: (opts: ChatStageOptions) => (fakeScene ? fakeScene(opts) : real.useChatStage(opts)),
+  };
+});
+
+/** A scene with the chat panel over it, somewhere in the world, as `useChatStage` hands the page one. */
+function sceneAt(visiting: string | null, showStage = true) {
+  return {
+    showStage,
+    has3d: true,
+    stageOn: true,
+    setStageOn: () => {},
+    stage: null,
+    visiting,
+    placeName: "trip",
+    activities: {},
+    spoken: null,
+    voice: { phase: "idle", error: null },
+    voiceEnabled: false,
+  };
+}
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -29,6 +59,8 @@ let turnMedia: unknown[] = [];
 let agentList: Record<string, unknown> = {};
 /** When set, a reply waits for this before it finishes: a turn still on its way. */
 let held: Promise<void> | null = null;
+/** A conversation's messages wait for this before they arrive, when set for it. */
+const slowMessages: Record<string, Promise<void>> = {};
 
 const history: Record<string, unknown[]> = {
   "sess-1": [
@@ -65,7 +97,11 @@ function reply(sessionKey: string | undefined, sessionId: string | undefined): R
 }
 
 /** Each stored conversation's key. */
-const keys: Record<string, string> = { "sess-1": "web:kitchen", "sess-p": "web:planner:100" };
+const keys: Record<string, string> = {
+  "sess-1": "web:kitchen",
+  "sess-p": "web:planner:100",
+  "sess-d": "web:default:300",
+};
 
 beforeEach(() => {
   container = document.createElement("div");
@@ -78,6 +114,12 @@ beforeEach(() => {
   turnMedia = [];
   agentList = {};
   held = null;
+  fakeScene = null;
+  for (const id of Object.keys(slowMessages)) delete slowMessages[id];
+  history["sess-d"] = [
+    { role: "user", content: "Another day" },
+    { role: "assistant", content: "Another answer" },
+  ];
   history["sess-p"] = [
     { role: "user", content: "Where should we stay?" },
     { role: "assistant", content: "Alfama, near the river." },
@@ -98,8 +140,11 @@ beforeEach(() => {
       const m = /^\/api\/sessions\/([^/]+)\/messages/.exec(url);
       if (m) {
         messageFetches.push(m[1]);
+        await slowMessages[m[1]];
         return new Response(JSON.stringify(history[m[1]] ?? []));
       }
+      if (url.startsWith("/api/ext/builtin:places/transcript/"))
+        return new Response(JSON.stringify({ name: "trip", members: ["planner", "writer"], lines: [] }));
       if (url.startsWith("/api/sessions")) return new Response(JSON.stringify(sessionRows));
       if (url.startsWith("/api/agents")) return new Response(JSON.stringify(agentList));
       if (url.startsWith("/api/live")) return new Response(JSON.stringify({ enabled: false }));
@@ -241,8 +286,8 @@ describe("talking to another agent", () => {
     localStorage.setItem("tai.chat.activeSessionKey", "web:kitchen");
   });
 
-  async function choose(agent: string) {
-    const select = container.querySelector(".chat-agent-select") as HTMLSelectElement;
+  async function choose(agent: string, picker = ".chat-agent-select") {
+    const select = container.querySelector(picker) as HTMLSelectElement;
     await act(async () => {
       select.value = agent;
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -280,14 +325,129 @@ describe("talking to another agent", () => {
     await render();
     await send("Hey!");
     await choose("planner");
-    // The reply is still coming into the conversation it was asked in.
+    // The reply is still coming into the conversation it was asked in; the picker shows where you go next.
     expect(shown()).toContain("Earlier answer");
-    expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("");
+    expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("planner");
     await act(async () => release());
     await settle();
     expect(chatPosts.map((p) => p.sessionKey)).toEqual(["web:kitchen"]);
     expect(shown()).toContain("Alfama, near the river.");
     expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("planner");
+  });
+
+  it("calls a waiting switch off when you pick the agent the reply is from", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    fakeScene = () => sceneAt(null);
+    await render();
+    const header = () => container.querySelector(".chat-with-who")?.textContent ?? "";
+    await send("Hey!");
+    await choose("planner", ".chat-with-switch select");
+    expect(header()).toContain("Then planner, once this reply is done");
+    await choose("", ".chat-with-switch select");
+    // Nothing waiting any more: not even a switch to the agent you are with.
+    expect(header()).toBe("Default agent");
+    expect((container.querySelector(".chat-with-switch select") as HTMLSelectElement).value).toBe("");
+    await act(async () => release());
+    await settle();
+    expect(shown()).toContain("Earlier answer");
+    expect(shown()).not.toContain("Alfama");
+  });
+
+  it("waits for a spoken reply as for a typed one", async () => {
+    let speaking: ((on: boolean) => void) | undefined;
+    fakeScene = (opts) => {
+      speaking = opts.setSpeaking;
+      return sceneAt(null, false);
+    };
+    await render();
+    await act(async () => speaking?.(true));
+    await choose("planner");
+    expect(shown()).toContain("Earlier answer");
+    await act(async () => speaking?.(false));
+    await settle();
+    expect(shown()).toContain("Alfama, near the river.");
+  });
+
+  it("comes back to the conversation you left an agent in, not its latest", async () => {
+    // A later conversation with the default agent than the one on screen.
+    sessionRows = [
+      plannerRow,
+      { ...plannerRow, id: "sess-d", key: "web:default:300", updated_at: "2026-10-09 09:00:00" },
+    ];
+    await render();
+    await choose("planner");
+    await choose("");
+    expect(shown()).toContain("Earlier answer");
+    expect(shown()).not.toContain("Another answer");
+    await send("Hey!");
+    expect(chatPosts.at(-1)?.sessionKey).toBe("web:kitchen");
+  });
+
+  it("comes back to a new conversation you hadn't written in yet, rather than an old one", async () => {
+    sessionRows = [
+      plannerRow,
+      { ...plannerRow, id: "sess-d", key: "web:default:300", updated_at: "2026-10-09 09:00:00" },
+    ];
+    await render();
+    await act(async () => (container.querySelector(".chat-new-btn") as HTMLButtonElement).click());
+    await settle();
+    await choose("planner");
+    await choose("");
+    expect(shown()).not.toContain("Earlier answer");
+    expect(shown()).not.toContain("Another answer");
+    expect(shown()).toContain("Send a message to start a conversation");
+  });
+
+  it("never shows one agent's messages in another's conversation, however quickly you move on", async () => {
+    let arrive = () => {};
+    slowMessages["sess-p"] = new Promise<void>((r) => {
+      arrive = r;
+    });
+    await render();
+    await choose("planner");
+    await choose("writer");
+    await act(async () => arrive());
+    await settle();
+    expect(shown()).not.toContain("Alfama");
+    await send("Hey!");
+    expect(chatPosts.at(-1)?.sessionKey).toMatch(/^web:writer:\d+$/);
+  });
+
+  it("starts a conversation with the agent a link names, as the Agents page's Open in chat does", async () => {
+    window.location.hash = "/chat?key=web:planner:1";
+    await render();
+    expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("planner");
+    // Not the conversation the page would otherwise have picked up again.
+    expect(shown()).not.toContain("Earlier answer");
+    await send("Hey!");
+    expect(chatPosts.at(-1)?.agent).toBe("planner");
+    expect(chatPosts.at(-1)?.sessionKey).toMatch(/^web:planner:\d+$/);
+  });
+
+  it("talks to whoever you pick in a meeting room, from the room or its tabs, instead of reading the room", async () => {
+    let chatWith: ((name: string) => void) | undefined;
+    fakeScene = (opts) => {
+      chatWith = opts.onChatWith;
+      return sceneAt("room:local:trip");
+    };
+    await render();
+    const bar = () => container.querySelector(".chat-input-bar") as HTMLElement;
+    const tab = (name: string) =>
+      [...container.querySelectorAll(".chat-with-tabs button")].find((b) => b.textContent === name) as HTMLElement;
+    expect(bar().hidden).toBe(true);
+    expect(tab("Room").getAttribute("aria-selected")).toBe("true");
+    // Talk to, beside someone in the room, or Chat with on their menu.
+    await act(async () => chatWith?.("planner"));
+    await settle();
+    expect(bar().hidden).toBe(false);
+    expect(tab("Room").getAttribute("aria-selected")).toBe("false");
+    expect(tab("planner").getAttribute("aria-selected")).toBe("true");
+    expect(shown()).toContain("Alfama, near the river.");
+    await act(async () => tab("Room").click());
+    expect(bar().hidden).toBe(true);
   });
 
   it("goes on with the agent a reopened conversation was with", async () => {

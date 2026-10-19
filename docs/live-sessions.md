@@ -347,27 +347,35 @@ doing right now, from their `activity` record. **Talk to** beside it switches
 to someone else. The conversation follows who you are with:
 
 - **Going to an agent's home**, on the map or any other way, talks to that
-  agent. Your latest conversation with it comes back, or a new one starts.
+  agent. The conversation you left it in comes back; the first time you go to
+  it since opening the page, your latest conversation with it does, or a new
+  one starts.
 - **Coming back**, with **Back to** or by picking on the map the place the
   agent you came from is in, talks to that agent again, where you left off.
 - **The lobby and shared places** keep the conversation you had.
-- **A reply on its way** is never cut off. The switch waits until it's done,
-  and the panel says who is next meanwhile.
+- **A reply on its way**, typed or spoken, is never cut off. The switch waits
+  until it's done, and the panel says who is next meanwhile. Coming back
+  before it's done, or picking the agent you're still with, calls the switch
+  off.
 
 Switching agents, from the panel, the toolbar or the floating chat, always
-leaves the last agent's conversation. It used to keep it, so the next message
-went into the previous agent's conversation under the new agent's name. A new
-web conversation's key names its agent (`web:<agent>:<time>`, and
-`web:default:<time>` for the default agent), which is how your latest one with
-an agent is found, and how a conversation you reopen knows who it is with.
-Keys from before that (`web:<time>`) count as the default agent's.
+leaves the last agent's conversation. A new web conversation's key names its
+agent (`web:<agent>:<time>`, and `web:default:<time>` for the default agent),
+which is how your latest one with an agent is found, and how a conversation
+you reopen knows who it is with. A key that doesn't name an agent
+(`web:<time>`, from before keys did) is never picked up this way, since it
+could be with anyone; it stays in **Sessions**. A link to the chat with such a
+key and no conversation, like the Agents page's **Open in chat**, starts a new
+conversation with that agent.
 
 **In a meeting room** there is nobody in particular to talk to, so the panel
 reads out the room's own conversation instead: who said what, and to whom,
-newest at the bottom, read again every 15 seconds. It is for reading only.
-Nobody's read cursor moves, and you can't post into the room from here. The
-room's members are tabs above it: pick one to talk to them, and **Room** to
-go back to reading.
+newest at the bottom. It is read again every 15 seconds while it is on
+screen, and not while you're talking to a member, the panel is hidden or the
+browser tab is in the background. It is for reading only. Nobody's read
+cursor moves, and you can't post into the room from here. The room's members
+are tabs above it: pick one, or **Talk to** someone you're standing next to,
+to talk to them, and **Room** to go back to reading.
 
 #### Every place, and the rooms agents talk in
 

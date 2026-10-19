@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SessionRow } from "../api";
-import { agentOfKey, latestWith, newChatKey } from "./conversations";
+import { agentOfKey, latestWith, nameOf, newChatKey } from "./conversations";
 
 const row = (key: string | null, updated: string, pinned = 0): SessionRow => ({
   id: `s-${key}`,
@@ -52,11 +52,21 @@ describe("latestWith", () => {
     expect(latestWith(sessions, "writer")?.key).toBe("web:writer:3");
   });
 
-  it("counts older keys that don't name an agent as the default agent's", () => {
-    expect(latestWith(sessions, "")?.key).toBe("web:5");
+  it("leaves older keys that don't name an agent alone: they could be with anyone", () => {
+    // web:5 is the newer, but nothing says it was with the default agent.
+    expect(latestWith(sessions, "")?.key).toBe("web:default:6");
+    expect(latestWith([row("web:5", "2026-10-02 09:00:00")], "")).toBeUndefined();
   });
 
   it("finds nothing with an agent you haven't talked to", () => {
     expect(latestWith(sessions, "trip-planner")).toBeUndefined();
+  });
+});
+
+describe("nameOf", () => {
+  it("calls the default agent the same everywhere, and any other agent by its name", () => {
+    expect(nameOf("")).toBe("Default agent");
+    expect(nameOf("default")).toBe("Default agent");
+    expect(nameOf("planner")).toBe("planner");
   });
 });

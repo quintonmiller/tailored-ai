@@ -159,6 +159,32 @@ describe("a meeting room", () => {
     expect(container.querySelector(".room-lines")).toBeNull();
   });
 
+  it("reads the room again only while its conversation is on screen, and once more when it comes back", async () => {
+    const reads = () =>
+      (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.filter(([u]) =>
+        String(u).includes("/transcript/"),
+      ).length;
+    function Polled({ active }: { active: boolean }) {
+      const talk = useRoomTalk("room:local:trip", active);
+      return <span className="members">{talk.members.join(",")}</span>;
+    }
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await show(<Polled active={false} />);
+      // Read once on arrival, for who is in it.
+      expect(container.querySelector(".members")?.textContent).toBe("planner,writer");
+      expect(reads()).toBe(1);
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(reads()).toBe(1);
+      await show(<Polled active />);
+      expect(reads()).toBe(2);
+      await act(async () => vi.advanceTimersByTime(15_000));
+      expect(reads()).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says why when the room can't be read", async () => {
     transcriptStatus = 503;
     await show(<Room talkedTo={[]} />);

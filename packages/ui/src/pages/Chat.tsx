@@ -10,6 +10,7 @@ import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
 import { useActiveProject } from "../hooks/useActiveProject";
 import type { MediaRef } from "../lib/content.js";
+import { agentOfKey, rowFor } from "../lib/conversations";
 
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const store = useChatStore();
@@ -37,22 +38,23 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       .then((msgs) => {
         // Touch the store via loadSession analogue: cheapest path is to
         // mimic by calling the store's own loadSession with a minimal row.
-        store.loadSession({
-          id: props.sessionId!,
-          key: props.sessionKey ?? null,
-          model: "",
-          provider: "",
-          project_id: null,
-          title: null,
-          pinned: 0,
-          created_at: "",
-          updated_at: "",
-        });
+        store.loadSession(rowFor(props.sessionId!, props.sessionKey ?? null));
         // loadSession will re-fetch the messages itself; the msgs above are
         // discarded but the fetch warmed the cache.
         void msgs;
       })
       .catch(() => {});
+  }, [props.sessionId, props.sessionKey]);
+
+  // A link that names an agent but no conversation, like the Agents page's "Open in chat", is a new conversation
+  // with that agent. Once per link, as for a conversation's link above.
+  const asked = useRef<string | undefined>(undefined);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the route alone decides; the store is read, not followed.
+  useEffect(() => {
+    if (props.sessionId || !props.sessionKey || props.sessionKey === asked.current) return;
+    asked.current = props.sessionKey;
+    const who = agentOfKey(props.sessionKey);
+    if (who !== undefined) store.setSelectedAgent(who, { fresh: true });
   }, [props.sessionId, props.sessionKey]);
 
   // Load sessions list when sidebar opens or project filter changes.
@@ -84,13 +86,20 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   // The agent's body behind the conversation, when it has one, and talking
   // out loud into the same conversation.
   const [panelOpen, setPanelOpen] = useState(true);
+  // In a meeting room: the room's own conversation is on screen, rather than yours with one of its members.
+  const [reading, setReading] = useState(true);
   const scene = useChatStage({
     agent: store.selectedAgent,
     sessionKey: store.sessionKey,
     sending: store.sending,
     panelOpen,
     setTurnExtras: store.setTurnExtras,
-    onChatWith: (name) => store.setSelectedAgent(name === "default" ? "" : name),
+    setSpeaking: store.setSpeaking,
+    onChatWith: (name) => {
+      // Choosing someone to talk to is leaving the room's own conversation for theirs, in a meeting room too.
+      setReading(false);
+      store.setSelectedAgent(name === "default" ? "" : name);
+    },
     onDraft: (name, text) => {
       store.setSelectedAgent(name === "default" ? "" : name, { fresh: true });
       setInput(text);
@@ -100,29 +109,19 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       if (!conversation) return;
       // Loading the conversation shows the spoken turn with the rest, and
       // makes it the one a typed message goes into next.
-      store.loadSession({
-        id: conversation,
-        key,
-        model: "",
-        provider: "",
-        project_id: null,
-        title: null,
-        pinned: 0,
-        created_at: "",
-        updated_at: "",
-      });
+      store.loadSession(rowFor(conversation, key));
     },
   });
 
   // In a meeting room there is nobody in particular to talk to: the panel reads out the room's own
   // conversation, until you pick one of its members to talk to.
   const meeting = scene.showStage && scene.visiting?.startsWith("room:") ? scene.visiting : null;
-  const talk = useRoomTalk(meeting);
-  const [reading, setReading] = useState(true);
   useEffect(() => {
     if (meeting) setReading(true);
   }, [meeting]);
   const showRoom = !!meeting && reading;
+  // Read again every little while only while it is on screen.
+  const talk = useRoomTalk(meeting, showRoom && panelOpen);
 
   const { attachments, add, remove, clear, readyIds, busy } = useAttachments();
   const [dragging, setDragging] = useState(false);
@@ -271,7 +270,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           {agentNames.length > 0 && !scene.showStage && (
             <select
               className="chat-agent-select"
-              value={store.selectedAgent}
+              value={store.nextAgent ?? store.selectedAgent}
               onChange={(e) => store.setSelectedAgent(e.target.value)}
               aria-label="Choose agent"
             >
@@ -316,6 +315,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
               fallbackName={scene.placeName}
               reading={reading}
               agent={store.selectedAgent}
+              next={store.nextAgent}
               activities={scene.activities}
               onRead={() => setReading(true)}
               onTalk={(name) => {
@@ -442,8 +442,13 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           </button>
           <input
             type="text"
+            // The default agent's own name is in the header: here it would only crowd the box.
             placeholder={
-              scene.showStage ? `Message ${store.selectedAgent || "the default agent"}…` : "Type a message..."
+              scene.showStage
+                ? store.selectedAgent
+                  ? `Message ${store.selectedAgent}…`
+                  : "Message…"
+                : "Type a message..."
             }
             value={input}
             onChange={(e) => setInput(e.target.value)}

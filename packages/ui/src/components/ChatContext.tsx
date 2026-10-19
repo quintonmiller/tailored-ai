@@ -17,7 +17,7 @@ import {
   updateSession,
 } from "../api";
 import type { ComponentSpec, MediaRef } from "../lib/content.js";
-import { agentOfKey, latestWith, newChatKey } from "../lib/conversations";
+import { agentOfKey, latestWith, newChatKey, rowFor } from "../lib/conversations";
 import { describeError, useToast } from "./Toast";
 
 export interface PendingApproval {
@@ -59,13 +59,17 @@ export interface ChatStore {
   /** The agent the conversation on screen is with; "" is the default agent. */
   selectedAgent: string;
   /**
-   * Talk to another agent: your latest conversation with it comes back, or a
-   * new one starts (always new with `fresh`). Never the last agent's
-   * conversation. While a reply is on its way the switch waits for it.
+   * Talk to another agent: the conversation you left it in comes back, or
+   * your latest with it, or a new one starts (always new with `fresh`). Never
+   * the last agent's conversation. While a reply is on its way, typed or
+   * spoken, the switch waits for it; asking for the agent you are already
+   * talking to calls a waiting switch off.
    */
   setSelectedAgent: (name: string, opts?: { fresh?: boolean }) => void;
   /** The agent a switch is waiting to go to, until the reply on its way is done; null when none is. */
   nextAgent: string | null;
+  /** A spoken turn is on its way, or not: a switch waits for it as for a typed reply. */
+  setSpeaking: (speaking: boolean) => void;
   // Session list (sidebar)
   sessions: SessionRow[];
   refreshSessions: () => void;
@@ -118,6 +122,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<Record<string, AgentInfo>>({});
   const [selectedAgent, setAgent] = useState("");
   const [nextAgent, setNextAgent] = useState<string | null>(null);
+  const [speaking, setSpeaking] = useState(false);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [dockSignal, setDockSignal] = useState<DockSignal | null>(null);
 
@@ -126,12 +131,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Moved on by every switch, opened conversation and message sent: a latest
   // conversation that turns up after any of them is too late to open.
   const turns = useRef(0);
+  // Moved on by every conversation opened or let go of: messages that turn up after either are another one's.
+  const opened = useRef(0);
   /** A switch asked for while a reply was on its way. */
   const queued = useRef<{ name: string; fresh: boolean } | null>(null);
-  const sendingNow = useRef(false);
-  sendingNow.current = sending;
+  // A reply on its way, typed or spoken: a switch waits for it.
+  const busy = sending || speaking;
+  const busyNow = useRef(busy);
+  busyNow.current = busy;
   const agentNow = useRef(selectedAgent);
   agentNow.current = selectedAgent;
+  const shownNow = useRef<{ id: string; key: string | null } | null>(null);
+  shownNow.current = sessionId ? { id: sessionId, key: sessionKey ?? null } : null;
+  /** Where you left each agent: the conversation you were in with it, or a new one you hadn't written in yet. */
+  const left = useRef(new Map<string, { id: string; key: string | null } | "fresh">());
 
   const requestDock = useCallback((text?: string) => {
     dockNonce.current += 1;
@@ -393,6 +406,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const newChat = useCallback(() => {
     turns.current++;
+    opened.current++;
     setMessages([]);
     setSessionKey(undefined);
     setSessionId(undefined);
@@ -402,6 +416,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const loadSession = useCallback(
     (s: SessionRow) => {
       turns.current++;
+      const mine = ++opened.current;
       setSessionId(s.id);
       setSessionKey(s.key ?? undefined);
       setStoredChatSessionId(s.id, s.key ?? null);
@@ -410,7 +425,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       if (who !== undefined) setAgent(who);
       setMessages([]);
       fetchMessages(s.id)
-        .then(setMessages)
+        .then((msgs) => {
+          // Another conversation is on screen by now: these are not its messages.
+          if (opened.current === mine) setMessages(msgs);
+        })
         .catch((err) => toast.error(`Failed to load session: ${describeError(err)}`));
     },
     [toast],
@@ -419,10 +437,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const switchTo = useCallback(
     (name: string, fresh: boolean) => {
       if (name === agentNow.current && !fresh) return;
+      // Where you leave this agent is where you find it again when you come back.
+      left.current.set(agentNow.current, shownNow.current ?? "fresh");
       // Off the last agent's conversation at once: what is typed now starts one with this agent.
       newChat();
       setAgent(name);
       if (fresh) return;
+      const was = left.current.get(name);
+      if (was === "fresh") return;
+      if (was) {
+        loadSession(rowFor(was.id, was.key));
+        return;
+      }
       const turn = turns.current;
       fetchSessions({ limit: 500 })
         .then((rows) => {
@@ -440,10 +466,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const setSelectedAgent = useCallback(
     (name: string, opts?: { fresh?: boolean }) => {
       const fresh = !!opts?.fresh;
-      // A reply on its way is never cut off: the switch waits for it.
-      if (sendingNow.current) {
-        queued.current = { name, fresh };
-        setNextAgent(name);
+      // A reply on its way is never cut off: the switch waits for it. Asking for the agent the reply is from
+      // calls the wait off, as coming back to it before the reply is done does.
+      if (busyNow.current) {
+        const staying = name === agentNow.current && !fresh;
+        queued.current = staying ? null : { name, fresh };
+        setNextAgent(staying ? null : name);
         return;
       }
       queued.current = null;
@@ -454,12 +482,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    if (sending || !queued.current) return;
+    if (busy || !queued.current) return;
     const { name, fresh } = queued.current;
     queued.current = null;
     setNextAgent(null);
     switchTo(name, fresh);
-  }, [sending, switchTo]);
+  }, [busy, switchTo]);
 
   const renameSession = useCallback(
     (s: SessionRow, title: string | null) => {
@@ -490,6 +518,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       deleteSession(s.id)
         .then(() => {
           setSessions((prev) => prev.filter((row) => row.id !== s.id));
+          // Gone, so not somewhere to come back to.
+          for (const [who, at] of left.current) if (at !== "fresh" && at.id === s.id) left.current.delete(who);
           if (sessionId === s.id) {
             setMessages([]);
             setSessionId(undefined);
@@ -546,6 +576,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       selectedAgent,
       setSelectedAgent,
       nextAgent,
+      setSpeaking,
       sessions,
       refreshSessions,
       send,

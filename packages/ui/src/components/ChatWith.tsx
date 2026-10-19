@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentActivity, behaviorFor } from "../avatar/doing";
+import { nameOf } from "../lib/conversations";
 import { renderMarkdown } from "../lib/markdown.js";
 import { agentColor } from "./WorldMap";
 
@@ -19,9 +20,6 @@ export function doingLine(activity: AgentActivity | undefined): string | undefin
   if (!b.label) return undefined;
   return b.detail ? `${b.label} · ${b.detail}` : b.label;
 }
-
-/** An agent's name as the panel shows it: the default agent says so. */
-const nameOf = (agent: string) => (agent && agent !== "default" ? agent : "Default agent");
 
 export function ChatWith({
   agent,
@@ -53,8 +51,9 @@ export function ChatWith({
       </div>
       <label className="chat-with-switch">
         <span>Talk to</span>
-        <select value={agent} onChange={(e) => onSwitch(e.target.value)} aria-label="Talk to someone else">
-          <option value="">Default agent</option>
+        {/* Who you are going to, once a switch is waiting: picking who you are with calls it off. */}
+        <select value={next ?? agent} onChange={(e) => onSwitch(e.target.value)} aria-label="Talk to someone else">
+          <option value="">{nameOf("")}</option>
           {agents.map((name) => (
             <option key={name} value={name}>
               {name}
@@ -86,11 +85,19 @@ export interface RoomTalk {
   loading: boolean;
 }
 
-/** A meeting room's own conversation, read now and every little while after, while it is on screen. */
-export function useRoomTalk(id: string | null): RoomTalk {
+/**
+ * A meeting room's own conversation: read when you arrive, for its name and
+ * members, and every little while after only while it is `active` (on screen,
+ * in a tab that is in view), and once more each time it comes back on screen.
+ * A room kept on Discord is read from Discord each time, so a page left
+ * standing in a room with the conversation out of sight reads nothing.
+ */
+export function useRoomTalk(id: string | null, active = true): RoomTalk {
   const [talk, setTalk] = useState<RoomTalk>({ members: [], lines: [], problem: null, loading: true });
+  const read = useRef<() => void>(() => {});
   useEffect(() => {
     setTalk({ members: [], lines: [], problem: null, loading: true });
+    read.current = () => {};
     if (!id) return;
     let gone = false;
     const load = () =>
@@ -115,13 +122,23 @@ export function useRoomTalk(id: string | null): RoomTalk {
           if (!gone)
             setTalk((t) => ({ ...t, problem: err instanceof Error ? err.message : String(err), loading: false }));
         });
+    read.current = () => void load();
     void load();
-    const timer = setInterval(load, ROOM_REFRESH_MS);
     return () => {
       gone = true;
-      clearInterval(timer);
     };
   }, [id]);
+  const was = useRef(active);
+  useEffect(() => {
+    const back = active && !was.current;
+    was.current = active;
+    if (!id || !active) return;
+    if (back) read.current();
+    const timer = setInterval(() => {
+      if (!document.hidden) read.current();
+    }, ROOM_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [id, active]);
   return talk;
 }
 
@@ -131,6 +148,7 @@ export function RoomWith({
   fallbackName,
   reading,
   agent,
+  next = null,
   activities,
   onRead,
   onTalk,
@@ -142,6 +160,8 @@ export function RoomWith({
   reading: boolean;
   /** The agent you are talking to; "" is the default agent. */
   agent: string;
+  /** The agent a switch is waiting to go to, until the reply on its way is done. */
+  next?: string | null;
   activities: Record<string, AgentActivity>;
   onRead: () => void;
   onTalk: (agent: string) => void;
@@ -151,7 +171,11 @@ export function RoomWith({
     <div className="chat-with chat-with-room" aria-label="The room you are in">
       <div className="chat-with-who">
         <strong>{name ? `#${name}` : "This room"}</strong>
-        {talk.purpose && <span className="chat-with-doing">{talk.purpose}</span>}
+        {next !== null ? (
+          <span className="chat-with-doing">Then {nameOf(next)}, once this reply is done</span>
+        ) : (
+          talk.purpose && <span className="chat-with-doing">{talk.purpose}</span>
+        )}
       </div>
       <div className="chat-with-tabs" role="tablist" aria-label="Read the room, or talk to someone in it">
         <button type="button" role="tab" aria-selected={reading} onClick={onRead}>
@@ -169,7 +193,7 @@ export function RoomWith({
             {m !== "default" && (
               <span className="chat-with-dot" style={{ background: agentColor(m) }} aria-hidden="true" />
             )}
-            {m === "default" ? "default" : m}
+            {nameOf(m)}
           </button>
         ))}
       </div>

@@ -322,7 +322,7 @@ export async function createStage(
     ...(selfie && start && start.activity !== "sit" ? { facing: 0.5 } : {}),
     hue: hueFor(opts.agent ?? "default"),
     // Your own body walks briskly and turns on the spot, whatever its size; the agents keep their own calmer pace.
-    ...(opts.visitor ? { pace: WALK_SPEED, turn: VISITOR_TURN } : {}),
+    ...(opts.visitor ? { pace: WALK_SPEED, turn: VISITOR_TURN, runs: true } : {}),
     // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
     onClips: () => {
       host.dataset.motion = "clips";
