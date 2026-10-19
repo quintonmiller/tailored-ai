@@ -84,6 +84,13 @@ interface Framing {
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 
+/**
+ * When a gesture looks most like itself, in seconds from its start: the photo
+ * is posed at exactly this moment. A wave's hand swings in and out, so the
+ * moment is when it is furthest out, not wherever a frame happens to land.
+ */
+const PEAK: Record<string, number> = { wave: 0.9, nod: 0.75, shake: 0.3 };
+
 /** Things that hang on a wall, so they are never in the way of a walk. */
 const WALL_KINDS = new Set(["window", "picture", "clock", "shelf"]);
 
@@ -591,6 +598,10 @@ export async function createStage(
       light(lightingFor(hour));
     }
     const { state, loudness, engaged } = input();
+    // A photo's frame is posed at the gesture's best moment exactly, however late this frame came.
+    const peak = PEAK[opts.still?.gesture ?? ""] ?? 0.7;
+    const shoot = !!opts.still && !readyFired && gestureAt !== undefined && t - gestureAt >= peak;
+    const poseAt = shoot && gestureAt !== undefined ? gestureAt + peak : t;
     const here = me.here;
     const next = asking || opts.still ? undefined : me.director.decide(t, here, engaged, taken(me));
     if (typeof next === "string") go(next);
@@ -615,7 +626,7 @@ export async function createStage(
     me.step(
       room,
       obstacles,
-      t,
+      poseAt,
       dt,
       { state, loudness: loudness() },
       camera.position,
@@ -642,7 +653,7 @@ export async function createStage(
         const move = c.director.decide(t, c.here, false, taken(c));
         if (typeof move === "string") c.go(room, move, obstacles);
       }
-      c.step(room, obstacles, t, dt, { state: "idle", loudness: 0 }, meHead);
+      c.step(room, obstacles, poseAt, dt, { state: "idle", loudness: 0 }, meHead);
     }
     for (const w of warm)
       if (w.fire && lit)
@@ -664,8 +675,7 @@ export async function createStage(
         if (opts.still.gesture && gestureAt === undefined) {
           handleCue({ name: opts.still.gesture });
           gestureAt = t;
-        }
-        if (gestureAt === undefined || t - gestureAt > 0.7) {
+        } else if (!opts.still.gesture || shoot) {
           readyFired = true;
           opts.onReady?.();
         }
