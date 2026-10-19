@@ -15,6 +15,8 @@ import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
+import { armClearance, bodyPoints } from "./fit";
 import { Director, route, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { type BuiltProp, buildProp, buildShell, disposeTree } from "./props";
@@ -69,7 +71,14 @@ export async function createStage(
   host: HTMLElement,
   url: string,
   input: StageInput,
-  opts: { reducedMotion?: boolean; view?: StageView; room?: Room; hour?: number } = {},
+  opts: {
+    reducedMotion?: boolean;
+    view?: StageView;
+    room?: Room;
+    hour?: number;
+    /** Animation libraries to play; the avatar moves by code until they load, and if they can't. */
+    animations?: string[];
+  } = {},
 ): Promise<Stage> {
   const room = opts.room ?? DEFAULT_ROOM;
   // Throws where the browser has no WebGL; the caller shows why.
@@ -103,7 +112,11 @@ export async function createStage(
   });
 
   const scene = new THREE.Scene();
-  scene.add(buildShell(room));
+  // Everything a close-up camera must not sit inside or look through.
+  const scenery: THREE.Object3D[] = [];
+  const shell = buildShell(room);
+  scene.add(shell);
+  scenery.push(shell);
   const glows: Partial<Record<string, BuiltProp>> = {};
   // Furniture that leads somewhere when clicked.
   const clickable: THREE.Object3D[] = [];
@@ -113,6 +126,7 @@ export async function createStage(
     built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
     built.group.rotation.y = rad(prop.facing);
     scene.add(built.group);
+    scenery.push(built.group);
     if (prop.spot) {
       built.group.userData.spot = prop.spot;
       clickable.push(built.group);
@@ -204,6 +218,26 @@ export async function createStage(
   // Dragging turns the view. The wheel is left to scroll the page.
   Object.assign(controls, { enableZoom: false, enablePan: false, enableDamping: true, rotateSpeed: 0.6 });
 
+  // A close-up from the preferred angle when the view is clear; otherwise the
+  // nearest clear angle on the open side, then a little closer in. A shelf or
+  // a wall between the camera and the avatar is never the shot.
+  const sight = new THREE.Raycaster();
+  const clearShot = (target: THREE.Vector3, distance: number, preferred: number) => {
+    const angles = [preferred];
+    for (let step = 0.15; step < OPEN_SIDES[1] - OPEN_SIDES[0]; step += 0.15)
+      angles.push(preferred + step, preferred - step);
+    const inRange = angles.filter((a) => a >= OPEN_SIDES[0] && a <= OPEN_SIDES[1]);
+    for (const d of [distance, distance * 0.8, distance * 0.65]) {
+      for (const a of inRange) {
+        const dir = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 0.08, a);
+        sight.set(target, dir);
+        sight.far = d + 0.1;
+        if (!sight.intersectObjects(scenery, true).length) return { azimuth: a, distance: d };
+      }
+    }
+    return { azimuth: preferred, distance };
+  };
+
   const framing = (view: StageView): Framing => {
     if (view === "close") {
       const top = bounds.max.y;
@@ -214,10 +248,10 @@ export async function createStage(
       const target = new THREE.Vector3(body.position.x, body.position.y + torso, body.position.z);
       // In front of its face when that side of the room is open; at a desk or
       // a shelf it faces a wall, so the camera takes the nearest open angle.
-      const azimuth = nearestWithin(body.rotation.y, OPEN_SIDES);
+      const { azimuth, distance: near } = clearShot(target, distance, nearestWithin(body.rotation.y, OPEN_SIDES));
       return {
         target,
-        position: new THREE.Vector3().setFromSphericalCoords(distance, Math.PI / 2 - 0.08, azimuth).add(target),
+        position: new THREE.Vector3().setFromSphericalCoords(near, Math.PI / 2 - 0.08, azimuth).add(target),
         azimuth: OPEN_SIDES,
         polar: [1.1, 1.75],
       };
@@ -236,6 +270,20 @@ export async function createStage(
 
   let view: StageView = opts.view ?? "room";
   let tween: { from: Framing; to: Framing; started: number } | null = null;
+  /** Ease the camera to a framing; with reduced motion, go straight there. */
+  const moveCamera = (to: Framing) => {
+    if (opts.reducedMotion) {
+      tween = null;
+      settle(to);
+      return;
+    }
+    controls.enabled = false;
+    tween = {
+      from: { target: controls.target.clone(), position: camera.position.clone(), azimuth: [0, 0], polar: [0, 0] },
+      to,
+      started: performance.now(),
+    };
+  };
   const settle = (f: Framing) => {
     camera.position.copy(f.position);
     controls.target.copy(f.target);
@@ -304,6 +352,42 @@ export async function createStage(
   canvas.addEventListener("pointermove", onHover);
 
   const motion = new Motion(opts);
+  // Swing the arms out just far enough that the hands clear this body.
+  const points = bodyPoints(vrm);
+  const probe = new Motion({ reducedMotion: true });
+  motion.armClearance = armClearance(vrm, points, (extra) => {
+    vrm.humanoid.resetNormalizedPose();
+    probe.armClearance = extra;
+    apply(vrm, probe.step(0, "idle", 0), flip);
+    vrm.update(0);
+  });
+  const hipsNode = vrm.humanoid.getNormalizedBoneNode("hips");
+
+  // Animation files, when configured, take over the base pose once they load;
+  // until then, and if they can't, the code-driven motion carries on.
+  let clips: ClipPlayer | undefined;
+  let disposed = false;
+  if (opts.animations?.length) {
+    loadClipLibrary(opts.animations, vrm)
+      .then((library) => {
+        if (disposed) return;
+        const player = clipPlayer(library, vrm);
+        if (!player) return;
+        motion.armClearance = armClearance(vrm, points, (extra) => player.sample("idle", extra, flip));
+        if (player.walkSpeed) walker.speed = player.walkSpeed;
+        clips = player;
+        host.dataset.motion = "clips";
+      })
+      .catch(() => {});
+  }
+  let lastWalkAt = Number.NEGATIVE_INFINITY;
+  let wasBusy = false;
+  let lastDragAt = Number.NEGATIVE_INFINITY;
+  controls.addEventListener("start", () => {
+    lastDragAt = clock;
+  });
+  // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
+  host.dataset.motion = "code";
   const started = performance.now();
   let last = started;
   /** The stage's clock, in seconds, as of the last frame: when a cue's move starts. */
@@ -356,21 +440,47 @@ export async function createStage(
     if (next) go(next);
     if (pending && seated <= 0.05) go(pending);
     const walked = pending ? 0 : walker.step(dt);
+    // Arrived somewhere: the close-up finds its best angle again, unless the
+    // person turned the view themselves a moment ago.
+    if (wasBusy && !walker.busy && view === "close" && !tween && t - lastDragAt > 8) moveCamera(framing("close"));
+    wasBusy = walker.busy;
     const spot = current ? spotById(room, current) : undefined;
+    if (walked > 0) lastWalkAt = t;
     const pose = motion.step(t, state, loudness(), {
       walked,
       stride,
       ...(here && spot?.activity ? { activity: spot.activity } : {}),
+      ...(clips ? { clips: clips.covers } : {}),
     });
     seated = pose.seated;
-    apply(vrm, pose, flip);
+    if (clips) {
+      // The files play the base: walking, sitting, arms folded at the window,
+      // talking, or idle. The code-driven moves go on top.
+      const role: ClipRole =
+        t - lastWalkAt < 0.2
+          ? "walk"
+          : here && spot?.activity === "sit"
+            ? state === "speaking"
+              ? "sitTalk"
+              : "sit"
+            : here && spot?.activity === "look"
+              ? "foldArms"
+              : state === "speaking"
+                ? "talk"
+                : "idle";
+      clips.update(role, t, dt);
+      overlay(vrm, pose, flip);
+    } else {
+      apply(vrm, pose, flip);
+    }
     // Settling onto a seat moves the body back onto it and to its height.
     let { x, z } = walker.place;
     let y = pose.lift;
     if (spot?.seat && seated > 0) {
       x += (spot.seat.at[0] - x) * seated;
       z += (spot.seat.at[1] - z) * seated;
-      y += (spot.seat.height + 0.03 - hipsY) * seated;
+      // From where the hips are now: a sitting clip lowers them itself.
+      y += (spot.seat.height + 0.03 - (hipsNode?.position.y ?? hipsY)) * seated;
     }
     body.position.set(x, y, z);
     body.rotation.y = walker.place.facing;
@@ -396,23 +506,7 @@ export async function createStage(
     setView(next) {
       if (next === view && !tween) return;
       view = next;
-      const to = framing(next);
-      if (opts.reducedMotion) {
-        tween = null;
-        settle(to);
-        return;
-      }
-      controls.enabled = false;
-      tween = {
-        from: {
-          target: controls.target.clone(),
-          position: camera.position.clone(),
-          azimuth: [0, 0],
-          polar: [0, 0],
-        },
-        to,
-        started: performance.now(),
-      };
+      moveCamera(framing(next));
     },
     walkTo: go,
     cue(c) {
@@ -422,10 +516,13 @@ export async function createStage(
       } else if (c.name === "look" || c.name === "point") {
         if (c.target) aim(c.target, c.name === "point");
       } else {
-        motion.gesture(c.name, clock);
+        // A nod or a head shake from the files when there is one; the rest by code.
+        if (!clips?.shot(c.name as ClipRole, clock)) motion.gesture(c.name, clock);
       }
     },
     dispose() {
+      disposed = true;
+      clips?.dispose();
       renderer.setAnimationLoop(null);
       observer.disconnect();
       canvas.removeEventListener("pointerdown", onDown);
@@ -438,6 +535,127 @@ export async function createStage(
       renderer.domElement.remove();
     },
   };
+}
+
+/** Plays the animation files' base pose, crossfading between roles, with one-off clips over it. */
+interface ClipPlayer {
+  /** What the files cover, so the code-driven motion leaves it alone. */
+  covers: { walk: boolean; activities: ("sit" | "look")[] };
+  /** The walking speed the walk clip was made for, in metres per second, so the feet don't slide. */
+  walkSpeed?: number;
+  update(role: ClipRole, t: number, dt: number): void;
+  /** Play a one-off over the base: true when the files have one for this role. */
+  shot(role: ClipRole, t: number): boolean;
+  /** Pose the model as a role looks partway through, arms swung out by `extra`, for fitting. */
+  sample(role: ClipRole, extra: number, flip: number): void;
+  dispose(): void;
+}
+
+const FADE = 0.35;
+
+function clipPlayer(library: ClipLibrary, vrm: VRM): ClipPlayer | undefined {
+  const roles = rolesFor(library.names());
+  if (!roles.idle) return undefined;
+  const mixer = new THREE.AnimationMixer(vrm.scene);
+  const clipFor = (role: ClipRole) => {
+    const name = roles[role] ?? roles.idle;
+    return name ? library.clip(name) : undefined;
+  };
+  const actionFor = (role: ClipRole, loop: boolean) => {
+    const clip = clipFor(role);
+    if (!clip) return undefined;
+    const action = mixer.clipAction(clip);
+    action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    action.clampWhenFinished = !loop;
+    return action;
+  };
+  let base: THREE.AnimationAction | undefined;
+  let baseRole: ClipRole | undefined;
+  let oneOff: { action: THREE.AnimationAction; ends: number } | undefined;
+  const fadeTo = (next: THREE.AnimationAction, from: THREE.AnimationAction | undefined, seconds: number) => {
+    next.reset().play();
+    if (from && from !== next) next.crossFadeFrom(from, seconds, false);
+    else next.fadeIn(seconds);
+  };
+  const walkSpeed = (clipFor("walk")?.userData as { speed?: number } | undefined)?.speed;
+  return {
+    covers: {
+      walk: !!roles.walk,
+      activities: [...(roles.sit ? (["sit"] as const) : []), ...(roles.foldArms ? (["look"] as const) : [])],
+    },
+    ...(walkSpeed && walkSpeed > 0.1 ? { walkSpeed } : {}),
+    update(role, t, dt) {
+      if (oneOff && t >= oneOff.ends) {
+        if (base) fadeTo(base, oneOff.action, FADE);
+        oneOff = undefined;
+      }
+      if (role !== baseRole) {
+        const next = actionFor(role, true);
+        if (next && next !== base) {
+          if (!oneOff) fadeTo(next, base, FADE);
+          base = next;
+        }
+        baseRole = role;
+      }
+      // Bones the files don't move keep only what goes on top: clear them each frame.
+      for (const bone of POSE_BONES) vrm.humanoid.getNormalizedBoneNode(bone)?.quaternion.identity();
+      mixer.update(dt);
+    },
+    shot(role, t) {
+      if (!roles[role] || !["nod", "shake", "dance"].includes(role)) return false;
+      const action = actionFor(role, false);
+      if (!action) return false;
+      fadeTo(action, oneOff?.action ?? base, 0.2);
+      oneOff = { action, ends: t + action.getClip().duration - 0.3 };
+      return true;
+    },
+    sample(role, extra, flip) {
+      const clip = clipFor(role);
+      vrm.humanoid.resetNormalizedPose();
+      if (clip) {
+        // Left as it is: stopping a mixer can put the bones back as they were.
+        const probe = new THREE.AnimationMixer(vrm.scene);
+        probe.clipAction(clip).play();
+        probe.setTime(clip.duration / 2);
+      }
+      for (const [bone, sign] of [
+        ["leftUpperArm", 1],
+        ["rightUpperArm", -1],
+      ] as const) {
+        const node = vrm.humanoid.getNormalizedBoneNode(bone);
+        node?.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, sign * extra * flip)));
+      }
+      vrm.update(0);
+    },
+    dispose() {
+      mixer.stopAllAction();
+      mixer.uncacheRoot(vrm.scene);
+    },
+  };
+}
+
+/**
+ * Code-driven offsets on top of what the files posed, each bone turned a
+ * little further in its own frame. Then any bones an arm gesture has taken
+ * over are blended toward the gesture's own pose.
+ */
+function overlay(vrm: VRM, pose: Pose, flip: number) {
+  const q = new THREE.Quaternion();
+  const e = new THREE.Euler();
+  for (const bone of POSE_BONES) {
+    const [x, y, z] = pose.bones[bone];
+    if (!x && !y && !z) continue;
+    vrm.humanoid.getNormalizedBoneNode(bone)?.quaternion.multiply(q.setFromEuler(e.set(x * flip, y, z * flip)));
+  }
+  if (pose.owned) {
+    for (const [bone, r] of Object.entries(pose.owned.bones)) {
+      if (!r) continue;
+      const node = vrm.humanoid.getNormalizedBoneNode(bone as (typeof POSE_BONES)[number]);
+      node?.quaternion.slerp(q.setFromEuler(e.set(r[0] * flip, r[1], r[2] * flip)), pose.owned.weight);
+    }
+  }
+  vrm.expressionManager?.setValue("blink", pose.expressions.blink);
+  vrm.expressionManager?.setValue("aa", pose.expressions.aa);
 }
 
 function apply(vrm: VRM, pose: Pose, flip: number) {

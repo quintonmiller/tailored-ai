@@ -171,4 +171,33 @@ describe("Motion", () => {
     const back = run(motion, "idle", 3, 0, 2.1);
     expect(Math.abs(back.bones.head[1])).toBeLessThan(0.1);
   });
+
+  it("with animation files playing, returns only what goes on top: no rest pose, walk cycle or breathing", () => {
+    const motion = new Motion({ random: steady });
+    let pose = motion.step(0, "idle", 0);
+    const clips = { walk: true, activities: ["sit" as const] };
+    for (let t = 0; t < 2; t += 1 / 60) pose = motion.step(t, "idle", 0, { walked: 0.5 / 60, stride: 0.45, clips });
+    expect(Math.abs(pose.bones.leftUpperArm[2])).toBeLessThan(0.05);
+    expect(Math.abs(pose.bones.leftUpperLeg[0])).toBeLessThan(0.01);
+    expect(pose.lift).toBe(0);
+  });
+
+  it("with animation files playing, lets an arm gesture take the arm over instead of adding to it", () => {
+    const motion = new Motion({ random: steady });
+    const clips = { walk: true, activities: [] };
+    motion.step(0, "idle", 0, { walked: 0, stride: 0.45, clips });
+    motion.gesture("wave", 0);
+    const pose = motion.step(0.8, "idle", 0, { walked: 0, stride: 0.45, clips });
+    expect(pose.owned?.weight).toBeGreaterThan(0.9);
+    expect(pose.owned?.bones.rightUpperArm?.[2]).toBeCloseTo(-0.9, 1);
+    expect(Math.abs(pose.bones.rightUpperArm[2])).toBeLessThan(0.05);
+  });
+
+  it("swings the arms out by the clearance the body needs", () => {
+    const motion = new Motion({ random: steady, reducedMotion: true });
+    motion.armClearance = 0.3;
+    const pose = motion.step(0, "idle", 0);
+    expect(pose.bones.leftUpperArm[2]).toBeCloseTo(-1.2 + 0.3, 1);
+    expect(pose.bones.rightUpperArm[2]).toBeCloseTo(1.2 - 0.3, 1);
+  });
 });

@@ -28,12 +28,15 @@ function savedView(): StageView {
  */
 export function Avatar({
   url,
+  animations = [],
   state,
   loudness,
   engaged,
   controls,
 }: {
   url: string;
+  /** Animation libraries for the avatar; it moves by code until they load. */
+  animations?: string[];
   state: BodyState;
   loudness: () => number;
   /** A session is under way: the avatar stays put and faces you instead of wandering. */
@@ -51,8 +54,12 @@ export function Avatar({
   viewRef.current = view;
   const controlsRef = useRef(controls);
   controlsRef.current = controls;
+  const animationsRef = useRef(animations);
+  animationsRef.current = animations;
+  const animationsKey = animations.join("\n");
   const [problem, setProblem] = useState<string | null>(null);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new animation list rebuilds the stage; the effect reads it through a ref.
   useEffect(() => {
     const el = host.current;
     if (!el) return;
@@ -60,7 +67,13 @@ export function Avatar({
     setProblem(null);
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     import("./stage")
-      .then(({ createStage }) => createStage(el, url, () => live.current, { reducedMotion, view: viewRef.current }))
+      .then(({ createStage }) =>
+        createStage(el, url, () => live.current, {
+          reducedMotion,
+          view: viewRef.current,
+          animations: animationsRef.current,
+        }),
+      )
       .then((s) => {
         if (gone) {
           s.dispose();
@@ -78,7 +91,7 @@ export function Avatar({
       stage.current = null;
       if (controlsRef.current) controlsRef.current.current = null;
     };
-  }, [url]);
+  }, [url, animationsKey]);
 
   const choose = (next: StageView) => {
     setView(next);

@@ -1,4 +1,4 @@
-export { avatarModelPath } from "./avatar.js";
+export { avatarAnimationPaths, avatarModelPath } from "./avatar.js";
 export {
   type AimedMove,
   type Body,

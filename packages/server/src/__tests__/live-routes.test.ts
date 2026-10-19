@@ -67,7 +67,7 @@ let tmpDir: string;
 let originalHome: string | undefined;
 let originalTaiHome: string | undefined;
 
-function setup(live = true, avatar?: { model: string }) {
+function setup(live = true, avatar?: { model: string; animations?: string[] }) {
   const cfg = buildConfig(live);
   if (avatar && cfg.live) cfg.live.avatar = avatar;
   runtime = new AgentRuntime(
@@ -235,6 +235,23 @@ describe("/api/live/avatar", () => {
     const res = await get("/api/live/avatar");
     expect(res.status).toBe(200);
     expect(Buffer.from(await res.arrayBuffer())).toEqual(model);
+  });
+
+  it("lists the configured animation libraries and serves each by position, and nothing else", async () => {
+    const lib = join(tmpDir, "moves.glb");
+    writeFileSync(lib, Buffer.from("glTF-animations"));
+    const file = join(tmpDir, "bot.vrm");
+    writeFileSync(file, model);
+    setup(true, { model: file, animations: [lib] });
+    expect((await json("GET", "/api/live")).json).toEqual({
+      avatar: "/api/live/avatar",
+      animations: ["/api/live/animations/0"],
+    });
+    const res = await get("/api/live/animations/0");
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer()).toString()).toBe("glTF-animations");
+    expect((await get("/api/live/animations/1")).status).toBe(404);
+    expect((await get("/api/live/animations/..%2Fbot.vrm")).status).toBe(404);
   });
 
   it("names the missing file, without the path to it", async () => {

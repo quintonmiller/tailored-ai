@@ -223,6 +223,15 @@ export class CueReader {
 
   constructor(private readonly body: Body) {}
 
+  /** The cue a matched tag stands for in this body, if any. */
+  private tagCue(m: RegExpExecArray): Cue | undefined {
+    const attrs = [...m[3].matchAll(/([a-z]+)\s*=\s*"([^"]*)"/gi)];
+    const name = m[2];
+    const move = (this.body.aimed ?? []).find((a) => a.verb === name.toLowerCase());
+    const target = (move && attrs.find((a) => a[1].toLowerCase() === move.prep)?.[2]) ?? attrs[0]?.[2];
+    return interpret(this.body, name, target);
+  }
+
   /** Add streamed text; returns what it can already tell apart, in order. */
   push(delta: string): CuePiece[] {
     this.pending += delta;
@@ -256,11 +265,7 @@ export class CueReader {
         if (m) {
           // Any tag is markup, never speech: a closing one, or one the body
           // can't do, is dropped.
-          const attrs = [...m[3].matchAll(/([a-z]+)\s*=\s*"([^"]*)"/gi)];
-          const name = m[2];
-          const move = (this.body.aimed ?? []).find((a) => a.verb === name.toLowerCase());
-          const target = (move && attrs.find((a) => a[1].toLowerCase() === move.prep)?.[2]) ?? attrs[0]?.[2];
-          const cue = m[1] ? undefined : interpret(this.body, name, target);
+          const cue = m[1] ? undefined : this.tagCue(m);
           emitText();
           if (cue) out.push({ cue });
           s = s.slice(m[0].length);
@@ -269,6 +274,16 @@ export class CueReader {
         // Could still become a tag: wait for more, unless it never can.
         if (!final && s.length < MAX_CUE_CHARS && !/>/.test(s) && /^<\s*\/?\s*[a-z]?[a-z-]*(\s+[^<]*)?$/i.test(s))
           break;
+        // The reply ended inside a tag (a model can stop mid-cue): finish the
+        // cue it plainly meant, and never speak what is left of the markup.
+        if (final && /^<\/?[a-z]/i.test(s) && !/>/.test(s)) {
+          const finished = TAG.exec(`${s.trimEnd()}${(s.match(/"/g) ?? []).length % 2 ? '"' : ""}/>`);
+          const cue = finished && !finished[1] ? this.tagCue(finished) : undefined;
+          emitText();
+          if (cue) out.push({ cue });
+          s = "";
+          break;
+        }
         text += "<";
         s = s.slice(1);
         continue;

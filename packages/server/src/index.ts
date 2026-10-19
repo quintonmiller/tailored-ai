@@ -10,6 +10,7 @@ import {
   type AutopilotSettings,
   type AutopilotWorker,
   addTaskComment,
+  avatarAnimationPaths,
   avatarModelPath,
   type Body,
   type Briefing,
@@ -1874,12 +1875,15 @@ export function createServer(opts: ServerOptions) {
   });
 
   // What the Talk page needs before a session starts: whether there is an avatar to draw.
-  app.get("/api/live", (c) => c.json(avatarModelPath(runtime.getConfig().live) ? { avatar: "/api/live/avatar" } : {}));
+  app.get("/api/live", (c) => {
+    const live = runtime.getConfig().live;
+    if (!avatarModelPath(live)) return c.json({});
+    const animations = avatarAnimationPaths(live).map((_, i) => `/api/live/animations/${i}`);
+    return c.json({ avatar: "/api/live/avatar", ...(animations.length ? { animations } : {}) });
+  });
 
-  // The avatar's model file, revalidated on every load so a swapped file shows up.
-  app.get("/api/live/avatar", async (c) => {
-    const path = avatarModelPath(runtime.getConfig().live);
-    if (!path) return c.json({ error: "No avatar is configured. Set live.avatar.model to a VRM file." }, 404);
+  // A configured avatar file, revalidated on every load so a swapped file shows up.
+  const sendAvatarFile = async (c: Context, path: string) => {
     const info = await stat(path).catch(() => null);
     if (!info?.isFile()) return c.json({ error: `The avatar file ${basename(path)} is missing.` }, 404);
     const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
@@ -1887,6 +1891,19 @@ export function createServer(opts: ServerOptions) {
     c.header("Cache-Control", "no-cache");
     if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
     return c.body(await readFile(path), 200, { "Content-Type": "model/gltf-binary" });
+  };
+
+  app.get("/api/live/avatar", async (c) => {
+    const path = avatarModelPath(runtime.getConfig().live);
+    if (!path) return c.json({ error: "No avatar is configured. Set live.avatar.model to a VRM file." }, 404);
+    return sendAvatarFile(c, path);
+  });
+
+  // Only the files the config lists, by position: nothing else under the folder is reachable.
+  app.get("/api/live/animations/:index", async (c) => {
+    const path = avatarAnimationPaths(runtime.getConfig().live)[Number(c.req.param("index"))];
+    if (!path) return c.json({ error: "No such animation file is configured." }, 404);
+    return sendAvatarFile(c, path);
   });
 
   app.post("/api/live/sessions", async (c) => {
