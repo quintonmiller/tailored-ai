@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DOING_COLORS } from "./doing";
 import {
   ARRIVE_IN,
   arrivalAt,
@@ -104,13 +105,10 @@ describe("doors", () => {
     expect(doorReached(room, [-4.75, 1.3], [-0.05, 0])).toBe(left);
   });
 
-  it("light up by what the agent behind them is doing, brightest when it needs you, waiting far from gold", () => {
-    // Waiting is the one that matters most: its amber must not be the gold of a brass plate.
-    const { color } = doorLight("waiting");
-    const [r, g, b] = [(color >> 16) & 255, (color >> 8) & 255, color & 255];
-    expect(r).toBe(255);
-    expect(g / r).toBeLessThan(0.65);
-    expect(b).toBeLessThan(40);
+  it("light up by what the agent behind them is doing, in the doing's own colour, brightest when it needs you", () => {
+    // The colour the map and the sign over its head use for the same thing: orange waiting on you, never gold.
+    for (const doing of ["working", "thinking", "talking", "waiting", "stuck", "idle", "asleep"] as const)
+      expect(doorLight(doing).color).toBe(DOING_COLORS[doing]);
     expect(doorLight("waiting").glow).toBeGreaterThan(doorLight("working").glow);
     expect(doorLight("asleep").glow).toBeLessThan(doorLight("idle").glow);
     expect(

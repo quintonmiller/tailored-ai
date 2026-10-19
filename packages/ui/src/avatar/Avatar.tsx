@@ -1,7 +1,7 @@
-import { type MutableRefObject, type ReactNode, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useRef, useState } from "react";
 import type { BoardSpot, BoardTask } from "./boards";
 import type { Cue } from "./cues";
-import type { AgentActivity } from "./doing";
+import { type AgentActivity, DOING_VARS } from "./doing";
 import { doorWords } from "./doors";
 import type { BodyState } from "./motion";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
@@ -319,7 +319,8 @@ export function Avatar({
 
   if (problem) return <p className="talk-avatar-problem">Couldn't show the avatar: {problem}</p>;
   return (
-    <div className={fill ? "talk-stage fill" : "talk-stage"}>
+    // What agents are doing, in the colours the doors and signs use, for everything over the stage.
+    <div className={fill ? "talk-stage fill" : "talk-stage"} style={DOING_VARS as CSSProperties}>
       <div
         className="talk-avatar"
         ref={host}

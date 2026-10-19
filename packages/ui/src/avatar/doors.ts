@@ -7,7 +7,7 @@
  * A door faces into its room. On the back wall it looks toward +Z, on the left
  * toward +X, and on the open front and right sides back into the room.
  */
-import type { AgentActivity } from "./doing";
+import { type AgentActivity, DOING_COLORS } from "./doing";
 import type { Obstacle } from "./locomotion";
 import type { Room, RoomDoor } from "./scene";
 
@@ -144,27 +144,15 @@ export function inDoorway(room: Pick<Room, "width" | "depth">, door: RoomDoor, a
 }
 
 /**
- * The colour of the light by a home's door, by what its agent is doing, and
- * how bright it is (0–1): full when it needs you, dim when it is idle or
- * asleep. Strong colours, drawn as they are, so each reads at a glance against
- * the plate beside it.
+ * The colour of the light by a home's door, by what its agent is doing (the
+ * colours every view of a doing uses), and how bright it is (0–1): full when
+ * it needs you, dim asleep, a plain grey idle. Drawn as they are, so each
+ * reads at a glance against the plate beside it.
  */
 export function doorLight(doing: AgentActivity["doing"] | undefined): { color: number; glow: number } {
-  switch (doing) {
-    case "working":
-      return { color: 0x22d65f, glow: 0.9 };
-    case "thinking":
-    case "talking":
-      return { color: 0x3388ff, glow: 0.9 };
-    case "waiting":
-      return { color: 0xff9a10, glow: 1 };
-    case "stuck":
-      return { color: 0xff2e2e, glow: 1 };
-    case "asleep":
-      return { color: 0x8a6cff, glow: 0.4 };
-    default:
-      return { color: 0xe6eaf0, glow: 0.45 };
-  }
+  const d = doing ?? "idle";
+  const glow = d === "waiting" || d === "stuck" ? 1 : d === "asleep" ? 0.4 : 0.9;
+  return { color: DOING_COLORS[d], glow };
 }
 
 /** Where a door goes, in words for a pointer over it: "to Residences E–N", "to analyst's home", "to #budget". */

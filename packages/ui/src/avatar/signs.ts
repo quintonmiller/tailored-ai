@@ -7,7 +7,7 @@
  */
 import * as THREE from "three";
 import { TAG_LINE_CHARS } from "../lib/did";
-import type { Sign } from "./doing";
+import { doingCss, type Sign } from "./doing";
 
 function sprite(canvas: HTMLCanvasElement, height: number): THREE.Sprite {
   const texture = new THREE.CanvasTexture(canvas);
@@ -204,10 +204,10 @@ function drawSign(sign: Sign): HTMLCanvasElement {
       dots(54, "#3d7bd9");
       break;
     case "wait":
-      disc("#f5c542", "!");
+      disc(doingCss("waiting"), "!");
       break;
     case "stuck":
-      disc("#f08a4b", "?");
+      disc(doingCss("stuck"), "?");
       break;
     case "sleep":
       ctx.fillStyle = "#cfe0ff";

@@ -6,7 +6,11 @@ import { areaTitle, MAIN, type MapArea, type MapPlace, mapIndex, placeTitle } fr
 
 export type { MapArea, MapPlace } from "../lib/wayfinding";
 
-/** A body's colour on the map, near enough to the colour it is drawn in. */
+/**
+ * A body's colour, near enough to the colour it is drawn in, for the dot by an
+ * agent's name on its card and in the chat. The map's dots say what agents
+ * are doing instead.
+ */
 export function agentColor(agent: string): string {
   const hue = hueFor(agent);
   return `hsl(${(145 + (hue ?? 0)) % 360} 52% 52%)`;
@@ -94,40 +98,60 @@ export function markWords(mark: { doing: AgentActivity["doing"]; count: number; 
 /** A change to where a body is: where an agent lives (`whereabouts`), or a meeting room it is visiting (`visit`). */
 export const comeOrGone = (type: string) => type === "whereabouts" || type === "visit";
 
-/** The places and areas, asked for when the map opens and again whenever someone comes or goes. */
-export function useWorldMap(open: boolean): { places: MapPlace[]; areas: MapArea[]; problem: string | null } {
+/**
+ * The places and areas, asked for while `open` and again whenever someone
+ * comes or goes. `fresh` turning true (the map or an agent's card opening)
+ * asks again, for what changes without anyone moving: a new agent, a new room.
+ */
+export function useWorldMap(
+  open: boolean,
+  fresh = false,
+): { places: MapPlace[]; areas: MapArea[]; problem: string | null } {
   const [places, setPlaces] = useState<MapPlace[]>([]);
   const [areas, setAreas] = useState<MapArea[]>([]);
   const [problem, setProblem] = useState<string | null>(null);
+  const reload = useRef<() => void>(() => {});
   useEffect(() => {
     if (!open) return;
     let gone = false;
-    const load = () =>
+    // Answers can come back out of order: only the last one asked for is kept, so an older map never wins.
+    let asked = 0;
+    const load = () => {
+      const n = ++asked;
       fetch("/api/ext/builtin:places/map")
         .then(async (res) => {
           if (!res.ok) throw new Error(`The map couldn't be loaded (${res.status}).`);
           return (await res.json()) as { places?: MapPlace[]; areas?: MapArea[] };
         })
         .then((body) => {
-          if (gone) return;
+          if (gone || n !== asked) return;
           setPlaces(body.places ?? []);
           setAreas(body.areas ?? []);
           setProblem(null);
         })
         .catch((err: unknown) => {
-          if (!gone) setProblem(err instanceof Error ? err.message : String(err));
+          if (!gone && n === asked) setProblem(err instanceof Error ? err.message : String(err));
         });
-    void load();
+    };
+    reload.current = load;
+    load();
     const off = subscribeStateChanges((change) => {
-      // Someone came or went, a shared place came or went, or a place moved to another area.
-      const moved = change.type === "place" && change.before?.area !== change.after?.area;
-      if (comeOrGone(change.type) || moved || (change.type === "place" && change.id.startsWith("shared:"))) void load();
+      // Someone came or went, a shared place came or went, or a place moved to another area or was given a new purpose.
+      const place = change.type === "place";
+      const moved = place && change.before?.area !== change.after?.area;
+      const repurposed = place && change.before?.purpose !== change.after?.purpose;
+      if (comeOrGone(change.type) || moved || repurposed || (place && change.id.startsWith("shared:"))) load();
     });
     return () => {
       gone = true;
+      reload.current = () => {};
       off();
     };
   }, [open]);
+  const asking = open && fresh;
+  useEffect(() => {
+    if (asking) reload.current();
+  }, [asking]);
   return { places, areas, problem };
 }
 
@@ -234,7 +258,7 @@ export function WorldMap({
                 const mark = doing ? MARKS[doing] : undefined;
                 return (
                   <span key={a} className={`world-map-agent${doing ? ` doing-${doing}` : ""}`}>
-                    <span className="world-map-dot" style={{ background: agentColor(a) }} aria-hidden="true">
+                    <span className="world-map-dot" aria-hidden="true">
                       {mark}
                     </span>
                     {nameOf(a)}
@@ -295,7 +319,7 @@ export function WorldMap({
           <section aria-label="Busy now" className="world-map-busy-list">
             <h3>Busy now</h3>
             {busy.length === 0 ? (
-              <p className="world-map-quiet">Nobody is busy right now: every agent is idle or asleep.</p>
+              <p className="world-map-quiet">Nobody is busy: every agent is idle or asleep.</p>
             ) : (
               <ul>
                 {busy.map((b) => (
@@ -306,7 +330,7 @@ export function WorldMap({
                       aria-current={current(b.place.id)}
                       onClick={() => onGo(b.place.id)}
                     >
-                      <span className="world-map-dot" style={{ background: agentColor(b.agent) }} aria-hidden="true">
+                      <span className="world-map-dot" aria-hidden="true">
                         {MARKS[b.activity.doing]}
                       </span>
                       <span className="world-map-busy-who">{nameOf(b.agent)}</span>
@@ -336,18 +360,22 @@ export function WorldMap({
             <ul>
               {index.agents.map(({ agent, home, away, activity }) => {
                 const doing = activity?.doing ?? "idle";
+                // Only what is worth a look is in words; idle and asleep are the dot's to say.
+                const calm = URGENCY[doing] === undefined;
                 return (
                   <li key={agent} className="world-map-person">
                     <button
                       type="button"
                       className={`world-map-who doing-${doing}${first(home.id)}`}
                       aria-current={current(home.id)}
-                      title={`Go to ${placeTitle(home)}`}
+                      title={`${nameOf(agent)}, ${STATE_WORDS[doing]}: go to ${placeTitle(home)}`}
                       onClick={() => onGo(home.id)}
                     >
-                      <span className="world-map-state" aria-hidden="true" />
+                      <span className="world-map-dot" aria-hidden="true">
+                        {MARKS[doing]}
+                      </span>
                       <span className="world-map-who-name">{nameOf(agent)}</span>
-                      <span className="world-map-who-doing">{STATE_WORDS[doing]}</span>
+                      <span className={`world-map-who-doing${calm ? " calm" : ""}`}>{STATE_WORDS[doing]}</span>
                     </button>
                     {away && (
                       <button
@@ -398,6 +426,8 @@ export function WorldMap({
               type="button"
               className="world-map-fold"
               aria-expanded={searching || hallsOpen}
+              // While searching, the halls are open to show what matched; folding them waits for the search to clear.
+              disabled={searching}
               onClick={() => setHallsOpen(!hallsOpen)}
             >
               <span aria-hidden="true">{searching || hallsOpen ? "▾" : "▸"}</span> Halls

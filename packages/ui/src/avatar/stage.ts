@@ -245,6 +245,8 @@ let reachKept = REACH.start;
 const FADE_MS = 220;
 /** How long a door waits for the place behind it before giving up and letting you back. */
 const DOOR_PATIENCE_MS = 5000;
+/** How often what is under a still pointer is looked at again while the view moves under it. */
+const HOVER_AGAIN_MS = 120;
 
 const bare = (s: string) =>
   s
@@ -854,13 +856,15 @@ export async function createStage(
   // A click (not a drag) on furniture sends the avatar to its spot; the
   // pointer says so on hover.
   const canvas = renderer.domElement;
+  /** Where a pointer is, on the page. */
+  type At = { clientX: number; clientY: number };
   const ray = new THREE.Raycaster();
   /**
    * The nearest clickable thing under the pointer, and what it is for: a
    * door, a use (a kiosk, a board) or a spot to go to. On a board's face, the
    * note or column the pointer is on as well.
    */
-  const pick = (e: PointerEvent): (Use & { on?: BoardSpot }) | undefined => {
+  const pick = (e: At): (Use & { on?: BoardSpot }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
@@ -887,7 +891,7 @@ export async function createStage(
   };
 
   /** The agent whose body (or tag, or sign) is under the pointer, if any. */
-  const agentAt = (e: PointerEvent): string | undefined => {
+  const agentAt = (e: At): string | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
@@ -940,8 +944,15 @@ export async function createStage(
       if (to) me.goTo(room, to, obstacles);
     }
   };
+  // Where the mouse is over the stage, so what is under it is looked at again as the view moves under a still pointer.
+  let pointer: At | undefined;
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
+    pointer = { clientX: e.clientX, clientY: e.clientY };
+    hoverAt(pointer);
+  };
+  /** What is under the pointer now: a body's tag says more, a door lights up and says where it goes. */
+  const hoverAt = (e: At) => {
     const who = agentAt(e);
     if (who !== hovered) hover(who);
     const it = pick(e);
@@ -963,8 +974,21 @@ export async function createStage(
     }
   };
   const onLeave = () => {
+    pointer = undefined;
     hover(undefined);
     hoverDoor(undefined);
+  };
+  // Walking, the camera easing or zooming, or someone stepping in front of a door all change what is under a pointer
+  // that hasn't moved: it is looked at again, a few times a second, while the view moves or something is lit.
+  const seen = new THREE.Matrix4();
+  let lookedAt = 0;
+  const lookAgain = (now: number) => {
+    if (!pointer || downAt || now - lookedAt < HOVER_AGAIN_MS) return;
+    const moved = !seen.equals(camera.matrixWorld);
+    if (!moved && !overDoor && !hovered) return;
+    lookedAt = now;
+    seen.copy(camera.matrixWorld);
+    hoverAt(pointer);
   };
 
   // Going through a door: the picture fades, the page brings the place behind it, and `enter` fades it back in.
@@ -1567,6 +1591,7 @@ export async function createStage(
       }
     }
     renderer.render(scene, camera);
+    lookAgain(now);
   });
 
   /** Leaving the place shown for another: everyone in it stays there, and whoever is in the next one was there already. */

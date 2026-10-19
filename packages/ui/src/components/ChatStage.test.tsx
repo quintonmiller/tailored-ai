@@ -8,6 +8,7 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { doingCss } from "../avatar/doing";
 import type { StageInput } from "../avatar/stage";
 import { type ChatStageOptions, TalkButton, tasksFor, useChatStage } from "./ChatStage";
 
@@ -155,6 +156,8 @@ let tasksHeld: Promise<void> | null = null;
 let watcherInfo = { enabled: true, triggers: ["created", "updated"] };
 /** Agents that run on their own, as the exploratory worker keeps them. */
 let ownAgents: Record<string, unknown>[] = [];
+/** Places on the map besides the usual ones: an agent made since the page opened. */
+let mapExtra: Record<string, unknown>[] = [];
 
 /** The agent's own room, as the server keeps it. */
 const home = {
@@ -256,6 +259,7 @@ beforeEach(() => {
   chattedWith.length = 0;
   agentsInfo = {};
   speechRecords = [];
+  mapExtra = [];
   stage.agents.length = 0;
   activityRecords = [];
   taskRows = [
@@ -354,6 +358,7 @@ beforeEach(() => {
                 via: "hall:main:homes-1",
               },
               { id: "room:local:trip", name: "trip", kind: "room", agents: ["planner", "writer"] },
+              ...mapExtra,
             ],
             areas: [{ id: "main", name: "the main building", places: ["lobby", "hall:main:homes-1"] }],
           }),
@@ -534,6 +539,10 @@ describe("the chat page's scene", () => {
     expect(stage.calls.map((c) => c.url)).toEqual(["/api/live/avatar?agent=talker"]);
     expect(stage.calls[0].animations).toEqual(["/api/live/animations/0?agent=talker"]);
     expect(stage.insets.at(-1)).toBeGreaterThan(0);
+    // Everything over the stage says what agents are doing in the colours its doors and signs use.
+    const over = container.querySelector(".talk-stage") as HTMLElement;
+    expect(over.style.getPropertyValue("--doing-waiting")).toBe(doingCss("waiting"));
+    expect(over.style.getPropertyValue("--doing-stuck")).toBe(doingCss("stuck"));
   });
 
   it("shows the agent's own room, and redraws it the moment the agent changes it", async () => {
@@ -860,6 +869,26 @@ describe("the chat page's scene", () => {
     container.appendChild(field);
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyM", bubbles: true })));
     expect(container.querySelector(".world-map")).not.toBeNull();
+  });
+
+  it("asks for the map again each time it opens, so an agent made since is on it", async () => {
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    const people = () =>
+      [...container.querySelectorAll(".world-map-who-name")].map((p) => p.textContent).filter((n) => n !== "talker");
+    await act(async () => tool("Map").click());
+    await settle();
+    expect(people()).toEqual(["planner"]);
+    // An agent made from the lobby's kiosk: nobody came or went, so nothing says so but the map itself.
+    mapExtra = [
+      { id: "home:newcomer", name: "newcomer's room", kind: "home", owner: "newcomer", agents: ["newcomer"] },
+    ];
+    await act(async () => tool("Map").click());
+    await settle();
+    await act(async () => tool("Map").click());
+    await settle();
+    expect(people()).toEqual(["newcomer", "planner"]);
   });
 
   it("says where you are over the stage, from the area down, and each step goes there", async () => {

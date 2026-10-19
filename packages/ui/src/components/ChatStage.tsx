@@ -567,8 +567,9 @@ export function useChatStage({
   const showing = loading ? last.current : { visiting, scene: visiting ? (visited as SceneInfo) : own };
   last.current = showing;
   const { room, company, id: placeId } = showing.scene;
-  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card.
-  const map = useWorldMap(showStage);
+  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card. Opening
+  // either asks again, for anything new that nobody moved to tell it about.
+  const map = useWorldMap(showStage, mapOpen || panel?.kind === "agent");
   const trail = useMemo(() => trailTo(placeId, map.places, map.areas), [placeId, map.places, map.areas]);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
   const hearLine = useVoicesNearby(voicesOn && !!visiting);

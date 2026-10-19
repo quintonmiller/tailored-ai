@@ -23,6 +23,33 @@ export interface AgentActivity {
   next?: string;
 }
 
+/**
+ * The colour of each doing, wherever it is shown: the light by a home's door,
+ * the sign over a head, the dots on the map, an agent's card and menu; the
+ * page's styles have them as `--doing-*` (see `DOING_VARS`). Waiting on you is
+ * orange and stuck is red: an amber would be taken for a door's brass plate,
+ * or the gold of the door under the pointer.
+ */
+export const DOING_COLORS: Record<AgentActivity["doing"], number> = {
+  working: 0x3ddc78,
+  thinking: 0x5aa2ff,
+  talking: 0x5aa2ff,
+  waiting: 0xff9a1f,
+  stuck: 0xff4d4d,
+  asleep: 0x9d8cff,
+  idle: 0x6b7286,
+};
+
+/** A doing's colour as a page writes it: `#ff9a1f`. */
+export function doingCss(doing: AgentActivity["doing"]): string {
+  return `#${DOING_COLORS[doing].toString(16).padStart(6, "0")}`;
+}
+
+/** The colours as custom properties, `--doing-waiting` and the rest, set on the stage for everything over it to use. */
+export const DOING_VARS: Record<string, string> = Object.fromEntries(
+  (Object.keys(DOING_COLORS) as AgentActivity["doing"][]).map((d) => [`--doing-${d}`, doingCss(d)]),
+);
+
 /** How a thing is held: up to the eyes, at the ear, in front of the chest, or out ahead. */
 export type Hold = "up" | "ear" | "chest" | "out";
 

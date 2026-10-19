@@ -507,7 +507,10 @@ export interface MapPlace {
   purpose?: string;
   /** A room of conversation's members with a body, wherever their bodies are. */
   members?: string[];
-  /** The place its way in is through: the hall its door opens off, or the lobby; none for an area's way in. */
+  /**
+   * The place its way in is through: the hall its door opens off, or the lobby; in an area of two places, which
+   * open on each other, the other one. None for the lobby, another area's first hall, or a place alone in its area.
+   */
   via?: string;
 }
 

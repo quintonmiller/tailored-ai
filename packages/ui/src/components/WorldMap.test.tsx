@@ -6,8 +6,22 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StateChangeInfo } from "../api";
 import type { AgentActivity } from "../avatar/doing";
-import { busyAgents, busyMark, type MapPlace, markWords, WorldMap } from "./WorldMap";
+import { busyAgents, busyMark, type MapPlace, markWords, useWorldMap, WorldMap } from "./WorldMap";
+
+// Changes to the world, as the page hears of them.
+const heard = vi.hoisted(() => ({ listeners: new Set<(change: unknown) => void>() }));
+vi.mock("../lib/state-events", () => ({
+  subscribeStateChanges: (listener: (change: unknown) => void) => {
+    heard.listeners.add(listener);
+    return () => heard.listeners.delete(listener);
+  },
+}));
+const hear = (change: Partial<StateChangeInfo>) =>
+  act(() => {
+    for (const listener of heard.listeners) listener(change);
+  });
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -72,8 +86,13 @@ describe("WorldMap", () => {
     expect(tiles()[1].getAttribute("aria-current")).toBe("location");
     // Someone waiting on you is marked where they are.
     expect(container.querySelector(".world-map-agent.doing-waiting")?.textContent).toMatch(/!writer/);
-    // An agent is listed by name, with what it is doing, whether or not anyone is at home.
+    // An agent is listed by name, with what it is doing, whether or not anyone is at home. Idle is the dot's to say:
+    // the word is there for a screen reader, not on the line.
     expect(people().map((p) => p.textContent)).toEqual(["planneridle"]);
+    expect(people()[0].querySelector(".world-map-who-doing")?.classList.contains("calm")).toBe(true);
+    // Every dot on the map says what an agent is doing, not which body it is.
+    expect(container.querySelectorAll(".world-map-dot[style]")).toHaveLength(0);
+    expect(container.querySelector(".world-map-busy.doing-waiting > .world-map-dot")?.textContent).toBe("!");
   });
 
   it("takes you into an agent's home, or to where its body is when that is somewhere else", () => {
@@ -82,7 +101,9 @@ describe("WorldMap", () => {
     });
     const planner = people()[0];
     expect(planner.classList.contains("doing-working")).toBe(true);
-    expect(planner.textContent).toBe("plannerworking");
+    // Busy is said in words on the line, beside a dot with its mark.
+    expect(planner.textContent).toBe("•plannerworking");
+    expect(planner.querySelector(".world-map-who-doing")?.classList.contains("calm")).toBe(false);
     act(() => planner.click());
     expect(onGo).toHaveBeenLastCalledWith("home:planner");
     // Its body is in the lounge, with the writer.
@@ -187,8 +208,16 @@ describe("WorldMap", () => {
     enter();
     expect(onGo).toHaveBeenLastCalledWith("room:local:trip");
     type("meeting");
-    expect(container.querySelector(".world-map-fold")?.getAttribute("aria-expanded")).toBe("true");
+    const fold = () => container.querySelector(".world-map-fold") as HTMLButtonElement;
+    expect(fold().getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector(".world-map-hall")?.textContent).toBe("Meeting rooms");
+    // Open to show what matched: folding them waits until the search is cleared, and then they are as they were.
+    expect(fold().disabled).toBe(true);
+    act(() => fold().click());
+    expect(container.querySelector(".world-map-hall")?.textContent).toBe("Meeting rooms");
+    type("");
+    expect(fold().disabled).toBe(false);
+    expect(fold().getAttribute("aria-expanded")).toBe("false");
     type("zzz");
     expect(tiles()).toHaveLength(0);
     expect(container.textContent).toMatch(/Nothing matches/);
@@ -298,5 +327,81 @@ describe("busyAgents", () => {
     expect(markWords({ doing: "waiting", count: 1, others: 2 })).toBe("waiting on you · 2 more busy");
     expect(markWords({ doing: "working", count: 2, others: 0 })).toBe("2 working");
     expect(markWords({ doing: "stuck", count: 2, others: 1 })).toBe("2 stuck · 1 more busy");
+  });
+});
+
+describe("useWorldMap", () => {
+  let root: Root;
+  let container: HTMLDivElement;
+  let answers: ((body: { places: MapPlace[] }) => void)[];
+  const home = (agent: string): MapPlace => ({
+    id: `home:${agent}`,
+    name: `${agent}'s room`,
+    kind: "home",
+    owner: agent,
+    agents: [agent],
+  });
+  function Probe({ open, fresh }: { open: boolean; fresh?: boolean }) {
+    const { places } = useWorldMap(open, fresh);
+    return <p>{places.map((p) => p.id).join(" ")}</p>;
+  }
+  const show = (open: boolean, fresh?: boolean) => act(() => root.render(<Probe open={open} fresh={fresh} />));
+  const answer = async (i: number, places: MapPlace[]) => act(async () => answers[i]({ places }));
+  const shown = () => container.textContent;
+
+  beforeEach(() => {
+    answers = [];
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    // Each ask is answered when the test says, so answers can come back in any order.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((done) =>
+            answers.push((body) => done(new Response(JSON.stringify({ ...body, areas: [] })))),
+          ),
+      ),
+    );
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("asks again each time the map opens, for an agent or a room nobody moved to tell it about", async () => {
+    show(true, false);
+    await answer(0, [home("planner")]);
+    expect(shown()).toBe("home:planner");
+    show(true, true);
+    expect(answers).toHaveLength(2);
+    await answer(1, [home("planner"), home("newcomer")]);
+    expect(shown()).toBe("home:planner home:newcomer");
+    // Closing asks nothing; opening again asks again.
+    show(true, false);
+    show(true, true);
+    expect(answers).toHaveLength(3);
+    // Nothing is asked while the stage is away.
+    show(false, true);
+    expect(answers).toHaveLength(3);
+  });
+
+  it("keeps the answer last asked for, though an older one comes back after it", async () => {
+    show(true);
+    hear({ type: "whereabouts", id: "planner", op: "update" });
+    expect(answers).toHaveLength(2);
+    await answer(1, [home("planner")]);
+    await answer(0, [home("stale")]);
+    expect(shown()).toBe("home:planner");
+  });
+
+  it("asks again when a place is given a new purpose, but not when its furniture moves", async () => {
+    show(true);
+    hear({ type: "place", id: "room:local:trip", op: "update", before: { purpose: "a" }, after: { purpose: "a" } });
+    expect(answers).toHaveLength(1);
+    hear({ type: "place", id: "room:local:trip", op: "update", before: { purpose: "a" }, after: { purpose: "b" } });
+    expect(answers).toHaveLength(2);
   });
 });
