@@ -34,7 +34,7 @@ const stage = vi.hoisted(() => ({
   cues: [] as string[],
   insets: [] as number[],
   /** Every room the stage was shown, first to last. */
-  rooms: [] as { name?: string; props: { name: string }[] }[],
+  rooms: [] as { name?: string; props: { name: string }[]; doors?: { to: string; along: number }[] }[],
   /** Who else the stage was told is in the room, each time. */
   company: [] as string[][],
   /** What the stage was told each agent is doing, each time. */
@@ -43,6 +43,12 @@ const stage = vi.hoisted(() => ({
   agents: [] as (string | undefined)[],
   /** Stages on screen now: what render() waits for, instead of a fixed sleep a slow runner outlasts. */
   mounted: 0,
+  /** The last stage's way to say a door was gone through. */
+  onDoor: undefined as ((door: { to: string }) => void) | undefined,
+  /** The place each stage was made coming from, through a door. */
+  arrivals: [] as (string | undefined)[],
+  /** Where each place come into on the same stage was come from. */
+  entered: [] as (string | undefined)[],
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (
@@ -59,9 +65,13 @@ vi.mock("../avatar/stage", () => ({
       onUse?: (action: string, on?: Record<string, string>) => void;
       onLine?: (agent: string, text: string, nearness: number) => void;
       company?: { agent: string }[];
+      onDoor?: (door: { to: string }) => void;
+      arriveFrom?: string;
     },
   ) => {
     stage.onLine = opts.onLine;
+    stage.onDoor = opts.onDoor;
+    stage.arrivals.push(opts.arriveFrom);
     stage.visitors.push(!!opts.visitor);
     stage.onNear = opts.onNear;
     stage.onUse = opts.onUse;
@@ -75,6 +85,10 @@ vi.mock("../avatar/stage", () => ({
       setView: () => {},
       setInsets: ({ right }: { right: number }) => stage.insets.push(right),
       setRoom: (room: { name?: string; props: { name: string }[] }) => stage.rooms.push(room),
+      enter: (room: { name?: string; props: { name: string }[] }, from: string | undefined) => {
+        stage.rooms.push(room);
+        stage.entered.push(from);
+      },
       setCompany: (company: { agent: string }[]) => stage.company.push(company.map((c) => c.agent)),
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
@@ -105,6 +119,8 @@ class FakeEventSource {
 /** Where the agent is, and who else is there with a body, as the server says. */
 let placeId = "home:talker";
 let company: { agent: string; name: string; avatar: string; animations: string[] }[] = [];
+/** Where the door of the agent's own place is, as the server says. */
+let homeDoorAlong = 1;
 /** The agents as configured: which run on their own. */
 let agentsInfo: Record<string, { online?: { enabled?: boolean } }> = {};
 /** The last thing each agent said, as the server's speech records say. */
@@ -211,6 +227,8 @@ beforeEach(() => {
   stage.cues.length = 0;
   stage.insets.length = 0;
   stage.rooms.length = 0;
+  stage.arrivals.length = 0;
+  stage.entered.length = 0;
   stage.company.length = 0;
   stage.activities.length = 0;
   stage.speech.length = 0;
@@ -254,6 +272,7 @@ beforeEach(() => {
   ownAgents = [];
   placeId = "home:talker";
   company = [];
+  homeDoorAlong = 1;
   stage.mounted = 0;
   vi.stubGlobal("EventSource", FakeEventSource);
   localStorage.clear();
@@ -311,6 +330,20 @@ beforeEach(() => {
             id: "home:planner",
             place: { ...home, name: "planner's room" },
             company: [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner" }],
+            doors: [{ wall: "back", along: 1, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
+          }),
+        );
+      if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("hall:main:homes-1")}`)
+        return new Response(
+          JSON.stringify({
+            id: "hall:main:homes-1",
+            place: { ...home, name: "Residences", props: [] },
+            company: [],
+            doors: [
+              { wall: "left", along: 0, to: "lobby", label: "Lobby", kind: "lobby" },
+              { wall: "back", along: -2, to: "home:planner", label: "planner", kind: "home", occupant: "planner" },
+              { wall: "front", along: -2, to: "home:talker", label: "talker", kind: "home", occupant: "talker" },
+            ],
           }),
         );
       if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("room:local:trip")}`)
@@ -349,7 +382,16 @@ beforeEach(() => {
         return new Response("{}");
       }
       if (url === "/api/ext/builtin:places/talker")
-        return new Response(JSON.stringify({ type: "place", id: placeId, version: 1, place: home, company }));
+        return new Response(
+          JSON.stringify({
+            type: "place",
+            id: placeId,
+            version: 1,
+            place: home,
+            company,
+            doors: [{ wall: "back", along: homeDoorAlong, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
+          }),
+        );
       if (init?.method === "DELETE") {
         deleted.push(url);
         return new Response("{}");
@@ -477,7 +519,19 @@ describe("the chat page's scene", () => {
     await act(async () =>
       FakeEventSource.last?.emit("change", { type: "place", id: "home:talker", op: "update", after: rearranged }),
     );
+    await settle();
+    // Its door stayed where it was, so the room stands as changed, not drawn again from the server's answer.
     expect(stage.rooms.at(-1)?.props.map((p) => p.name)).toEqual(["the reading chair", "the lamp"]);
+    const drawn = stage.rooms.length;
+    expect(stage.rooms.at(-1)?.doors?.map((d) => d.along)).toEqual([1]);
+    // A change that moves the door (something cleared from the end of a wall): the door moves with it.
+    homeDoorAlong = 2.5;
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "place", id: "home:talker", op: "update", after: home }),
+    );
+    await settle();
+    expect(stage.rooms.length).toBeGreaterThan(drawn);
+    expect(stage.rooms.at(-1)?.doors?.map((d) => d.along)).toEqual([2.5]);
   });
 
   it("shows who else is in the room, and the agent knows they are there", async () => {
@@ -616,6 +670,41 @@ describe("the chat page's scene", () => {
     await settle(60);
     expect(stage.visitors.at(-1)).toBe(false);
     expect(extras.at(-1)?.body).toBeDefined();
+  });
+
+  it("goes through doors in your own body: out of the agent's room into the hall, and on into another home", async () => {
+    await render({ following: true });
+    expect(stage.rooms.at(-1)?.doors?.map((d) => d.to)).toEqual(["hall:main:homes-1"]);
+    // From the agent's own view, a door starts a visit: your body, come out of the door on the other side.
+    await act(async () => stage.onDoor?.({ to: "hall:main:homes-1" }));
+    await settle(60);
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.arrivals.at(-1)).toBe("home:talker");
+    expect(stage.rooms.at(-1)?.name).toBe("Residences");
+    // A hall is nobody's home: the conversation goes on.
+    expect(chattedWith).toEqual([]);
+    const made = stage.calls.length;
+    // On through the next door: the same stage, the same body, into planner's home from the hall, talking to planner.
+    await act(async () => stage.onDoor?.({ to: "home:planner" }));
+    await settle(60);
+    expect(stage.calls.length).toBe(made);
+    expect(stage.entered.at(-1)).toBe("hall:main:homes-1");
+    expect(stage.rooms.at(-1)?.name).toBe("planner's room");
+    expect(stage.company.at(-1)).toEqual(["planner"]);
+    expect(chattedWith).toEqual(["planner"]);
+    // The map takes you somewhere at its start, not by a door: still the same stage.
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Map").click());
+    await settle();
+    const trip = [...container.querySelectorAll(".world-map-place")].find((b) =>
+      b.querySelector(".world-map-name")?.textContent?.startsWith("#trip"),
+    ) as HTMLButtonElement;
+    await act(async () => trip.click());
+    await settle(60);
+    expect(stage.calls.length).toBe(made);
+    expect(stage.entered.at(-1)).toBeUndefined();
+    expect(stage.rooms.at(-1)?.name).toBe("trip");
   });
 
   it("talks to the agent whose home you go to, and to the one you came from when you come back", async () => {

@@ -60,7 +60,9 @@ export type PropKind =
   | "painting"
   | "poster"
   | "pegboard"
-  | "table_lamp";
+  | "table_lamp"
+  | "bench"
+  | "sign";
 
 export interface Prop {
   id: string;
@@ -122,6 +124,25 @@ export interface Room {
   floorColor?: string;
   /** Photos taken here, newest first, by their media id: the pictures on the walls show them. */
   photos?: { media: string; what: string; at: string }[];
+  /** Doors to other places, as the server lays the building out; none when the room stands on its own. */
+  doors?: RoomDoor[];
+}
+
+/**
+ * A door in a room: which side it is on and where along it (x on the back and
+ * front, z on the left and right), the place it opens on, and what its name
+ * plate says. The back and left are walls; a door on the open front or right
+ * stands on its own at the floor's edge.
+ */
+export interface RoomDoor {
+  wall: "back" | "left" | "front" | "right";
+  along: number;
+  /** The place it opens on, by id. */
+  to: string;
+  label: string;
+  kind: "lobby" | "hall" | "home" | "shared" | "room";
+  /** The agent whose home it opens on: its light says what that agent is doing. */
+  occupant?: string;
 }
 
 export const DEFAULT_ROOM: Room = {

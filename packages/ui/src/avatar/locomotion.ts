@@ -232,6 +232,14 @@ export class Walker {
     this.finalFacing = facing;
   }
 
+  /** Be somewhere at once, facing this way, with nothing left to walk: coming in through a door. */
+  jump(at: [number, number], facing: number) {
+    this.legs = [];
+    this.finalFacing = undefined;
+    [this.place.x, this.place.z] = at;
+    this.place.facing = facing;
+  }
+
   /** Still walking or turning. */
   get busy(): boolean {
     return this.legs.length > 0 || this.finalFacing !== undefined;

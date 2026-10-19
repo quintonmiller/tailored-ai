@@ -3,7 +3,7 @@ import type { BoardSpot, BoardTask } from "./boards";
 import type { Cue } from "./cues";
 import type { AgentActivity } from "./doing";
 import type { BodyState } from "./motion";
-import type { Room } from "./scene";
+import type { Room, RoomDoor } from "./scene";
 import type { Companion, Line, Stage, StageView, Travel } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
@@ -62,6 +62,9 @@ export function Avatar({
   tasks,
   onUse,
   onLine,
+  place,
+  arriveFrom,
+  onDoor,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -112,6 +115,15 @@ export function Avatar({
   onUse?: (action: string, on?: BoardSpot) => void;
   /** A visitor is near an agent as it starts saying something, nearness 0–1. */
   onLine?: (agent: string, text: string, nearness: number) => void;
+  /**
+   * Which place `room` is, by id. A new one on the same stage is a place come
+   * into through a door: you stand just inside the door back to the last one.
+   */
+  place?: string;
+  /** The place come from through a door, for a stage made on the way in: you start just inside that door. */
+  arriveFrom?: string;
+  /** A door was gone through: bring the place behind it. */
+  onDoor?: (door: RoomDoor) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -159,6 +171,8 @@ export function Avatar({
   useEffect(() => {
     if (tasks) stage.current?.setTasks(tasks);
   }, [tasks]);
+  const placeRef = useRef(place);
+  placeRef.current = place;
   const onUseRef = useRef(onUse);
   onUseRef.current = onUse;
   const lineRef = useRef(onLine);
@@ -170,8 +184,22 @@ export function Avatar({
   agentRef.current = agent;
   const roomRef = useRef(room);
   roomRef.current = room;
+  const doorRef = useRef(onDoor);
+  doorRef.current = onDoor;
+  // Doors only open where the page can bring what is behind them.
+  const doors = !!onDoor;
+  const arriveRef = useRef(arriveFrom);
+  arriveRef.current = arriveFrom;
+  // The place the stage shows. On a visit, a different one arriving is a place come into, through a door or by the
+  // map; anywhere else, and for the first room to arrive, it is the same stage's room changing.
+  const shownPlace = useRef(place);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the room and its place arrive together; the room says when.
   useEffect(() => {
-    if (room) stage.current?.setRoom(room);
+    if (!room || !stage.current) return;
+    if (visitor && shownPlace.current !== undefined && place !== shownPlace.current)
+      stage.current.enter(room, arriveRef.current);
+    else stage.current.setRoom(room);
+    shownPlace.current = place;
   }, [room]);
   const animationsRef = useRef(animations);
   animationsRef.current = animations;
@@ -202,6 +230,8 @@ export function Avatar({
               }
             : {}),
           onUse: (action: string, on?: BoardSpot) => onUseRef.current?.(action, on),
+          ...(doors ? { onDoor: (door: RoomDoor) => doorRef.current?.(door) } : {}),
+          ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {
                 onPick: (who: string, at: { x: number; y: number }) => {
@@ -237,6 +267,7 @@ export function Avatar({
         s.setInsets({ right: insetRef.current });
         // The room, or who is in it, may have arrived or changed while the stage was loading.
         if (roomRef.current) s.setRoom(roomRef.current);
+        shownPlace.current = placeRef.current;
         s.setCompany(companyRef.current ?? []);
         if (activitiesRef.current) s.setActivities(activitiesRef.current);
         if (speechRef.current) s.setSpeech(speechRef.current);
@@ -254,7 +285,7 @@ export function Avatar({
       stage.current = null;
       if (controlsRef.current) controlsRef.current.current = null;
     };
-  }, [url, animationsKey, choosing, picking, visitor]);
+  }, [url, animationsKey, choosing, picking, visitor, doors]);
   useEffect(() => {
     if (visitor) setTravel("walk");
   }, [visitor]);

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Avatar } from "../avatar/Avatar";
-import { DEFAULT_ROOM, type Room } from "../avatar/scene";
+import type { Room } from "../avatar/scene";
 import type { Companion } from "../avatar/stage";
-import { companyOf, type PlaceInfo } from "../components/ChatStage";
+import { companyOf, type PlaceInfo, roomOf } from "../components/ChatStage";
 
 /**
  * A photo of an agent's room, for the server's camera: the stage alone, with
@@ -40,7 +40,8 @@ export function Snapshot() {
         setScene({
           avatar: live.avatar,
           animations: live.animations ?? [],
-          room: here?.place ?? DEFAULT_ROOM,
+          // With its doors, as the chat page draws it.
+          room: roomOf(here),
           company: companyOf(here),
         });
       })

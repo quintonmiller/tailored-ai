@@ -10,6 +10,7 @@ import { initDatabase } from "../db/schema.js";
 import {
   anyAvatar,
   applyAction,
+  buildWorld,
   homeId,
   PLACE_TYPE,
   PlaceTool,
@@ -26,6 +27,8 @@ import {
 } from "../plugins/places.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
+  doorOf,
+  doorProblems,
   findPlacement,
   firstHome,
   type Place,
@@ -35,7 +38,7 @@ import {
   resize,
   spotOf,
 } from "../plugins/places-layout.js";
-import { homePlace, LOBBY, lobby, meetingRoom, THEMES, themeFor } from "../plugins/places-rooms.js";
+import { homePlace, LOBBY, lobby, meetingRoom, sharedPlace, THEMES, themeFor } from "../plugins/places-rooms.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { RoomStore } from "../rooms/store.js";
@@ -85,7 +88,9 @@ describe("adding things", () => {
   });
 
   it("turns a seat put near a TV or a fire to face it", () => {
+    // The small first room's door is a gate at the front right, its approach held: the desk chair makes room for the TV.
     let place = must(firstHome(), { action: "remove", item: "desk" });
+    place = must(place, { action: "remove", item: "desk chair" });
     place = must(place, { action: "add", kind: "tv", wall: "right" });
     place = must(place, { action: "add", kind: "armchair", near: "the TV", side: "front" });
     const tv = item(place, "tv");
@@ -309,6 +314,49 @@ describe("the place tool", () => {
     expect(now.props.filter((p) => p.kind === "plant")).toHaveLength(plants + 1);
   });
 
+  it("says which area the room is in and where its door is, and keeps the doorway clear of what is added", async () => {
+    const t = tool();
+    const look = await t.execute({ action: "look" }, context("assistant"));
+    expect(String(look.output)).toMatch(/It is in the main building\. Its door is on the (back|left) wall, toward the/);
+    const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+    const before = (await readHome(state, owner, "assistant")).place;
+    const door = doorOf(before);
+    for (const kind of ["plant", "armchair", "lamp", "plant", "window"])
+      await t.execute({ action: "add", kind, near: "the door" }, context("assistant"));
+    const after = (await readHome(state, owner, "assistant")).place;
+    expect(after.props.length).toBeGreaterThan(before.props.length);
+    expect(doorOf(after)).toEqual(door);
+    expect(doorProblems(after, [door as never])).toEqual([]);
+  });
+
+  it("mentions a door only when the building gives the room one: alone in an area of its own, it has none", async () => {
+    const t = tool();
+    await t.execute({ action: "room", area: "the attic" }, context("assistant"));
+    const alone = String((await t.execute({ action: "look" }, context("assistant"))).output);
+    expect(alone).toMatch(/It is in the attic, the only place there, so it has no door yet: the map is the way in\./);
+    expect(alone).not.toMatch(/Its door is/);
+    // A shared place in the same area, however it is written: now there is a door between them.
+    const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+    const loft = { ...sharedPlace("shared:loft", "the loft"), area: "The Attic" };
+    await state.put(owner, { type: PLACE_TYPE, id: "shared:loft", scope: "global", data: loft as never });
+    const joined = String((await t.execute({ action: "look" }, context("assistant"))).output);
+    expect(joined).toMatch(/You are at home\..* It is in the attic\. Its door is /);
+  });
+
+  it("moves the room to an area and back, and signs say what they're called", () => {
+    const room = firstHome();
+    const away = must(room, { action: "room", area: "the summer house" });
+    expect(away.area).toBe("the summer house");
+    expect(must(away, { action: "room", area: "the main building" }).area).toBeUndefined();
+    const signed = must(room, { action: "add", kind: "sign", name: "the Reading Room", wall: "back" });
+    expect(signed.props.find((p) => p.kind === "sign")).toMatchObject({
+      label: "Reading Room",
+      name: "the Reading Room",
+    });
+    const renamed = must(signed, { action: "change", item: "the Reading Room", name: "Quiet please" });
+    expect(renamed.props.find((p) => p.kind === "sign")?.label).toBe("Quiet please");
+  });
+
   it("tells an agent with no body there's no room to change", async () => {
     const out = await tool().execute({ action: "look" }, context("planner"));
     expect(out.success).toBe(false);
@@ -515,8 +563,9 @@ describe("the map, and any place on it", () => {
     await tool.execute({ action: "go", to: "lounge" }, as("guest"));
     const map = await worldMap(state, owner, ["host", "guest", "other", "bodiless"], rooms, hasBody);
     expect(map.map((p) => [p.id, p.kind, p.agents])).toEqual([
-      // Where everyone starts.
+      // Where everyone starts, and the hall off it with a door to each home.
       ["lobby", "lobby", []],
+      ["hall:main:homes-1", "hall", []],
       ["home:host", "home", []],
       ["home:guest", "home", []],
       ["home:other", "home", ["other"]],
@@ -525,6 +574,7 @@ describe("the map, and any place on it", () => {
       ["room:local:trip", "room", ["guest", "host"]],
     ]);
     expect(map.find((p) => p.kind === "room")).toMatchObject({ name: "trip", purpose: "Plan the trip" });
+    expect(new Set(map.map((p) => p.area))).toEqual(new Set(["main"]));
   });
 
   it("has a body at home when the place it went to is gone", async () => {
@@ -532,8 +582,68 @@ describe("the map, and any place on it", () => {
     await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
     const map = await worldMap(state, owner, ["host"], [], hasBody);
     expect(map.filter((p) => p.kind !== "lobby")).toEqual([
-      { id: "home:host", name: "host's room", kind: "home", owner: "host", agents: ["host"] },
+      { id: "home:host", name: "host's room", kind: "home", owner: "host", agents: ["host"], area: "main" },
     ]);
+  });
+
+  it("puts a place in an area of its own, joined to the others there by doors and to the main building by the map", async () => {
+    await tool.execute({ action: "new", name: "porch", area: "the summer house" }, as("host"));
+    const moved = await tool.execute({ action: "room", area: "the summer house" }, as("guest"));
+    expect(moved.success, moved.error).toBe(true);
+    expect(moved.output).toMatch(/the summer house/);
+    const map = await worldMap(state, owner, ["host", "guest", "other"], rooms, hasBody);
+    expect(map.filter((p) => p.area === "summer-house").map((p) => p.id)).toEqual(["home:guest", "shared:porch"]);
+    const world = await buildWorld(state, owner, ["host", "guest", "other"], rooms, hasBody);
+    expect(world.areas.map((a) => a.name)).toEqual(["the main building", "the summer house"]);
+    // Door to door: the porch and the guest's home.
+    const porch = await scene(state, owner, "shared:porch", rooms, hasBody, world);
+    expect(porch?.doors.map((d) => [d.to, d.label])).toEqual([["home:guest", "guest"]]);
+    const guest = await scene(state, owner, homeId("guest"), rooms, hasBody, world);
+    expect(guest?.doors.map((d) => d.to)).toEqual(["shared:porch"]);
+    // Back in the main building, the guest's home is off the residences again.
+    await tool.execute({ action: "room", area: "main" }, as("guest"));
+    const again = await buildWorld(state, owner, ["host", "guest", "other"], rooms, hasBody);
+    expect(again.doors.get(homeId("guest"))?.to).toBe("hall:main:homes-1");
+    expect(again.doors.has("shared:porch")).toBe(false);
+  });
+
+  it("gives every place doors that match the doors on the other side, wherever they are in the room", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    const agents = ["host", "guest", "other"];
+    const world = await buildWorld(state, owner, agents, rooms, hasBody);
+    const ids = [
+      LOBBY,
+      ...world.halls.map((h) => h.id),
+      ...agents.map(homeId),
+      "shared:lounge",
+      roomPlaceId("local:trip"),
+    ];
+    const seen = new Map<string, { to: string }[]>();
+    for (const id of ids) {
+      const found = await scene(state, owner, id, rooms, hasBody, world);
+      expect(found, id).not.toBeNull();
+      expect(doorProblems(found?.place as Place, found?.doors ?? []), id).toEqual([]);
+      seen.set(id, found?.doors ?? []);
+    }
+    for (const [id, doors] of seen) {
+      expect(doors.length, id).toBeGreaterThan(0);
+      for (const d of doors)
+        expect(
+          seen.get(d.to)?.some((back) => back.to === id),
+          `${id} -> ${d.to}`,
+        ).toBe(true);
+    }
+    // A home's door is where its room keeps its doorway, and its plate names the hall.
+    const home = await scene(state, owner, homeId("other"), rooms, hasBody, world);
+    expect(home?.doors[0]).toMatchObject({
+      ...doorOf(home?.place as Place),
+      to: "hall:main:homes-1",
+      label: "Residences",
+    });
+    const hall = await scene(state, owner, "hall:main:homes-1", rooms, hasBody, world);
+    expect(hall?.doors.find((d) => d.to === homeId("other"))).toMatchObject({ label: "other", occupant: "other" });
+    // A hall is only there while the building has it.
+    expect(await scene(state, owner, "hall:main:homes-9", rooms, hasBody, world)).toBeNull();
   });
 
   it("shows a room of conversation as a meeting room, a seat for each member with a body", async () => {
@@ -733,7 +843,7 @@ describe("homes made before rooms were drawn from a seed", () => {
     // The agent added a plant to the first room.
     await store(system, firstHome("assistant's room"));
     const v1 = await state.get(owner, ref);
-    const planted = applyAction(firstHome("assistant's room"), { action: "add", kind: "plant", corner: "front right" });
+    const planted = applyAction(firstHome("assistant's room"), { action: "add", kind: "plant", corner: "front left" });
     await store(agent, planted.place as Place, v1?.version);
     expect((await readHome(state, owner, "assistant")).place).toEqual(planted.place);
     // A person repainted it.
@@ -747,7 +857,7 @@ describe("homes made before rooms were drawn from a seed", () => {
 
   it("counts only what was written since the room was last made: a home someone cleared is the system's again", async () => {
     await store(system, firstHome("assistant's room"));
-    const planted = applyAction(firstHome("assistant's room"), { action: "add", kind: "plant", corner: "front right" });
+    const planted = applyAction(firstHome("assistant's room"), { action: "add", kind: "plant", corner: "front left" });
     await store(agent, planted.place as Place, (await state.get(owner, ref))?.version);
     await state.delete(owner, ref);
     // Made again, the old way, after the person cleared it.
@@ -798,7 +908,7 @@ describe("homes made before rooms were drawn from a seed", () => {
   it("reads one change of a home an agent has changed, not its whole history", async () => {
     await store(system, firstHome("assistant's room"));
     let place = (await readHome(state, owner, "assistant")).place;
-    for (const corner of ["front right", "back right", "front left"]) {
+    for (const corner of ["front right", "front left", "back left"]) {
       place = applyAction(place, { action: "add", kind: "plant", corner }).place as Place;
       await store(agent, place, (await state.get(owner, ref))?.version);
     }

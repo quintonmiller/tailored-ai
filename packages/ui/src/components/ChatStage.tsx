@@ -5,7 +5,7 @@ import type { BoardSpot, BoardTask } from "../avatar/boards";
 import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
-import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
+import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import type { Companion } from "../avatar/stage";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { subscribeStateChanges } from "../lib/state-events";
@@ -58,8 +58,8 @@ function remember(key: string, on: boolean) {
  * change with its `place` tool, redrawn the moment it does. The built-in
  * room until it arrives, and when the server keeps none.
  */
-export function useRoom(agent: string, enabled: boolean): { room: Room; company: Companion[]; id?: string } {
-  const [scene, setScene] = useState<{ room: Room; company: Companion[]; id?: string }>({
+export function useRoom(agent: string, enabled: boolean): SceneInfo {
+  const [scene, setScene] = useState<SceneInfo>({
     room: DEFAULT_ROOM,
     company: [],
   });
@@ -67,24 +67,39 @@ export function useRoom(agent: string, enabled: boolean): { room: Room; company:
     if (!enabled) return;
     let gone = false;
     let id: string | undefined;
-    const load = () =>
-      fetch(`/api/ext/builtin:places/${encodeURIComponent(agent || "default")}`)
+    // Only the latest answer counts: an older one arriving late would show the room as it was. A whole answer
+    // still owed when a later ask is for the doors alone is taken whole.
+    let asked = 0;
+    let owed = false;
+    /** Ask for the place; `ifDoorsMoved`, only take the answer when its doors aren't where they were. */
+    const load = (ifDoorsMoved = false) => {
+      const n = ++asked;
+      if (!ifDoorsMoved) owed = true;
+      const doorsOnly = ifDoorsMoved && !owed;
+      return fetch(`/api/ext/builtin:places/${encodeURIComponent(agent || "default")}`)
         .then((res) => (res.ok ? (res.json() as Promise<PlaceInfo>) : null))
         .then((body) => {
-          if (gone) return;
+          if (gone || n !== asked) return;
+          owed = false;
           id = body?.id;
-          setScene({ room: body?.place ?? DEFAULT_ROOM, company: companyOf(body), ...(id ? { id } : {}) });
+          const next = { room: roomOf(body), company: companyOf(body), ...(id ? { id } : {}), ...areaOf(body) };
+          setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : next));
         })
         .catch(() => {
-          if (!gone) setScene({ room: DEFAULT_ROOM, company: [] });
+          if (!gone && n === asked && !doorsOnly) setScene({ room: DEFAULT_ROOM, company: [] });
         });
+    };
     void load();
     const off = subscribeStateChanges((change) => {
       // Someone came or went, maybe this agent itself: where it is and who is there are asked again.
       if (change.type === "whereabouts") void load();
       if (change.type !== "place" || !id || change.id !== id) return;
-      if (change.op === "delete" || !change.after) void load();
-      else setScene((s) => ({ ...s, room: change.after as unknown as Room }));
+      if (change.op === "delete" || !change.after || resized(change)) void load();
+      else {
+        // Shown as changed at once; and since where its door goes depends on what is in it, asked again for that.
+        setScene((s) => ({ ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } }));
+        void load(true);
+      }
     });
     return () => {
       gone = true;
@@ -92,6 +107,34 @@ export function useRoom(agent: string, enabled: boolean): { room: Room; company:
     };
   }, [agent, enabled]);
   return scene;
+}
+
+/** A place as the page shows it: its room with its doors, who is in it, its id, and the area it is in. */
+export interface SceneInfo {
+  room: Room;
+  company: Companion[];
+  id?: string;
+  area?: string;
+}
+
+/** The room the server sent, with its doors; the built-in room when it sent none. */
+export function roomOf(info: PlaceInfo | null | undefined): Room {
+  if (!info?.place) return DEFAULT_ROOM;
+  return info.doors?.length ? { ...info.place, doors: info.doors } : info.place;
+}
+
+const areaOf = (info: PlaceInfo | null | undefined) => (info?.area ? { area: info.area } : {});
+
+/** Whether two lists of doors are the same doors in the same places. */
+export function sameDoors(a: RoomDoor[] | undefined, b: RoomDoor[] | undefined): boolean {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+/** A change that can move a place's doors (made anew, a new size, another area): worth asking for them again. */
+function resized(change: { op: string; before?: Record<string, unknown>; after?: Record<string, unknown> }): boolean {
+  const { before, after } = change;
+  if (!before || !after) return change.op === "create";
+  return before.width !== after.width || before.depth !== after.depth || before.area !== after.area;
 }
 
 /**
@@ -299,29 +342,50 @@ async function must(res: Promise<Response>, what: string): Promise<void> {
  * Any place, by id, as a visitor sees it: its room and everyone in it, asked
  * again when someone comes or goes, and redrawn as it changes.
  */
-export function useScene(id: string | null): { room: Room; company: Companion[]; id?: string } | null {
-  const [scene, setScene] = useState<{ room: Room; company: Companion[]; id?: string } | null>(null);
+export function useScene(id: string | null): SceneInfo | null {
+  const [scene, setScene] = useState<SceneInfo | null>(null);
   useEffect(() => {
     if (!id) {
       setScene(null);
       return;
     }
     let gone = false;
-    const load = () =>
-      fetch(`/api/ext/builtin:places/scene/${encodeURIComponent(id)}`)
+    // As for the agent's own place (`useRoom`): the latest answer only, and a whole one if one is owed.
+    let asked = 0;
+    let owed = false;
+    /** Ask for the place; `ifDoorsMoved`, only take the answer when its doors aren't where they were. */
+    const load = (ifDoorsMoved = false) => {
+      const n = ++asked;
+      if (!ifDoorsMoved) owed = true;
+      const doorsOnly = ifDoorsMoved && !owed;
+      return fetch(`/api/ext/builtin:places/scene/${encodeURIComponent(id)}`)
         .then((res) => (res.ok ? (res.json() as Promise<PlaceInfo>) : null))
         .then((body) => {
-          if (!gone) setScene({ room: body?.place ?? DEFAULT_ROOM, company: companyOf(body), id });
+          if (gone || n !== asked) return;
+          owed = false;
+          const next = { room: roomOf(body), company: companyOf(body), id, ...areaOf(body) };
+          setScene((s) => (doorsOnly && s && sameDoors(s.room.doors, next.room.doors) ? s : next));
         })
         .catch(() => {
-          if (!gone) setScene({ room: DEFAULT_ROOM, company: [], id });
+          if (!gone && n === asked && !doorsOnly) setScene({ room: DEFAULT_ROOM, company: [], id });
         });
+    };
     void load();
     const off = subscribeStateChanges((change) => {
       if (change.type === "whereabouts") void load();
+      // A place made, gone, or moved to another area elsewhere may add or take away a door here.
+      if (
+        change.type === "place" &&
+        change.id !== id &&
+        (change.op !== "update" || change.before?.area !== change.after?.area)
+      )
+        void load();
       if (change.type !== "place" || change.id !== id) return;
-      if (change.op === "delete" || !change.after) void load();
-      else setScene((s) => (s ? { ...s, room: change.after as unknown as Room } : s));
+      if (change.op === "delete" || !change.after || resized(change)) void load();
+      else {
+        setScene((s) => (s ? { ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } } : s));
+        void load(true);
+      }
     });
     return () => {
       gone = true;
@@ -336,6 +400,10 @@ export interface PlaceInfo {
   id?: string;
   place?: Room;
   company?: { agent: string; name?: string; avatar?: string; animations?: string[] }[];
+  /** Its doors to other places. */
+  doors?: RoomDoor[];
+  /** The area it is in, by id. */
+  area?: string;
 }
 
 /** The others in the place, as the stage takes them; anyone without a body file is left out. */
@@ -397,7 +465,14 @@ export function useChatStage({
   onDraft,
 }: ChatStageOptions) {
   // Visiting a place in your own body, walking or flying; null is the agent's own view.
-  const [visiting, setVisiting] = useState<string | null>(null);
+  const [visiting, setVisitingTo] = useState<string | null>(null);
+  // The place you came from, when you came through a door: you stand just inside the door back to it.
+  const [cameFrom, setCameFrom] = useState<string | undefined>(undefined);
+  /** Go somewhere: by the map (to its start), or through a door from `from`. */
+  const setVisiting = useCallback((id: string | null, from?: string) => {
+    setCameFrom(from);
+    setVisitingTo(id);
+  }, []);
   // Whose own view the scene shows: the agent you talk to, until you go visiting. Then it stays the agent you
   // came from, whoever you talk to on the way, so "Back to" knows where back is.
   const [home, setHome] = useState(agent);
@@ -445,7 +520,13 @@ export function useChatStage({
   const [listView, setListView] = useState<ListView>({ filter: "open", who: undefined });
   const [near, setNear] = useState<string | undefined>(undefined);
   const visited = useScene(visiting);
-  const { room, company, id: placeId } = visited ?? own;
+  // What is on screen: the place you are going to once it has come, and until then the one you are in, so a door
+  // or the map never shows a room that isn't there yet.
+  const loading = !!visiting && visited?.id !== visiting;
+  const last = useRef<{ visiting: string | null; scene: SceneInfo }>({ visiting: null, scene: own });
+  const showing = loading ? last.current : { visiting, scene: visiting ? (visited as SceneInfo) : own };
+  last.current = showing;
+  const { room, company, id: placeId } = showing.scene;
   // The map also says where an agent's body is, for its card.
   const map = useWorldMap((mapOpen || panel?.kind === "agent") && showStage);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
@@ -465,7 +546,8 @@ export function useChatStage({
   const shown = home || "default";
   const talking = agent || "default";
   // Where you are says who you talk to: an agent's own home is a conversation with it, and coming back to the
-  // agent you came from is one with it again. Anywhere else, the conversation you had goes on.
+  // agent you came from is one with it again. Anywhere else, the conversation you had goes on. Through a door or
+  // by the map, arriving is the same.
   const host = visiting ? (visiting.startsWith("home:") ? visiting.slice("home:".length) : undefined) : shown;
   // Talking to someone is the chat: a panel in its column steps aside, or the click would seem to do nothing.
   const chatWith = useCallback(
@@ -678,8 +760,8 @@ export function useChatStage({
   const state: BodyState = voice.phase !== "idle" ? voice.phase : sending ? "thinking" : "idle";
   // The boards show the tasks of whoever is in the place: on the agent's own view, the agent too.
   const boardTasks = useMemo(
-    () => tasksFor(placeId, [...(visiting ? [] : [shown]), ...company.map((c) => c.agent)], allTasks),
-    [placeId, visiting, shown, company, allTasks],
+    () => tasksFor(placeId, [...(showing.visiting ? [] : [shown]), ...company.map((c) => c.agent)], allTasks),
+    [placeId, showing.visiting, shown, company, allTasks],
   );
   // What the lobby's kiosks and the boards do when clicked. A note on a board opens its task; anywhere else on a
   // board opens the list, at that column when it was one, and at the owner's tasks in a home.
@@ -704,6 +786,16 @@ export function useChatStage({
       else if (action === "new-room") setPanel({ kind: "new-room" });
     },
     [onDraft, placeId],
+  );
+  // Through a door: on into the place behind it, in your own body, from wherever you are.
+  const onDoor = useCallback(
+    (door: RoomDoor) => {
+      if (!placeId) return;
+      setVisiting(door.to, placeId);
+      // The map covers the stage, so it closes; a panel in the chat's column stays open beside the new place.
+      setPanel((open) => (open?.kind === "map" ? null : open));
+    },
+    [placeId, setVisiting],
   );
   const tools = (
     <>
@@ -765,8 +857,9 @@ export function useChatStage({
     overlay = (
       <WorldMap
         places={map.places}
+        areas={map.areas}
         problem={map.problem}
-        here={visiting ?? own.id}
+        here={placeId}
         activities={activities}
         onGo={go}
         onClose={closePanel}
@@ -844,30 +937,34 @@ export function useChatStage({
   const stage: ReactNode =
     showStage && info.avatar ? (
       <Avatar
-        // A new place is a new stage: you arrive at its start, not wherever you stood in the last one.
-        key={visiting ?? "own"}
+        // Your own body or the agent's: going from one to the other is a new stage. Between places, the stage
+        // stays, and you go on in the same body, at the door you came in by or the start of where the map took you.
+        key={showing.visiting ? "visit" : "own"}
         fill
         url={info.avatar}
         animations={info.animations ?? []}
-        state={visiting ? "idle" : state}
-        loudness={visiting ? () => 0 : voice.loudness}
-        engaged={visiting ? false : busy || conversing}
+        state={showing.visiting ? "idle" : state}
+        loudness={showing.visiting ? () => 0 : voice.loudness}
+        engaged={showing.visiting ? false : busy || conversing}
         controls={controls}
         insetRight={(panelOpen || side) && wide ? PANEL_WIDTH : 0}
         room={room}
+        place={placeId}
+        arriveFrom={showing.visiting ? cameFrom : undefined}
+        onDoor={onDoor}
         company={company}
-        agent={visiting ? "you" : shown}
+        agent={showing.visiting ? "you" : shown}
         activities={activities}
         speech={speech}
         menuFor={menuFor}
-        visitor={!!visiting}
+        visitor={!!showing.visiting}
         onNear={setNear}
         tools={tools}
         tasks={boardTasks}
         onUse={onUse}
         onLine={hearLine}
         overlay={overlay}
-        {...(info.enabled && !visiting ? { chooseIdle } : {})}
+        {...(info.enabled && !showing.visiting ? { chooseIdle } : {})}
       />
     ) : null;
 
@@ -884,8 +981,8 @@ export function useChatStage({
     voice,
     /** A spoken turn in progress: what was heard, and the reply so far. */
     spoken: heard === null ? null : { heard, replying },
-    /** The place you are visiting, by id; null at the agent's own view. */
-    visiting,
+    /** The place you are visiting and can see, by id; null at the agent's own view. */
+    visiting: showing.visiting,
     /** Whose own view the scene shows, and where "Back to" goes. */
     home: shown,
     /** What every agent is doing, while the scene is on. */

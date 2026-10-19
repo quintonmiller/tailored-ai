@@ -23,10 +23,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
 import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
+import { arrivalAt, doorFrame, doorLight, doorReached, doorTo } from "./doors";
 import { Figure, loadModel } from "./figure";
 import type { Obstacle } from "./locomotion";
 import type { BodyState } from "./motion";
-import { buildProp, buildShell, disposeTree } from "./props";
+import { nearestUse, type Use } from "./pick";
+import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
 import {
   DEFAULT_ROOM,
   farFor,
@@ -39,6 +41,7 @@ import {
   ROOM_TARGET,
   ROOM_VIEW,
   type Room,
+  type RoomDoor,
   roomDistance,
   roomFocus,
   type Spot,
@@ -101,6 +104,13 @@ export interface Stage {
   setTravel(travel: Travel): void;
   /** The tasks every board in the room shows. */
   setTasks(tasks: BoardTask[]): void;
+  /**
+   * Come into another place through a door: the room is swapped for it, and
+   * you stand just inside the door back to `from` (at its start, when it has
+   * none), with your body, how you travel and the keys you hold as they were.
+   * Everyone in the place you left stays there.
+   */
+  enter(room: Room, from: string | undefined): void;
   dispose(): void;
 }
 
@@ -179,7 +189,7 @@ function hangPhoto(picture: THREE.Group, kind: string, media: string) {
 }
 
 /** Things that hang on a wall, so they are never in the way of a walk. */
-const WALL_KINDS = new Set(["window", "picture", "clock", "shelf", "board", "painting", "poster", "pegboard"]);
+const WALL_KINDS = new Set(["window", "picture", "clock", "shelf", "board", "painting", "poster", "pegboard", "sign"]);
 /** Things flat on the floor, walked over. */
 const FLAT_KINDS = new Set(["rug", "round_rug"]);
 /** Lamps that light the room after dark, and how high their bulb is above where they stand. */
@@ -188,6 +198,10 @@ const BULBS: Partial<Record<string, number>> = { lamp: 1.45, table_lamp: 0.32 };
 const LIT_LAMPS = 4;
 /** How far back the camera following a visitor may sit, however big the room: near enough to see who you are. */
 const VISIT_DISTANCE = 9;
+/** Milliseconds the picture takes to fade out as you go through a door, and in again. */
+const FADE_MS = 220;
+/** How long a door waits for the place behind it before giving up and letting you back. */
+const DOOR_PATIENCE_MS = 5000;
 
 const bare = (s: string) =>
   s
@@ -232,6 +246,10 @@ export async function createStage(
     onUse?: (action: string, on?: BoardSpot) => void;
     /** A visitor is within earshot of an agent as it starts saying something: who, what, and how near (0–1, 1 beside it). */
     onLine?: (agent: string, text: string, nearness: number) => void;
+    /** Someone went through a door (walked into it, or clicked it): the page brings the place behind it. */
+    onDoor?: (door: RoomDoor) => void;
+    /** The place come from, through a door: you start just inside the door back to it. */
+    arriveFrom?: string;
   } = {},
 ): Promise<Stage> {
   let room = opts.room ?? DEFAULT_ROOM;
@@ -265,6 +283,8 @@ export async function createStage(
   // Boards on the walls, each drawn with the tasks; and what they show.
   let boards: { label: string; screen: NonNullable<ReturnType<typeof buildProp>["screen"]> }[] = [];
   let tasks: BoardTask[] = [];
+  // What each agent is doing: every body shows its own, and the light by a home's door its owner's.
+  let activities: Record<string, AgentActivity> = {};
   const drawBoards = () => {
     for (const b of boards) {
       drawBoard(b.screen.canvas, b.label, tasks);
@@ -273,6 +293,14 @@ export async function createStage(
   };
   // Things that just appeared, growing into place.
   const appearing: { group: THREE.Group; started: number; scale: number }[] = [];
+  // The doors, each with the light by it that says what the agent behind it is doing.
+  let doorLights: { occupant: string; light: THREE.MeshBasicMaterial }[] = [];
+  const lightDoors = () => {
+    for (const d of doorLights) {
+      const { color, glow } = doorLight(activities[d.occupant]?.doing);
+      d.light.color.setHex(color).multiplyScalar(glow);
+    }
+  };
 
   /** Build the room's shell and furniture; `fresh` names props to grow in, as just added. */
   const furnish = (fresh: Set<string> = new Set()) => {
@@ -329,6 +357,24 @@ export async function createStage(
         appearing.push({ group: built.group, started: performance.now(), scale });
       }
     }
+    // The doors to other places: on a wall, or standing at an open side.
+    doorLights = [];
+    for (const door of room.doors ?? []) {
+      const built = buildDoor(door, {
+        freestanding: door.wall === "front" || door.wall === "right",
+        trim: room.walls,
+        height: room.height,
+      });
+      const { at, facing } = doorFrame(room, door);
+      built.group.position.set(at[0], 0, at[1]);
+      built.group.rotation.y = rad(facing);
+      built.group.userData.door = door;
+      furniture.add(built.group);
+      scenery.push(built.group);
+      clickable.push(built.group);
+      if (built.light && door.occupant) doorLights.push({ occupant: door.occupant, light: built.light });
+    }
+    lightDoors();
     scene.add(furniture);
     drawBoards();
     for (const w of warm) scene.remove(w.light);
@@ -344,8 +390,12 @@ export async function createStage(
   };
   furnish();
 
-  const start =
-    (opts.still?.spot ? spotById(room, opts.still.spot) : undefined) ?? spotById(room, room.start) ?? room.spots[0];
+  // Come in through a door: just inside it, facing in, at no spot.
+  const cameIn = doorTo(room, opts.arriveFrom);
+  const arrival = cameIn ? arrivalAt(room, cameIn, obstacles) : undefined;
+  const start: Spot | undefined = arrival
+    ? { id: "", name: "", place: "", at: arrival.at, facing: (arrival.facing * 180) / Math.PI }
+    : ((opts.still?.spot ? spotById(room, opts.still.spot) : undefined) ?? spotById(room, room.start) ?? room.spots[0]);
   // A photo holds still. A selfie faces the camera, sitting down if the spot is a seat.
   const selfie = !!opts.still && opts.view === "close";
   const stillActivity = opts.still && !(selfie && start?.activity !== "sit") ? start?.activity : undefined;
@@ -363,13 +413,13 @@ export async function createStage(
     },
   });
   scene.add(me.body, me.gaze);
+  if (arrival) me.placeAt(arrival.at, arrival.facing);
   host.dataset.motion = "code";
 
   const self = opts.agent || "default";
   // Other agents in the room, by agent; and those still loading.
   const companions = new Map<string, Figure & { name?: string }>();
-  // What each agent is doing, and what each body is showing of it.
-  let activities: Record<string, AgentActivity> = {};
+  // What each body is showing of what its agent is doing.
   const shows = new Map<Figure, { behavior: Behavior; doing?: string; checked: number; faced: number }>();
   // The last line of each agent's that has been shown, by its time, so a line shows once.
   const heard = new Map<string, string>();
@@ -564,38 +614,24 @@ export async function createStage(
   // pointer says so on hover.
   const canvas = renderer.domElement;
   const ray = new THREE.Raycaster();
-  const spotAt = (e: PointerEvent): string | undefined => {
-    const r = canvas.getBoundingClientRect();
-    ray.setFromCamera(
-      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
-      camera,
-    );
-    for (const hit of ray.intersectObjects(clickable, true)) {
-      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent)
-        if (typeof o.userData.spot === "string") return o.userData.spot;
-    }
-    return undefined;
-  };
   /**
-   * What the thing under the pointer does when clicked, if it is made to be
-   * used; on a board's face, the note or column the pointer is on as well.
+   * The nearest clickable thing under the pointer, and what it is for: a
+   * door, a use (a kiosk, a board) or a spot to go to. On a board's face, the
+   * note or column the pointer is on as well.
    */
-  const actionAt = (e: PointerEvent): { action: string; on?: BoardSpot } | undefined => {
+  const pick = (e: PointerEvent): (Use & { on?: BoardSpot }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
       camera,
     );
-    for (const hit of ray.intersectObjects(clickable, true)) {
-      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
-        if (typeof o.userData.action !== "string") continue;
-        const board = boards.find((b) => b.screen.face === hit.object);
-        if (!board || !hit.uv) return { action: o.userData.action };
-        const { width, height } = board.screen.canvas;
-        return { action: o.userData.action, on: boardAtUv(width, height, tasks, hit.uv.x, hit.uv.y) };
-      }
-    }
-    return undefined;
+    const found = nearestUse(ray.intersectObjects(clickable, true));
+    if (!found) return undefined;
+    const { hit, use } = found;
+    const board = use.action ? boards.find((b) => b.screen.face === hit.object) : undefined;
+    if (!board || !hit.uv) return use;
+    const { width, height } = board.screen.canvas;
+    return { ...use, on: boardAtUv(width, height, tasks, hit.uv.x, hit.uv.y) };
   };
   /** Where on the floor the pointer is, for a visitor to walk to. */
   const floorAt = (e: PointerEvent): [number, number] | undefined => {
@@ -641,13 +677,16 @@ export async function createStage(
       opts.onPick?.(who, { x: e.clientX, y: e.clientY });
       return;
     }
-    const used = opts.onUse ? actionAt(e) : undefined;
-    if (used) {
-      opts.onUse?.(used.action, used.on);
+    const it = pick(e);
+    if (it?.action && opts.onUse) {
+      opts.onUse(it.action, it.on);
       return;
     }
-    const id = spotAt(e);
-    if (id) go(id);
+    if (it?.door && opts.onDoor) {
+      leave(it.door);
+      return;
+    }
+    if (it?.spot) go(it.spot);
     else if (opts.visitor && travel === "walk") {
       const to = floorAt(e);
       if (to) me.goTo(room, to, obstacles);
@@ -655,22 +694,61 @@ export async function createStage(
   };
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
-    canvas.style.cursor = (opts.onPick && agentAt(e)) || spotAt(e) || (opts.onUse && actionAt(e)) ? "pointer" : "";
+    const it = pick(e);
+    canvas.style.cursor =
+      (opts.onPick && agentAt(e)) || it?.spot || (it?.action && opts.onUse) || (it?.door && opts.onDoor)
+        ? "pointer"
+        : "";
   };
+
+  // Going through a door: the picture fades, the page brings the place behind it, and `enter` fades it back in.
+  canvas.style.transition = opts.reducedMotion ? "" : `opacity ${FADE_MS}ms ease`;
+  let leaving: { door: RoomDoor; giveUp: ReturnType<typeof setTimeout> } | undefined;
+  const fadeIn = () => {
+    if (leaving) clearTimeout(leaving.giveUp);
+    leaving = undefined;
+    canvas.style.opacity = "1";
+  };
+  function leave(door: RoomDoor) {
+    if (leaving || !opts.onDoor) return;
+    // Nothing came back in time: you are still here, and can try again.
+    leaving = { door, giveUp: setTimeout(fadeIn, DOOR_PATIENCE_MS) };
+    canvas.style.opacity = "0";
+    setTimeout(
+      () => {
+        if (!disposed) opts.onDoor?.(door);
+      },
+      opts.reducedMotion ? 0 : FADE_MS,
+    );
+  }
+  // Come in through a door: from dark.
+  if (arrival) {
+    canvas.style.opacity = "0";
+    requestAnimationFrame(() => requestAnimationFrame(fadeIn));
+  }
   // A visitor's keys: held keys move them every frame, unless they are typing or working in a panel over the stage.
   let travel: Travel = "walk";
   const held = new Set<string>();
   const typing = (e: KeyboardEvent) =>
     (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']");
+  // Keys held through a door, until they are let go: the view faces the same way on the other side, so holding W
+  // into a door at the back would otherwise walk you straight back out of the one you came in by.
+  const waiting = new Set<string>();
   const onKeyDown = (e: KeyboardEvent) => {
     const run = RUN_KEYS.has(e.code);
     if (!opts.visitor || !(run || e.code in MOVE_KEYS) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
     // Shift alone does nothing in the page to keep from it, so it is only listened to.
     if (!run) e.preventDefault();
-    held.add(e.code);
+    if (!waiting.has(e.code)) held.add(e.code);
   };
-  const onKeyUp = (e: KeyboardEvent) => held.delete(e.code);
-  const onBlur = () => held.clear();
+  const onKeyUp = (e: KeyboardEvent) => {
+    held.delete(e.code);
+    waiting.delete(e.code);
+  };
+  const onBlur = () => {
+    held.clear();
+    waiting.clear();
+  };
   if (opts.visitor) {
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -876,6 +954,17 @@ export async function createStage(
     }
   };
 
+  /** Flying: turn about a point just ahead, so dragging feels like turning your head, any way round. */
+  function turnAboutAhead() {
+    const look = controls.target.clone().sub(camera.position).normalize();
+    controls.target.copy(camera.position).add(look.multiplyScalar(1.2));
+    controls.minAzimuthAngle = Number.NEGATIVE_INFINITY;
+    controls.maxAzimuthAngle = Number.POSITIVE_INFINITY;
+    controls.minPolarAngle = 0.05;
+    controls.maxPolarAngle = Math.PI - 0.05;
+    controls.update();
+  }
+
   /** The camera's heading on the floor, and its right, for keys that move relative to the view. */
   const heading = () => {
     const fwd = controls.target.clone().sub(camera.position);
@@ -885,15 +974,19 @@ export async function createStage(
     return { fwd, right: new THREE.Vector3(-fwd.z, 0, fwd.x) };
   };
 
+  /** The way the held keys push your body this frame, walking; undefined when none are held. */
+  let pushing: [number, number] | undefined;
   /** One frame of a visit: move by the held keys, at a run while Shift is held. */
   function visit(dt: number) {
     const { right: r, forward: f, up: u, running } = heldMove(held);
     const speed = travelSpeed(travel, running) * dt;
+    pushing = undefined;
     if (travel === "walk") {
       if (r || f) {
         const { fwd, right } = heading();
         const v = fwd.multiplyScalar(f).add(right.multiplyScalar(r)).normalize().multiplyScalar(speed);
         me.steer(v.x, v.z, room, obstacles);
+        pushing = [v.x, v.z];
       }
     } else if (r || f || u) {
       const look = controls.target.clone().sub(camera.position).normalize();
@@ -918,6 +1011,10 @@ export async function createStage(
     const p = me.walker.place;
     const moved: [number, number, number] = [p.x - lastAt[0], 0, p.z - lastAt[1]];
     lastAt = [p.x, p.z];
+    // Walked into a door, or pressing on toward it where the wall stopped you: through it.
+    const through =
+      travel === "walk" && !leaving ? doorReached(room, [p.x, p.z], [moved[0], moved[2]], pushing) : undefined;
+    if (through) leave(through);
     if (tween || travel !== "walk") return;
     const head = me.head();
     const t = controls.target;
@@ -1116,15 +1213,66 @@ export async function createStage(
       furnish(new Set(next.props.filter((p) => !before.has(p.id)).map((p) => p.id)));
       if (lit) light(lit);
       fitShadows();
-      reseat(me, () => (spotById(room, room.start) ? room.start : undefined));
+      // A visitor stays where they are standing: the room changing round them doesn't walk them anywhere.
+      if (!opts.visitor) reseat(me, () => (spotById(room, room.start) ? room.start : undefined));
       for (const c of companions.values()) reseat(c, () => freeSpot(c)?.id);
-      if (resized && !tween) moveCamera(framing(view));
+      if (resized && !tween && !opts.visitor) moveCamera(framing(view));
+    },
+    enter(next, from) {
+      // Everyone in the place you left stays there.
+      for (const c of companions.values()) {
+        shows.delete(c);
+        c.dispose();
+      }
+      companions.clear();
+      noticed.clear();
+      voices = [];
+      if (near) {
+        near = undefined;
+        opts.onNear?.(undefined);
+      }
+      scene.remove(furniture);
+      disposeTree(furniture);
+      appearing.length = 0;
+      room = next;
+      camera.far = farFor(room);
+      camera.updateProjectionMatrix();
+      furnish();
+      if (lit) light(lit);
+      fitShadows();
+      me.director.setRoom(room);
+      const door = doorTo(room, from);
+      const first = spotById(room, room.start) ?? room.spots[0];
+      const to = door
+        ? arrivalAt(room, door, obstacles)
+        : { at: first?.at ?? ([0, 0] as [number, number]), facing: rad(first?.facing ?? 0) };
+      me.placeAt(to.at, to.facing);
+      lastAt = [to.at[0], to.at[1]];
+      // You stop on the threshold; Shift still runs once you set off again.
+      for (const key of [...held])
+        if (key in MOVE_KEYS) {
+          held.delete(key);
+          waiting.add(key);
+        }
+      tween = null;
+      // The same view as on arriving anywhere, centred on where you came in; flying, you turn about a point
+      // just ahead of you from there, as you did before the door.
+      const f = framing("room");
+      const shift = me.head().sub(f.target);
+      f.target.add(shift);
+      f.position.add(shift);
+      settle(f);
+      if (travel === "fly") turnAboutAhead();
+      // Whoever is in the new place, at free spots in it.
+      meet(wanted);
+      requestAnimationFrame(fadeIn);
     },
     setCompany: meet,
     setActivities(next) {
       activities = next;
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
+      lightDoors();
     },
     setTasks(next) {
       tasks = next;
@@ -1136,13 +1284,7 @@ export async function createStage(
       held.clear();
       me.body.visible = next === "walk";
       if (next === "fly") {
-        // Turn about a point just ahead, so dragging feels like turning your head.
-        const look = controls.target.clone().sub(camera.position).normalize();
-        controls.target.copy(camera.position).add(look.multiplyScalar(1.2));
-        controls.minAzimuthAngle = Number.NEGATIVE_INFINITY;
-        controls.maxAzimuthAngle = Number.POSITIVE_INFINITY;
-        controls.minPolarAngle = 0.05;
-        controls.maxPolarAngle = Math.PI - 0.05;
+        turnAboutAhead();
         if (near) {
           near = undefined;
           opts.onNear?.(undefined);
@@ -1157,6 +1299,7 @@ export async function createStage(
     },
     dispose() {
       disposed = true;
+      if (leaving) clearTimeout(leaving.giveUp);
       renderer.setAnimationLoop(null);
       observer.disconnect();
       canvas.removeEventListener("pointerdown", onDown);

@@ -248,6 +248,16 @@ export class Figure {
     this.steered += moved;
   }
 
+  /** Stand somewhere at once, facing `facing` radians, at no spot: coming in through a door. */
+  placeAt(at: [number, number], facing: number) {
+    this.pending = undefined;
+    this.current = undefined;
+    this.currentAt = undefined;
+    this.walker.jump(at, facing);
+    this.body.position.set(at[0], 0, at[1]);
+    this.body.rotation.y = facing;
+  }
+
   /** Walk to a point on the floor, round the furniture, and face the way it walked. */
   goTo(room: Room, to: [number, number], obstacles: Obstacle[]) {
     this.director.sent();

@@ -1,0 +1,150 @@
+/**
+ * Doors between places, as the stage needs them: where a door stands and which
+ * way it faces, where you come in through one, when walking takes you through
+ * it, and what its light says about whoever lives behind it. Pure, so it is
+ * tested without a GPU; the stage draws and walks by what this says.
+ *
+ * A door faces into its room. On the back wall it looks toward +Z, on the left
+ * toward +X, and on the open front and right sides back into the room.
+ */
+import type { AgentActivity } from "./doing";
+import type { Obstacle } from "./locomotion";
+import type { Room, RoomDoor } from "./scene";
+
+/**
+ * How far inside a door you are put when you come through it: clear of its
+ * doorway, so you don't go straight back. Further through a gate at the open
+ * front or right, which stands between you and the camera: any nearer and its
+ * name plate hides you. The `place` tool keeps the floor this far in clear of
+ * anything new (`DOOR_APPROACH` in core's `places-layout.ts`).
+ */
+export const ARRIVE_IN = { wall: 1.1, open: 1.7 };
+/** The widest a body is from its middle: where you come in has this much room all round. */
+const BODY = 0.3;
+/** Walking within this far of a door's opening, toward it, takes you through. */
+export const DOOR_REACH = 0.55;
+/** Half the width you have to be within, across the door, to go through it. */
+export const DOOR_HALF = 0.6;
+
+/** Where a door stands on the floor plan, and which way it faces, in degrees (0 faces +Z). */
+export function doorFrame(room: Pick<Room, "width" | "depth">, door: Pick<RoomDoor, "wall" | "along">) {
+  switch (door.wall) {
+    case "back":
+      return { at: [door.along, -room.depth / 2] as [number, number], facing: 0 };
+    case "left":
+      return { at: [-room.width / 2, door.along] as [number, number], facing: 90 };
+    case "front":
+      return { at: [door.along, room.depth / 2] as [number, number], facing: 180 };
+    case "right":
+      return { at: [room.width / 2, door.along] as [number, number], facing: -90 };
+  }
+}
+
+/** The way into the room from a door, as a unit vector on the floor. */
+function inward(facing: number): [number, number] {
+  const f = (facing * Math.PI) / 180;
+  return [Math.round(Math.sin(f) * 1e6) / 1e6, Math.round(Math.cos(f) * 1e6) / 1e6];
+}
+
+/** Whether a body stands clear of everything on the floor, and inside the room. */
+export function standsClear(room: Pick<Room, "width" | "depth">, obstacles: Obstacle[], [x, z]: [number, number]) {
+  if (Math.abs(x) > room.width / 2 - BODY || Math.abs(z) > room.depth / 2 - BODY) return false;
+  return !obstacles.some((o) => x > o.minX - BODY && x < o.maxX + BODY && z > o.minZ - BODY && z < o.maxZ + BODY);
+}
+
+/**
+ * Where you stand having just come through a door, and the way you face: into
+ * the room, radians as the walker keeps them. Straight in from the door, as
+ * far as `ARRIVE_IN`, or the nearest point on that line clear of what stands
+ * on the floor (`obstacles`): a room furnished before doors came may have
+ * something just inside one.
+ */
+export function arrivalAt(
+  room: Pick<Room, "width" | "depth">,
+  door: Pick<RoomDoor, "wall" | "along">,
+  obstacles: Obstacle[] = [],
+): { at: [number, number]; facing: number } {
+  const { at, facing } = doorFrame(room, door);
+  const [ix, iz] = inward(facing);
+  const point = (d: number): [number, number] => [at[0] + ix * d, at[1] + iz * d];
+  const want = door.wall === "front" || door.wall === "right" ? ARRIVE_IN.open : ARRIVE_IN.wall;
+  const across = door.wall === "back" || door.wall === "front" ? room.depth : room.width;
+  // Further in first, then back toward the door, but never so near that you stand in its doorway.
+  const step = (k: number) => Math.round((want + k / 10) * 100) / 100;
+  const tries: number[] = [];
+  for (let k = 0; step(k) <= across - BODY; k++) tries.push(step(k));
+  for (let k = -1; step(k) >= DOOR_REACH + BODY; k--) tries.push(step(k));
+  const found = tries.find((d) => standsClear(room, obstacles, point(d)));
+  return { at: point(found ?? want), facing: (facing * Math.PI) / 180 };
+}
+
+/** The door back to where you came from, if this room has one. */
+export function doorTo(room: Pick<Room, "doors">, from: string | undefined): RoomDoor | undefined {
+  return from ? room.doors?.find((d) => d.to === from) : undefined;
+}
+
+/** Where a point is from a door: `across` it (0 in the middle) and how far `in` from its opening. */
+function fromDoor(room: Pick<Room, "width" | "depth">, door: RoomDoor, [x, z]: [number, number]) {
+  const { at, facing } = doorFrame(room, door);
+  const [ix, iz] = inward(facing);
+  const dx = x - at[0];
+  const dz = z - at[1];
+  return { across: dx * iz - dz * ix, in: dx * ix + dz * iz };
+}
+
+/**
+ * The door a step takes you through: you are at its opening, within reach and
+ * square on to it, and the step was toward it, not along the wall past it.
+ * `push` is the way you are trying to go, when you are pressing a key: up
+ * against the wall in front of a door the wall stops the step, but pressing
+ * toward the door still takes you through.
+ */
+export function doorReached(
+  room: Pick<Room, "width" | "depth" | "doors">,
+  at: [number, number],
+  step: [number, number],
+  push?: [number, number],
+): RoomDoor | undefined {
+  const way = push && Math.hypot(push[0], push[1]) > 1e-6 ? push : step;
+  const length = Math.hypot(way[0], way[1]);
+  // A step too small to have a way is standing still; a push always has one.
+  if (way === step && length < 1e-4) return undefined;
+  for (const door of room.doors ?? []) {
+    const p = fromDoor(room, door, at);
+    if (Math.abs(p.across) > DOOR_HALF || p.in > DOOR_REACH || p.in < -0.3) continue;
+    const [ix, iz] = inward(doorFrame(room, door).facing);
+    // Mostly toward it: walking along the wall past a door isn't going through it.
+    if (-(way[0] * ix + way[1] * iz) / length > 0.5) return door;
+  }
+  return undefined;
+}
+
+/** Whether a point is in a door's opening at all: someone just come through it hasn't left it yet. */
+export function inDoorway(room: Pick<Room, "width" | "depth">, door: RoomDoor, at: [number, number]): boolean {
+  const p = fromDoor(room, door, at);
+  return Math.abs(p.across) <= DOOR_HALF && p.in <= DOOR_REACH;
+}
+
+/**
+ * The colour of the light by a home's door, by what its agent is doing, and
+ * how bright it is (0–1): full when it needs you, dim when it is idle or
+ * asleep. Strong colours, drawn as they are, so each reads at a glance against
+ * the plate beside it.
+ */
+export function doorLight(doing: AgentActivity["doing"] | undefined): { color: number; glow: number } {
+  switch (doing) {
+    case "working":
+      return { color: 0x22d65f, glow: 0.9 };
+    case "thinking":
+    case "talking":
+      return { color: 0x3388ff, glow: 0.9 };
+    case "waiting":
+      return { color: 0xff9a10, glow: 1 };
+    case "stuck":
+      return { color: 0xff2e2e, glow: 1 };
+    case "asleep":
+      return { color: 0x8a6cff, glow: 0.4 };
+    default:
+      return { color: 0xe6eaf0, glow: 0.45 };
+  }
+}
