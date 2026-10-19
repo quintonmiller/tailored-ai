@@ -974,7 +974,8 @@ export function useChatStage({
       <WorldPlace
         id={placeId}
         room={room}
-        members={[...(showing.visiting ? [] : [shown]), ...company.map((c) => c.agent)]}
+        // A meeting room is its members' to change, wherever their bodies are: the map lists them all.
+        members={map.places.find((p) => p.id === placeId)?.members ?? []}
         canPlace={canPlace}
         {...(onDraft ? { onAsk: askRoom } : {})}
         onClose={closePanel}

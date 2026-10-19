@@ -125,6 +125,10 @@ describe("a place's card", () => {
     );
     expect(container.textContent).toMatch(/Nothing yet/);
     expect(container.textContent).toMatch(/Nobody has said yet/);
+    // Where to give it the tool instead.
+    expect(container.querySelector('a[href="#/agents/writer"]')?.textContent).toBe(
+      "Give writer the place tool on its page",
+    );
     act(() =>
       root.render(
         <WorldPlace
@@ -139,5 +143,6 @@ describe("a place's card", () => {
     // A meeting room goes by its room's name, as on the map.
     expect(container.querySelector(".world-panel-title")?.textContent).toBe("#trip");
     expect([...container.querySelectorAll("button")].some((b) => /make it fit/.test(b.textContent ?? ""))).toBe(false);
+    expect(container.querySelector('a[href^="#/agents/"]')).toBeNull();
   });
 });

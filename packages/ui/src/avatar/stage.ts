@@ -35,6 +35,7 @@ import type { BodyState } from "./motion";
 import { nearestUse, type Use } from "./pick";
 import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
 import {
+  changesShown,
   DEFAULT_ROOM,
   farFor,
   type Lighting,
@@ -48,7 +49,6 @@ import {
   ROOM_VIEW,
   type Room,
   type RoomDoor,
-  roomChanges,
   roomDistance,
   roomFocus,
   type Spot,
@@ -1436,10 +1436,8 @@ export async function createStage(
     setRoom(next, moved = false) {
       if (next === given && !moved) return;
       if (moved) leavePlace();
-      // The same place changing shows what changed: new things pop in, moved ones glide over. Another place, or the
-      // first room after the stand-in, is simply there, as on walking in: things in two places can share an id
-      // without being the same thing.
-      const changed = moved || given === DEFAULT_ROOM ? undefined : roomChanges(given, next);
+      // The same place changing shows what changed: new things pop in, moved ones glide over. Another place is simply there.
+      const changed = changesShown(given, next, !moved);
       const resized = next.width !== room.width || next.depth !== room.depth || next.height !== room.height;
       scene.remove(furniture);
       disposeTree(furniture);

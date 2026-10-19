@@ -139,7 +139,12 @@ describe("what an agent has done, from what the runtime keeps", () => {
   const since = Date.parse("2026-10-18T10:00:00Z");
   const at = (ms: number) => dbTime(ms);
 
-  function seed() {
+  type Seeding = {
+    session: (id: string, key: string) => void;
+    used: (sessionId: string, agent: string | null, when: number) => void;
+    called: (sessionId: string, calls: { name: string; arguments?: unknown }[], when: number) => void;
+  };
+  function seed(more?: (seeding: Seeding) => void) {
     const db = initDatabase(":memory:");
     const session = (id: string, key: string) =>
       db.prepare("INSERT INTO sessions (id, key, model, provider) VALUES (?, ?, 'm', 'p')").run(id, key);
@@ -169,6 +174,7 @@ describe("what an agent has done, from what the runtime keeps", () => {
     called("s-room", [{ name: "place", arguments: { action: "photo" } }, { name: "room" }], since + 2 * HOUR);
     called("s-tend", [{ name: "place", arguments: { action: "add" } }], since + 3 * HOUR);
     called("s-other", [{ name: "exec" }], since + HOUR);
+    more?.({ session, used, called });
     return db;
   }
 
@@ -221,6 +227,23 @@ describe("what an agent has done, from what the runtime keeps", () => {
     expect(done.photos).toBe(1);
     expect(done.rooms).toEqual(["trip"]);
     expect(done.tasks).toEqual({ count: 2, titles: ["Book the hotel", "Draft the itinerary"] });
+  });
+
+  it("counts the default agent's calls, whether they carry no name or the name default", async () => {
+    // A config with an `agents.default` has the default agent's calls say "default"; one without, nothing.
+    const db = seed(({ session, used, called }) => {
+      session("s-plain", "web:3");
+      session("s-named", "web:4");
+      used("s-plain", null, since + HOUR);
+      used("s-named", "default", since + HOUR);
+      called("s-plain", [{ name: "exec" }], since + HOUR);
+      called("s-named", [{ name: "exec" }, { name: "edit" }], since + HOUR);
+    });
+    const done = await gatherDone({ db, agent: "default", since, rooms: [] });
+    expect(done.tools).toEqual([
+      ["exec", 2],
+      ["edit", 1],
+    ]);
   });
 
   it("finds nothing for an agent that did nothing, and does without a task backend", async () => {
@@ -301,42 +324,48 @@ describe("tending, as time goes by", () => {
     await tender.idle();
   });
 
-  it("never starts a second tend for an agent whose last is still going, even from a tender made since", async () => {
+  it("starts nothing while a tend is going, even from a tender made since: not for that agent, nor another", async () => {
     let clock = Date.parse("2026-10-19T00:00:00Z");
-    let release: () => void = () => {};
+    const releases: (() => void)[] = [];
     const started: string[] = [];
     const make = () =>
       new Tender({
-        settings: { everyMs: HOUR, agents: ["planner"] },
-        agents: () => ["planner"],
+        settings: { everyMs: HOUR, agents: ["planner", "writer"] },
+        agents: () => ["planner", "writer"],
         unready: () => null,
         tend: (agent) => {
           started.push(agent);
-          return new Promise((done) => {
-            release = () => done("woken");
-          });
+          return new Promise((done) => releases.push(() => done("woken")));
         },
         now: () => clock,
         log: () => {},
       });
     const before = make();
     before.tick();
-    clock = before.dueAt("planner") as number;
+    clock = Math.min(before.dueAt("planner") as number, before.dueAt("writer") as number);
     before.tick();
-    expect(started).toEqual(["planner"]);
+    expect(started).toHaveLength(1);
+    const [first] = started;
     // A reload: the old tender stops, a new one starts, and the turn the old one began is still going.
     before.stop();
     const after = make();
     after.tick();
-    clock = after.dueAt("planner") as number;
+    // Both agents come due in the new tender while that turn goes on: neither starts beside it.
+    clock = Math.max(after.dueAt("planner") as number, after.dueAt("writer") as number);
     after.tick();
-    expect(started).toEqual(["planner"]);
-    release();
+    expect(started).toEqual([first]);
+    releases.shift()?.();
     await before.idle();
-    clock += HOUR;
+    // Then one at a time again, each once.
     after.tick();
-    expect(started).toEqual(["planner", "planner"]);
-    release();
+    expect(started).toHaveLength(2);
+    after.tick();
+    expect(started).toHaveLength(2);
+    releases.shift()?.();
+    await after.idle();
+    after.tick();
+    expect(started.slice(1).sort()).toEqual(["planner", "writer"]);
+    releases.shift()?.();
     await after.idle();
   });
 

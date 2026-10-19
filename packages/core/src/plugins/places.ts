@@ -46,6 +46,7 @@ import { agentStateCaller } from "../tools/state.js";
 import { whyAsleep } from "./activity.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
 import {
+  CHANGE_LENGTH,
   CHANGES_KEPT,
   colorWord,
   describe,
@@ -320,6 +321,15 @@ function drawMeeting(room: TalkRoom, hasBody: Meetings["hasBody"], theme?: strin
     meetingRoom(room.name, agents.length, purpose, theme),
   );
   return { place, agents };
+}
+
+/**
+ * A meeting room as people see it: what it is for is what its members said,
+ * or else its room's own purpose. Only for showing: kept out of the record,
+ * so a room whose purpose changes later isn't held to the old one.
+ */
+function shownPurpose(place: Place, room: TalkRoom | undefined): Place {
+  return room?.purpose && !place.purpose ? { ...place, purpose: room.purpose } : place;
 }
 
 /**
@@ -682,7 +692,7 @@ async function sceneOf(
     if (!room) return null;
     // Once a member has changed it, it is kept: drawn from the record, never from its name again.
     const kept = await service.get(caller, { type: PLACE_TYPE, id }).catch(() => null);
-    const place = kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place;
+    const place = shownPurpose(kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place, room);
     return { id, place, agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms) };
   }
   if (id.startsWith("home:")) {
@@ -961,9 +971,15 @@ function whereSaid(where: Where): string {
   return "";
 }
 
-/** A place with one more change in its recent changes, newest first, keeping the last few. */
+/**
+ * A place with one more change in its recent changes, newest first, keeping
+ * the last few. What it says is cut short to fit: it carries the agent's own
+ * words (a purpose, a name, where it put something), and a change too long to
+ * keep would fail the very change it records.
+ */
 export function withChange(place: Place, change: PlaceChange): Place {
-  return { ...place, changes: [change, ...(place.changes ?? [])].slice(0, CHANGES_KEPT) };
+  const what = change.what.length > CHANGE_LENGTH ? `${change.what.slice(0, CHANGE_LENGTH - 1)}…` : change.what;
+  return { ...place, changes: [{ ...change, what }, ...(place.changes ?? [])].slice(0, CHANGES_KEPT) };
 }
 
 export interface ApplyOptions {
@@ -1059,8 +1075,8 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     const name = text(args.name);
     if (name) {
       next = { ...next, name: name.slice(0, 80) };
-      changes.push(`it is called ${name}`);
-      did.push(`named it ${name}`);
+      changes.push(`it is called ${next.name}`);
+      did.push(`named it ${next.name}`);
     }
     const purpose = text(args.purpose);
     if (purpose) {
@@ -1372,7 +1388,8 @@ export class PlaceTool implements Tool {
               : `You are in ${place.name}, a shared place.`;
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
         const door = await hasDoor(service, id, place, this.hasBody);
-        return { success: true, output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${describe(place)}` };
+        const shown = describe(shownPurpose(place, talk));
+        return { success: true, output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${shown}` };
       }
       if (action === "undo") {
         const { id } = await readCurrent(service, caller, agent, meetings);

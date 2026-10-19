@@ -35,12 +35,14 @@ import {
 } from "../plugins/places.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
+  CHANGE_LENGTH,
   CHANGES_KEPT,
   describe as describeRoom,
   doorOf,
   doorProblems,
   findPlacement,
   firstHome,
+  PLACE_SCHEMA,
   type Place,
   type PlaceItem,
   parseColor,
@@ -684,13 +686,20 @@ describe("bodies going where the talk is", () => {
     expect(await bodyAt(state, owner, "host")).toBe("shared:lounge");
   });
 
-  it("never keeps a body in a meeting room on whereabouts alone", async () => {
+  it("keeps a body in a meeting room on whereabouts only for a member of its room", async () => {
+    // host went in to change it; other, who isn't a member, has whereabouts naming it all the same.
     await state.put(owner, { type: WHEREABOUTS_TYPE, id: "host", scope: "global", data: { place: trip } });
+    await state.put(owner, { type: WHEREABOUTS_TYPE, id: "other", scope: "global", data: { place: trip } });
+    expect(await bodyAt(state, owner, "host", rooms)).toBe(trip);
+    expect(await bodyAt(state, owner, "other", rooms)).toBe(homeId("other"));
+    expect(await whoIsIn(state, owner, trip, hasBody, undefined, rooms)).toEqual(["host"]);
+    const map = await worldMap(state, owner, ["host", "guest", "other"], rooms, hasBody);
+    expect(map.find((p) => p.id === trip)?.agents).toEqual(["host"]);
+    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual([]);
+    expect(map.find((p) => p.id === homeId("other"))?.agents).toEqual(["other"]);
+    // Without the rooms to check membership against, nobody is kept there on whereabouts.
     expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
     expect(await whoIsIn(state, owner, trip, hasBody)).toEqual([]);
-    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
-    expect(map.find((p) => p.id === trip)?.agents).toEqual([]);
-    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual(["host"]);
   });
 
   it("reads a visit's end from its record alone", () => {
@@ -1159,9 +1168,10 @@ describe("meeting rooms its members can change", () => {
     expect((await scene(state, owner, homeId("host"), rooms, hasBody))?.agents).toEqual([]);
     const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
     expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual([]);
-    expect(String((await tool.execute({ action: "look" }, as("host"))).output)).toMatch(
-      /meeting room of #trip.*Also here: guest/,
-    );
+    // Only who is there now: guest is a member, but hasn't come in.
+    const looked = String((await tool.execute({ action: "look" }, as("host"))).output);
+    expect(looked).toMatch(/meeting room of #trip, a room you talk in/);
+    expect(looked).not.toMatch(/Also here/);
     // Going there changes nothing: the room is still the one drawn for it.
     expect(await kept()).toBeUndefined();
 
@@ -1175,12 +1185,12 @@ describe("meeting rooms its members can change", () => {
     // Its home is untouched.
     expect((await readHome(state, owner, "host")).place.props.some((p) => p.id === place.props.at(-1)?.id)).toBe(false);
 
-    // Drawn from the record now, members and doors as before, even when the room gains a member.
+    // Drawn from the record now, with whoever is in it and its doors, even when the room gains a member.
     rooms[0].members.push("other");
     const world = await buildWorld(state, owner, ["host", "guest", "other"], rooms, hasBody);
     const now = await scene(state, owner, id, rooms, hasBody, world);
-    expect(now?.place).toEqual(place);
-    expect(now?.agents).toEqual(["guest", "host", "other"]);
+    expect(now?.place).toEqual({ ...place, purpose: "Plan the trip" });
+    expect(now?.agents).toEqual(["host"]);
     expect(now?.doors.length).toBeGreaterThan(0);
     expect(doorProblems(now?.place as Place, now?.doors ?? [])).toEqual([]);
 
@@ -1191,6 +1201,21 @@ describe("meeting rooms its members can change", () => {
     const both = (await kept()) as Place;
     expect(both.props.length).toBe(drawn.props.length + 2);
     expect(both.changes?.map((c) => c.who)).toEqual(["guest", "host"]);
+  });
+
+  it("says what it is for, as the map does: its members' word, or else its room's own, never kept for it", async () => {
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.purpose).toBe("Plan the trip");
+    await tool.execute({ action: "go", to: "trip" }, as("host"));
+    expect(String((await tool.execute({ action: "look" }, as("host"))).output)).toMatch(/It is for: Plan the trip/);
+    await tool.execute({ action: "add", kind: "plant" }, as("host"));
+    // Kept, but without the room's purpose: a room that says something else later is read afresh.
+    expect((await kept())?.purpose).toBeUndefined();
+    rooms[0].purpose = "Plan the trip to Porto";
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.purpose).toBe("Plan the trip to Porto");
+    await tool.execute({ action: "room", purpose: "packing lists" }, as("host"));
+    expect((await scene(state, owner, id, rooms, hasBody))?.place.purpose).toBe("packing lists");
+    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(map.find((p) => p.id === id)?.purpose).toBe("packing lists");
   });
 
   it("takes back the first change by going back to the room as drawn", async () => {
@@ -1216,6 +1241,7 @@ describe("meeting rooms its members can change", () => {
   });
 
   it("lists the meeting rooms an agent can go to with the places it knows", async () => {
+    await tool.execute({ action: "go", to: "trip" }, as("guest"));
     const listed = String((await tool.execute({ action: "places" }, as("host"))).output);
     expect(listed).toMatch(/#trip, the meeting room of a room you talk in: guest is there/);
     expect(String((await tool.execute({ action: "places" }, as("other"))).output)).not.toMatch(/#trip/);
@@ -1382,6 +1408,33 @@ describe("what was done to a room lately", () => {
     expect(before.what).toBe("painted the walls sage");
     const place = (await readHome(state, owner, "assistant")).place;
     expect(withChange(place, { who: "planner", what: "added a lamp", at: "x" }).changes?.[0].who).toBe("planner");
+  });
+
+  it("cuts a change short to fit, so a long purpose or name, or undoing a long change, still works", async () => {
+    // The schema the plugin registers, which caps what a change says.
+    state = new StateService({
+      getConfig: () => ({
+        state: { backend: "sqlite", types: [{ name: PLACE_TYPE, scope: "agent", schema: PLACE_SCHEMA as never }] },
+      }),
+      db: new Database(":memory:"),
+    });
+    const purpose = "reading up on the old town, its trams and its tiles, ".repeat(3).slice(0, 140);
+    const set = await tool.execute({ action: "room", theme: "library", purpose, name: "n".repeat(120) }, as);
+    expect(set.success, set.error).toBe(true);
+    const [made] = await changes();
+    expect(made.what).toHaveLength(CHANGE_LENGTH);
+    expect(made.what).toMatch(/^gave it the library theme, named it n{80}, made it a place for reading up/);
+    expect(made.what.endsWith("…")).toBe(true);
+    // Taking back a change as long as one can be: the undo's own words go over, and are cut short too.
+    const undone = await tool.execute({ action: "undo" }, as);
+    expect(undone.success, undone.error).toBe(true);
+    const [took] = await changes();
+    expect(took.what).toMatch(/^took back "gave it the library theme/);
+    expect(took.what).toHaveLength(CHANGE_LENGTH);
+    expect(
+      withChange((await readHome(state, owner, "assistant")).place, { who: "a", what: "short", at: "x" }).changes?.[0]
+        .what,
+    ).toBe("short");
   });
 });
 

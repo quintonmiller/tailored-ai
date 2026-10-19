@@ -7,6 +7,7 @@ import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import {
   bodyFor,
+  changesShown,
   DEFAULT_ROOM,
   farFor,
   GESTURES,
@@ -303,5 +304,24 @@ describe("what a change did to a room's things", () => {
     // Where it was, to glide from.
     expect(moved.get(first.id)?.at).toEqual(first.at);
     expect(roomChanges(before, before)).toEqual({ fresh: new Set(), moved: new Map() });
+  });
+
+  it("shows nothing changing on going to another place, or on the first room after the stand-in", () => {
+    // Two homes drawn from the same kit: a plant and a lamp in each, in different spots.
+    const home = (x: number): Room => ({
+      ...DEFAULT_ROOM,
+      props: [
+        { id: "plant", name: "the plant", kind: "plant", at: [x, -1], facing: 0 },
+        { id: "lamp", name: "the lamp", kind: "lamp", at: [-x, 1], facing: 0 },
+      ],
+    });
+    const mine = home(1);
+    const theirs = home(-1.5);
+    expect(changesShown(mine, theirs, false)).toBeUndefined();
+    // The stand-in shares ids with real rooms too.
+    expect(changesShown(DEFAULT_ROOM, mine, true)).toBeUndefined();
+    // The same place changing: the plant moved, and glides.
+    const moved = { ...mine, props: [{ ...mine.props[0], at: [2, -1] as [number, number] }, mine.props[1]] };
+    expect([...(changesShown(mine, moved, true)?.moved.keys() ?? [])]).toEqual(["plant"]);
   });
 });

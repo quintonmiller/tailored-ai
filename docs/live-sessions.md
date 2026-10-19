@@ -589,7 +589,9 @@ room.
 
 `purpose` says what the place is for, in a line: "planning the Lisbon trip".
 `look` reads it out, and the map shows it under the place's name, in place of
-a meeting room's own purpose. `purpose: none` clears it. The room's `name` is
+a meeting room's own purpose. Until a member gives one, a meeting room's card
+and `look` read out its room's own purpose, as the map does. `purpose: none`
+clears it. The room's `name` is
 what it is called inside; the map and the door plates keep a home as
 "planner's room" and a meeting room by its room's name.
 
@@ -635,7 +637,8 @@ Your room, as the place tool's look shows it:
 A reply in that session reaches nobody, and the message says so: what the
 agent changes in the room is what people see. An agent that did nothing in
 the interval isn't woken, since there is nothing new for its room to show.
-One tend runs at a time, so never two for one agent. A turn that comes round
+One tend runs at a time, even across a config reload, so never two for one
+agent. A turn that comes round
 while agents are paused, or while an agent's own switch on the Agents page has
 it switched off or paused, is skipped, not saved up, so lifting a pause wakes
 nobody at once. An agent without the `place` tool is skipped too, and the log
@@ -654,13 +657,16 @@ The **Room** button, beside **Map** and **Tasks** in a home, a shared place
 or a meeting room, opens the place's card: what it is for, its theme, who can
 change it, and its recent changes, newest first, each with who made it and
 when. A place keeps its last 8 changes made with the `place` tool, in its
-record's `changes`; the **State** page has the full history, including
+record's `changes`, each cut short past 160 characters; the **State** page
+has the full history, including
 changes made there. In a home whose owner has the `place` tool, the card has
 **Ask planner to make it fit its work**, which opens a chat with the agent
 with "Have a look at your room and make it reflect what you've been working
 on." written for you to send. **Redo its room** on the agent's own card does
-the same. An agent whose `tools:` list leaves out `place` can't change a room,
-and the card says so instead of offering.
+the same. In a meeting room, it takes you out of reading the room's own
+conversation and into a chat with that agent. An agent whose `tools:` list
+leaves out `place` can't change a room, and the card says so instead of
+offering, with a link to the agent's page, where you can add the tool.
 
 #### Task boards and the lobby
 

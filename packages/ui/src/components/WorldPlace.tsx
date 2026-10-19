@@ -80,7 +80,7 @@ export function WorldPlace({
 }: {
   id: string;
   room: Room;
-  /** Who is in it: in a meeting room, its members. */
+  /** A meeting room's members, who can change it, wherever their bodies are. */
   members: string[];
   /** Whether an agent has the place tool to change a room with. */
   canPlace: (agent: string) => boolean;
@@ -95,7 +95,22 @@ export function WorldPlace({
   const name = room.name ?? "This place";
   const title = id.startsWith("room:") && !/\s/.test(name) ? `#${name}` : name;
   return (
-    <WorldPanel kicker={kind} title={title} className="world-place" onClose={onClose}>
+    <WorldPanel
+      kicker={kind}
+      title={title}
+      className="world-place"
+      onClose={onClose}
+      // An owner that can't change its room yet: its page is where it gets the place tool.
+      {...(owner && owner !== "default" && !canPlace(owner)
+        ? {
+            footer: (
+              <a className="world-panel-link" href={`#/agents/${encodeURIComponent(owner)}`}>
+                Give {nameOf(owner)} the place tool on its page
+              </a>
+            ),
+          }
+        : {})}
+    >
       <dl className="world-facts">
         <dt>For</dt>
         <dd>{room.purpose ?? <span className="world-panel-quiet">Nobody has said yet</span>}</dd>

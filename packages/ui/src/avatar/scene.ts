@@ -179,6 +179,20 @@ export function roomChanges(before: Room, after: Room): { fresh: Set<string>; mo
 }
 
 /**
+ * What the stage shows changing when a room arrives: for the same place
+ * changing, what is new and what moved (see {@link roomChanges}); for another
+ * place, or the first room after the stand-in, nothing, as on walking in,
+ * since things in two places can share an id without being the same thing.
+ */
+export function changesShown(
+  before: Room,
+  after: Room,
+  samePlace: boolean,
+): ReturnType<typeof roomChanges> | undefined {
+  return samePlace && before !== DEFAULT_ROOM ? roomChanges(before, after) : undefined;
+}
+
+/**
  * A door in a room: which side it is on and where along it (x on the back and
  * front, z on the left and right), the place it opens on, and what its name
  * plate says. The back and left are walls; a door on the open front or right

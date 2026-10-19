@@ -100,6 +100,8 @@ export interface PlaceChange {
 
 /** Changes a place remembers: enough for a glance at who has been at it lately. */
 export const CHANGES_KEPT = 8;
+/** The most a recorded change says, in characters: it is a glance, and the agent's own words can run long. */
+export const CHANGE_LENGTH = 160;
 
 /** A photo taken in a place, kept in the media store. */
 export interface PlacePhoto {
@@ -1582,7 +1584,7 @@ export const PLACE_SCHEMA = {
         required: ["who", "what", "at"],
         properties: {
           who: { type: "string", maxLength: 80 },
-          what: { type: "string", maxLength: 160 },
+          what: { type: "string", maxLength: CHANGE_LENGTH },
           at: { type: "string" },
         },
       },

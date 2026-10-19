@@ -196,13 +196,14 @@ export async function gatherDone(at: {
   skip?: string;
 }): Promise<Done> {
   const since = dbTime(at.since);
-  const who = at.agent === "default" ? "t.agent IS NULL" : "t.agent = ?";
+  // The default agent's model calls carry no name, or "default" when the config has an `agents.default`.
+  const who = at.agent === "default" ? "(t.agent IS NULL OR t.agent = ?)" : "t.agent = ?";
   const sessions = at.db
     .prepare(
       `SELECT DISTINCT s.id AS id, s.key AS key FROM token_usage t JOIN sessions s ON s.id = t.session_id
        WHERE ${who} AND t.created_at >= ?`,
     )
-    .all(...(at.agent === "default" ? [since] : [at.agent, since])) as { id: string; key: string | null }[];
+    .all(at.agent, since) as { id: string; key: string | null }[];
   const ran = sessions.filter((s) => !at.skip || s.key !== at.skip);
 
   const counts = new Map<string, number>();
@@ -279,8 +280,7 @@ export const TEND_TICK_MS = 30_000;
 /**
  * Agents being tended right now, by any tender. A reload stops the old
  * tender and starts a new one while a turn the old one began may still be
- * going: this is what keeps the new one from starting a second for the same
- * agent.
+ * going: this is what keeps the new one from starting another beside it.
  */
 const inFlight = new Set<string>();
 
@@ -315,10 +315,11 @@ export class Tender {
   }
 
   /**
-   * One look at who is due. Everyone due is moved on to their next time
-   * first, so a slow turn is never started twice; those who can't be tended
-   * now are skipped, and the first who can is tended. Only one at a time: the
-   * others wait their turn at the next look.
+   * One look at who is due. Nothing starts while a tend is still going, this
+   * tender's or one a reload replaced: one at a time. Otherwise each due agent
+   * is moved on to its next time as it is looked at, so a slow turn is never
+   * started twice; one that can't be tended now is skipped, and the first that
+   * can is tended, while the rest wait for the next look.
    */
   tick(): void {
     const now = this.now();
@@ -326,11 +327,11 @@ export class Tender {
     const wanted = this.wanted();
     for (const agent of wanted) if (!this.due.has(agent)) this.due.set(agent, nextTend(agent, everyMs, now));
     for (const agent of [...this.due.keys()]) if (!wanted.includes(agent)) this.due.delete(agent);
-    if (this.running) return;
+    if (this.running || inFlight.size) return;
     const ready = [...this.due.entries()].filter(([, at]) => at <= now).sort((a, b) => a[1] - b[1]);
     for (const [agent, at] of ready) {
       this.due.set(agent, nextTend(agent, everyMs, now));
-      const why = inFlight.has(agent) ? "its last tend is still going" : this.opts.unready(agent);
+      const why = this.opts.unready(agent);
       if (why) {
         this.log(`${agent}'s tend skipped: ${why}`);
         continue;
