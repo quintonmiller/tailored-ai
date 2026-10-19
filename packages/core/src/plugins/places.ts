@@ -28,25 +28,22 @@ import { getRoomBackend, listRoomBackends } from "../rooms/registry.js";
 import { formatRoomRef, type RoomBackend, type RoomMessage, type Room as TalkRoomRecord } from "../rooms/types.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
-import { StateConflictError, StateError } from "../state/types.js";
+import { type Actor, type StateChange, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
 import {
   colorWord,
-  defaultPlace,
   describe,
   FLOORS,
   type Floor,
   findItem,
   findPlacement,
   findSpot,
+  firstHome,
   footprintOf,
   KINDS,
   LIMITS,
-  LOBBY,
-  lobby,
-  meetingRoom,
   moveItem,
   newId,
   newName,
@@ -66,6 +63,7 @@ import {
   whereWords,
   withSpots,
 } from "./places-layout.js";
+import { homePlace, LOBBY, lobby, meetingRoom } from "./places-rooms.js";
 
 export const PLACE_TYPE = "place";
 
@@ -94,18 +92,77 @@ export function anyAvatar(config: AgentConfig): boolean {
 
 const PLUGIN_CALLER: StateCaller = { actor: { kind: "plugin", name: "places" }, source: { surface: "http" } };
 
-/** An agent's home, made from the default room the first time anyone asks. */
+const byPlugin = (actor: Actor) => actor.kind === PLUGIN_CALLER.actor.kind && actor.name === PLUGIN_CALLER.actor.name;
+
+/** Whether a stored room is the first room every home used to start as, exactly: same size, colours and things. */
+export function isFirstHome(place: Place): boolean {
+  const first = firstHome(place.name);
+  const shape = (p: Place) =>
+    JSON.stringify([
+      p.width,
+      p.depth,
+      p.height,
+      p.walls,
+      p.floor,
+      p.floorColor,
+      p.photos?.length ?? 0,
+      p.props.map((i) => [i.id, i.kind, i.at, i.facing, i.elevation, i.on, i.color, i.scale, i.size, i.name]),
+    ]);
+  return shape(place) === shape(first);
+}
+
+/**
+ * Whether a home is still as the system gave it: since the room was last
+ * made, no agent, person or other plugin has changed it. Either this plugin
+ * wrote every version since (it made the room, and maybe gave it a newer one
+ * after), or the room is just as it was made, in the agent's name when its
+ * first `place` call found no room, and is the first room exactly. What came
+ * before a delete was another room. Anything else is someone's room and is
+ * never replaced.
+ */
+async function untouched(service: StateService, record: StateRecord): Promise<boolean> {
+  const asMade = (actor: Actor) =>
+    byPlugin(actor) || (actor.kind === "agent" && isFirstHome(record.data as unknown as Place));
+  if (record.version === 1) return asMade(record.updatedBy);
+  if (!byPlugin(record.updatedBy) && record.updatedBy.kind !== "agent") return false;
+  const changes = await service
+    .history(PLUGIN_CALLER, { type: record.type, id: record.id }, { limit: record.version })
+    .catch(() => undefined);
+  if (!changes) return false;
+  // Newest first: everything written since the room was last made, which must be in the history.
+  const since: StateChange[] = [];
+  for (const change of changes) {
+    since.push(change);
+    if (change.op === "create") break;
+  }
+  const made = since.at(-1);
+  if (made?.op !== "create") return false;
+  if (since.length === 1) return asMade(made.actor);
+  return since.every((c) => byPlugin(c.actor));
+}
+
+/**
+ * An agent's home: its own room, drawn from its id the first time anyone
+ * asks. A home nobody has changed is brought up to the room its id draws
+ * now, so homes made before rooms were drawn from a seed get one too; a
+ * home anyone has changed is left exactly as it is.
+ */
 export async function readHome(
   service: StateService,
   caller: StateCaller,
   agent: string,
 ): Promise<{ place: Place; version: number }> {
   const ref = { type: PLACE_TYPE, id: homeId(agent) };
+  const name = agent === "default" ? "your room" : `${agent}'s room`;
   const found = await service.get(caller, ref);
-  if (found) return { place: found.data as unknown as Place, version: found.version };
-  const place = defaultPlace(agent === "default" ? "your room" : `${agent}'s room`);
+  if (found) {
+    const fresh = await upgrade(service, found, name);
+    return fresh ?? { place: found.data as unknown as Place, version: found.version };
+  }
+  const place = homePlace(ref.id, name);
   try {
-    const made = await service.put(caller, {
+    // The system makes the room, whoever asked: so it is known to be untouched until someone changes it.
+    const made = await service.put(PLUGIN_CALLER, {
       ...ref,
       scope: `agent:${agent}`,
       data: place as unknown as Record<string, unknown>,
@@ -116,6 +173,29 @@ export async function readHome(
     const again = await service.get(caller, ref);
     if (again) return { place: again.data as unknown as Place, version: again.version };
     throw err;
+  }
+}
+
+/** The room a home's id draws now, written over an untouched home that differs from it; undefined when there is nothing to do. */
+async function upgrade(
+  service: StateService,
+  record: StateRecord,
+  name: string,
+): Promise<{ place: Place; version: number } | undefined> {
+  const stored = record.data as unknown as Place;
+  const place = homePlace(record.id, typeof stored.name === "string" ? stored.name : name);
+  if (JSON.stringify(stored) === JSON.stringify(place)) return undefined;
+  if (!(await untouched(service, record))) return undefined;
+  try {
+    const made = await service.put(
+      PLUGIN_CALLER,
+      { type: record.type, id: record.id, scope: record.scope, data: place as unknown as Record<string, unknown> },
+      record.version,
+    );
+    return { place, version: made.version };
+  } catch {
+    // Changed a moment ago, by someone who is now its author: theirs stands.
+    return undefined;
   }
 }
 
@@ -843,7 +923,7 @@ export class PlaceTool implements Tool {
       type: PLACE_TYPE,
       id,
       scope: "global",
-      data: defaultPlace(named.slice(0, 80)) as unknown as Record<string, unknown>,
+      data: homePlace(id, named.slice(0, 80)) as unknown as Record<string, unknown>,
     });
     await service.put(caller, { type: WHEREABOUTS_TYPE, id: agent, scope: "global", data: { place: id } });
     return {

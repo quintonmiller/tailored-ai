@@ -34,12 +34,14 @@ import {
   lookTarget,
   nearestWithin,
   OPEN_SIDES,
+  ROOM_TARGET,
   ROOM_VIEW,
   type Room,
   roomDistance,
   type Spot,
   spotById,
   spotFor,
+  spreadLights,
 } from "./scene";
 import { heldMove, keepUp, MOVE_KEYS, RUN_KEYS, type Travel, travelSpeed, VISITOR_TURN, WALK_SPEED } from "./travel";
 
@@ -165,7 +167,15 @@ function hangPhoto(picture: THREE.Group, media: string) {
 }
 
 /** Things that hang on a wall, so they are never in the way of a walk. */
-const WALL_KINDS = new Set(["window", "picture", "clock", "shelf"]);
+const WALL_KINDS = new Set(["window", "picture", "clock", "shelf", "board", "painting", "poster", "pegboard"]);
+/** Things flat on the floor, walked over. */
+const FLAT_KINDS = new Set(["rug", "round_rug"]);
+/** Lamps that light the room after dark, and how high their bulb is above where they stand. */
+const BULBS: Partial<Record<string, number>> = { lamp: 1.45, table_lamp: 0.32 };
+/** The most lamps lit at once, for the frame rate: the rest glow, but light nothing. */
+const LIT_LAMPS = 4;
+/** How far back the camera following a visitor may sit, however big the room: near enough to see who you are. */
+const VISIT_DISTANCE = 9;
 
 const bare = (s: string) =>
   s
@@ -276,7 +286,7 @@ export async function createStage(
       const scale = prop.size ? 1 : (prop.scale ?? 1);
       built.group.scale.setScalar(scale);
       // Its outline on the floor, measured from what was built, before it grows in.
-      if (!prop.on && !WALL_KINDS.has(prop.kind) && prop.kind !== "rug") {
+      if (!prop.on && !WALL_KINDS.has(prop.kind) && !FLAT_KINDS.has(prop.kind)) {
         const box = new THREE.Box3().setFromObject(built.group);
         obstacles.push({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z });
       }
@@ -286,8 +296,12 @@ export async function createStage(
       if (prop.action) built.group.userData.action = prop.action;
       if (prop.spot || prop.action) clickable.push(built.group);
       if (built.glow) glows.push({ kind: prop.kind, glow: built.glow });
-      if (prop.kind === "lamp")
-        lights.push({ at: new THREE.Vector3(prop.at[0], 1.45 * scale, prop.at[1]), fire: false });
+      const bulb = BULBS[prop.kind];
+      if (bulb !== undefined)
+        lights.push({
+          at: new THREE.Vector3(prop.at[0], (prop.elevation ?? 0) + bulb * scale, prop.at[1]),
+          fire: false,
+        });
       if (prop.kind === "fireplace") {
         const front = new THREE.Vector3(Math.sin(rad(prop.facing)), 0, Math.cos(rad(prop.facing))).multiplyScalar(0.45);
         lights.push({ at: new THREE.Vector3(prop.at[0], 0.4, prop.at[1]).add(front), fire: true });
@@ -301,8 +315,10 @@ export async function createStage(
     drawBoards();
     for (const w of warm) scene.remove(w.light);
     warm.length = 0;
-    for (const l of lights.slice(0, 4)) {
-      const light = new THREE.PointLight(l.fire ? 0xff9a50 : 0xffc98a, 0, 5, 1.5);
+    // A big room's lamps reach further, so the light still meets in the middle.
+    const reach = Math.max(5, Math.hypot(room.width, room.depth) / 2.2);
+    for (const l of spreadLights(lights, LIT_LAMPS)) {
+      const light = new THREE.PointLight(l.fire ? 0xff9a50 : 0xffc98a, 0, reach, 1.5);
       light.position.copy(l.at);
       scene.add(light);
       warm.push({ light, fire: l.fire });
@@ -394,7 +410,7 @@ export async function createStage(
     sun.intensity = l.sun.intensity;
     for (const w of warm) w.light.intensity = w.fire ? (l.lamp.on ? 1.8 : 0.9) : l.lamp.on ? l.lamp.intensity : 0;
     for (const { kind, glow } of glows) {
-      if (kind === "lamp") glow.emissiveIntensity = l.lamp.on ? 0.9 : 0;
+      if (kind === "lamp" || kind === "table_lamp") glow.emissiveIntensity = l.lamp.on ? 0.9 : 0;
       else if (kind === "window") {
         glow.color.setHex(l.window.color);
         glow.emissive.setHex(l.window.color);
@@ -458,8 +474,9 @@ export async function createStage(
         polar: [1.1, 1.75],
       };
     }
-    const target = new THREE.Vector3(0, 0.65, -0.15);
-    const distance = roomDistance(room, visibleAspect());
+    const target = new THREE.Vector3(...ROOM_TARGET);
+    const whole = roomDistance(room, visibleAspect());
+    const distance = opts.visitor ? Math.min(whole, VISIT_DISTANCE) : whole;
     return {
       target,
       position: new THREE.Vector3()

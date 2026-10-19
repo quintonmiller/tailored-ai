@@ -3,6 +3,7 @@
  * not, lighting that follows the hour, and a camera that backs off for a
  * narrow frame.
  */
+import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import {
   bodyFor,
@@ -12,11 +13,14 @@ import {
   lookTarget,
   nearestWithin,
   OPEN_SIDES,
+  ROOM_TARGET,
+  ROOM_VIEW,
   type Room,
   roomDistance,
   roomProblems,
   spotById,
   spotFor,
+  spreadLights,
 } from "./scene";
 
 describe("the default room", () => {
@@ -90,6 +94,73 @@ describe("roomDistance", () => {
 
   it("is never closer than the room's height needs", () => {
     expect(roomDistance(DEFAULT_ROOM, 10)).toBeCloseTo(roomDistance(DEFAULT_ROOM, 20), 5);
+  });
+
+  it("keeps every corner of a room in the frame, big or small, without leaving it lost in the middle", () => {
+    const rooms = [
+      DEFAULT_ROOM,
+      { ...DEFAULT_ROOM, width: 8, depth: 8, height: 3 },
+      { ...DEFAULT_ROOM, width: 10, depth: 6, height: 2.7 },
+      { ...DEFAULT_ROOM, width: 14, depth: 10, height: 3.2 },
+    ];
+    for (const room of rooms)
+      for (const aspect of [0.6, 1, 1.8]) {
+        const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, aspect, 0.05, 200);
+        const target = new THREE.Vector3(...ROOM_TARGET);
+        camera.position
+          .setFromSphericalCoords(roomDistance(room, aspect), Math.PI / 2 - ROOM_VIEW.elevation, ROOM_VIEW.azimuth)
+          .add(target);
+        camera.lookAt(target);
+        camera.updateMatrixWorld();
+        const { width: w, depth: d, height: h } = room;
+        const corners = [
+          [-w / 2, 0, -d / 2],
+          [w / 2, 0, -d / 2],
+          [-w / 2, 0, d / 2],
+          [w / 2, 0, d / 2],
+          [-w / 2, h, -d / 2],
+          [w / 2, h, -d / 2],
+          [-w / 2, h, d / 2],
+        ].map(([x, y, z]) => new THREE.Vector3(x, y, z).project(camera));
+        const label = `${w}x${d} at ${aspect}`;
+        for (const c of corners) {
+          expect(Math.abs(c.x), label).toBeLessThanOrEqual(1);
+          expect(Math.abs(c.y), label).toBeLessThanOrEqual(1);
+        }
+        // Snug: some corner comes close to an edge of the frame.
+        expect(Math.max(...corners.flatMap((c) => [Math.abs(c.x), Math.abs(c.y)])), label).toBeGreaterThan(0.85);
+      }
+  });
+
+  it("backs off further for a bigger room", () => {
+    expect(roomDistance({ ...DEFAULT_ROOM, width: 10, depth: 8 }, 1.5)).toBeGreaterThan(
+      roomDistance(DEFAULT_ROOM, 1.5) * 1.5,
+    );
+  });
+});
+
+describe("spreadLights", () => {
+  const lamp = (x: number, z: number, fire = false) => ({ at: { x, z }, fire });
+
+  it("keeps a fire, then lamps as far apart as they can be, so a big room is lit all over", () => {
+    const lights = [
+      lamp(-4, -3),
+      lamp(-3.6, -3),
+      lamp(-3.2, -2.8),
+      lamp(4, 3),
+      lamp(0, 0, true),
+      lamp(4, -3),
+      lamp(-4, 3),
+    ];
+    const kept = spreadLights(lights, 4);
+    expect(kept).toHaveLength(4);
+    expect(kept[0].fire).toBe(true);
+    // One from each corner, not three from the crowded one.
+    expect(kept.filter((l) => l.at.x < -3 && l.at.z < -2)).toHaveLength(1);
+  });
+
+  it("keeps them all when there are few enough", () => {
+    expect(spreadLights([lamp(0, 0), lamp(1, 1)], 4)).toHaveLength(2);
   });
 });
 

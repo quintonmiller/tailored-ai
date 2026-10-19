@@ -26,18 +26,16 @@ import {
 } from "../plugins/places.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
-  defaultPlace,
   findPlacement,
-  lobby,
-  meetingRoom,
+  firstHome,
   type Place,
   type PlaceItem,
   parseColor,
   placeProblems,
   resize,
   spotOf,
-  themeFor,
 } from "../plugins/places-layout.js";
+import { homePlace, lobby, meetingRoom, themeFor } from "../plugins/places-rooms.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { RoomStore } from "../rooms/store.js";
@@ -57,9 +55,9 @@ function must(place: Place, args: Record<string, unknown>): Place {
   return out.place as Place;
 }
 
-describe("the default room", () => {
+describe("the first room", () => {
   it("is sound, and its spots are the ones the avatar has always used", () => {
-    const place = defaultPlace();
+    const place = firstHome();
     expect(placeProblems(place)).toEqual([]);
     expect(spot(place, "couch")).toMatchObject({
       at: [-0.85, -0.72],
@@ -77,7 +75,7 @@ describe("the default room", () => {
 
 describe("adding things", () => {
   it("puts a seat by a window turned the way the window looks, with a spot to sit in that nothing covers", () => {
-    const place = must(defaultPlace(), { action: "add", kind: "armchair", near: "the window", color: "sage" });
+    const place = must(firstHome(), { action: "add", kind: "armchair", near: "the window", color: "sage" });
     const chair = place.props.at(-1) as PlaceItem;
     expect(chair).toMatchObject({ kind: "armchair", name: "the sage armchair", color: parseColor("sage") });
     // Into the room, as the window looks: not staring at the wall.
@@ -87,7 +85,7 @@ describe("adding things", () => {
   });
 
   it("turns a seat put near a TV or a fire to face it", () => {
-    let place = must(defaultPlace(), { action: "remove", item: "desk" });
+    let place = must(firstHome(), { action: "remove", item: "desk" });
     place = must(place, { action: "add", kind: "tv", wall: "right" });
     place = must(place, { action: "add", kind: "armchair", near: "the TV", side: "front" });
     const tv = item(place, "tv");
@@ -97,7 +95,7 @@ describe("adding things", () => {
   });
 
   it("puts small things on a surface, at its height, and they move with it", () => {
-    let place = must(defaultPlace(), { action: "add", kind: "vase", on: "the desk" });
+    let place = must(firstHome(), { action: "add", kind: "vase", on: "the desk" });
     const vase = place.props.at(-1) as PlaceItem;
     expect(vase).toMatchObject({ on: "desk", elevation: 0.76, spot: "desk" });
     place = must(place, { action: "move", item: "desk", wall: "right" });
@@ -115,15 +113,15 @@ describe("adding things", () => {
   });
 
   it("finds a surface on its own for something that needs one", () => {
-    const place = must(defaultPlace(), { action: "add", kind: "mug" });
+    const place = must(firstHome(), { action: "add", kind: "mug" });
     expect((place.props.at(-1) as PlaceItem).on).toBe("desk");
   });
 
   it("hangs things on the walls that exist, without covering what is there", () => {
-    const refused = applyAction(defaultPlace(), { action: "add", kind: "picture", wall: "front" });
+    const refused = applyAction(firstHome(), { action: "add", kind: "picture", wall: "front" });
     expect(refused.ok).toBe(false);
     expect(refused.text).toMatch(/open/);
-    const place = must(defaultPlace(), { action: "add", kind: "clock", wall: "back" });
+    const place = must(firstHome(), { action: "add", kind: "clock", wall: "back" });
     const clock = place.props.at(-1) as PlaceItem;
     expect(clock.at[1]).toBeCloseTo(-place.depth / 2 + 0.01);
     expect(clock.elevation).toBeGreaterThan(1.5);
@@ -131,9 +129,9 @@ describe("adding things", () => {
 
   it("won't let a tall bookcase hide the window", () => {
     // The left wall holds the window and a bookshelf already: take the shelf away first.
-    const place = must(defaultPlace(), { action: "remove", item: "bookshelf" });
+    const place = must(firstHome(), { action: "remove", item: "bookshelf" });
     const window = item(place, "window");
-    expect(typeof findPlacement(defaultPlace(), { kind: "bookshelf" }, { wall: "left" })).toBe("string");
+    expect(typeof findPlacement(firstHome(), { kind: "bookshelf" }, { wall: "left" })).toBe("string");
     const got = findPlacement(place, { kind: "bookshelf" }, { wall: "left", near: "the window" });
     expect(typeof got).not.toBe("string");
     if (typeof got === "string") return;
@@ -142,7 +140,7 @@ describe("adding things", () => {
   });
 
   it("names things so they stay tell-apart-able", () => {
-    let place = must(defaultPlace(), { action: "add", kind: "lamp", wall: "right" });
+    let place = must(firstHome(), { action: "add", kind: "lamp", wall: "right" });
     expect((place.props.at(-1) as PlaceItem).name).toBe("the lamp");
     place = must(place, { action: "add", kind: "lamp", corner: "front left" });
     expect((place.props.at(-1) as PlaceItem).name).toBe("the lamp 2");
@@ -151,7 +149,7 @@ describe("adding things", () => {
   });
 
   it("says why when there's no room, and stops instead of overlapping", () => {
-    let place = defaultPlace();
+    let place = firstHome();
     let refusals = 0;
     for (let i = 0; i < 25 && refusals === 0; i++) {
       const out = applyAction(place, { action: "add", kind: "armchair" });
@@ -163,14 +161,14 @@ describe("adding things", () => {
   });
 
   it("explains a bad colour or kind instead of guessing", () => {
-    expect(applyAction(defaultPlace(), { action: "add", kind: "armchair", color: "blurple" }).text).toMatch(/colour/);
-    expect(applyAction(defaultPlace(), { action: "add", kind: "spaceship" }).text).toMatch(/kind/);
+    expect(applyAction(firstHome(), { action: "add", kind: "armchair", color: "blurple" }).text).toMatch(/colour/);
+    expect(applyAction(firstHome(), { action: "add", kind: "spaceship" }).text).toMatch(/kind/);
   });
 });
 
 describe("changing and removing", () => {
   it("removes what stands on a thing with it, and a click that led to it leads nowhere", () => {
-    const out = applyAction(defaultPlace(), { action: "remove", item: "the desk" });
+    const out = applyAction(firstHome(), { action: "remove", item: "the desk" });
     expect(out.text).toMatch(/the laptop/);
     const place = out.place as Place;
     expect(place.props.some((p) => p.id === "laptop")).toBe(false);
@@ -179,7 +177,7 @@ describe("changing and removing", () => {
   });
 
   it("recolours, renames and resizes, and a bigger thing has to fit again", () => {
-    let place = must(defaultPlace(), { action: "change", item: "couch", color: "dark green", name: "the green sofa" });
+    let place = must(firstHome(), { action: "change", item: "couch", color: "dark green", name: "the green sofa" });
     expect(item(place, "couch")).toMatchObject({ name: "the green sofa", color: parseColor("dark green") });
     expect(spot(place, "couch")?.place).toBe("the green sofa");
     place = must(place, { action: "change", item: "the green sofa", scale: 0.8 });
@@ -192,15 +190,15 @@ describe("changing and removing", () => {
   });
 
   it("turns a thing where it stands", () => {
-    const place = must(defaultPlace(), { action: "move", item: "lamp", facing: 45 });
+    const place = must(firstHome(), { action: "move", item: "lamp", facing: 45 });
     expect(item(place, "lamp")).toMatchObject({ at: [0.25, -1.5], facing: 45 });
     // A round pot takes no more room turned, so it stays put.
-    expect(item(must(defaultPlace(), { action: "move", item: "plant", facing: 45 }), "plant")).toMatchObject({
+    expect(item(must(firstHome(), { action: "move", item: "plant", facing: 45 }), "plant")).toMatchObject({
       at: [-1.86, -1.5],
       facing: 45,
     });
     // A square desk turned so its corner would meet the wall shifts just enough to stay inside.
-    const desk = item(must(defaultPlace(), { action: "move", item: "desk", facing: 30 }), "desk");
+    const desk = item(must(firstHome(), { action: "move", item: "desk", facing: 30 }), "desk");
     expect(desk.facing).toBe(30);
     expect(Math.hypot(desk.at[0] - 1.35, desk.at[1] + 1.47)).toBeLessThan(0.5);
   });
@@ -208,7 +206,7 @@ describe("changing and removing", () => {
 
 describe("the room itself", () => {
   it("resizes with what is against a wall staying against it", () => {
-    const place = resize(defaultPlace(), { width: 5, depth: 4 });
+    const place = resize(firstHome(), { width: 5, depth: 4 });
     expect(typeof place).not.toBe("string");
     if (typeof place === "string") return;
     expect(item(place, "window").at[0]).toBeCloseTo(-2.49);
@@ -217,13 +215,13 @@ describe("the room itself", () => {
   });
 
   it("refuses a size that would push things out, saying which", () => {
-    const out = applyAction(defaultPlace(), { action: "room", width: 2.5, depth: 2.5 });
+    const out = applyAction(firstHome(), { action: "room", width: 2.5, depth: 2.5 });
     expect(out.ok).toBe(false);
     expect(out.text).toMatch(/doesn't work/);
   });
 
   it("repaints walls and floor", () => {
-    const place = must(defaultPlace(), { action: "room", walls: "pale blue", floor: "tile" });
+    const place = must(firstHome(), { action: "room", walls: "pale blue", floor: "tile" });
     expect(place.walls).toBe(parseColor("pale blue"));
     expect(place.floor).toBe("tile");
   });
@@ -275,16 +273,18 @@ describe("the place tool", () => {
 
   it("undoes the last change", async () => {
     const t = tool();
-    await t.execute({ action: "add", kind: "rug" }, context("assistant"));
+    const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+    const before = (await readHome(state, owner, "assistant")).place;
+    await t.execute({ action: "add", kind: "plant", corner: "front right" }, context("assistant"));
     const undone = await t.execute({ action: "undo" }, context("assistant"));
     expect(undone.success, undone.error).toBe(true);
-    const { place } = await readHome(state, { actor: { kind: "user", name: "owner" } }, "assistant");
-    expect(place.props.filter((p) => p.kind === "rug")).toHaveLength(1);
+    const { place } = await readHome(state, owner, "assistant");
+    expect(place.props.map((p) => p.id)).toEqual(before.props.map((p) => p.id));
   });
 
   it("works from what is there now when someone changes the room between its read and its write", async () => {
     const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
-    await readHome(state, owner, "assistant");
+    const plants = (await readHome(state, owner, "assistant")).place.props.filter((p) => p.kind === "plant").length;
     // The person repaints the walls just after the tool has read the room.
     let raced = false;
     const racing = Object.create(state) as StateService;
@@ -306,7 +306,7 @@ describe("the place tool", () => {
     const { place: now } = await readHome(state, owner, "assistant");
     // Both changes stand: the repaint, and the plant.
     expect(now.walls).toBe("#112233");
-    expect(now.props.filter((p) => p.kind === "plant")).toHaveLength(2);
+    expect(now.props.filter((p) => p.kind === "plant")).toHaveLength(plants + 1);
   });
 
   it("tells an agent with no body there's no room to change", async () => {
@@ -319,11 +319,21 @@ describe("the place tool", () => {
 describe("photos", () => {
   const types = [{ name: PLACE_TYPE, scope: "agent" as const }];
   let state: StateService;
-  beforeEach(() => {
+  beforeEach(async () => {
     state = new StateService({
       getConfig: () => ({ state: { backend: "sqlite", types } }),
       db: new Database(":memory:"),
     });
+    // A room someone has made their own (the first room, with its couch): it stays exactly as it is.
+    await state.put(
+      { actor: { kind: "user", name: "owner" } },
+      {
+        type: PLACE_TYPE,
+        id: homeId("assistant"),
+        scope: "agent:assistant",
+        data: firstHome("assistant's room") as never,
+      },
+    );
   });
 
   /** A media store that keeps what it is given, in memory. */
@@ -434,12 +444,14 @@ describe("shared places", () => {
     expect(await whereIs(state, owner, "host")).toBe("shared:lounge");
     const lounge = await state.get(owner, { type: PLACE_TYPE, id: "shared:lounge" });
     expect(lounge).toMatchObject({ scope: "global", data: { name: "the lounge" } });
+    const homeBefore = (await readHome(state, owner, "host")).place;
+    const before = (lounge?.data as unknown as Place).props.length;
     const added = await tool.execute({ action: "add", kind: "beanbag", corner: "front left" }, as("host"));
     expect(added.success, added.error).toBe(true);
     const after = await state.get(owner, { type: PLACE_TYPE, id: "shared:lounge" });
-    expect((after?.data as unknown as Place).props.some((p) => p.kind === "beanbag")).toBe(true);
-    const home = await readHome(state, owner, "host");
-    expect(home.place.props.some((p) => p.kind === "beanbag")).toBe(false);
+    expect((after?.data as unknown as Place).props).toHaveLength(before + 1);
+    // Home is untouched by it.
+    expect((await readHome(state, owner, "host")).place).toEqual(homeBefore);
     expect(String((await tool.execute({ action: "look" }, as("host"))).output)).toMatch(/You are in the lounge/);
   });
 
@@ -558,8 +570,13 @@ describe("the map, and any place on it", () => {
     const beach = meetingRoom("summer", 4, "Plan the family vacation");
     expect(beach).toMatchObject({ walls: "#cfe8f0", floor: "tile", floorColor: "#e6d3a3" });
     expect(beach.props.map((p) => p.kind)).toEqual(expect.arrayContaining(["palm", "umbrella", "board"]));
-    const tavern = meetingRoom("the-campaign", 5, "A D&D campaign");
-    expect(tavern.props.filter((p) => p.kind === "candle").every((c) => c.on?.startsWith("table-"))).toBe(true);
+    for (const n of [5, 9]) {
+      const tavern = meetingRoom("the-campaign", n, "A D&D campaign");
+      const tables = tavern.props.filter((p) => /^table-\d+$/.test(p.id));
+      // A candle on every table.
+      expect(tables.length).toBeGreaterThan(0);
+      for (const t of tables) expect(tavern.props.some((p) => p.kind === "candle" && p.on === t.id)).toBe(true);
+    }
     const plain = meetingRoom("standup", 3);
     expect(plain.props.some((p) => p.kind === "palm")).toBe(false);
     expect(plain.props.find((p) => p.kind === "board")).toMatchObject({ action: "tasks" });
@@ -582,7 +599,7 @@ describe("the map, and any place on it", () => {
     for (const n of [0, 1, 2, 3, 5, 8, 12, 16]) {
       const room = meetingRoom("standup", n);
       expect(placeProblems(room), `${n} seats`).toEqual([]);
-      expect(room.props.filter((p) => p.kind === "armchair")).toHaveLength(Math.max(2, n));
+      expect(room.props.filter((p) => p.id.startsWith("seat-"))).toHaveLength(Math.max(2, n));
       // Lit after dark.
       expect(room.props.filter((p) => p.kind === "lamp").length).toBeGreaterThan(0);
       expect(room.width).toBeGreaterThanOrEqual(last);
@@ -649,6 +666,93 @@ describe("a room's conversation, for a visitor to read", () => {
     });
     const broken = { ...backend, fetchSince: async () => Promise.reject(new Error("gateway down")) } as never;
     expect(await transcript(trip(), broken, ids, [])).toEqual({ error: "Couldn't read #trip: gateway down" });
+  });
+});
+
+describe("homes made before rooms were drawn from a seed", () => {
+  const types = [{ name: PLACE_TYPE, scope: "agent" as const }];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const system: StateCaller = { actor: { kind: "plugin", name: "places" } };
+  const agent: StateCaller = { actor: { kind: "agent", name: "assistant" }, source: { tool: "place" } };
+  const ref = { type: PLACE_TYPE, id: homeId("assistant") };
+  const drawn = () => homePlace(homeId("assistant"), "assistant's room");
+  let state: StateService;
+  beforeEach(() => {
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+  });
+  const store = (caller: StateCaller, data: Place, version?: number) =>
+    state.put(caller, { ...ref, scope: "agent:assistant", data: data as never }, version);
+
+  it("draws a new home from its id, made by the system", async () => {
+    expect((await readHome(state, agent, "assistant")).place).toEqual(drawn());
+    expect((await state.get(owner, ref))?.updatedBy).toEqual(system.actor);
+  });
+
+  it("gives a home the system made as the first room a room of its own", async () => {
+    await store(system, firstHome("assistant's room"));
+    expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+    const changes = await state.history(owner, ref);
+    expect(changes.map((c) => c.actor.kind)).toEqual(["plugin", "plugin"]);
+  });
+
+  it("does the same for a first room the agent's first look made, and nobody changed", async () => {
+    await store(agent, firstHome("assistant's room"));
+    expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+  });
+
+  it("brings a home only the system has written up to the room its id draws now", async () => {
+    await store(system, firstHome("assistant's room"));
+    await readHome(state, owner, "assistant");
+    // A room an older way of drawing gave it.
+    const older = homePlace("some other seed", "assistant's room");
+    const now = await state.get(owner, ref);
+    await store(system, older, now?.version);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+    // And leaves it be once it is that room.
+    const version = (await state.get(owner, ref))?.version;
+    await readHome(state, owner, "assistant");
+    expect((await state.get(owner, ref))?.version).toBe(version);
+  });
+
+  it("never replaces a home anyone else has changed", async () => {
+    // The agent added a plant to the first room.
+    await store(system, firstHome("assistant's room"));
+    const v1 = await state.get(owner, ref);
+    const planted = applyAction(firstHome("assistant's room"), { action: "add", kind: "plant", corner: "front right" });
+    await store(agent, planted.place as Place, v1?.version);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(planted.place);
+    // A person repainted it.
+    const repainted = { ...(planted.place as Place), walls: "#112233" };
+    await store(owner, repainted, (await state.get(owner, ref))?.version);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(repainted);
+    // Whatever is written to it later, by anyone, it stays theirs.
+    await store(system, firstHome("assistant's room"), (await state.get(owner, ref))?.version);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(firstHome("assistant's room"));
+  });
+
+  it("counts only what was written since the room was last made: a home someone cleared is the system's again", async () => {
+    await store(system, firstHome("assistant's room"));
+    const planted = applyAction(firstHome("assistant's room"), { action: "add", kind: "plant", corner: "front right" });
+    await store(agent, planted.place as Place, (await state.get(owner, ref))?.version);
+    await state.delete(owner, ref);
+    // Made again, the old way, after the person cleared it.
+    await store(system, firstHome("assistant's room"));
+    expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+  });
+
+  it("never replaces a room an agent wrote that isn't the first room, or one a person made", async () => {
+    const own = { ...firstHome("assistant's room"), walls: "#334455" };
+    await store(agent, own);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(own);
+    const other = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    await other.put(owner, { ...ref, scope: "agent:assistant", data: firstHome("assistant's room") as never });
+    expect((await readHome(other, owner, "assistant")).place).toEqual(firstHome("assistant's room"));
   });
 });
 

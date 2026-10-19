@@ -49,7 +49,18 @@ export type PropKind =
   | "aquarium"
   | "block"
   | "ball"
-  | "cylinder";
+  | "cylinder"
+  | "round_rug"
+  | "sideboard"
+  | "round_table"
+  | "stool"
+  | "easel"
+  | "tall_plant"
+  | "cactus"
+  | "painting"
+  | "poster"
+  | "pegboard"
+  | "table_lamp";
 
 export interface Prop {
   id: string;
@@ -242,6 +253,14 @@ export function lookTarget(
       clock: 0.18,
       aquarium: 0.2,
       bed: 0.45,
+      easel: 1.1,
+      tall_plant: 1.1,
+      cactus: 0.5,
+      painting: 0.4,
+      poster: 0.42,
+      pegboard: 0.38,
+      sideboard: 0.5,
+      table_lamp: 0.3,
     };
     const size = prop.size ? prop.size[1] / 2 : undefined;
     const up = (size ?? middle[prop.kind] ?? 0.4) * (prop.scale ?? 1);
@@ -300,9 +319,10 @@ export function lightingFor(hour: number): Lighting {
       window: { color: 0xffb88a, glow: 0.55 },
     };
   }
+  // Moonlight and the sky's glow, enough to make out a big room's far side; the lamps do the rest.
   return {
-    sun: { color: 0x8fa8ff, intensity: 0.35 },
-    sky: { color: 0x5a6a8c, ground: 0x3a3340, intensity: 0.45 },
+    sun: { color: 0x8fa8ff, intensity: 0.4 },
+    sky: { color: 0x5a6a8c, ground: 0x3a3340, intensity: 0.62 },
     lamp: { on: true, intensity: 2.2 },
     window: { color: 0x2b3a66, glow: 0.25 },
   };
@@ -325,16 +345,71 @@ export function nearestWithin(angle: number, [lo, hi]: [number, number]): number
   return a - hi < lo + 2 * Math.PI - a ? hi : lo;
 }
 
+/** The point the room view looks at and turns about: the middle of the floor, a little up. */
+export const ROOM_TARGET: [number, number, number] = [0, 0.65, -0.15];
+
+/** How much of the frame the room may fill, leaving a margin round it. */
+const FRAME_FILL = 0.92;
+
 /**
- * How far back the camera sits to fit the room at this aspect ratio: a narrow
- * frame (a phone) has to back off further than a wide one.
+ * How far back the camera sits to fit the room at this aspect ratio: every
+ * corner of what is drawn (the floor, and the tops of the back and left
+ * walls) inside the frame, with a margin. A narrow frame (a phone) backs off
+ * further than a wide one, and a big room further than a small one.
  */
 export function roomDistance(room: Room, aspect: number): number {
-  const vfov = (ROOM_VIEW.fov * Math.PI) / 180;
-  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
-  // The room seen from the corner is about as wide as its diagonal.
-  const span = Math.hypot(room.width, room.depth) * 1.02;
-  const fitWidth = span / 2 / Math.tan(hfov / 2);
-  const fitHeight = (room.height * 1.7) / 2 / Math.tan(vfov / 2);
-  return Math.max(fitWidth, fitHeight);
+  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * FRAME_FILL;
+  const tanH = tanV * aspect;
+  const { azimuth: a, elevation: e } = ROOM_VIEW;
+  // Toward the camera from what it looks at, and the frame's right and up.
+  const back = [Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a)];
+  const right = [Math.cos(a), 0, -Math.sin(a)];
+  const up = [
+    back[1] * right[2] - back[2] * right[1],
+    back[2] * right[0] - back[0] * right[2],
+    back[0] * right[1] - back[1] * right[0],
+  ];
+  const { width: w, depth: d, height: h } = room;
+  const corners = [
+    [-w / 2, 0, -d / 2],
+    [w / 2, 0, -d / 2],
+    [-w / 2, 0, d / 2],
+    [w / 2, 0, d / 2],
+    [-w / 2, h, -d / 2],
+    [w / 2, h, -d / 2],
+    [-w / 2, h, d / 2],
+  ];
+  const dot = (p: number[], q: number[]) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  let distance = 0;
+  for (const c of corners) {
+    const p = [c[0] - ROOM_TARGET[0], c[1] - ROOM_TARGET[1], c[2] - ROOM_TARGET[2]];
+    // A corner nearer the camera than the target needs more room either side of it, by how much nearer it is.
+    const toward = dot(p, back);
+    distance = Math.max(distance, Math.abs(dot(p, right)) / tanH + toward, Math.abs(dot(p, up)) / tanV + toward);
+  }
+  return distance;
+}
+
+/**
+ * Which lights to keep when a room has more than the frame rate allows: fires
+ * first, since they burn by day too, then each next one as far as it can be
+ * from those already kept, so a big room is lit all over rather than in one
+ * corner.
+ */
+export function spreadLights<T extends { at: { x: number; z: number }; fire: boolean }>(lights: T[], n: number): T[] {
+  const kept = lights.filter((l) => l.fire).slice(0, n);
+  const rest = lights.filter((l) => !l.fire);
+  while (kept.length < n && rest.length) {
+    let best = 0;
+    let bestGap = -1;
+    for (const [i, l] of rest.entries()) {
+      const gap = kept.length ? Math.min(...kept.map((k) => Math.hypot(k.at.x - l.at.x, k.at.z - l.at.z))) : 0;
+      if (gap > bestGap) {
+        best = i;
+        bestGap = gap;
+      }
+    }
+    kept.push(...rest.splice(best, 1));
+  }
+  return kept;
 }

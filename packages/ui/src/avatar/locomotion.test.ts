@@ -66,6 +66,18 @@ describe("findPath", () => {
     expect(findPath(room, [0, -1], [0, 1], [wall], 0.2)).toEqual([[0, 1]]);
   });
 
+  it("finds its way across a room as big as the lobby, round a row of things in the middle", () => {
+    const big = { ...room, width: 14, depth: 10 };
+    const row: Obstacle[] = [-4, -2, 0, 2].map((x) => ({ minX: x - 0.9, maxX: x + 0.9, minZ: -0.5, maxZ: 0.5 }));
+    const from: [number, number] = [-1, -3.5];
+    const to: [number, number] = [-1, 3.5];
+    const way = findPath(big, from, to, row, 0.2);
+    expect(way.at(-1)).toEqual(to);
+    for (const o of row) expect(crosses(from, way, o, 0.2)).toBe(false);
+    // Round the end of the row, not through it.
+    expect(way.some(([x]) => x > 2.9 || x < -4.9)).toBe(true);
+  });
+
   it("can start and end close to furniture, as a spot by a desk is", () => {
     const desk: Obstacle = { minX: 0.75, maxX: 1.95, minZ: -1.77, maxZ: -1.17 };
     const way = findPath(DEFAULT_ROOM, [-0.85, -0.72], [1.35, -0.98], [desk, sofa], 0.2);
