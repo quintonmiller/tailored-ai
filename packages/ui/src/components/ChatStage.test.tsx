@@ -20,6 +20,8 @@ const stage = vi.hoisted(() => ({
   }[],
   cues: [] as string[],
   insets: [] as number[],
+  /** Every room the stage was shown, first to last. */
+  rooms: [] as { name?: string; props: { name: string }[] }[],
   /** Stages on screen now: what render() waits for, instead of a fixed sleep a slow runner outlasts. */
   mounted: 0,
 }));
@@ -38,12 +40,51 @@ vi.mock("../avatar/stage", () => ({
       },
       setView: () => {},
       setInsets: ({ right }: { right: number }) => stage.insets.push(right),
+      setRoom: (room: { name?: string; props: { name: string }[] }) => stage.rooms.push(room),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
     };
   },
 }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+/** jsdom has no EventSource; this one lets a test push world-state changes. */
+class FakeEventSource {
+  static last: FakeEventSource | undefined;
+  listeners = new Map<string, ((ev: { data: string }) => void)[]>();
+  constructor(readonly url: string) {
+    FakeEventSource.last = this;
+  }
+  addEventListener(event: string, fn: (ev: { data: string }) => void) {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), fn]);
+  }
+  emit(event: string, data: unknown) {
+    for (const fn of this.listeners.get(event) ?? []) fn({ data: JSON.stringify(data) });
+  }
+  close() {}
+}
+
+/** The agent's own room, as the server keeps it. */
+const home = {
+  name: "talker's room",
+  width: 4.2,
+  depth: 3.6,
+  height: 2.5,
+  props: [{ id: "armchair", name: "the reading chair", kind: "armchair", at: [-1, 0], facing: 90, spot: "armchair" }],
+  spots: [
+    { id: "middle", name: "the middle of the room", place: "the middle of the room", at: [0.15, 0.35], facing: 20 },
+    {
+      id: "armchair",
+      name: "on the reading chair",
+      place: "the reading chair",
+      at: [-0.4, 0],
+      facing: 90,
+      activity: "sit",
+      item: "armchair",
+    },
+  ],
+  start: "middle",
+};
 
 let root: Root;
 let container: HTMLDivElement;
@@ -100,7 +141,9 @@ beforeEach(() => {
   stage.calls.length = 0;
   stage.cues.length = 0;
   stage.insets.length = 0;
+  stage.rooms.length = 0;
   stage.mounted = 0;
+  vi.stubGlobal("EventSource", FakeEventSource);
   localStorage.clear();
   const audio = btoa("mp3-bytes");
   turnChunks = [
@@ -137,6 +180,8 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith("/api/live?")) return new Response(JSON.stringify(liveInfo));
+      if (url === "/api/ext/builtin:places/talker")
+        return new Response(JSON.stringify({ type: "place", id: "home:talker", version: 1, place: home }));
       if (init?.method === "DELETE") {
         deleted.push(url);
         return new Response("{}");
@@ -233,6 +278,27 @@ describe("the chat page's scene", () => {
     expect(stage.calls.map((c) => c.url)).toEqual(["/api/live/avatar?agent=talker"]);
     expect(stage.calls[0].animations).toEqual(["/api/live/animations/0?agent=talker"]);
     expect(stage.insets.at(-1)).toBeGreaterThan(0);
+  });
+
+  it("shows the agent's own room, and redraws it the moment the agent changes it", async () => {
+    await render();
+    expect(stage.rooms.at(-1)?.name).toBe("talker's room");
+    // What the body is told it can go to comes from that room.
+    const aimed = (extras.at(-1)?.body as { aimed: { verb: string; targets: string[] }[] }).aimed;
+    expect(aimed.find((a) => a.verb === "go")?.targets).toContain("the reading chair");
+    const rearranged = {
+      ...home,
+      props: [...home.props, { id: "lamp", name: "the lamp", kind: "lamp", at: [1, -1], facing: 0 }],
+    };
+    // Someone else's room changing is not this one.
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "place", id: "home:other", op: "update", after: rearranged }),
+    );
+    expect(stage.rooms.at(-1)?.props).toHaveLength(1);
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "place", id: "home:talker", op: "update", after: rearranged }),
+    );
+    expect(stage.rooms.at(-1)?.props.map((p) => p.name)).toEqual(["the reading chair", "the lamp"]);
   });
 
   it("has no 3D view for an agent without a body, but can still talk", async () => {

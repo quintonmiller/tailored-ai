@@ -20,7 +20,7 @@ import type { Cue } from "./cues";
 import { armClearance, bodyPoints } from "./fit";
 import { Director, route, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
-import { type BuiltProp, buildProp, buildShell, disposeTree } from "./props";
+import { buildProp, buildShell, disposeTree } from "./props";
 import {
   DEFAULT_ROOM,
   type Lighting,
@@ -49,6 +49,8 @@ export interface Stage {
    * or `point` at something. One the room can't make sense of is ignored.
    */
   cue(cue: { name: string; target?: string }): void;
+  /** Show the room as it is now: what is new appears, what is gone goes, and the avatar stays where it can. */
+  setRoom(room: Room): void;
   dispose(): void;
 }
 
@@ -88,7 +90,7 @@ export async function createStage(
     chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
   } = {},
 ): Promise<Stage> {
-  const room = opts.room ?? DEFAULT_ROOM;
+  let room = opts.room ?? DEFAULT_ROOM;
   // Throws where the browser has no WebGL; the caller shows why.
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -122,26 +124,61 @@ export async function createStage(
   const scene = new THREE.Scene();
   // Everything a close-up camera must not sit inside or look through.
   const scenery: THREE.Object3D[] = [];
-  const shell = buildShell(room);
-  scene.add(shell);
-  scenery.push(shell);
-  const glows: Partial<Record<string, BuiltProp>> = {};
   // Furniture that leads somewhere when clicked.
   const clickable: THREE.Object3D[] = [];
-  let lampAt: THREE.Vector3 | undefined;
-  for (const prop of room.props) {
-    const built = buildProp(prop.kind);
-    built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
-    built.group.rotation.y = rad(prop.facing);
-    scene.add(built.group);
-    scenery.push(built.group);
-    if (prop.spot) {
-      built.group.userData.spot = prop.spot;
-      clickable.push(built.group);
+  // What glows, by kind: lamp shades, window glass, screens, flames.
+  let glows: { kind: string; glow: THREE.MeshStandardMaterial }[] = [];
+  // Lamps light the room after dark; a fire lights it always. At most a few, for the frame rate.
+  const warm: { light: THREE.PointLight; fire: boolean }[] = [];
+  let furniture = new THREE.Group();
+  // Things that just appeared, growing into place.
+  const appearing: { group: THREE.Group; started: number; scale: number }[] = [];
+
+  /** Build the room's shell and furniture; `fresh` names props to grow in, as just added. */
+  const furnish = (fresh: Set<string> = new Set()) => {
+    furniture = new THREE.Group();
+    scenery.length = 0;
+    clickable.length = 0;
+    glows = [];
+    const shell = buildShell(room);
+    furniture.add(shell);
+    scenery.push(shell);
+    const lights: { at: THREE.Vector3; fire: boolean }[] = [];
+    for (const prop of room.props) {
+      const built = buildProp(prop.kind, { color: prop.color, size: prop.size });
+      built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
+      built.group.rotation.y = rad(prop.facing);
+      const scale = prop.size ? 1 : (prop.scale ?? 1);
+      built.group.scale.setScalar(scale);
+      furniture.add(built.group);
+      scenery.push(built.group);
+      if (prop.spot) {
+        built.group.userData.spot = prop.spot;
+        clickable.push(built.group);
+      }
+      if (built.glow) glows.push({ kind: prop.kind, glow: built.glow });
+      if (prop.kind === "lamp")
+        lights.push({ at: new THREE.Vector3(prop.at[0], 1.45 * scale, prop.at[1]), fire: false });
+      if (prop.kind === "fireplace") {
+        const front = new THREE.Vector3(Math.sin(rad(prop.facing)), 0, Math.cos(rad(prop.facing))).multiplyScalar(0.45);
+        lights.push({ at: new THREE.Vector3(prop.at[0], 0.4, prop.at[1]).add(front), fire: true });
+      }
+      if (fresh.has(prop.id) && !opts.reducedMotion) {
+        built.group.scale.setScalar(scale * 0.01);
+        appearing.push({ group: built.group, started: performance.now(), scale });
+      }
     }
-    if (built.glow) glows[prop.kind] = built;
-    if (prop.kind === "lamp") lampAt = new THREE.Vector3(prop.at[0], 1.45, prop.at[1]);
-  }
+    scene.add(furniture);
+    for (const w of warm) scene.remove(w.light);
+    warm.length = 0;
+    for (const l of lights.slice(0, 4)) {
+      const light = new THREE.PointLight(l.fire ? 0xff9a50 : 0xffc98a, 0, 5, 1.5);
+      light.position.copy(l.at);
+      scene.add(light);
+      warm.push({ light, fire: l.fire });
+    }
+  };
+  furnish();
 
   // The body is a group around the model, so placing and turning it leaves
   // the model's own VRM 0.x turn alone.
@@ -162,23 +199,32 @@ export async function createStage(
   Object.assign(sun.shadow.camera, { left: -3.2, right: 3.2, top: 3.2, bottom: -3.2, near: 0.5, far: 16 });
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.02;
-  const lamp = new THREE.PointLight(0xffc98a, 0, 5, 1.5);
-  if (lampAt) lamp.position.copy(lampAt);
-  scene.add(sky, sun, lamp);
+  scene.add(sky, sun);
+  /** The shadows cover the whole room, however big it has been made. */
+  const fitShadows = () => {
+    const half = Math.max(room.width, room.depth) / 2 + 0.6;
+    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half });
+    sun.shadow.camera.updateProjectionMatrix();
+  };
+  fitShadows();
+  let lit: Lighting | undefined;
   const light = (l: Lighting) => {
+    lit = l;
     sky.color.setHex(l.sky.color);
     sky.groundColor.setHex(l.sky.ground);
     sky.intensity = l.sky.intensity;
     sun.color.setHex(l.sun.color);
     sun.intensity = l.sun.intensity;
-    lamp.intensity = l.lamp.on ? l.lamp.intensity : 0;
-    const shade = glows.lamp?.glow;
-    if (shade) shade.emissiveIntensity = l.lamp.on ? 0.9 : 0;
-    const glass = glows.window?.glow;
-    if (glass) {
-      glass.color.setHex(l.window.color);
-      glass.emissive.setHex(l.window.color);
-      glass.emissiveIntensity = l.window.glow;
+    for (const w of warm) w.light.intensity = w.fire ? (l.lamp.on ? 1.8 : 0.9) : l.lamp.on ? l.lamp.intensity : 0;
+    for (const { kind, glow } of glows) {
+      if (kind === "lamp") glow.emissiveIntensity = l.lamp.on ? 0.9 : 0;
+      else if (kind === "window") {
+        glow.color.setHex(l.window.color);
+        glow.emissive.setHex(l.window.color);
+        glow.emissiveIntensity = l.window.glow;
+      } else if (kind === "fireplace" || kind === "candle") glow.emissiveIntensity = 1.4;
+      else if (kind === "tv") glow.emissiveIntensity = 0.55;
+      else if (kind === "aquarium") glow.emissiveIntensity = l.lamp.on ? 0.5 : 0.15;
     }
   };
   const hourNow = () => opts.hour ?? new Date().getHours();
@@ -202,6 +248,8 @@ export async function createStage(
   );
   const stride = Math.max(0.15, hipsY * 1.1);
   const director = new Director(room, Math.random, !!opts.chooseIdle);
+  /** Where the spot it stands at was, so a moved couch takes it along. */
+  let currentAt: [number, number] | undefined = start?.at;
   let asking = false;
   /** The spot it is at, or walking to. */
   let current: string | undefined = start?.id;
@@ -219,6 +267,7 @@ export async function createStage(
     pending = undefined;
     walker.go(route(room, walker.busy ? undefined : current, id), rad(to.facing));
     current = id;
+    currentAt = to.at;
     return true;
   };
 
@@ -547,6 +596,17 @@ export async function createStage(
       camera.position.y + pose.gaze[1] * head,
       camera.position.z,
     );
+    for (const w of warm)
+      if (w.fire && lit)
+        w.light.intensity = (lit.lamp.on ? 1.8 : 0.9) * (0.85 + 0.15 * Math.sin(t * 9) * Math.sin(t * 3.7));
+    for (let i = appearing.length - 1; i >= 0; i--) {
+      const a = appearing[i];
+      const k = Math.min(1, (now - a.started) / 450);
+      // A little overshoot, so it pops in rather than inflates.
+      const e = 1 + 2.2 * (k - 1) ** 3 + 1.2 * (k - 1) ** 2;
+      a.group.scale.setScalar(a.scale * Math.max(0.01, e));
+      if (k >= 1) appearing.splice(i, 1);
+    }
     vrm.update(dt);
     renderer.render(scene, camera);
   });
@@ -564,6 +624,31 @@ export async function createStage(
     },
     walkTo: go,
     cue: handleCue,
+    setRoom(next) {
+      if (next === room) return;
+      const before = new Set(room.props.map((p) => p.id));
+      const resized = next.width !== room.width || next.depth !== room.depth || next.height !== room.height;
+      scene.remove(furniture);
+      disposeTree(furniture);
+      appearing.length = 0;
+      room = next;
+      furnish(new Set(next.props.filter((p) => !before.has(p.id)).map((p) => p.id)));
+      if (lit) light(lit);
+      fitShadows();
+      director.setRoom(room);
+      if (pending && !spotById(room, pending)) pending = undefined;
+      // Its spot went away, or moved with its furniture: go there again, or back to the start.
+      const spot = current ? spotById(room, current) : undefined;
+      if (!spot) {
+        current = undefined;
+        if (spotById(room, room.start)) go(room.start);
+      } else if (currentAt && Math.hypot(spot.at[0] - currentAt[0], spot.at[1] - currentAt[1]) > 0.05) {
+        // A walk from a spot to itself goes nowhere: from here, as if between spots.
+        current = undefined;
+        go(spot.id);
+      }
+      if (resized && !tween) moveCamera(framing(view));
+    },
     dispose() {
       disposed = true;
       clips?.dispose();

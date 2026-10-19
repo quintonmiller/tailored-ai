@@ -8,6 +8,9 @@
  * and when an agent moves it later, it says "the couch" and the stage works
  * out where that is. Each spot can come with something to do there.
  *
+ * The agent's own room comes from the server, as a `place` record it can
+ * change; the room below is what the page shows when the server has none.
+ *
  * Units are metres. +X is to the viewer's right, +Z toward the viewer, and
  * the back and left walls close the room. A `facing` of 0° looks toward the
  * viewer, 90° toward +X.
@@ -16,14 +19,33 @@
 export type PropKind =
   | "rug"
   | "couch"
-  | "lamp"
-  | "desk"
-  | "laptop"
+  | "armchair"
+  | "beanbag"
+  | "bed"
   | "chair"
+  | "desk"
+  | "table"
+  | "coffee_table"
+  | "side_table"
   | "bookshelf"
+  | "tv"
+  | "fireplace"
+  | "lamp"
   | "plant"
   | "window"
-  | "picture";
+  | "picture"
+  | "clock"
+  | "shelf"
+  | "laptop"
+  | "books"
+  | "vase"
+  | "small_plant"
+  | "mug"
+  | "candle"
+  | "aquarium"
+  | "block"
+  | "ball"
+  | "cylinder";
 
 export interface Prop {
   id: string;
@@ -37,6 +59,14 @@ export interface Prop {
   elevation?: number;
   /** The spot to walk to when someone clicks this. */
   spot?: string;
+  /** The prop it stands on. */
+  on?: string;
+  /** "#rrggbb" for its main part. */
+  color?: string;
+  /** Size relative to normal. */
+  scale?: number;
+  /** The basic shapes' width, height and depth. */
+  size?: [number, number, number];
 }
 
 /** What the avatar does once it gets to a spot. */
@@ -52,9 +82,14 @@ export interface Spot {
   activity?: Activity;
   /** For `sit`: where the seat is and how high, so the avatar settles onto it. */
   seat?: { at: [number, number]; height: number };
+  /** The prop this spot belongs to. */
+  item?: string;
 }
 
+export type Floor = "wood" | "carpet" | "tile" | "concrete";
+
 export interface Room {
+  name?: string;
   width: number;
   depth: number;
   height: number;
@@ -62,6 +97,10 @@ export interface Room {
   spots: Spot[];
   /** Where the avatar stands when the page opens. */
   start: string;
+  /** "#rrggbb". */
+  walls?: string;
+  floor?: Floor;
+  floorColor?: string;
 }
 
 export const DEFAULT_ROOM: Room = {
@@ -86,7 +125,7 @@ export const DEFAULT_ROOM: Room = {
       spot: "window",
     },
     { id: "bookshelf", name: "the bookshelf", kind: "bookshelf", at: [-1.9, 0.95], facing: 90, spot: "bookshelf" },
-    { id: "plant", name: "the plant", kind: "plant", at: [-1.78, -1.48], facing: 0 },
+    { id: "plant", name: "the plant", kind: "plant", at: [-1.86, -1.5], facing: 0 },
   ],
   spots: [
     { id: "middle", name: "the middle of the room", place: "the middle of the room", at: [0.15, 0.35], facing: 20 },
@@ -185,8 +224,15 @@ export function lookTarget(
       lamp: 1.4,
       bookshelf: 1.0,
       plant: 0.6,
+      tv: 0.85,
+      fireplace: 0.5,
+      clock: 0.18,
+      aquarium: 0.2,
+      bed: 0.45,
     };
-    return { at: [prop.at[0], (prop.elevation ?? 0) + (middle[prop.kind] ?? 0.4), prop.at[1]] };
+    const size = prop.size ? prop.size[1] / 2 : undefined;
+    const up = (size ?? middle[prop.kind] ?? 0.4) * (prop.scale ?? 1);
+    return { at: [prop.at[0], (prop.elevation ?? 0) + up, prop.at[1]] };
   }
   const spot = spotFor(room, target);
   return spot ? { at: [spot.at[0], 0.5, spot.at[1]] } : undefined;

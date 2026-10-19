@@ -112,12 +112,13 @@ collection published under CC0, such as 100Avatars. Many models, free ones
 included, carry licences that limit sharing the file, so keep yours in your
 own instance.
 
-The room is furnished: a couch, a desk with a laptop, a bookshelf, a window
-and a floor lamp. It is lit for the time of day: daylight through the window,
-the lamp on in the evening, the lamp alone at night. Drag to look around the
-room, or press **Close up** to frame the head and torso. The page remembers
-the choice. The furniture is built from simple shapes, so there are no files
-to download.
+The room starts out furnished: a couch, a desk with a laptop, a bookshelf, a
+window and a floor lamp. The agent can change it (see
+[A room the agent can change](#a-room-the-agent-can-change)). It is lit for the
+time of day: daylight through the window, the lamp on in the evening, the lamp
+alone at night. Drag to look around the room, or press **Close up** to frame
+the head and torso. The page remembers the choice. The furniture is built from
+simple shapes, so there are no files to download.
 
 The avatar moves around the room on its own. Between sessions it wanders:
 it sits on the couch, types at the desk, looks out of the window, browses
@@ -215,6 +216,56 @@ Paths work as they do under `live.avatar`. An agent that names a model but
 no animations plays the shared libraries, since any library fits any model.
 Its voice is set by `voice.voice`, as before.
 
+### A room the agent can change
+
+Each agent with a body has a room of its own, and it can furnish it. Ask for
+a reading chair by the window, and the chair appears on the page while the
+agent is still answering.
+
+The room is a [world-state](./world-state.md) record of type `place`, kept
+as `home:<agent>` in the agent's own scope. It is made from the starting room
+the first time anything asks for it. Like any record, every change says who
+made it, the history keeps every version, and the **State** page shows it.
+The chat page redraws the room as soon as the record changes, whoever changed
+it. Something new grows in, and a moved couch takes the avatar sitting on it
+along.
+
+The agent changes it with the `place` tool:
+
+| action | does |
+|---|---|
+| `look` | the room in words: its size and colours, each thing and where it is, the spots to go to, and what can be added |
+| `add` | a new thing: `kind`, and optionally `name`, `color`, `scale` (0.5 to 2), or `size` for a shape |
+| `move` | a thing to somewhere new, or turned where it stands with only `facing` |
+| `change` | a thing's `name`, `color`, `scale` or `size` |
+| `remove` | a thing, and whatever stands on it |
+| `room` | the room's `width`, `depth` and `height`, `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), and `name` |
+| `undo` | the last change, whoever made it |
+
+Where things go is said in words: `near` a thing or spot, on one `side` of it
+(left, right, front or behind, as you face it), against a `wall`, in a
+`corner`, or `on` a desk, table or shelf. The tool finds the nearest place
+that fits. Things never overlap, nothing is put where the avatar needs to
+stand, a tall bookcase won't go in front of a window, and only the back and
+left walls are walls: the front and right are open to the camera. Seats put
+near a TV or a fire turn to face it. When nothing fits, the tool says why, and
+the agent can move or remove something and try again. Exact `x` and `z`, in
+metres from the middle, work too.
+
+What can be added: seats (couch, armchair, beanbag, bed, chair), tables (desk,
+table, coffee table, side table), a bookshelf, TV, fireplace, lamp and plant,
+things for the walls (window, picture, clock, shelf), small things for a
+surface (laptop, books, vase of flowers, small plant, mug, candle, aquarium),
+and blocks, balls and cylinders of any size and colour. Seats, desks, the
+bookshelf, the TV, the fireplace and windows each bring a spot: add an
+armchair, and the agent can sit in it, and so can a click.
+
+Rooms come from the built-in `builtin:places` plugin. It does nothing unless
+some agent has a body. An agent with its own `tools:` list needs `place`
+in it. The page asks for the room at `GET /api/ext/builtin:places/:agent`
+(`default` for the default agent). Without the plugin, the page shows the
+starting room, and the agent can't change it.
+
 ## Cues: the agent moves its own body
 
 A page that shows the agent with a body says what that body can do when it
@@ -271,6 +322,7 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
+| `GET /api/ext/builtin:places/:agent` | the agent's room: `{type, id, version, place}`, made from the starting room on first use; `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/idle` | what the agent does with a quiet moment: `{agent?, body, here?, hour?}` → `{cues}`. `429` within 45 s of the last ask for that agent; `400` for a body that can't go in a prompt |

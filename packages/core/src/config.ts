@@ -778,6 +778,9 @@ export const DEFAULT_PLUGIN_MODULES = [
   // On by default and free when unused: it subscribes only to events some
   // agent actually names under `hooks.on`, so a config with none costs nothing.
   "builtin:config-hooks",
+  // Free when unused: with no avatar configured it registers nothing. With one,
+  // each agent's room becomes a `place` record the agent can change.
+  "builtin:places",
 ] as const;
 
 /**
