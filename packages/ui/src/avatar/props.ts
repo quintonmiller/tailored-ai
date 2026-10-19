@@ -154,8 +154,8 @@ export function buildShell(room: Room): THREE.Group {
 export interface BuiltProp {
   group: THREE.Group;
   glow?: THREE.MeshStandardMaterial;
-  /** A face the stage draws on: a task board's tasks. */
-  screen?: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture };
+  /** A face the stage draws on, a task board's tasks, and the mesh showing it, to tell where a click lands. */
+  screen?: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; face: THREE.Mesh };
 }
 
 /** How a prop looks beyond its kind: the colour of its main part, and the basic shapes' size. */
@@ -438,7 +438,7 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       mesh.position.set(0, 0.45, 0.022);
       g.add(mesh);
       box(g, 1.2, 0.03, 0.06, 0x9aa1ab, 0, 0.0, 0.03).castShadow = false;
-      return { group: g, screen: { canvas: face.canvas, texture: face.texture } };
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh } };
     }
     case "kiosk": {
       box(g, 0.56, 0.06, 0.46, 0x3a3f4b, 0, 0.03, 0);

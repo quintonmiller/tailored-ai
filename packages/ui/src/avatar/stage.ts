@@ -20,7 +20,7 @@
 import { type VRM, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { type BoardTask, drawBoard } from "./boards";
+import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
 import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
 import { Figure, loadModel } from "./figure";
@@ -228,8 +228,8 @@ export async function createStage(
     visitor?: boolean;
     /** The agent the visitor is standing next to, when it changes; undefined when none is. */
     onNear?: (agent: string | undefined) => void;
-    /** Something made to be used was clicked: a kiosk, a task board. Its action. */
-    onUse?: (action: string) => void;
+    /** Something made to be used was clicked: a kiosk, a task board. Its action, and on a board what was hit. */
+    onUse?: (action: string, on?: BoardSpot) => void;
     /** A visitor is within earshot of an agent as it starts saying something: who, what, and how near (0–1, 1 beside it). */
     onLine?: (agent: string, text: string, nearness: number) => void;
   } = {},
@@ -576,16 +576,24 @@ export async function createStage(
     }
     return undefined;
   };
-  /** What the thing under the pointer does when clicked, if it is made to be used. */
-  const actionAt = (e: PointerEvent): string | undefined => {
+  /**
+   * What the thing under the pointer does when clicked, if it is made to be
+   * used; on a board's face, the note or column the pointer is on as well.
+   */
+  const actionAt = (e: PointerEvent): { action: string; on?: BoardSpot } | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
       camera,
     );
     for (const hit of ray.intersectObjects(clickable, true)) {
-      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent)
-        if (typeof o.userData.action === "string") return o.userData.action;
+      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
+        if (typeof o.userData.action !== "string") continue;
+        const board = boards.find((b) => b.screen.face === hit.object);
+        if (!board || !hit.uv) return { action: o.userData.action };
+        const { width, height } = board.screen.canvas;
+        return { action: o.userData.action, on: boardAtUv(width, height, tasks, hit.uv.x, hit.uv.y) };
+      }
     }
     return undefined;
   };
@@ -608,7 +616,8 @@ export async function createStage(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
       camera,
     );
-    const bodies = new Map<THREE.Object3D, string>([[me.body, self]]);
+    // A visitor's own body is nobody's to open a menu on.
+    const bodies = new Map<THREE.Object3D, string>(opts.visitor ? [] : [[me.body, self]]);
     for (const [agent, c] of companions) bodies.set(c.body, agent);
     for (const hit of ray.intersectObjects([...bodies.keys()], true)) {
       for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
@@ -632,9 +641,9 @@ export async function createStage(
       opts.onPick?.(who, { x: e.clientX, y: e.clientY });
       return;
     }
-    const action = opts.onUse ? actionAt(e) : undefined;
-    if (action) {
-      opts.onUse?.(action);
+    const used = opts.onUse ? actionAt(e) : undefined;
+    if (used) {
+      opts.onUse?.(used.action, used.on);
       return;
     }
     const id = spotAt(e);
@@ -648,11 +657,11 @@ export async function createStage(
     if (downAt || e.pointerType !== "mouse") return;
     canvas.style.cursor = (opts.onPick && agentAt(e)) || spotAt(e) || (opts.onUse && actionAt(e)) ? "pointer" : "";
   };
-  // A visitor's keys: held keys move them every frame, unless they are typing.
+  // A visitor's keys: held keys move them every frame, unless they are typing or working in a panel over the stage.
   let travel: Travel = "walk";
   const held = new Set<string>();
   const typing = (e: KeyboardEvent) =>
-    (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
+    (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']");
   const onKeyDown = (e: KeyboardEvent) => {
     const run = RUN_KEYS.has(e.code);
     if (!opts.visitor || !(run || e.code in MOVE_KEYS) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;

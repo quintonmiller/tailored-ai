@@ -94,7 +94,10 @@ export function WorldMap({
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Claimed, so the chat page doesn't take the same Escape as stopping a reply.
+      e.preventDefault();
+      onClose();
     };
     window.addEventListener("keydown", key);
     box.current?.querySelector<HTMLInputElement>("input")?.focus();

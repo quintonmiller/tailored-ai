@@ -1,5 +1,5 @@
 import { type MutableRefObject, type ReactNode, useEffect, useRef, useState } from "react";
-import type { BoardTask } from "./boards";
+import type { BoardSpot, BoardTask } from "./boards";
 import type { Cue } from "./cues";
 import type { AgentActivity } from "./doing";
 import type { BodyState } from "./motion";
@@ -108,8 +108,8 @@ export function Avatar({
   overlay?: ReactNode;
   /** What the task boards on the walls show. */
   tasks?: BoardTask[];
-  /** A kiosk or a board was clicked: what it does. */
-  onUse?: (action: string) => void;
+  /** A kiosk or a board was clicked: what it does, and on a board the note or column clicked. */
+  onUse?: (action: string, on?: BoardSpot) => void;
   /** A visitor is near an agent as it starts saying something, nearness 0–1. */
   onLine?: (agent: string, text: string, nearness: number) => void;
 }) {
@@ -201,7 +201,7 @@ export function Avatar({
                 onLine: (who: string, text: string, nearness: number) => lineRef.current?.(who, text, nearness),
               }
             : {}),
-          onUse: (action: string) => onUseRef.current?.(action),
+          onUse: (action: string, on?: BoardSpot) => onUseRef.current?.(action, on),
           ...(picking
             ? {
                 onPick: (who: string, at: { x: number; y: number }) => {
@@ -357,7 +357,10 @@ function AgentMenu({
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Claimed, so the chat page doesn't take the same Escape as stopping a reply.
+      e.preventDefault();
+      onClose();
     };
     const away = (e: PointerEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) onClose();

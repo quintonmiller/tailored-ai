@@ -459,3 +459,85 @@ describe("talking to another agent", () => {
     expect(chatPosts.at(-1)).toMatchObject({ sessionKey: "web:planner:100", agent: "planner" });
   });
 });
+
+describe("the chat beside a panel in the world", () => {
+  /** A scene with a task, list or agent panel open in the chat's column, closed through `closePanel`. */
+  function sceneWithPanel(closed: string[]) {
+    return {
+      ...sceneAt(null),
+      worldPanel: true,
+      sidePanel: true,
+      chatCovered: true,
+      closePanel: () => closed.push("closed"),
+    };
+  }
+
+  it("leaves a reply on its way alone when Escape closes a panel", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    fakeScene = () => sceneWithPanel([]);
+    await render();
+    await send("Hey!");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })));
+    await settle();
+    expect(shown()).not.toContain("[Interrupted]");
+    await act(async () => release());
+    await settle();
+    expect(shown()).toContain("Hello!");
+  });
+
+  it("leaves it alone too when the panel heard Escape first and has already closed", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    // A panel opened before the message was sent hears the key first, and may be gone by the time the page does.
+    const claim = (e: KeyboardEvent) => {
+      if (e.key === "Escape") e.preventDefault();
+    };
+    window.addEventListener("keydown", claim);
+    try {
+      fakeScene = () => sceneAt(null);
+      await render();
+      await send("Hey!");
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })));
+      await settle();
+      expect(shown()).not.toContain("[Interrupted]");
+    } finally {
+      window.removeEventListener("keydown", claim);
+      await act(async () => release());
+      await settle();
+    }
+  });
+
+  it("still stops a reply on Escape with nothing open over the scene", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    fakeScene = () => sceneAt(null);
+    await render();
+    await send("Hey!");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })));
+    expect(shown()).toContain("[Interrupted]");
+    await act(async () => release());
+    await settle();
+  });
+
+  it("brings the chat back from the toolbar's Chat button, closing the panel that had its place", async () => {
+    const closed: string[] = [];
+    fakeScene = () => sceneWithPanel(closed);
+    await render();
+    const button = [...container.querySelectorAll(".chat-toolbar-btn")].find(
+      (b) => b.textContent === "Chat",
+    ) as HTMLButtonElement;
+    // The chat is out of sight, so the button doesn't say it is showing.
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => button.click());
+    expect(closed).toEqual(["closed"]);
+    // And the chat is to be shown once it closes, not hidden as a press of a showing chat would.
+    expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(false);
+  });
+});

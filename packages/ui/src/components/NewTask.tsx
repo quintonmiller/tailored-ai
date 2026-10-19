@@ -3,9 +3,22 @@ import { createProjectTask } from "../api";
 
 /**
  * Make a task from the 3D room: a title, what it is, and who should do it.
- * Assigned to an agent, it starts on it.
+ * Assigned to an agent, it starts on it when the task watcher is on, and the
+ * form says which before you make it.
  */
-export function NewTask({ agents, onClose }: { agents: string[]; onClose: () => void }) {
+export function NewTask({
+  agents,
+  wakes,
+  onMade,
+  onClose,
+}: {
+  agents: string[];
+  /** Whether a new task wakes the agent it is given to; undefined until the server has said. */
+  wakes?: boolean;
+  /** A task was made: the boards show it at once. */
+  onMade?: () => void;
+  onClose: () => void;
+}) {
   const [title, setTitle] = useState("");
   const [details, setDetails] = useState("");
   const [assignee, setAssignee] = useState("");
@@ -15,7 +28,10 @@ export function NewTask({ agents, onClose }: { agents: string[]; onClose: () => 
   const box = useRef<HTMLFormElement>(null);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Claimed, so the chat page doesn't take the same Escape as stopping a reply.
+      e.preventDefault();
+      onClose();
     };
     window.addEventListener("keydown", key);
     box.current?.querySelector("input")?.focus();
@@ -25,6 +41,7 @@ export function NewTask({ agents, onClose }: { agents: string[]; onClose: () => 
     <form
       ref={box}
       className="new-task"
+      role="dialog"
       aria-label="New task"
       onSubmit={async (e) => {
         e.preventDefault();
@@ -40,6 +57,7 @@ export function NewTask({ agents, onClose }: { agents: string[]; onClose: () => 
           setMade(assignee ? `Made "${title.trim()}" for ${assignee}.` : `Made "${title.trim()}".`);
           setTitle("");
           setDetails("");
+          onMade?.();
         } catch (err) {
           setProblem(err instanceof Error ? err.message : String(err));
         } finally {
@@ -72,7 +90,13 @@ export function NewTask({ agents, onClose }: { agents: string[]; onClose: () => 
           ))}
         </select>
       </label>
-      {assignee && <p className="new-task-note">{assignee} starts on it as soon as it's made.</p>}
+      {assignee && wakes !== undefined && (
+        <p className="new-task-note">
+          {wakes
+            ? `${assignee} starts on it as soon as it's made.`
+            : `The task watcher is off, so ${assignee} isn't woken. The task waits on its list.`}
+        </p>
+      )}
       <button type="submit" className="talk-tool" disabled={busy || !title.trim()}>
         {busy ? "Making…" : "Make task"}
       </button>

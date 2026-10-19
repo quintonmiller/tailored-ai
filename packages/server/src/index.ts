@@ -1777,6 +1777,14 @@ export function createServer(opts: ServerOptions) {
     return c.json(comment, 201);
   });
 
+  // Whether a change to a task wakes its agent, as the watcher runs now. The
+  // config section route echoes the file, which leaves out the defaults, so a
+  // page can't tell from it; this is what lets one say so before you assign.
+  app.get("/api/task-watcher", (c) => {
+    const { enabled, triggers } = runtime.getConfig().taskWatcher;
+    return c.json({ enabled: !!opts.taskWatcher && enabled, triggers });
+  });
+
   // --- Collections (personal tracker: steelbooks, tiki mugs, restaurants, etc.) ---
 
   app.get("/api/collections", (c) => {

@@ -8690,7 +8690,6 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 
 /* Making a task from the room. */
 .new-task { position: absolute; top: 44px; left: 8px; z-index: 6; width: min(340px, calc(100% - 16px)); display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); }
-.talk-stage.fill .new-task { top: 134px; left: 16px; }
 .new-task-head { display: flex; align-items: center; justify-content: space-between; }
 .new-task-head strong { font-size: 13px; color: var(--text); }
 .new-task label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); }
@@ -8711,6 +8710,73 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .agent-menu button:disabled { opacity: 0.5; cursor: default; }
 .agent-menu-problem { margin: 4px 8px; font-size: 12px; color: #f08a4b; }
 .talk-view button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* A panel over the 3D world: a task, the task list, an agent, a new room. One at a time; it scrolls inside, the scene runs on behind. */
+.world-panel { position: absolute; top: 44px; left: 8px; z-index: 6; width: min(400px, calc(100% - 16px)); max-height: calc(100% - 52px); display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); color: var(--text); }
+.world-panel-head { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 2px 8px; padding: 10px 10px 8px 14px; border-bottom: 1px solid var(--border); }
+.world-panel-head > :not(.world-panel-close) { grid-column: 1; }
+.world-panel-close { grid-column: 2; grid-row: 1; }
+.world-panel-back { justify-self: start; font-family: var(--font); font-size: 12px; padding: 2px 0; background: none; border: 0; color: var(--accent); cursor: pointer; }
+.world-panel-back:hover, .world-panel-back:focus-visible { text-decoration: underline; outline: none; }
+.world-panel-kicker { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+.world-panel-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--text); overflow-wrap: anywhere; }
+.world-panel-body { min-height: 0; overflow-y: auto; padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 12px; }
+.world-panel-foot { padding: 8px 14px; border-top: 1px solid var(--border); font-size: 12px; }
+.world-panel-link { color: var(--text-dim); text-decoration: underline; text-underline-offset: 2px; }
+.world-panel-link:hover, .world-panel-link:focus-visible { color: var(--accent); outline: none; }
+.world-panel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.world-panel-quiet { margin: 0; font-size: 12px; line-height: 1.45; color: var(--text-dim); }
+.world-panel-text { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text); }
+.talk-tool.world-panel-quiet-btn { color: var(--text-dim); }
+.world-panel-said { margin: -4px 0 0; }
+.world-panel-inline { padding: 0; font: inherit; text-align: left; color: var(--accent); background: none; border: 0; cursor: pointer; }
+.world-panel-inline:hover, .world-panel-inline:focus-visible { text-decoration: underline; outline: none; }
+.world-panel input, .world-panel textarea, .world-panel select { font-family: var(--font); font-size: 12px; padding: 6px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); }
+.world-panel input:focus-visible, .world-panel textarea:focus-visible, .world-panel select:focus-visible { border-color: var(--accent); outline: none; }
+.world-panel textarea { resize: vertical; }
+/* What a task or an agent is, as label and value side by side. */
+.world-facts { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; font-size: 12px; line-height: 1.45; }
+.world-facts dt { color: var(--text-dim); }
+.world-facts dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+/* A row of choices, one pressed: a task's status, the list's filters. */
+.world-task-status, .world-list-filters { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.world-task-status button, .world-list-filters button { font-family: var(--font); font-size: 12px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); color: var(--text-dim); cursor: pointer; }
+.world-task-status button:hover, .world-task-status button:focus-visible, .world-list-filters button:hover, .world-list-filters button:focus-visible { color: var(--text); border-color: var(--text-dim); outline: none; }
+.world-task-status button[aria-pressed="true"], .world-list-filters button[aria-pressed="true"] { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--bg)); }
+.world-task-status:disabled button { opacity: 0.6; cursor: default; }
+.world-task-words { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.world-task-text { margin: 0; max-height: 14em; overflow-y: auto; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.world-task-edit { display: flex; flex-direction: column; gap: 8px; }
+.world-task-edit label, .world-task-assign label, .world-list-who { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); }
+.world-task-assign { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.world-task-assign label { flex: 1; min-width: 150px; }
+.world-task-assign .new-task-note { flex-basis: 100%; }
+.world-task-comments h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.world-task-comments ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.world-task-comment-head { font-size: 11px; color: var(--text-dim); }
+.world-task-comment-head strong { font-weight: 600; color: var(--text); }
+.world-task-comments p { margin: 2px 0 0; font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* The task list: who and how filtered, then a row per task, newest first. */
+.world-list-tools { justify-content: space-between; }
+.world-list-who { flex-direction: row; align-items: center; gap: 6px; }
+.world-list-who select { max-width: 170px; }
+.world-list-count { margin-left: 6px; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+.world-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.world-list-row { width: 100%; display: grid; grid-template-columns: 8px 1fr; align-items: center; gap: 2px 10px; padding: 8px 10px; text-align: left; font-family: var(--font); background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); cursor: pointer; }
+.world-list-row:hover, .world-list-row:focus-visible { border-color: var(--accent); outline: none; }
+.world-list-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--text-dim); }
+.world-list-title { font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
+.world-list-meta { grid-column: 2; font-size: 11px; color: var(--text-dim); }
+/* An agent's card. */
+.world-agent-name { display: inline-flex; align-items: center; gap: 8px; }
+.world-agent-dot { flex: none; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 70%, transparent); }
+.world-agent-doing.doing-waiting { color: #f5c542; }
+.world-agent-doing.doing-stuck { color: #f08a4b; }
+.world-agent-said { font-style: italic; }
+.world-agent-when, .world-agent-run { color: var(--text-dim); }
+.world-agent-actions { padding-top: 10px; border-top: 1px solid var(--border); }
+.world-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5; color: var(--text); }
+.world-steps li::marker { color: var(--text-dim); }
 .talk-avatar-problem { font-size: 12px; color: var(--text-dim); margin: 0; }
 
 /* The agent's scene behind the chat: the room fills the page, the conversation is a panel over it. */
@@ -8724,6 +8790,17 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 /* Behind a chat its header covers the top: the tools go under the view toggle, the map under them. */
 .talk-stage.fill .talk-tools { top: 96px; left: 16px; }
 .talk-stage.fill .world-map { top: 134px; left: 16px; bottom: 16px; }
+/* Behind a chat, a panel takes the chat's own column, and the chat steps aside until it closes: the scene stays in view. */
+.talk-stage.fill .world-panel,
+.talk-stage.fill .new-task { top: var(--chat-toolbar-h, 45px); right: 0; bottom: 0; left: auto; width: min(440px, 100%); max-height: none; overflow-y: auto; border-width: 0 0 0 1px; border-radius: 0; box-shadow: none; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(10px); }
+.talk-stage.fill .world-panel { overflow-y: visible; }
+.talk-stage.fill .new-task { padding: 12px 14px 14px; }
+.chat-side-open > .chat-messages,
+.chat-side-open > .chat-with,
+.chat-side-open > .chat-room-note,
+.chat-side-open > .chat-input-bar,
+.chat-side-open > .chat-voice-error,
+.chat-side-open > .attachment-tray { visibility: hidden; }
 .talk-stage.fill .talk-keys { left: 16px; bottom: 16px; transform: none; }
 /* A photo for the server's camera: the stage alone, filling the frame, on a soft backdrop. */
 .snapshot-stage { position: fixed; inset: 0; background: radial-gradient(ellipse at 50% 38%, #2b3048 0%, #171a26 70%); color: var(--text); font-family: var(--font); }
@@ -8789,6 +8866,14 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   /* On a narrow screen the header sits on the panel, at the bottom with it. */
   .chat-with-stage > .chat-with { margin-top: auto; border-top: 1px solid var(--border); }
   .chat-with-stage > .chat-with + .chat-messages { margin-top: 0; border-top: 0; }
+  /* Something open over the scene has the screen the chat would take: the chat steps aside, the bar to type stays. */
+  .chat-world-open > .chat-messages,
+  .chat-world-open > .chat-with,
+  .chat-world-open > .chat-room-note { visibility: hidden; }
+  /* On a phone, a sheet over the lower part, where the chat sits: the scene and its tools stay in view above it. */
+  .talk-stage.fill .world-panel,
+  .talk-stage.fill .new-task { top: 40%; width: 100%; border-width: 1px 0 0; border-radius: 12px 12px 0 0; }
+  .talk-stage.fill .world-map { top: 52px; left: 8px; right: 8px; bottom: 76px; width: auto; }
 }
 .chat-voice-error { font-size: 12px; color: var(--amber); padding: 6px 24px; }
 
