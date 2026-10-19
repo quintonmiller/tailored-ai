@@ -42,11 +42,15 @@
  */
 
 import { isStallStop, stallReasonOf } from "../agent/loop.js";
+import { isInTimeWindow } from "../db/autopilot-queries.js";
 import { type ExploratoryState, getExploratoryState } from "../db/exploratory-queries.js";
 import type { EventBus, RuntimeEventPayload, Subscription } from "../events.js";
+import { tickIntervalMs } from "../exploratory/worker.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import { fromDbTime, ScheduleStore } from "../schedules/store.js";
 import type { StateCaller, StateService } from "../state/service.js";
+import { runtimeTimeProvider, systemTimeZone } from "../time/provider.js";
+import { zonedParts } from "../time/zoned.js";
 import { anyAvatar } from "./places.js";
 
 export const ACTIVITY_TYPE = "activity";
@@ -140,8 +144,41 @@ function talkingTo(name: string | undefined, what: string, look?: string): Look 
   return name ? { what: `${what} ${name}`, with: name, ...(look ? { look } : {}) } : { what: "messaging someone" };
 }
 
+/** A room a tool call names, as "#name": by its name when the call gave its `<backend>:<id>`. */
+type RoomWords = (room: unknown) => string | undefined;
+
+/**
+ * A `room` call, by what it does: talking to one agent, saying something in
+ * a room, or reading one and keeping quiet. Only saying something is said as
+ * speaking, so an agent that read a room and passed isn't remembered as
+ * having talked there.
+ */
+function roomLook(a: Record<string, unknown>, room: RoomWords): Look {
+  const where = room(a.room);
+  switch (a.action) {
+    case "dm":
+      return talkingTo(words(a.agent ?? a.to ?? a.member), "talking to");
+    case "post":
+      return { what: where ? `posting in ${where}` : "posting in a room", look: "phone" };
+    case "update":
+      return { what: where ? `editing a post in ${where}` : "editing a post", look: "phone" };
+    case "react":
+      return { what: where ? `reacting in ${where}` : "reacting in a room", look: "phone" };
+    case "read":
+    case "pass":
+      return {
+        what: where ? `reading ${where}` : a.action === "read" ? "reading its rooms" : "reading a room",
+        look: "phone",
+      };
+    case "create":
+      return { what: "opening a room" };
+    default:
+      return { what: "looking after rooms" };
+  }
+}
+
 /** The built-in tools, and the plugins' that ship here. A tool not listed is "using <tool>". */
-const LOOKS: Record<string, (args: Record<string, unknown>) => Look> = {
+const LOOKS: Record<string, (args: Record<string, unknown>, room: RoomWords) => Look> = {
   web_search: (a) => ({ what: "searching the web", look: "magnifier", detail: words(a.query) }),
   web_fetch: (a) => ({ what: "reading a page", look: "tablet", detail: host(a.url) }),
   browser: () => ({ what: "browsing", look: "tablet" }),
@@ -169,10 +206,7 @@ const LOOKS: Record<string, (args: Record<string, unknown>) => Look> = {
   notify_owner: () => ({ what: "messaging you", look: "phone" }),
   speak: () => ({ what: "recording", look: "microphone" }),
   delegate: (a) => talkingTo(words(a.agent), "handing work to", "folder"),
-  room: (a) =>
-    a.action === "dm"
-      ? talkingTo(words(a.agent ?? a.to ?? a.member), "talking to")
-      : { what: "posting in a room", look: "phone", detail: words(a.room) },
+  room: roomLook,
   place: (a) =>
     a.action === "photo"
       ? { what: String(a.view).toLowerCase() === "selfie" ? "taking a selfie" : "taking a photo", look: "camera" }
@@ -192,7 +226,7 @@ export interface ActivityOptions {
   asleep: (agent: string) => string | { why: string; until?: string } | null;
   /** When an agent next wakes on its own, as an ISO time; null when nothing will wake it. */
   next?: (agent: string) => string | null;
-  /** A room's name, by its `<backend>:<id>`, for saying where an agent talked. */
+  /** A room's name, by its `<backend>:<id>`, for saying where an agent talked or read. */
   roomName?: (ref: string) => string | undefined;
   /** Deployment overrides: `tool` or `tool.action` → how it looks. */
   tools?: Record<string, Partial<Look>>;
@@ -220,6 +254,10 @@ interface Tracked {
   room?: string;
   /** A tool was used in the turn it is in. */
   used?: boolean;
+  /** It said something in a room with the room tool in the turn it is in. */
+  posted?: boolean;
+  /** The room a turn without a tool was for, until the room says whether it spoke there. */
+  heard?: string;
   /** The last thing it did. */
   last?: LastDone;
 }
@@ -256,10 +294,11 @@ export class ActivityTracker {
         this.change(nameOf(e.agentName), (t) => (t.asked = { what: "needs you", detail: words(e.message) })),
       ),
       on.on("agent.stalled", (e) => this.change(nameOf(e.agentName), (t) => (t.stuck = stuckWords(e.stallReason)))),
-      // The room a turn is for, so a turn that only talks there can say so after.
+      // The room a turn is for, so a turn that uses no tool can say after whether it spoke there or only read it.
       on.on("room.woke", (e) => {
         this.track(nameOf(e.agent)).room = e.roomRef;
       }),
+      on.on("room.turn_ended", (e) => this.change(nameOf(e.agent), (t) => this.roomTurnEnded(t, e))),
       on.on("agents.pause_changed", () => this.refresh()),
     );
     if (opts.speech !== false) {
@@ -386,6 +425,8 @@ export class ActivityTracker {
         t.asked = undefined;
         t.stuck = undefined;
         t.used = false;
+        t.posted = false;
+        t.heard = undefined;
         t.from = this.incoming.get(agent);
         this.incoming.delete(agent);
       }
@@ -397,8 +438,12 @@ export class ActivityTracker {
     this.change(nameOf(e.agent), (t) => {
       t.turns.delete(e.sessionId);
       if (t.turns.size > 0) return;
-      // A turn that used no tool still did something: it talked, to whoever started it, in a room, or to you.
-      if (!t.used) t.last = { what: this.talked(t), at: this.now().toISOString() };
+      // A turn that used no tool still did something: it talked to whoever started it, or to you. One a room woke
+      // waits for the room to say whether it spoke there (`roomTurnEnded`).
+      if (!t.used) {
+        if (t.room && !t.from) t.heard = t.room;
+        else t.last = { what: t.from ? `talking to ${t.from}` : "replying", at: this.now().toISOString() };
+      }
       t.tool = undefined;
       t.from = undefined;
       t.room = undefined;
@@ -415,6 +460,7 @@ export class ActivityTracker {
     this.change(agent, (t) => {
       t.tool = { id: p.toolUseId, name: p.tool, look };
       t.used = true;
+      if (p.tool === "room" && (p.args.action === "post" || p.args.action === "update")) t.posted = true;
       t.last = { what: look.what, ...(look.look ? { look: look.look } : {}), at: this.now().toISOString() };
     });
     if (p.tool === "ask_user") this.track(agent).asked = { what: "has a question for you", detail: look.detail };
@@ -435,20 +481,38 @@ export class ActivityTracker {
     if (look.with && this.incoming.get(look.with) === agent) this.incoming.delete(look.with);
   }
 
-  /** What a turn without a tool was: talking to the agent that started it, in the room that woke it, or replying. */
-  private talked(t: Tracked): string {
-    if (t.from) return `talking to ${t.from}`;
-    if (t.room) {
-      const name = this.opts.roomName?.(t.room);
-      return name ? `talking in #${name}` : "talking in a room";
-    }
-    return "replying";
+  /**
+   * A room turn over, and whether anything reached the room. A reply goes
+   * out as the turn ends, after any tool, so it is the last thing the agent
+   * did, unless the room tool already said it. A turn that used no tool and
+   * said nothing only read the room.
+   */
+  private roomTurnEnded(t: Tracked, e: RuntimeEventPayload<"room.turn_ended">): void {
+    const where = this.where(e.rooms.length === 1 ? e.rooms[0] : t.heard);
+    const at = this.now().toISOString();
+    if (e.posted && !t.posted) t.last = { what: where ? `talking in ${where}` : "talking in a room", at };
+    else if (!e.posted && t.heard) t.last = { what: where ? `reading ${where}` : "reading a room", at };
+    t.heard = undefined;
+    t.posted = false;
   }
+
+  /** A room as "#name", by its name when given its `<backend>:<id>`. */
+  private readonly where: RoomWords = (room) => {
+    const given = words(room)?.replace(/^#/, "");
+    if (!given) return undefined;
+    let name: string | undefined;
+    try {
+      name = words(this.opts.roomName?.(given));
+    } catch {
+      // A store that can't say keeps the name the call gave.
+    }
+    return `#${name ?? given}`;
+  };
 
   private lookOf(tool: string, args: Record<string, unknown>): Look {
     const action = typeof args.action === "string" ? args.action : "";
     const own = (action && this.opts.tools?.[`${tool}.${action}`]) || this.opts.tools?.[tool];
-    const builtIn = LOOKS[tool]?.(args) ?? { what: `using ${tool}` };
+    const builtIn = LOOKS[tool]?.(args, this.where) ?? { what: `using ${tool}` };
     return own ? { ...builtIn, ...own } : builtIn;
   }
 
@@ -559,30 +623,67 @@ export function whyAsleep(at: {
   return null;
 }
 
+/** How an agent that runs on its own keeps time, for {@link nextWake}. */
+export interface OwnTurns {
+  /** Its last turn; null before its first. */
+  last: string | null;
+  /** The interval it is on. */
+  intervalMs: number;
+  /** The hours it keeps to, as HH:MM in `timeZone`: a turn due outside them waits for them to start. */
+  window?: { start: string; end: string };
+  timeZone?: string;
+  /** It has had all the turns it may today: none before this. */
+  notBefore?: string;
+}
+
 /**
  * When an agent next wakes on its own, as an ISO time: the soonest wake it
- * booked, or its next turn when it runs on its own (its last turn plus the
- * interval it is on, the way the exploratory worker counts), whichever comes
- * first. Never before `now`: a turn that is due waits for the worker's next
- * look. Null when nothing will wake it. A time window the turns keep to isn't
- * counted, so the time is "about".
+ * booked, or its next turn when it runs on its own, whichever comes first.
+ * Null when nothing will wake it. A time that has passed stays as it was
+ * rather than becoming "now": the plugin asks again every few seconds, and a
+ * time that moved each time would be a new record each time.
  */
-export function nextWake(at: {
-  booked: string | null;
-  own: { last: string | null; intervalMs: number | null } | null;
-  now: Date;
-}): string | null {
+export function nextWake(at: { booked: string | null; own: OwnTurns | null; now: Date }): string | null {
   const times: number[] = [];
   const booked = at.booked ? Date.parse(at.booked) : Number.NaN;
   if (Number.isFinite(booked)) times.push(booked);
-  if (at.own) {
-    const last = at.own.last ? Date.parse(at.own.last) : Number.NaN;
-    // Never run yet: due now. Run before, with no interval to go on: nothing to say.
-    if (!Number.isFinite(last)) times.push(at.now.getTime());
-    else if (at.own.intervalMs && at.own.intervalMs > 0) times.push(last + at.own.intervalMs);
-  }
-  if (!times.length) return null;
-  return new Date(Math.max(at.now.getTime(), Math.min(...times))).toISOString();
+  const own = at.own ? ownTurn(at.own, at.now.getTime()) : undefined;
+  if (own !== undefined) times.push(own);
+  return times.length ? new Date(Math.min(...times)).toISOString() : null;
+}
+
+/**
+ * Its next turn, the way the exploratory worker decides: its last turn plus
+ * the interval it is on, once the day's limit lifts, within its hours. Due
+ * outside its hours, or overdue while they are over, it is when they next
+ * start. Nothing before its first turn, which the worker takes at its next
+ * look, and nothing when its hours never come.
+ */
+function ownTurn(own: OwnTurns, now: number): number | undefined {
+  const last = own.last ? Date.parse(own.last) : Number.NaN;
+  if (!Number.isFinite(last) || !(own.intervalMs > 0)) return undefined;
+  const lifts = own.notBefore ? Date.parse(own.notBefore) : Number.NaN;
+  const due = Math.max(last + own.intervalMs, Number.isFinite(lifts) ? lifts : 0);
+  if (!own.window) return due;
+  const { start, end } = own.window;
+  const opens = minuteOfDay(start);
+  if (opens === undefined || minuteOfDay(end) === undefined || opens === minuteOfDay(end)) return undefined;
+  // The worker takes a turn at its first look once it is due: then, or now if that has passed.
+  const from = Math.max(due, now);
+  if (isInTimeWindow(start, end, new Date(from), own.timeZone)) return due;
+  // The next time the clock reads the window's start, to the minute: the same answer for every look until then.
+  const local = zonedParts(new Date(from), own.timeZone ?? systemTimeZone());
+  const wait = (opens - (local.hour * 60 + local.minute) + 1440) % 1440 || 1440;
+  return Math.floor(from / 60_000) * 60_000 + wait * 60_000;
+}
+
+/** An HH:MM time as minutes into the day, the way the worker reads its window; undefined when it isn't one. */
+function minuteOfDay(hm: string): number | undefined {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hm.trim());
+  if (!m) return undefined;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  return h <= 23 && min <= 59 ? h * 60 + min : undefined;
 }
 
 export const SPEECH_SCHEMA = {
@@ -642,6 +743,8 @@ const plugin: Plugin = (ctx) => {
       return why === "paused" && own?.paused_until ? { why, until: own.paused_until } : why;
     },
     next: (agent) => {
+      // Paused, nobody wakes on their own: booked wakes and own turns alike wait for the pause to lift.
+      if (runtime.isAgentsPaused("autonomous")) return null;
       let booked: string | null = null;
       try {
         const soonest = schedules.listForAgent(agent)[0];
@@ -651,17 +754,24 @@ const plugin: Plugin = (ctx) => {
       }
       const online = onlineOf(agent);
       const now = new Date();
-      let own: { last: string | null; intervalMs: number | null } | null = null;
-      if (online?.enabled && runtime.getConfig().exploratory?.enabled) {
-        const state = getExploratoryState(runtime.db, agent);
-        const paused = !!state?.paused_until && new Date(state.paused_until) > now;
-        if (state?.enabled !== false && !paused) {
-          const minutes = online.cadence?.interval_minutes;
-          own = {
-            last: state?.last_tick_at ?? null,
-            intervalMs: state?.current_interval_ms || (minutes && minutes > 0 ? minutes * 60_000 : null),
-          };
-        }
+      let own: OwnTurns | null = null;
+      const state =
+        online?.enabled && runtime.getConfig().exploratory?.enabled && getExploratoryState(runtime.db, agent);
+      if (online && state && state.enabled && !(state.paused_until && new Date(state.paused_until) > now)) {
+        // Its turns for the day are counted against the store's date, in UTC: once they run out, none till the next.
+        const today = now.toISOString().slice(0, 10);
+        const cap = online.budgets?.stop_after_runs_per_day;
+        const spent = cap !== undefined && state.tokens_today_resets_at === today && state.runs_today >= cap;
+        own = {
+          last: state.last_tick_at,
+          intervalMs: tickIntervalMs(state, online),
+          ...(online.cadence?.window
+            ? { window: online.cadence.window, timeZone: runtimeTimeProvider(runtime).timeZone() }
+            : {}),
+          ...(spent
+            ? { notBefore: `${new Date(Date.parse(today) + 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z` }
+            : {}),
+        };
       }
       return nextWake({ booked, own, now });
     },

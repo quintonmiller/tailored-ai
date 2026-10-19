@@ -6,7 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivity } from "../avatar/doing";
-import { busyAgents, busyMark, type MapPlace, WorldMap } from "./WorldMap";
+import { busyAgents, busyMark, type MapPlace, markWords, WorldMap } from "./WorldMap";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -199,7 +199,8 @@ describe("WorldMap", () => {
       "writer's room",
     ]);
     expect(homes[0].classList.contains("busy")).toBe(true);
-    expect(homes[0].querySelector(".world-map-mark")?.textContent).toBe("stuck · 2");
+    // One is stuck and one working: the mark says so, rather than two stuck.
+    expect(homes[0].querySelector(".world-map-mark")?.textContent).toBe("stuck · 1 more busy");
     expect(homes[1].querySelector(".world-map-mark")?.textContent).toBe("thinking");
     expect(homes[2].querySelector(".world-map-mark")).toBeNull();
   });
@@ -246,8 +247,20 @@ describe("busyAgents", () => {
     ]);
   });
 
-  it("marks a place by the most pressing thing happening there", () => {
-    expect(busyMark(map[2], { c: act("talking"), d: act("stuck") })).toEqual({ doing: "stuck", count: 2 });
+  it("marks a place by the most pressing thing happening there, counting only those doing it", () => {
+    expect(busyMark(map[2], { c: act("talking"), d: act("stuck") })).toEqual({ doing: "stuck", count: 1, others: 1 });
+    expect(busyMark(map[2], { c: act("working"), d: act("working") })).toEqual({
+      doing: "working",
+      count: 2,
+      others: 0,
+    });
     expect(busyMark(map[1], { b: act("asleep") })).toBeUndefined();
+  });
+
+  it("says a mark in words a glance gets right", () => {
+    expect(markWords({ doing: "waiting", count: 1, others: 0 })).toBe("waiting on you");
+    expect(markWords({ doing: "waiting", count: 1, others: 2 })).toBe("waiting on you · 2 more busy");
+    expect(markWords({ doing: "working", count: 2, others: 0 })).toBe("2 working");
+    expect(markWords({ doing: "stuck", count: 2, others: 1 })).toBe("2 stuck · 1 more busy");
   });
 });

@@ -136,7 +136,8 @@ export function heldFor(
 /**
  * The nearest free spot for a station, or none when it is already at one or
  * all are taken. A seat is a spot to sit at, a desk one to type at, and the
- * board the spot the page adds in front of a task board (`for: "board"`).
+ * board the spot the page adds in front of a task board (`for: "board"`). In
+ * a room with no board free, tasks are seen to at the desk.
  */
 export function stationSpot<S extends { id: string; at: [number, number]; activity?: string; for?: string }>(
   station: Station,
@@ -144,11 +145,13 @@ export function stationSpot<S extends { id: string; at: [number, number]; activi
   here: { x: number; z: number; spotActivity?: string; spot?: string },
   taken: Set<string>,
 ): S | undefined {
-  const fits = (s: { activity?: string; for?: string }) =>
-    station === "board" ? s.for === "board" : s.activity === (station === "seat" ? "sit" : "type");
+  const fitsFor = (st: Station) => (s: { activity?: string; for?: string }) =>
+    st === "board" ? s.for === "board" : s.activity === (st === "seat" ? "sit" : "type");
+  const boardFree = spots.some((s) => fitsFor("board")(s) && !taken.has(s.id));
+  const use: Station = station === "board" && !boardFree ? "desk" : station;
+  const fits = fitsFor(use);
   const at = here.spot ? spots.find((s) => s.id === here.spot) : undefined;
-  if (at ? fits(at) : station !== "board" && here.spotActivity === (station === "seat" ? "sit" : "type"))
-    return undefined;
+  if (at ? fits(at) : use !== "board" && here.spotActivity === (use === "seat" ? "sit" : "type")) return undefined;
   const distance = (s: S) => Math.hypot(s.at[0] - here.x, s.at[1] - here.z);
   return spots.filter((s) => fits(s) && !taken.has(s.id)).sort((a, b) => distance(a) - distance(b))[0];
 }

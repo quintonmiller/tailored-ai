@@ -96,6 +96,10 @@ function ended(agent: string | undefined, extra: { stop?: LoopStop; error?: stri
   events.emit("agent.turn_ended", { ...turn(agent, sessionId), ...extra });
 }
 
+function roomEnded(agent: string, posted: boolean, rooms = ["local:trip"]) {
+  events.emit("room.turn_ended", { rooms, agent, stallReason: null, posted });
+}
+
 let toolIds = 0;
 async function tool(agent: string, name: string, args: Record<string, unknown> = {}, finish = true) {
   const toolUseId = `t${++toolIds}`;
@@ -297,6 +301,7 @@ describe("activity", () => {
     events.emit("room.woke", { roomRef: "local:trip", agent: "writer", messageCount: 2 });
     started("writer");
     ended("writer", { stop: { kind: "complete" } });
+    roomEnded("writer", true);
     expect((await activity("writer")).last?.what).toBe("talking in #trip");
     await tool("planner", "room", { action: "dm", agent: "writer" }, false);
     started("writer", "dm");
@@ -305,6 +310,44 @@ describe("activity", () => {
     started("default");
     ended("default", { stop: { kind: "complete" } });
     expect((await activity("default")).last?.what).toBe("replying");
+  });
+
+  it("says a room turn that posted nothing only read the room, however it kept quiet", async () => {
+    make({ roomName: (ref) => (ref === "local:trip" ? "trip" : undefined) });
+    // Woken, and nothing said: no tool, no reply.
+    events.emit("room.woke", { roomRef: "local:trip", agent: "writer", messageCount: 1 });
+    started("writer");
+    ended("writer", { stop: { kind: "complete" } });
+    roomEnded("writer", false);
+    expect((await activity("writer")).last?.what).toBe("reading #trip");
+    // Passing with the room tool, the room named by its ref.
+    started("writer");
+    await tool("writer", "room", { action: "pass", room: "local:trip" });
+    ended("writer", { stop: { kind: "complete" } });
+    roomEnded("writer", false);
+    expect((await activity("writer")).last).toMatchObject({ what: "reading #trip", look: "phone" });
+  });
+
+  it("says where an agent posted, and that a reply after its tools was the last thing it did", async () => {
+    make({ roomName: (ref) => (ref === "local:trip" ? "trip" : undefined) });
+    started("writer");
+    await tool("writer", "room", { action: "post", room: "#trip", body: "Ferries every 20 minutes" });
+    ended("writer", { stop: { kind: "complete" } });
+    roomEnded("writer", true);
+    expect((await activity("writer")).last?.what).toBe("posting in #trip");
+    // Looked something up, then answered as the turn ended: the answer is the last thing.
+    events.emit("room.woke", { roomRef: "local:trip", agent: "writer", messageCount: 1 });
+    started("writer");
+    await tool("writer", "web_search", { query: "ferries" });
+    ended("writer", { stop: { kind: "complete" } });
+    roomEnded("writer", true);
+    expect((await activity("writer")).last?.what).toBe("talking in #trip");
+    // Looked something up and said nothing: the search is.
+    started("writer");
+    await tool("writer", "web_search", { query: "ferries" });
+    ended("writer", { stop: { kind: "complete" } });
+    roomEnded("writer", false);
+    expect((await activity("writer")).last?.what).toBe("searching the web");
   });
 
   it("says when an idle or sleeping agent next wakes, and when a pause runs out", async () => {
@@ -451,15 +494,39 @@ describe("nextWake", () => {
     expect(nextWake({ booked: "2026-10-19T02:10:00.000Z", own, now })).toBe("2026-10-19T02:10:00.000Z");
     expect(nextWake({ booked: "2026-10-19T07:00:00.000Z", own, now })).toBe("2026-10-19T02:30:00.000Z");
   });
-  it("is now when a turn is already due, or it has never run", () => {
-    expect(nextWake({ booked: null, own: { last: "2026-10-18T20:00:00.000Z", intervalMs: 60_000 }, now })).toBe(
-      now.toISOString(),
-    );
-    expect(nextWake({ booked: null, own: { last: null, intervalMs: null }, now })).toBe(now.toISOString());
+  it("stays the same time once it has passed, however often it is asked, so the record isn't rewritten", () => {
+    const own = { last: "2026-10-18T20:00:00.000Z", intervalMs: 60_000 };
+    const first = nextWake({ booked: null, own, now });
+    expect(first).toBe("2026-10-18T20:01:00.000Z");
+    expect(nextWake({ booked: null, own, now: new Date(now.getTime() + 5_000) })).toBe(first);
+    const booked = "2026-10-19T01:59:00.000Z";
+    expect(nextWake({ booked, own: null, now: new Date(now.getTime() + 5_000) })).toBe(booked);
   });
-  it("is nothing when nothing will wake it", () => {
+  it("is when its hours next start, for a turn due or overdue outside them, the same on every look", () => {
+    const window = { start: "07:00", end: "22:00" };
+    // 02:00 UTC, overdue since 20:01 the evening before: the window opens at 07:00.
+    const own = { last: "2026-10-18T20:00:00.000Z", intervalMs: 60_000, window, timeZone: "UTC" };
+    expect(nextWake({ booked: null, own, now })).toBe("2026-10-19T07:00:00.000Z");
+    expect(nextWake({ booked: null, own, now: new Date(now.getTime() + 61_234) })).toBe("2026-10-19T07:00:00.000Z");
+    // Due later tonight, still outside: the same.
+    const later = { ...own, last: "2026-10-19T01:30:00.000Z", intervalMs: 60 * 60_000 };
+    expect(nextWake({ booked: null, own: later, now })).toBe("2026-10-19T07:00:00.000Z");
+    // Due inside its hours: then. In another time zone, by that zone's clock.
+    const day = { ...own, last: "2026-10-19T08:00:00.000Z", intervalMs: 30 * 60_000 };
+    expect(nextWake({ booked: null, own: day, now })).toBe("2026-10-19T08:30:00.000Z");
+    const ny = { ...own, timeZone: "America/New_York" };
+    expect(nextWake({ booked: null, own: ny, now })).toBe("2026-10-19T11:00:00.000Z");
+    // Hours that never come: nothing.
+    expect(nextWake({ booked: null, own: { ...own, window: { start: "07:00", end: "7:00" } }, now })).toBeNull();
+  });
+  it("waits for the day's limit to lift", () => {
+    const own = { last: "2026-10-19T01:30:00.000Z", intervalMs: 60 * 60_000, notBefore: "2026-10-20T00:00:00.000Z" };
+    expect(nextWake({ booked: null, own, now })).toBe("2026-10-20T00:00:00.000Z");
+  });
+  it("is nothing when nothing will wake it, or before its first turn", () => {
     expect(nextWake({ booked: null, own: null, now })).toBeNull();
-    expect(nextWake({ booked: null, own: { last: "2026-10-19T01:00:00.000Z", intervalMs: null }, now })).toBeNull();
+    expect(nextWake({ booked: null, own: { last: null, intervalMs: 60_000 }, now })).toBeNull();
+    expect(nextWake({ booked: null, own: { last: "2026-10-19T01:00:00.000Z", intervalMs: 0 }, now })).toBeNull();
   });
 });
 

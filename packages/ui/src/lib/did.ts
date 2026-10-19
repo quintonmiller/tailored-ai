@@ -64,20 +64,39 @@ export function pastTense(what: string): string {
   return [done, ...rest].join(" ");
 }
 
-/** What it did last and how long ago: "searched the web, 40 min ago". */
-export function lastDid(last: AgentActivity["last"], now = Date.now()): string | undefined {
+/** Characters on one of the smaller lines under a tag over a head, and so on each line `aboutLines` gives. */
+export const TAG_LINE_CHARS = 40;
+
+/**
+ * What it did last and how long ago: "searched the web, 40 min ago". Given
+ * `chars`, a long "what" is cut to fit, and the "how long ago" kept whole,
+ * since it is the point of the line.
+ */
+export function lastDid(
+  last: AgentActivity["last"],
+  now = Date.now(),
+  chars = Number.POSITIVE_INFINITY,
+): string | undefined {
   if (!last?.what) return undefined;
   const when = ago(last.at, now);
-  return `${pastTense(last.what)}${when ? `, ${when}` : ""}`;
+  const tail = when ? `, ${when}` : "";
+  const what = pastTense(last.what);
+  const room = chars - tail.length;
+  return `${what.length > room ? `${what.slice(0, Math.max(1, room - 1)).trimEnd()}…` : what}${tail}`;
 }
 
 /** A time of day, the way the person's clock shows it. */
 export const clockTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-/** When it next wakes: "any minute now", a time today ("07:00"), or a day and a time further off ("Tue 07:00"). */
+/**
+ * When it next wakes: "any minute now", a time today ("07:00"), or a day and
+ * a time further off ("Tue 07:00"). Nothing once the time is more than a
+ * minute gone: the wake is late for a reason this can't see, and "any minute
+ * now" would go on being wrong.
+ */
 export function wakeWords(next: string | undefined, now = Date.now(), clock = clockTime): string | undefined {
   const at = next ? Date.parse(next) : Number.NaN;
-  if (!Number.isFinite(at)) return undefined;
+  if (!Number.isFinite(at) || at < now - 60_000) return undefined;
   if (at - now < 60_000) return "any minute now";
   if (at - now < 20 * 3_600_000) return clock(at);
   return `${new Date(at).toLocaleDateString([], { weekday: "short" })} ${clock(at)}`;
@@ -93,7 +112,7 @@ export function asleepWords(a: AgentActivity, clock = clockTime): string {
 /** The lines an idle or sleeping agent's tag shows when you come close: what it did last, and when it wakes. */
 export function aboutLines(a: AgentActivity | undefined, now = Date.now(), clock = clockTime): string[] {
   if (!a || (a.doing !== "idle" && a.doing !== "asleep")) return [];
-  const last = lastDid(a.last, now);
+  const last = lastDid(a.last, now, TAG_LINE_CHARS - "last: ".length);
   const next = wakeWords(a.next, now, clock);
   return [...(last ? [`last: ${last}`] : []), ...(next ? [`next: ${next}`] : [])];
 }

@@ -131,7 +131,16 @@ describe("stationSpot", () => {
     expect(stationSpot("board", withBoard, { x: 1, z: 1 }, new Set())?.id).toBe("idle:board");
     expect(stationSpot("board", withBoard, { x: 0, z: -1.8, spot: "idle:board" }, new Set())).toBeUndefined();
     // A window is somewhere to look too, but not the board.
-    expect(stationSpot("board", spots, { x: 0, z: 0 }, new Set())).toBeUndefined();
+    expect(stationSpot("board", withBoard, { x: -1.5, z: 0, spot: "window" }, new Set())?.id).toBe("idle:board");
+  });
+
+  it("sees to tasks at the desk in a room without a board free", () => {
+    expect(stationSpot("board", spots, { x: 0, z: 0 }, new Set())?.id).toBe("desk");
+    expect(stationSpot("board", spots, { x: 1.4, z: -1, spot: "desk" }, new Set())).toBeUndefined();
+    const withBoard = [...spots, { id: "idle:board", at: [0, -1.8] as [number, number], for: "board" }];
+    expect(stationSpot("board", withBoard, { x: 0, z: 0 }, new Set(["idle:board"]))?.id).toBe("desk");
+    // Board and desk both taken: it stays where it is.
+    expect(stationSpot("board", withBoard, { x: 0, z: 0 }, new Set(["idle:board", "desk"]))).toBeUndefined();
   });
 });
 

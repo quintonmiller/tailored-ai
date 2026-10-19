@@ -97,8 +97,13 @@ export interface Stage {
    * make sense of is ignored.
    */
   cue(cue: { name: string; target?: string }): void;
-  /** Show the room as it is now: what is new appears, what is gone goes, and the avatar stays where it can. */
-  setRoom(room: Room): void;
+  /**
+   * Show the room as it is now: what is new appears, what is gone goes, and
+   * the avatar stays where it can. `moved`, the avatar has gone to another
+   * place: whoever was round it stays behind, and whoever is in the new one
+   * is there already rather than coming in.
+   */
+  setRoom(room: Room, moved?: boolean): void;
   /** Who else is in the room: new arrivals appear at a free spot, and those who left go. */
   setCompany(company: Companion[]): void;
   /** What each agent is doing, by agent: every body in the room shows its own. */
@@ -1361,6 +1366,25 @@ export async function createStage(
     renderer.render(scene, camera);
   });
 
+  /** Leaving the place shown for another: everyone in it stays there, and whoever is in the next one was there already. */
+  const leavePlace = () => {
+    for (const c of companions.values()) {
+      shows.delete(c);
+      errands.delete(c);
+      c.dispose();
+    }
+    companions.clear();
+    for (const d of departing.splice(0)) d.fig.dispose();
+    placedAt = performance.now();
+    placeGen++;
+    noticed.clear();
+    voices = [];
+    if (near) {
+      near = undefined;
+      opts.onNear?.(undefined);
+    }
+  };
+
   return {
     setView(next) {
       if (next === view && !tween) return;
@@ -1374,8 +1398,9 @@ export async function createStage(
     },
     walkTo: go,
     cue: handleCue,
-    setRoom(next) {
-      if (next === given) return;
+    setRoom(next, moved = false) {
+      if (next === given && !moved) return;
+      if (moved) leavePlace();
       const before = new Set(room.props.map((p) => p.id));
       const resized = next.width !== room.width || next.depth !== room.depth || next.height !== room.height;
       scene.remove(furniture);
@@ -1392,24 +1417,12 @@ export async function createStage(
       if (!opts.visitor) reseat(me, () => (spotById(room, room.start) ? room.start : undefined));
       for (const c of companions.values()) reseat(c, () => freeSpot(c)?.id);
       if (resized && !tween && !opts.visitor) moveCamera(framing(view));
+      // Whoever is in the new place, at free spots in it.
+      if (moved) meet(wanted);
     },
     enter(next, from) {
       // Everyone in the place you left stays there.
-      for (const c of companions.values()) {
-        shows.delete(c);
-        errands.delete(c);
-        c.dispose();
-      }
-      companions.clear();
-      for (const d of departing.splice(0)) d.fig.dispose();
-      placedAt = performance.now();
-      placeGen++;
-      noticed.clear();
-      voices = [];
-      if (near) {
-        near = undefined;
-        opts.onNear?.(undefined);
-      }
+      leavePlace();
       scene.remove(furniture);
       disposeTree(furniture);
       appearing.length = 0;

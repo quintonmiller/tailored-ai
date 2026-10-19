@@ -360,7 +360,8 @@ code · in the commons", "has a question for you · in #trip"); click it to go
 straight there. When nobody is busy it says so, which tells you a quiet world
 is idle rather than broken. In each group, places where something is
 happening come first, with a coloured edge and a word for the most pressing
-thing there ("waiting on you · 3").
+thing there and how many are doing it, then how many others are busy
+("waiting on you · 2 more busy", "2 working").
 
 You arrive in your own body ("you"), in a colour of its own. **Walk** with
 WASD or the arrow keys, which move you the way the camera faces, at a brisk
@@ -504,22 +505,32 @@ who is in each. A room of conversation is drawn as a meeting room with a
 seat for every member with a body: up to six round a round table, more at a
 long one, and the room grows with them.
 
-Bodies go where the talk is. When a room wakes an agent, or the agent says
-something in one, its body leaves where it was and takes a seat at that
-room's meeting table, so the bubbles of a conversation show up round the
-table it is having. Each new message there keeps it a while longer. After a
-quiet spell (10 minutes) it goes back where it came from: home, or the
-shared place it was in. While it is away, its home is empty and the map
-shows it in the room. Round the table, everyone turns to whoever speaks.
-A quiet room shows its member count on the map ("quiet · 3 members").
+Bodies go where the talk is. When an agent says something in a room, its
+body leaves where it was and takes a seat at that room's meeting table, so
+the bubbles of a conversation show up round the table it is having. Each
+thing it says there, and each time the room wakes it while it is there,
+keeps it a while longer; other people's messages don't. Being woken alone
+moves nobody, so an agent that reads a room and keeps quiet stays where it
+was. After a quiet spell (10 minutes) it goes back where it lives: home, or
+the shared place it was in. While it is away, its home is empty and the map
+shows it in the room. Round the table, everyone turns to whoever speaks. A
+quiet room shows its member count on the map ("quiet · 3 members").
 
-It is all kept in `whereabouts` records: a visit names the room's place
-with an `until`, and a `back` when the body came from a shared place, and
-the plugin clears visits that have run out every 20 seconds, so a page
-watching sees the body go. The `place` tool still works on the agent's own
-room (or the shared place it came from) while its body is at a meeting.
-Sending it home from the menu ends the visit early; its next message brings
-it back. Change the quiet spell, or turn this off with `0`:
+The agent you are chatting with is the exception on your own page: it stays
+in its own room with you while you talk, even while its body is at a
+meeting. The map, **Busy now** and anyone visiting see it at the table, and
+if you go to that meeting room you'll find it there too.
+
+A visit is a `visit` record, one per agent, naming the room's place and an
+`until`. It lives in the built-in `memory` state provider, apart from the
+`whereabouts` record that says where the agent lives, so a visit never
+changes where it lives, leaves no history behind, and ends on restart. The
+plugin clears visits that have run out every 20 seconds, so a page watching
+sees the body go. The `place` tool still works on the agent's own room (or
+the shared place it lives in) while its body is at a meeting, and moving
+with the `place` tool ends the visit. Sending it home from the menu ends the
+visit early too; its next message brings it back. Change the quiet spell, or
+turn this off with `0`:
 
 ```yaml
 plugins:
@@ -664,12 +675,20 @@ sharing one model are told apart at a glance; the default agent keeps the
 model's own colours.
 
 While an agent is idle or asleep, its record also carries `last`, the last
-thing it did (`{what, look?, at}`, the status line it showed for its last
-tool call, or "talking in #trip", "talking to planner" or "replying" for a
-turn that used none), and `next`, when it next wakes on its own: the soonest
-wake it booked with the `schedule` tool, or its next turn when it runs on its
-own, whichever comes first. An agent asleep because it was paused has
-`until`, when the pause runs out.
+thing it did (`{what, look?, at}`), and `next`, when it next wakes on its
+own. `last` is the status line it showed for its last tool call ("posting in
+#trip", "reading #trip" for a room it read or passed on), or for a turn that
+used none, "talking to planner", "replying", or, for a turn a room woke,
+"talking in #trip" when its answer reached the room and "reading #trip" when
+it kept quiet. A reply that reaches the room after its tools is the last
+thing it did. `next` is the soonest wake it booked with the `schedule` tool,
+or its next turn when it runs on its own, worked out the way the worker does
+it: outside the hours it keeps to (`cadence.window`), or once it has had its
+turns for the day, it is when those come round again. A time that has passed
+stays as it was, and the tag says "any minute now" for a minute or so after,
+then leaves it off. While agents are paused, nothing wakes on its own and
+there is no `next`. An agent asleep because it was paused has `until`, when
+the pause runs out.
 
 Everything comes off the event bus — turns starting and ending, tool calls,
 approvals, stalls, the pause switch — so nothing here runs a model or slows a
@@ -803,7 +822,7 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` change means someone came or went |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` or `visit` change means someone came or went |
 | `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there. A room also lists `members`, every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, its `company` the members talking there now, and a hall a corridor with a door for each place off it, both made fresh each time. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |

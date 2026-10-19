@@ -113,6 +113,21 @@ const DEFAULT_IDLE_BACKOFF_MULTIPLIER = 2.0;
 // online block, no cap is enforced. Set explicit values to gate runaway
 // ticks; leave the block off entirely to run unrestricted.
 
+/**
+ * The interval an agent's turns are on: the one it has backed off to, or the
+ * one it was given. Exported so whatever shows when it next runs counts the
+ * way the worker does.
+ */
+export function tickIntervalMs(
+  state: Pick<ExploratoryState, "current_interval_ms">,
+  online: Pick<OnlineAgentConfig, "cadence">,
+): number {
+  if (state.current_interval_ms && state.current_interval_ms > 0) return state.current_interval_ms;
+  const base = (online.cadence?.interval_minutes ?? DEFAULT_TICK_INTERVAL_MINUTES) * 60_000;
+  const max = (online.cadence?.max_interval_minutes ?? DEFAULT_MAX_INTERVAL_MINUTES) * 60_000;
+  return Math.min(base, max);
+}
+
 export type SkipReason =
   | "config-disabled"
   | "agent-online-disabled"
@@ -629,12 +644,7 @@ export class ExploratoryWorker {
   }
 
   private effectiveIntervalMs(state: ExploratoryState, online: OnlineAgentConfig): number {
-    if (state.current_interval_ms && state.current_interval_ms > 0) {
-      return state.current_interval_ms;
-    }
-    const base = (online.cadence?.interval_minutes ?? DEFAULT_TICK_INTERVAL_MINUTES) * 60_000;
-    const max = (online.cadence?.max_interval_minutes ?? DEFAULT_MAX_INTERVAL_MINUTES) * 60_000;
-    return Math.min(base, max);
+    return tickIntervalMs(state, online);
   }
 
   private skip(agentName: string, reason: SkipReason | string): void {

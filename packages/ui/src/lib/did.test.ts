@@ -3,7 +3,7 @@
  * said as done, how long ago, and the time it next wakes.
  */
 import { describe, expect, it } from "vitest";
-import { aboutLines, asleepWords, lastDid, pastTense, wakeWords } from "./did";
+import { aboutLines, asleepWords, lastDid, pastTense, TAG_LINE_CHARS, wakeWords } from "./did";
 
 const now = Date.UTC(2026, 9, 19, 2, 0);
 const clock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
@@ -42,6 +42,14 @@ describe("lastDid", () => {
     expect(lastDid({ what: "replying", at: minutes(0) }, now)).toBe("replied, just now");
     expect(lastDid(undefined, now)).toBeUndefined();
   });
+
+  it("cuts a long what to fit, keeping how long ago whole", () => {
+    const long = { what: "talking in #draft-review-for-the-quarterly-newsletter", at: minutes(40) };
+    const line = lastDid(long, now, 34);
+    expect(line).toMatch(/…, 40 min ago$/);
+    expect(line?.length).toBeLessThanOrEqual(34);
+    expect(lastDid({ what: "searching the web", at: minutes(40) }, now, 34)).toBe("searched the web, 40 min ago");
+  });
 });
 
 describe("wakeWords", () => {
@@ -50,6 +58,11 @@ describe("wakeWords", () => {
     expect(wakeWords("2026-10-19T02:00:30Z", now, clock)).toBe("any minute now");
     expect(wakeWords("2026-10-21T07:00:00Z", now, clock)).toMatch(/^\S+ 07:00$/);
     expect(wakeWords(undefined, now, clock)).toBeUndefined();
+  });
+
+  it("says any minute now for a wake just gone, and nothing for one long gone", () => {
+    expect(wakeWords("2026-10-19T01:59:30Z", now, clock)).toBe("any minute now");
+    expect(wakeWords("2026-10-18T20:01:00Z", now, clock)).toBeUndefined();
   });
 });
 
@@ -60,6 +73,13 @@ describe("aboutLines", () => {
       aboutLines({ agent: "planner", doing: "idle", what: "idle", last, next: "2026-10-19T07:00:00Z" }, now, clock),
     ).toEqual(["last: searched the web, 40 min ago", "next: 07:00"]);
     expect(aboutLines({ agent: "planner", doing: "idle", what: "idle" }, now, clock)).toEqual([]);
+  });
+
+  it("fits each line on a tag, the time it did it in full", () => {
+    const long = { what: "talking in #draft-review-for-the-newsletter", at: minutes(40) };
+    const [line] = aboutLines({ agent: "planner", doing: "idle", what: "idle", last: long }, now, clock);
+    expect(line.length).toBeLessThanOrEqual(TAG_LINE_CHARS);
+    expect(line).toMatch(/^last: talked in #draft.*…, 40 min ago$/);
   });
 
   it("says nothing of it while the agent is busy", () => {

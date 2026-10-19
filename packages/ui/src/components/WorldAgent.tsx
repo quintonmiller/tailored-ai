@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type ExploratoryAgent, type ExploratoryRun, fetchExploratoryAgents, fetchExploratoryRuns } from "../api";
 import type { AgentActivity } from "../avatar/doing";
 import { nameOf } from "../lib/conversations";
-import { asleepWords, lastDid, wakeWords } from "../lib/did";
+import { asleepWords, clockTime as clock, lastDid, wakeWords } from "../lib/did";
 import { ago, lasting } from "../lib/tasks";
 import { nextTurn } from "../lib/wakes";
 import { agentColor } from "./WorldMap";
@@ -18,9 +18,6 @@ export interface Said {
   /** The room it was said in, as `<backend>:<id>`; absent for a direct message. */
   room?: string;
 }
-
-/** A time of day, the way the person's clock shows it. */
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** An interval in a few words: "45 min", "90 min", "3 h", "2.5 h". */
 const every = (ms: number) => {

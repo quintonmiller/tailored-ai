@@ -98,19 +98,33 @@ export function busyAgents(places: MapPlace[], activities: Record<string, AgentA
   return out.sort((a, b) => rank(a) - rank(b) || a.agent.localeCompare(b.agent));
 }
 
-/** What is happening in a place, for its mark: the most pressing doing there and how many are busy; none when all are idle. */
+/**
+ * What is happening in a place, for its mark: the most pressing doing there,
+ * how many are doing it, and how many others are busy with something else;
+ * none when all are idle.
+ */
 export function busyMark(
   place: MapPlace,
   activities: Record<string, AgentActivity>,
-): { doing: AgentActivity["doing"]; count: number } | undefined {
+): { doing: AgentActivity["doing"]; count: number; others: number } | undefined {
   const busy = place.agents.flatMap((a) => {
     const doing = activities[a]?.doing;
     return doing && URGENCY[doing] !== undefined ? [doing] : [];
   });
   if (!busy.length) return undefined;
   const doing = busy.sort((a, b) => (URGENCY[a] ?? 9) - (URGENCY[b] ?? 9))[0];
-  return { doing, count: busy.length };
+  const count = busy.filter((d) => d === doing).length;
+  return { doing, count, others: busy.length - count };
 }
+
+/** A place's mark in words: "waiting on you", "2 working", "waiting on you · 2 more busy". */
+export function markWords(mark: { doing: AgentActivity["doing"]; count: number; others: number }): string {
+  const word = BUSY_WORDS[mark.doing] ?? mark.doing;
+  return `${mark.count > 1 ? `${mark.count} ` : ""}${word}${mark.others ? ` · ${mark.others} more busy` : ""}`;
+}
+
+/** A change to where a body is: where an agent lives (`whereabouts`), or a meeting room it is visiting (`visit`). */
+export const comeOrGone = (type: string) => type === "whereabouts" || type === "visit";
 
 /** The places and areas, asked for when the map opens and again whenever someone comes or goes. */
 export function useWorldMap(open: boolean): { places: MapPlace[]; areas: MapArea[]; problem: string | null } {
@@ -139,8 +153,7 @@ export function useWorldMap(open: boolean): { places: MapPlace[]; areas: MapArea
     const off = subscribeStateChanges((change) => {
       // Someone came or went, a shared place came or went, or a place moved to another area.
       const moved = change.type === "place" && change.before?.area !== change.after?.area;
-      if (change.type === "whereabouts" || moved || (change.type === "place" && change.id.startsWith("shared:")))
-        void load();
+      if (comeOrGone(change.type) || moved || (change.type === "place" && change.id.startsWith("shared:"))) void load();
     });
     return () => {
       gone = true;
@@ -219,12 +232,7 @@ export function WorldMap({
             {p.kind === "room" ? `#${p.name}` : p.name}
             {p.id === here && <span className="world-map-here">you are here</span>}
           </span>
-          {mark && (
-            <span className={`world-map-mark doing-${mark.doing}`}>
-              {BUSY_WORDS[mark.doing]}
-              {mark.count > 1 ? ` · ${mark.count}` : ""}
-            </span>
-          )}
+          {mark && <span className={`world-map-mark doing-${mark.doing}`}>{markWords(mark)}</span>}
           {p.purpose && <span className="world-map-purpose">{p.purpose}</span>}
           {p.kind === "lobby" && (
             <span className="world-map-purpose">Make a new agent, task or room; see every open task</span>

@@ -6,6 +6,7 @@
  * readable from any angle.
  */
 import * as THREE from "three";
+import { TAG_LINE_CHARS } from "../lib/did";
 import type { Sign } from "./doing";
 
 function sprite(canvas: HTMLCanvasElement, height: number): THREE.Sprite {
@@ -31,7 +32,7 @@ function clip(text: string, chars = LINE_CHARS): string {
 }
 
 /** The smaller lines under a tag fit a few more characters in the same width. */
-const MORE_CHARS = 40;
+const MORE_CHARS = TAG_LINE_CHARS;
 
 /**
  * A tag over the head: a name, a status, or both — the name on top, what it
