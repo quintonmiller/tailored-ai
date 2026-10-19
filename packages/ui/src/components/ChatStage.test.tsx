@@ -15,12 +15,17 @@ const stage = vi.hoisted(() => ({
   calls: [] as { url: string; input: StageInput; animations?: string[] }[],
   cues: [] as string[],
   insets: [] as number[],
+  /** Stages on screen now: what render() waits for, instead of a fixed sleep a slow runner outlasts. */
+  mounted: 0,
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (_host: HTMLElement, url: string, input: StageInput, opts: { animations?: string[] }) => {
     stage.calls.push({ url, input, animations: opts.animations });
+    stage.mounted++;
     return {
-      dispose: () => {},
+      dispose: () => {
+        stage.mounted--;
+      },
       setView: () => {},
       setInsets: ({ right }: { right: number }) => stage.insets.push(right),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
@@ -85,6 +90,7 @@ beforeEach(() => {
   stage.calls.length = 0;
   stage.cues.length = 0;
   stage.insets.length = 0;
+  stage.mounted = 0;
   localStorage.clear();
   const audio = btoa("mp3-bytes");
   turnChunks = [
@@ -181,6 +187,16 @@ async function settle(ms = 30) {
 async function render(props: Partial<ChatStageOptions> = {}) {
   await act(async () => {
     root.render(<Harness {...props} />);
+  });
+  // The stage is imported on demand: when one is due, wait until it exists.
+  const due = typeof liveInfo.avatar === "string" && localStorage.getItem("tai.chat.stage") !== "off";
+  await act(async () => {
+    await vi.waitFor(
+      () => {
+        if (due && stage.mounted < 1) throw new Error("the stage has not loaded yet");
+      },
+      { timeout: 3000, interval: 10 },
+    );
   });
   await settle();
 }
