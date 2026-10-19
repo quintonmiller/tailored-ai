@@ -260,19 +260,16 @@ export class AgentRuntime {
     this._taskBackend = createTaskBackend(merged, opts.db);
     this._embedder = opts.createEmbedder?.(merged);
     const builtinTools =
-      opts.createTools(merged, opts.contextDir, opts.configPath, {
-        db: opts.db,
-        taskBackend: this._taskBackend,
-        taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
-        getEmbedder: () => this._embedder,
-        getMemoryBackend: () => this.getMemoryBackend(),
-        getStateService: () => this.getStateService(),
-        timeProvider: this._timeProvider,
-        resolveOutbound: (id?: string) => this.resolveOutbound(id),
-        getOwnerId: (id?: string) => this.getOwnerId(id),
-        getNotificationGate: () => this.getNotificationGate(),
-        events: this.events,
-      }) ?? [];
+      opts.createTools(
+        merged,
+        opts.contextDir,
+        opts.configPath,
+        this.toolContext({
+          taskBackend: this._taskBackend,
+          getEmbedder: () => this._embedder,
+          timeProvider: this._timeProvider,
+        }),
+      ) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
     const { provider, model } = opts.createProvider(merged);
     this._provider = provider;
@@ -366,22 +363,47 @@ export class AgentRuntime {
    * two walks is the factories that were not registered yet. Reacting to a
    * config change is `reload()`'s job and stays there.
    */
+  /**
+   * What every tool factory is handed, wherever the tools are built: at
+   * construction, for late plugin factories, and on reload. One builder, so a
+   * capability added to one walk reaches all three. The construction walk
+   * used to be written out separately and lacked `deliverAgentMessage`, so
+   * `room`'s direct messages answered "not wired up" from every start until
+   * the first reload.
+   */
+  private toolContext(parts: {
+    taskBackend: TaskBackend;
+    getEmbedder: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
+    timeProvider: ResolvedTimeProvider;
+  }): NonNullable<Parameters<RuntimeOptions["createTools"]>[3]> {
+    return {
+      db: this.db,
+      taskBackend: parts.taskBackend,
+      taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
+      getEmbedder: parts.getEmbedder,
+      getMemoryBackend: () => this.getMemoryBackend(),
+      getStateService: () => this.getStateService(),
+      timeProvider: parts.timeProvider,
+      resolveOutbound: (id?: string) => this.resolveOutbound(id),
+      getOwnerId: (id?: string) => this.getOwnerId(id),
+      getNotificationGate: () => this.getNotificationGate(),
+      deliverAgentMessage: (to, from, body) => this.deliverAgentMessage(to, from, body),
+      events: this.events,
+    };
+  }
+
   applyPendingToolFactories(): string[] {
     const produced =
-      this._createTools(this._config, this.contextDir, this.configPath, {
-        db: this.db,
-        taskBackend: this._taskBackend,
-        taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
-        getEmbedder: () => this._embedder,
-        getMemoryBackend: () => this.getMemoryBackend(),
-        getStateService: () => this.getStateService(),
-        timeProvider: this._timeProvider,
-        resolveOutbound: (id?: string) => this.resolveOutbound(id),
-        getOwnerId: (id?: string) => this.getOwnerId(id),
-        getNotificationGate: () => this.getNotificationGate(),
-        deliverAgentMessage: (to, from, body) => this.deliverAgentMessage(to, from, body),
-        events: this.events,
-      }) ?? [];
+      this._createTools(
+        this._config,
+        this.contextDir,
+        this.configPath,
+        this.toolContext({
+          taskBackend: this._taskBackend,
+          getEmbedder: () => this._embedder,
+          timeProvider: this._timeProvider,
+        }),
+      ) ?? [];
     const existing = new Set(this._toolRegistry.list().map((t) => t.name));
     const added: string[] = [];
     for (const tool of produced) {
@@ -767,20 +789,12 @@ export class AgentRuntime {
       const timeProvider = resolveTimeProvider(config);
       const embedder = this._createEmbedder?.(config);
       const tools =
-        this._createTools(config, this.contextDir, this.configPath, {
-          db: this.db,
-          taskBackend,
-          taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
-          getEmbedder: () => embedder,
-          getMemoryBackend: () => this.getMemoryBackend(),
-          getStateService: () => this.getStateService(),
-          timeProvider,
-          resolveOutbound: (id?: string) => this.resolveOutbound(id),
-          getOwnerId: (id?: string) => this.getOwnerId(id),
-          getNotificationGate: () => this.getNotificationGate(),
-          deliverAgentMessage: (to, from, body) => this.deliverAgentMessage(to, from, body),
-          events: this.events,
-        }) ?? [];
+        this._createTools(
+          config,
+          this.contextDir,
+          this.configPath,
+          this.toolContext({ taskBackend, getEmbedder: () => embedder, timeProvider }),
+        ) ?? [];
       const { provider, model } = this._createProvider(config);
       // Clean up old tools that have a destroy hook (e.g. browser processes).
       // destroyAll() runs in parallel and swallows individual errors so one
