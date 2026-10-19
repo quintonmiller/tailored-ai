@@ -39,6 +39,8 @@ export type StageView = "room" | "close";
 
 export interface Stage {
   setView(view: StageView): void;
+  /** Say how much of the stage's right side is covered, so the camera frames what is left. */
+  setInsets(insets: { right: number }): void;
   /** Walk to a spot in the room, by id. False when there is no such spot. */
   walkTo(spot: string): boolean;
   /**
@@ -238,12 +240,17 @@ export async function createStage(
     return { azimuth: preferred, distance };
   };
 
+  /** Pixels on the right of the stage covered by something laid over it, like a chat panel. */
+  let insetRight = 0;
+  /** The shape of the part of the stage that can be seen: framing fits the room into that. */
+  const visibleAspect = () => Math.max(0.2, (host.clientWidth - insetRight) / Math.max(1, host.clientHeight));
+
   const framing = (view: StageView): Framing => {
     if (view === "close") {
       const top = bounds.max.y;
       const span = (top - hipsY) * 1.25;
       const vfov = rad(ROOM_VIEW.fov);
-      const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
+      const hfov = 2 * Math.atan(Math.tan(vfov / 2) * visibleAspect());
       const distance = Math.max(span / 2 / Math.tan(vfov / 2), (span * 0.9) / 2 / Math.tan(hfov / 2));
       const target = new THREE.Vector3(body.position.x, body.position.y + torso, body.position.z);
       // In front of its face when that side of the room is open; at a desk or
@@ -257,7 +264,7 @@ export async function createStage(
       };
     }
     const target = new THREE.Vector3(0, 0.65, -0.15);
-    const distance = roomDistance(room, camera.aspect);
+    const distance = roomDistance(room, visibleAspect());
     return {
       target,
       position: new THREE.Vector3()
@@ -299,6 +306,10 @@ export async function createStage(
     const h = Math.max(1, host.clientHeight);
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
+    // Shift the picture left by half the covered strip, so the scene is
+    // centred in the part of the stage nothing is laid over.
+    if (insetRight > 0 && insetRight < w) camera.setViewOffset(w, h, insetRight / 2, 0, w, h);
+    else camera.clearViewOffset();
     camera.updateProjectionMatrix();
     if (tween) return;
     // Keep the angle the person dragged to; only the distance follows the frame's shape.
@@ -507,6 +518,11 @@ export async function createStage(
       if (next === view && !tween) return;
       view = next;
       moveCamera(framing(next));
+    },
+    setInsets({ right }) {
+      if (right === insetRight) return;
+      insetRight = Math.max(0, right);
+      resize();
     },
     walkTo: go,
     cue(c) {

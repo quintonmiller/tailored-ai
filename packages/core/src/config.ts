@@ -392,6 +392,12 @@ export interface AgentDefinition {
    * and tool set, because a spoken reply has a couple of seconds, not
    * twenty. See `docs/live-sessions.md`.
    */
+  /**
+   * The agent's body on the web UI: its own VRM model and animation
+   * libraries, over the deployment's `live.avatar`. Paths as there. `false`
+   * gives this agent no body, and so no 3D view.
+   */
+  avatar?: false | { model?: string; animations?: string[] };
   voice?: {
     /** Replaces the agent's instructions while it talks. Unset: a short spoken-style guide, then its own instructions. */
     instructions?: string;

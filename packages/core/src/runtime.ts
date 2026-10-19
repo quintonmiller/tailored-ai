@@ -29,7 +29,7 @@ import {
 } from "./db/runtime-settings-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
-import type { Body } from "./live/cues.js";
+import { type Body, bodyInstructions } from "./live/cues.js";
 import { LiveSessions } from "./live/session.js";
 import { voiceMode } from "./live/voice-mode.js";
 import type { MediaStore } from "./media/interface.js";
@@ -493,6 +493,12 @@ export class AgentRuntime {
   }
 
   /** An agent's `voice:` settings, resolved the way the rest of the agent is. */
+  /** The agent's own `avatar:` setting, or the deployment default's; undefined when neither sets one. */
+  avatarFor(agentName?: string): AgentDefinition["avatar"] {
+    return resolveAgent(agentName, this._config, [], undefined, this.contextDir, this.kbDir, this.buildResolveOptions())
+      .avatar;
+  }
+
   voiceModeFor(agentName?: string): AgentDefinition["voice"] {
     const resolved = resolveAgent(
       agentName,
@@ -1446,7 +1452,7 @@ export class AgentRuntime {
      * identity and history; a smaller, faster turn.
      */
     mode?: "voice";
-    /** In voice mode: what the session's surface shows the agent with, whose cues it may write. */
+    /** What the surface shows the agent with, whose cues it may write: in voice mode or typed. */
     body?: Body;
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
@@ -1587,7 +1593,14 @@ export class AgentRuntime {
         this.resolveAgentProvider(resolved.provider, agentName),
       getModelChain: () => this.resolveModelChain(resolved.models, agentName),
     };
-    return opts.mode === "voice" ? voiceMode(built, resolved.voice, opts.body) : built;
+    if (opts.mode === "voice") return voiceMode(built, resolved.voice, opts.body);
+    // Typing on a page that shows the agent's body: the same cues as talking.
+    return opts.body
+      ? {
+          ...built,
+          extraInstructions: [built.extraInstructions, bodyInstructions(opts.body)].filter(Boolean).join("\n\n"),
+        }
+      : built;
   }
 
   /**

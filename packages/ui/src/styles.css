@@ -8657,3 +8657,49 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .talk-view button[aria-pressed="true"] { background: var(--bg); color: var(--text); }
 .talk-view button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .talk-avatar-problem { font-size: 12px; color: var(--text-dim); margin: 0; }
+
+/* The agent's scene behind the chat: the room fills the page, the conversation is a panel over it. */
+.chat-toolbar-spacer { flex: 1; }
+.chat-toolbar-btn[aria-pressed="true"] { background: var(--bg-surface); color: var(--text); border-color: var(--accent-dim); }
+.chat.chat-with-stage { max-width: none; position: relative; isolation: isolate; }
+.chat-stage { position: absolute; inset: 0; z-index: 0; }
+.chat-stage .talk-stage.fill { position: absolute; inset: 0; }
+.talk-stage.fill .talk-avatar { height: 100%; }
+.talk-stage.fill .talk-view { top: 56px; left: 16px; right: auto; }
+.chat-with-stage > .chat-toolbar,
+.chat-with-stage > .chat-messages,
+.chat-with-stage > .chat-input-bar,
+.chat-with-stage > .chat-voice-error,
+.chat-with-stage > .attachment-tray { position: relative; z-index: 1; }
+.chat-with-stage > .chat-toolbar { background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(8px); }
+.chat-with-stage > .chat-messages,
+.chat-with-stage > .chat-input-bar,
+.chat-with-stage > .chat-voice-error { align-self: flex-end; width: min(440px, 100%); }
+.chat-with-stage > .chat-messages { background: color-mix(in srgb, var(--bg) 80%, transparent); backdrop-filter: blur(10px); border-left: 1px solid var(--border); padding: 16px; }
+.chat-with-stage > .chat-input-bar { background: color-mix(in srgb, var(--bg-surface) 88%, transparent); backdrop-filter: blur(10px); border-left: 1px solid var(--border); padding: 12px 16px; }
+/* With the panel hidden, the scene has the page; the bar to type or talk stays. */
+.chat-panel-hidden > .chat-messages { visibility: hidden; }
+@media (max-width: 719px) {
+  .chat-with-stage > .chat-messages,
+  .chat-with-stage > .chat-input-bar,
+  .chat-with-stage > .chat-voice-error { width: 100%; border-left: 0; }
+  .chat-with-stage > .chat-messages { flex: 0 0 42%; margin-top: auto; border-top: 1px solid var(--border); }
+}
+.chat-voice-error { font-size: 12px; color: var(--amber); padding: 6px 24px; }
+
+/* Hold to talk, in the bar beside Send. */
+.chat-talk-btn { display: inline-flex; align-items: center; gap: 8px; touch-action: none; user-select: none; }
+.chat-talk-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-dim); flex: none; }
+.chat-talk-listening { border-color: var(--red); }
+.chat-talk-listening .chat-talk-dot { background: var(--red); animation: talk-pulse 1s ease-in-out infinite; }
+.chat-talk-thinking .chat-talk-dot { background: var(--amber); }
+.chat-talk-speaking .chat-talk-dot { background: var(--accent); animation: talk-pulse 1.4s ease-in-out infinite; }
+.chat-talk-label { white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-talk-listening .chat-talk-dot, .chat-talk-speaking .chat-talk-dot { animation: none; }
+}
+/* On a phone the bar is tight: the talk button keeps its dot and loses its words. */
+@media (max-width: 479px) {
+  .chat-talk-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .chat-input-bar { gap: 6px; }
+}

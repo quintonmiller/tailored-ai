@@ -10,8 +10,6 @@ import {
   type AutopilotSettings,
   type AutopilotWorker,
   addTaskComment,
-  avatarAnimationPaths,
-  avatarModelPath,
   type Body,
   type Briefing,
   BUDGETED_TOKEN_SOURCES,
@@ -19,6 +17,8 @@ import {
   type CollectionType,
   ConfigWriteRejected,
   type CronScheduler,
+  type CuePiece,
+  CueReader,
   checkBudget,
   compactSession,
   componentSpecs,
@@ -101,6 +101,7 @@ import {
   recallQueryAsync,
   renderSkillMd,
   resetSession,
+  resolveAvatar,
   resolveDashboardWidgets,
   resolveWorkflowsDir,
   respondToComponent,
@@ -133,6 +134,7 @@ import {
   validateWorkflow,
   type WorkflowEngine,
   type WorkflowTrigger,
+  withoutCues,
   writeRawConfigPath,
   writeRawConfigText,
 } from "@tailored-ai/core";
@@ -1104,9 +1106,17 @@ export function createServer(opts: ServerOptions) {
       profile?: string;
       /** Ids from `POST /api/media`, in the order they should appear. */
       mediaIds?: string[];
+      /** What the page shows the agent with: its cues come back as `cue` events. */
+      body?: unknown;
     }>();
     const { message, sessionKey, agent, profile, mediaIds } = body;
     const agentName = agent ?? profile;
+    let shown: Body | undefined;
+    if (body.body !== undefined) {
+      const parsed = parseBody(body.body);
+      if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+      shown = parsed.body;
+    }
 
     // A message carrying only an image is a real message. Requiring text would
     // repeat the Slack bug this work exists to fix, where an image with no
@@ -1161,7 +1171,16 @@ export function createServer(opts: ServerOptions) {
           }
         }
 
-        const baseOpts = runtime.buildLoopOptions({ session, agentName });
+        const baseOpts = runtime.buildLoopOptions({ session, agentName, ...(shown ? { body: shown } : {}) });
+        // Cues come out of the text before it is shown, and go to the page's body.
+        const reader = shown ? new CueReader(shown) : undefined;
+        let streamed = false;
+        const pieces = (list: CuePiece[], withText: boolean) => {
+          for (const p of list) {
+            if ("cue" in p) stream.writeSSE({ event: "cue", data: JSON.stringify(p.cue) });
+            else if (withText && p.text) stream.writeSSE({ event: "delta", data: JSON.stringify({ text: p.text }) });
+          }
+        };
         const combinedSignal = baseOpts.signal
           ? AbortSignal.any([baseOpts.signal, c.req.raw.signal])
           : c.req.raw.signal;
@@ -1175,6 +1194,11 @@ export function createServer(opts: ServerOptions) {
           approvalHandler,
           signal: combinedSignal,
           onTextDelta: (text) => {
+            streamed = true;
+            if (reader) {
+              pieces(reader.push(text), true);
+              return;
+            }
             stream.writeSSE({
               event: "delta",
               data: JSON.stringify({ text }),
@@ -1244,10 +1268,12 @@ export function createServer(opts: ServerOptions) {
         const lastReasoning = [...getSessionMessages(runtime.db, session.id)]
           .reverse()
           .find((m) => m.role === "assistant")?.reasoning;
+        // A provider that doesn't stream hands the cues over with the whole reply.
+        if (reader) pieces(streamed ? reader.flush() : [...reader.push(response), ...reader.flush()], streamed);
         await stream.writeSSE({
           event: "response",
           data: JSON.stringify({
-            content: response,
+            content: shown && typeof response === "string" ? withoutCues(shown, response) : response,
             reasoning: lastReasoning,
             sessionId: session.id,
             sessionKey: key,
@@ -1867,6 +1893,8 @@ export function createServer(opts: ServerOptions) {
   const liveJson = (s: LiveSession) => ({
     id: s.id,
     ...(s.agent ? { agent: s.agent } : {}),
+    // The conversation its turns go into: a page shows them with the rest of the chat.
+    conversation: s.sessionId,
     transport: s.transport,
     startedAt: s.startedAt,
     turns: s.turns,
@@ -1875,11 +1903,24 @@ export function createServer(opts: ServerOptions) {
   });
 
   // What the Talk page needs before a session starts: whether there is an avatar to draw.
+  // An agent's body: its own avatar over the deployment's. An agent that
+  // doesn't exist has none.
+  const bodyFiles = (agent: string | undefined) => {
+    try {
+      return resolveAvatar(runtime.getConfig().live, runtime.avatarFor(agent));
+    } catch {
+      return { animations: [] as string[] };
+    }
+  };
+  // What a page needs to know before talking: whether it can, and the agent's body if it has one.
   app.get("/api/live", (c) => {
-    const live = runtime.getConfig().live;
-    if (!avatarModelPath(live)) return c.json({});
-    const animations = avatarAnimationPaths(live).map((_, i) => `/api/live/animations/${i}`);
-    return c.json({ avatar: "/api/live/avatar", ...(animations.length ? { animations } : {}) });
+    const agent = c.req.query("agent") || undefined;
+    const enabled = !!runtime.getConfig().live?.enabled;
+    const files = bodyFiles(agent);
+    if (!files.model) return c.json({ enabled });
+    const q = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+    const animations = files.animations.map((_, i) => `/api/live/animations/${i}${q}`);
+    return c.json({ enabled, avatar: `/api/live/avatar${q}`, ...(animations.length ? { animations } : {}) });
   });
 
   // A configured avatar file, revalidated on every load so a swapped file shows up.
@@ -1894,22 +1935,27 @@ export function createServer(opts: ServerOptions) {
   };
 
   app.get("/api/live/avatar", async (c) => {
-    const path = avatarModelPath(runtime.getConfig().live);
+    const path = bodyFiles(c.req.query("agent") || undefined).model;
     if (!path) return c.json({ error: "No avatar is configured. Set live.avatar.model to a VRM file." }, 404);
     return sendAvatarFile(c, path);
   });
 
   // Only the files the config lists, by position: nothing else under the folder is reachable.
   app.get("/api/live/animations/:index", async (c) => {
-    const path = avatarAnimationPaths(runtime.getConfig().live)[Number(c.req.param("index"))];
+    const path = bodyFiles(c.req.query("agent") || undefined).animations[Number(c.req.param("index"))];
     if (!path) return c.json({ error: "No such animation file is configured." }, 404);
     return sendAvatarFile(c, path);
   });
 
   app.post("/api/live/sessions", async (c) => {
     const body = await c.req
-      .json<{ agent?: string; body?: unknown }>()
-      .catch(() => ({}) as { agent?: string; body?: unknown });
+      .json<{ agent?: string; body?: unknown; sessionKey?: unknown }>()
+      .catch(() => ({}) as { agent?: string; body?: unknown; sessionKey?: unknown });
+    // The chat this session talks in: its turns join that conversation.
+    const sessionKey =
+      typeof body.sessionKey === "string" && body.sessionKey.trim() && body.sessionKey.length <= 200
+        ? body.sessionKey.trim()
+        : undefined;
     // A page that shows the agent with a body says what it can do; its cues go into the agent's instructions.
     let declared: Body | undefined;
     if (body.body !== undefined) {
@@ -1921,6 +1967,7 @@ export function createServer(opts: ServerOptions) {
       const session = startLiveSession(runtime, {
         ...(typeof body.agent === "string" && body.agent ? { agent: body.agent } : {}),
         ...(declared ? { body: declared } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
         transport: "web",
       });
       return c.json(liveJson(session), 201);

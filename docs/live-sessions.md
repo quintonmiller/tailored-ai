@@ -41,17 +41,18 @@ name it there. `apiKey` in a stage's options is sent as a bearer token.
 
 ## Talking in the web UI
 
-Open **Talk** in the sidebar, pick an agent and press **Start talking**. Allow
-the microphone when the browser asks. Then:
+Talking happens on the **Chat** page, in the same conversation as typing.
+Pick an agent, then hold **Talk** beside the message box (or hold Space when
+you're not typing) and let go to send. Allow the microphone the first time.
 
-- Hold the button, or Space, while you speak, and let go to send.
-- What you said appears, then the agent's reply as it is written, and its
-  voice plays a sentence at a time while the rest is still being made.
-- Holding the button again while it speaks cuts it off. Barge-in that works
+- What you said and the agent's reply appear in the chat as it is written,
+  and its voice plays a sentence at a time while the rest is still being made.
+- Spoken and typed turns are one history: say something, type the next
+  thing, and the agent has both. A new chat gets its conversation on its
+  first spoken turn.
+- Holding Talk again while it speaks cuts it off. Barge-in that works
   hands-free comes in a later phase.
-- No microphone? Type into the box under the button: it is the same turn.
-- Under the button: how long hearing you took, and how long until the first
-  word.
+- Old links to `#/talk` open the chat.
 
 Measured on the reference machine, with speech-to-text on the CPU: first word
 about 1.7 s after you let go. Speech-to-text on the GPU saves about half a
@@ -94,7 +95,7 @@ customise `systemPrompt.order`, keep those layers in the tail.
 
 ## An avatar
 
-Give the agent a body on the Talk page: a 3D model, standing in a small room,
+Give the agent a body on the Chat page: a 3D model, standing in a small room,
 that breathes and blinks, leans in while you talk, looks up and away while it
 thinks, and moves its mouth with its voice.
 
@@ -174,6 +175,37 @@ the avatar adds no tokens and no delay. It is drawn in the browser with
 three.js, loaded only when an avatar is set, and it moves far less when the
 browser asks for reduced motion.
 
+### On the chat page
+
+When the agent has a body, its room fills the chat page and the conversation
+becomes a panel laid over it, on the right on a wide screen and at the bottom
+on a phone. The camera frames the room in the part the panel leaves clear.
+**3D** in the toolbar turns the scene off and on, and the page remembers the
+choice. **Chat** hides the panel when you want the whole room; the message
+box stays. An agent without a body has no 3D button, just the chat.
+
+During a conversation the avatar stays where it is, or where it was sent.
+The first turn after three quiet minutes calls it back to face you, and
+between conversations it wanders.
+
+### Each agent its own body
+
+The `live.avatar` block is every agent's body by default. An agent can wear
+its own, or none:
+
+```yaml
+agents:
+  greeter:
+    avatar:
+      model: fox.vrm          # its own model; still plays the shared animations
+  analyst:
+    avatar: false             # no body, no 3D view
+```
+
+Paths work as they do under `live.avatar`. An agent that names a model but
+no animations plays the shared libraries, since any library fits any model.
+Its voice is set by `voice.voice`, as before.
+
 ## Cues: the agent moves its own body
 
 A page that shows the agent with a body says what that body can do when it
@@ -212,7 +244,11 @@ though they were looking at it. The voice style line changes with a body
 too: "only offer what your tools let you do" stopped it walking anywhere;
 "what your tools and your body let you do" did not.
 
-Cues need no configuration: the Talk page declares its body. The avatar
+Typed turns work the same way: while the chat page shows the body, each
+message carries it, the agent's instructions get the same line, and the
+reply's cues come back as `cue` events before the text is shown.
+
+Cues need no configuration: the chat page declares its body. The avatar
 offers six gestures (wave, nod, shake, shrug, think, bow), walking to any
 spot in its room, and looking or pointing at its furniture or at you. Asked
 to look at something behind it, or to point, it turns to face the thing
@@ -225,10 +261,10 @@ cues, and its text passes through untouched.
 
 | route | does |
 |---|---|
-| `GET /api/live` | what the Talk page needs before a session: `{avatar?, animations?}`, the URLs of the avatar's model file and its animation libraries when set |
-| `GET /api/live/avatar` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
-| `GET /api/live/animations/:index` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
-| `POST /api/live/sessions` | start: `{agent?, body?}`; `201` with the session and its limits; `400` when the body is not one that can go in a prompt (names must be short plain words); `409` when live sessions are off. `body` is `{looks?, gestures, aimed?}`, where each `aimed` move is `{verb, prep, does, targets}`, e.g. `{"verb": "go", "prep": "to", "does": "walk somewhere", "targets": ["the couch"]}` |
+| `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
+| `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
+| `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
+| `POST /api/live/sessions` | start: `{agent?, body?, sessionKey?}`. With `sessionKey`, its turns go into that chat's conversation, otherwise a fresh one; the session's `conversation` names it; `201` with the session and its limits; `400` when the body is not one that can go in a prompt (names must be short plain words); `409` when live sessions are off. `body` is `{looks?, gestures, aimed?}`, where each `aimed` move is `{verb, prep, does, targets}`, e.g. `{"verb": "go", "prep": "to", "does": "walk somewhere", "targets": ["the couch"]}` |
 | `GET /api/live/sessions/:id` | the session, with `endedAt` and `endReason` once it has ended |
 | `DELETE /api/live/sessions/:id` | end it |
 | `POST /api/live/sessions/:id/turn` | one turn. The body is the recorded audio (its `Content-Type` names the format), or `{"text": "..."}`. The reply is a server-sent stream: `transcript` `{text}`, `text` `{delta}` as the reply is written, `audio` `{seq, text, mimeType, data}` (base64, one per sentence, in order), `cue` `{seq, name, target?}` with the `seq` of the sentence it comes before, then `done` `{transcript, reply, timings}`, or `error` `{message}`. `409` once the session has ended |

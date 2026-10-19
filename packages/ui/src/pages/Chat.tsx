@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
 import { useChatStore } from "../components/ChatContext";
+import { TalkButton, useChatStage } from "../components/ChatStage";
 import { AttachmentTray, filesFromDrop, filesFromPaste, useAttachments } from "../components/Composer.js";
 import { MessageBubble, ThinkingDisclosure, ToolLogPanel } from "../components/MessageBubble";
 import { SuggestionChips } from "../components/SuggestionChips";
@@ -76,6 +77,33 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   );
 
   const agentNames = Object.keys(store.agents);
+
+  // The agent's body behind the conversation, when it has one, and talking
+  // out loud into the same conversation.
+  const [panelOpen, setPanelOpen] = useState(true);
+  const scene = useChatStage({
+    agent: store.selectedAgent,
+    sessionKey: store.sessionKey,
+    sending: store.sending,
+    panelOpen,
+    setTurnExtras: store.setTurnExtras,
+    onSpoken: (conversation, key) => {
+      if (!conversation) return;
+      // Loading the conversation shows the spoken turn with the rest, and
+      // makes it the one a typed message goes into next.
+      store.loadSession({
+        id: conversation,
+        key,
+        model: "",
+        provider: "",
+        project_id: null,
+        title: null,
+        pinned: 0,
+        created_at: "",
+        updated_at: "",
+      });
+    },
+  });
 
   const { attachments, add, remove, clear, readyIds, busy } = useAttachments();
   const [dragging, setDragging] = useState(false);
@@ -197,7 +225,10 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
         </div>
       )}
 
-      <div className="chat">
+      <div
+        className={`chat${scene.showStage ? " chat-with-stage" : ""}${scene.showStage && !panelOpen ? " chat-panel-hidden" : ""}`}
+      >
+        {scene.stage && <div className="chat-stage">{scene.stage}</div>}
         <div className="chat-toolbar">
           <button
             type="button"
@@ -226,6 +257,29 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
             </select>
           )}
           {store.sessionKey && <span className="chat-session-label">Session: {store.sessionKey}</span>}
+          <span className="chat-toolbar-spacer" />
+          {scene.has3d && (
+            <button
+              type="button"
+              className="chat-toolbar-btn"
+              aria-pressed={scene.stageOn}
+              onClick={() => scene.setStageOn(!scene.stageOn)}
+              title="Show the agent in its room"
+            >
+              3D
+            </button>
+          )}
+          {scene.showStage && (
+            <button
+              type="button"
+              className="chat-toolbar-btn"
+              aria-pressed={panelOpen}
+              onClick={() => setPanelOpen(!panelOpen)}
+              title="Show or hide the conversation over the scene"
+            >
+              Chat
+            </button>
+          )}
         </div>
 
         <div className="chat-messages">
@@ -258,6 +312,12 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
                 </span>
               </div>
             ))}
+          {scene.spoken && (
+            <>
+              <MessageBubble message={{ role: "user", content: scene.spoken.heard }} />
+              <MessageBubble message={{ role: "assistant", content: scene.spoken.replying || "…" }} />
+            </>
+          )}
           {store.approvals.length > 0 && (
             <ApprovalPanel
               approvals={store.approvals}
@@ -268,6 +328,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
             />
           )}
         </div>
+        {scene.voice.error && <div className="chat-voice-error">{scene.voice.error}</div>}
         <AttachmentTray attachments={attachments} onRemove={remove} />
         {/*
           Drag handlers sit on the bar itself so the whole strip is a target.
@@ -340,10 +401,14 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
             disabled={store.sending}
             aria-label="Compose message"
           />
-          <VoiceInputButton
-            disabled={store.sending}
-            onTranscript={(text) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
-          />
+          {scene.voiceEnabled ? (
+            <TalkButton voice={scene.voice} />
+          ) : (
+            <VoiceInputButton
+              disabled={store.sending}
+              onTranscript={(text) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
+            />
+          )}
           {store.sending ? (
             <button type="button" onClick={store.interrupt} className="chat-stop-btn" title="Stop generating">
               Stop

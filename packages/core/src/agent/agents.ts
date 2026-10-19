@@ -166,6 +166,8 @@ export interface ResolvedAgent {
   stateContext?: StateContextQuery[];
   /** How the agent talks in a live session (`voice:`). Undefined means the defaults. */
   voice?: AgentDefinition["voice"];
+  /** The agent's own body (`avatar:`), over `live.avatar`. Undefined means the deployment's. */
+  avatar?: AgentDefinition["avatar"];
 }
 
 /** @deprecated Use ResolvedAgent instead. */
@@ -345,6 +347,7 @@ export function resolveAgent(
     // Whole list, not merged: an agent that pins its own queries means those.
     stateContext: agent?.state?.context ?? dep.state?.context,
     voice: agent?.voice ?? dep.voice,
+    avatar: agent?.avatar ?? dep.avatar,
   };
 
   // Derive contextDir when an agent is active

@@ -33,6 +33,8 @@ export function Avatar({
   loudness,
   engaged,
   controls,
+  fill = false,
+  insetRight = 0,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -43,6 +45,10 @@ export function Avatar({
   engaged: boolean;
   /** Filled in once the avatar is on screen, so the page can pass on the agent's cues. */
   controls?: MutableRefObject<AvatarControls | null>;
+  /** Fill the container instead of sitting in a box on the page: the scene behind a chat. */
+  fill?: boolean;
+  /** Pixels of the right side covered by something laid over the scene; the camera frames what is left. */
+  insetRight?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -54,6 +60,11 @@ export function Avatar({
   viewRef.current = view;
   const controlsRef = useRef(controls);
   controlsRef.current = controls;
+  const insetRef = useRef(insetRight);
+  insetRef.current = insetRight;
+  useEffect(() => {
+    stage.current?.setInsets({ right: insetRight });
+  }, [insetRight]);
   const animationsRef = useRef(animations);
   animationsRef.current = animations;
   const animationsKey = animations.join("\n");
@@ -80,6 +91,7 @@ export function Avatar({
           return;
         }
         stage.current = s;
+        s.setInsets({ right: insetRef.current });
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
       })
       .catch((err: unknown) => {
@@ -105,7 +117,7 @@ export function Avatar({
 
   if (problem) return <p className="talk-avatar-problem">Couldn't show the avatar: {problem}</p>;
   return (
-    <div className="talk-stage">
+    <div className={fill ? "talk-stage fill" : "talk-stage"}>
       <div
         className="talk-avatar"
         ref={host}

@@ -33,7 +33,6 @@ const KIND_LABEL: Record<Kind, string> = {
 const NAV_PAGES: Item[] = [
   { kind: "page", title: "Home", href: "#/" },
   { kind: "page", title: "Chat", href: "#/chat" },
-  { kind: "page", title: "Talk", href: "#/talk" },
   { kind: "page", title: "Tasks", href: "#/projects" },
   { kind: "page", title: "Agents", href: "#/agents" },
   { kind: "page", title: "Projects", href: "#/projects" },
