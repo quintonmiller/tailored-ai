@@ -10,7 +10,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doingCss } from "../avatar/doing";
 import type { StageInput } from "../avatar/stage";
-import { type ChatStageOptions, TalkButton, tasksFor, useChatStage } from "./ChatStage";
+import { type ChatStageOptions, companyOf, TalkButton, tasksFor, useChatStage } from "./ChatStage";
 
 const stage = vi.hoisted(() => ({
   calls: [] as {
@@ -599,6 +599,21 @@ describe("the chat page's scene", () => {
     await settle();
     expect(stage.company.at(-1)).toEqual(["writer"]);
     expect(stage.rooms.length).toBe(drawn);
+  });
+
+  it("tells the stage who came to see whom, and leaves out anyone without a body to draw", () => {
+    expect(
+      companyOf({
+        company: [
+          { agent: "planner", avatar: "/api/live/avatar?agent=planner", with: "writer" },
+          { agent: "writer", avatar: "/api/live/avatar?agent=writer" },
+          { agent: "ghost" },
+        ],
+      }),
+    ).toEqual([
+      { agent: "planner", name: "planner", url: "/api/live/avatar?agent=planner", animations: [], with: "writer" },
+      { agent: "writer", name: "writer", url: "/api/live/avatar?agent=writer", animations: [] },
+    ]);
   });
 
   it("tells the stage when the agent has gone to another place, rather than its room changing", async () => {

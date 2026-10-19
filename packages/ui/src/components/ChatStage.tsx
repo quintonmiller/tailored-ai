@@ -438,7 +438,8 @@ export function useScene(id: string | null): SceneInfo | null {
 export interface PlaceInfo {
   id?: string;
   place?: Room;
-  company?: { agent: string; name?: string; avatar?: string; animations?: string[] }[];
+  /** Everyone else in it; `with`, the one here an agent came to see, having messaged it directly. */
+  company?: { agent: string; name?: string; avatar?: string; animations?: string[]; with?: string }[];
   /** Its doors to other places. */
   doors?: RoomDoor[];
   /** The area it is in, by id. */
@@ -448,7 +449,17 @@ export interface PlaceInfo {
 /** The others in the place, as the stage takes them; anyone without a body file is left out. */
 export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
   return (info?.company ?? []).flatMap((c) =>
-    c.avatar ? [{ agent: c.agent, name: c.name ?? c.agent, url: c.avatar, animations: c.animations ?? [] }] : [],
+    c.avatar
+      ? [
+          {
+            agent: c.agent,
+            name: c.name ?? c.agent,
+            url: c.avatar,
+            animations: c.animations ?? [],
+            ...(c.with ? { with: c.with } : {}),
+          },
+        ]
+      : [],
   );
 }
 

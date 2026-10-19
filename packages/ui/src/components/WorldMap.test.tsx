@@ -8,7 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateChangeInfo } from "../api";
 import type { AgentActivity } from "../avatar/doing";
-import { busyAgents, busyMark, type MapPlace, markWords, useWorldMap, WorldMap } from "./WorldMap";
+import { busyAgents, busyMark, doingHere, type MapPlace, markWords, useWorldMap, WorldMap } from "./WorldMap";
 
 // Changes to the world, as the page hears of them.
 const heard = vi.hoisted(() => ({ listeners: new Set<(change: unknown) => void>() }));
@@ -247,6 +247,35 @@ describe("WorldMap", () => {
     expect(onGo).toHaveBeenCalledWith("room:local:trip");
   });
 
+  it("says who went to see whom, and where, in Busy now and the list of agents", () => {
+    render({
+      here: "home:planner",
+      places: [
+        { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: [] },
+        {
+          id: "home:writer",
+          name: "writer's room",
+          kind: "home",
+          owner: "writer",
+          agents: ["planner", "writer"],
+          with: { planner: "writer" },
+        },
+      ],
+      activities: {
+        planner: { agent: "planner", doing: "idle", what: "idle" },
+        writer: { agent: "writer", doing: "idle", what: "idle" },
+      },
+    });
+    const busy = [...container.querySelectorAll(".world-map-busy")] as HTMLButtonElement[];
+    expect(busy.map((b) => b.textContent)).toEqual(["…plannertalking with writerin writer's room"]);
+    // In the list of agents too: talking, and where; the one it came to see is as it is.
+    const [planner, writer] = people();
+    expect(planner.classList.contains("doing-talking")).toBe(true);
+    expect(planner.querySelector(".world-map-who-doing")?.textContent).toBe("talking");
+    expect(planner.parentElement?.querySelector(".world-map-away")?.textContent).toBe("in writer's home");
+    expect(writer.classList.contains("doing-idle")).toBe(true);
+  });
+
   it("marks where something is happening, and puts it first", () => {
     render({
       places: [
@@ -320,6 +349,26 @@ describe("busyAgents", () => {
       others: 0,
     });
     expect(busyMark(map[1], { b: act("asleep") })).toBeUndefined();
+  });
+
+  it("has one gone to see an agent talking with it, unless it is busier than that", () => {
+    const visit: MapPlace = {
+      id: "home:b",
+      name: "b's room",
+      kind: "home",
+      owner: "b",
+      agents: ["a", "b"],
+      with: { a: "b" },
+    };
+    expect(doingHere(visit, "a", { a: act("idle") })).toMatchObject({ doing: "talking", what: "talking with b" });
+    expect(doingHere(visit, "a", {})).toMatchObject({ doing: "talking", with: "b" });
+    // Thinking over what it heard: that is what it is doing.
+    expect(doingHere(visit, "a", { a: act("thinking") })?.doing).toBe("thinking");
+    // The one it came to see is as busy as its own activity says.
+    expect(doingHere(visit, "b", { b: act("idle") })?.doing).toBe("idle");
+    expect(busyAgents([visit], { a: act("idle"), b: act("idle") }).map((b) => [b.agent, b.activity.what])).toEqual([
+      ["a", "talking with b"],
+    ]);
   });
 
   it("says a mark in words a glance gets right", () => {
