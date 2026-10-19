@@ -5,6 +5,7 @@
  * own origin, front toward +Z; the stage places and turns it.
  */
 import * as THREE from "three";
+import { fitPlate } from "./doors";
 import type { PropKind, Room, RoomDoor } from "./scene";
 
 const materials = new Map<string, THREE.MeshStandardMaterial>();
@@ -166,6 +167,10 @@ export interface PropLook {
   label?: string;
 }
 
+/** How brightly a canvas face lights itself, so it reads at night; and a door's plate while the pointer is on it. */
+const FACE_GLOW = 0.45;
+const FACE_LIT = 1.1;
+
 /** A canvas to draw on, and the texture that shows it, lit from within so it reads at night. */
 function canvasFace(
   w: number,
@@ -181,7 +186,7 @@ function canvasFace(
     map: texture,
     emissiveMap: texture,
     emissive: 0xffffff,
-    emissiveIntensity: 0.45,
+    emissiveIntensity: FACE_GLOW,
     roughness: 0.9,
   });
   return { canvas, texture, material };
@@ -753,7 +758,11 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
   }
 }
 
-/** Words on a plate, as large as fit, on a ground of their own. */
+/**
+ * Words on a plate, on a ground of their own: as large as fit on one line, or
+ * on two when a long name reads better that way (`fitPlate`), and squeezed
+ * only past the smallest worth drawing, never cut off.
+ */
 function drawPlate(canvas: HTMLCanvasElement, label: string, ground: string, ink: string) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
@@ -762,14 +771,14 @@ function drawPlate(canvas: HTMLCanvasElement, label: string, ground: string, ink
   ctx.fillStyle = ink;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  let size = Math.round(canvas.height * 0.58);
-  ctx.font = `600 ${size}px system-ui, sans-serif`;
-  // Smaller for a long name, down to a point, rather than squashed.
-  while (size > canvas.height * 0.3 && ctx.measureText(label).width > canvas.width * 0.9) {
-    size -= 2;
-    ctx.font = `600 ${size}px system-ui, sans-serif`;
-  }
-  ctx.fillText(label, canvas.width / 2, canvas.height * 0.54, canvas.width * 0.92);
+  const font = (size: number) => `600 ${size}px system-ui, sans-serif`;
+  // Measured once at a large size, and scaled: the width of words grows with their size.
+  ctx.font = font(100);
+  const { lines, size } = fitPlate(label, (t) => ctx.measureText(t).width / 100, canvas.width, canvas.height);
+  ctx.font = font(Math.floor(size));
+  const step = size * 1.08;
+  const top = canvas.height * 0.54 - ((lines.length - 1) * step) / 2;
+  for (const [i, line] of lines.entries()) ctx.fillText(line, canvas.width / 2, top + i * step, canvas.width * 0.92);
 }
 
 /**
@@ -800,7 +809,7 @@ let glass: THREE.MeshStandardMaterial | undefined;
 export function buildDoor(
   door: Pick<RoomDoor, "label" | "kind" | "occupant">,
   opts: { freestanding: boolean; trim?: string; height: number },
-): { group: THREE.Group; light?: THREE.MeshBasicMaterial } {
+): { group: THREE.Group; light?: THREE.MeshBasicMaterial; highlight: (on: boolean) => void } {
   const g = new THREE.Group();
   const look = DOOR_LOOKS[door.kind] ?? DOOR_LOOKS.room;
   const trim = hex(opts.trim, 0xf2efe8);
@@ -861,7 +870,28 @@ export function buildDoor(
   }
   // A mat in front, so a door is found by where it meets the floor as well.
   box(g, 1.3, 0.014, 0.55, 0x4a4038, 0, 0.007, 0.45).castShadow = false;
-  if (!door.occupant) return { group: g };
+  // Lit up while the pointer is on it: a bright edge round the doorway and the mat, and the plate brighter.
+  const edge = new THREE.MeshBasicMaterial({ color: 0xffd98a, toneMapped: false, transparent: true, opacity: 0.9 });
+  const glow = new THREE.Group();
+  const bar = (w: number, h: number, d: number, x: number, y: number, z: number) => {
+    const mesh = solid(new THREE.BoxGeometry(w, h, d), edge, x, y, z);
+    mesh.castShadow = false;
+    glow.add(mesh);
+  };
+  const up = opts.freestanding ? 1.08 : tall;
+  const front = opts.freestanding ? 0.13 : 0.15;
+  for (const x of [-0.6, 0.6]) bar(0.035, up, 0.02, x, up / 2, front);
+  bar(1.235, 0.035, 0.02, 0, up, front);
+  // The mat's outline, just above it.
+  for (const z of [0.18, 0.72]) bar(1.3, 0.008, 0.03, 0, 0.018, z);
+  for (const x of [-0.65, 0.65]) bar(0.03, 0.008, 0.57, x, 0.018, 0.45);
+  glow.visible = false;
+  g.add(glow);
+  const highlight = (on: boolean) => {
+    glow.visible = on;
+    face.material.emissiveIntensity = on ? FACE_LIT : FACE_GLOW;
+  };
+  if (!door.occupant) return { group: g, highlight };
   // Drawn in its own colour, untouched by the lights or the tone mapping, so it stays that colour at night too.
   const light = new THREE.MeshBasicMaterial({ color: 0xe6eaf0, toneMapped: false });
   // A bulb beside the plate on a wall, on top of a gate's post seen from all round; and a strip along the plate,
@@ -886,7 +916,7 @@ export function buildDoor(
     mesh.castShadow = false;
     g.add(mesh);
   }
-  return { group: g, light };
+  return { group: g, light, highlight };
 }
 
 /**

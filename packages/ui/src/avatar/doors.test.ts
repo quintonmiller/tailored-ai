@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DOING_COLORS } from "./doing";
 import {
   ARRIVE_IN,
   arrivalAt,
@@ -7,7 +8,10 @@ import {
   doorLight,
   doorReached,
   doorTo,
+  doorWords,
+  fitPlate,
   inDoorway,
+  plateBreak,
   standsClear,
   THRESHOLD,
   threshold,
@@ -101,13 +105,10 @@ describe("doors", () => {
     expect(doorReached(room, [-4.75, 1.3], [-0.05, 0])).toBe(left);
   });
 
-  it("light up by what the agent behind them is doing, brightest when it needs you, waiting far from gold", () => {
-    // Waiting is the one that matters most: its amber must not be the gold of a brass plate.
-    const { color } = doorLight("waiting");
-    const [r, g, b] = [(color >> 16) & 255, (color >> 8) & 255, color & 255];
-    expect(r).toBe(255);
-    expect(g / r).toBeLessThan(0.65);
-    expect(b).toBeLessThan(40);
+  it("light up by what the agent behind them is doing, in the doing's own colour, brightest when it needs you", () => {
+    // The colour the map and the sign over its head use for the same thing: orange waiting on you, never gold.
+    for (const doing of ["working", "thinking", "talking", "waiting", "stuck", "idle", "asleep"] as const)
+      expect(doorLight(doing).color).toBe(DOING_COLORS[doing]);
     expect(doorLight("waiting").glow).toBeGreaterThan(doorLight("working").glow);
     expect(doorLight("asleep").glow).toBeLessThan(doorLight("idle").glow);
     expect(
@@ -115,5 +116,62 @@ describe("doors", () => {
         .size,
     ).toBe(6);
     expect(doorLight(undefined)).toEqual(doorLight("idle"));
+  });
+});
+
+describe("doorWords", () => {
+  it("says where a door goes, as a pointer over it shows it", () => {
+    expect(doorWords({ kind: "hall", label: "Residences E–N" })).toBe("to Residences E–N");
+    expect(doorWords({ kind: "home", label: "analyst", occupant: "analyst" })).toBe("to analyst's home");
+    expect(doorWords({ kind: "home", label: "Default agent", occupant: "default" })).toBe(
+      "to the default agent's home",
+    );
+    expect(doorWords({ kind: "room", label: "#budget" })).toBe("to #budget");
+    expect(doorWords({ kind: "lobby", label: "Lobby" })).toBe("to the lobby");
+    expect(doorWords({ kind: "shared", label: "Lounge" })).toBe("to Lounge");
+  });
+});
+
+describe("plate words", () => {
+  // Every character half as wide as it is high, as near as matters for a plate's font.
+  const measure = (text: string) => text.length * 0.55;
+  // A gate's plate, as drawn: 1.36 by 0.27 metres at 440 pixels a metre.
+  const [w, h] = [598, 119];
+
+  it("puts a short name on one line, as large as the plate allows", () => {
+    expect(fitPlate("analyst", measure, w, h)).toEqual({ lines: ["analyst"], size: h * 0.58 });
+  });
+
+  it("shrinks a longer name onto one line while it still reads well", () => {
+    const { lines, size } = fitPlate("meeting-summarizer", measure, w, h);
+    expect(lines).toEqual(["meeting-summarizer"]);
+    expect(size).toBeLessThan(h * 0.58);
+    expect(size * measure("meeting-summarizer")).toBeLessThanOrEqual(w * 0.9 + 1e-9);
+  });
+
+  it("puts a name too long for one line on two, broken at its hyphen, larger than one line could be", () => {
+    const label = "calendar-organizer-assistant";
+    const { lines, size } = fitPlate(label, measure, w, h);
+    expect(lines).toEqual(["calendar-organizer-", "assistant"]);
+    expect(size).toBeGreaterThan((w * 0.9) / measure(label));
+    for (const line of lines) expect(size * measure(line)).toBeLessThanOrEqual(w * 0.9 + 1e-9);
+    // Two lines, a little apart, inside the plate's height.
+    expect(size * 2 * 1.08).toBeLessThan(h);
+  });
+
+  it("breaks where a name breaks best: at a hyphen, a space, an underscore or a capital, lines as even as can be", () => {
+    expect(plateBreak("meeting-summarizer")).toEqual(["meeting-", "summarizer"]);
+    expect(plateBreak("#weekly-team-sync-notes")).toEqual(["#weekly-team-", "sync-notes"]);
+    expect(plateBreak("Residences E–N and more")).toEqual(["Residences", "E–N and more"]);
+    expect(plateBreak("mail_sorter_two")).toEqual(["mail_", "sorter_two"]);
+    expect(plateBreak("calendarOrganizer")).toEqual(["calendar", "Organizer"]);
+    // A name with nowhere to break is broken in the middle, with a hyphen.
+    expect(plateBreak("supercalifragilistic")).toEqual(["supercalif-", "ragilistic"]);
+  });
+
+  it("never draws a name smaller than a floor: past it, it is squeezed rather than cut off", () => {
+    const label = "x".repeat(200);
+    const { size } = fitPlate(label, measure, w, h);
+    expect(size).toBeCloseTo(h * 0.22, 9);
   });
 });

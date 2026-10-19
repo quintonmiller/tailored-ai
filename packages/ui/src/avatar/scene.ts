@@ -387,7 +387,20 @@ export interface Lighting {
   window: { color: number; glow: number };
 }
 
-export function lightingFor(hour: number): Lighting {
+/**
+ * How a place is lit after dark. A home is cosy: moonlight and its own lamps.
+ * The lobby, the halls and the meeting rooms are public, where anyone may be
+ * at any hour, so the lights overhead are on and they stay bright; only the
+ * windows say it is night.
+ */
+export type Lights = "home" | "public";
+
+/** How a place is lit, by its id: the lobby, the halls and the meeting rooms are public; the rest lit as homes. */
+export function lightsFor(place: string | undefined): Lights {
+  return place === "lobby" || !!place?.startsWith("hall:") || !!place?.startsWith("room:") ? "public" : "home";
+}
+
+export function lightingFor(hour: number, lights: Lights = "home"): Lighting {
   if (hour >= 7 && hour < 17) {
     return {
       sun: { color: 0xfff4e0, intensity: 2.4 },
@@ -396,7 +409,16 @@ export function lightingFor(hour: number): Lighting {
       window: { color: 0xbfe3ff, glow: 0.7 },
     };
   }
-  if (hour >= 17 && hour < 20) {
+  const evening = hour >= 17 && hour < 20;
+  // The lights overhead, warm white, from above as the sun would be, and bounced off the floor and walls.
+  if (lights === "public")
+    return {
+      sun: { color: 0xfff1de, intensity: 1.9 },
+      sky: { color: 0xfff4e6, ground: 0xa89a88, intensity: 1.15 },
+      lamp: { on: true, intensity: 1.6 },
+      window: evening ? { color: 0xffb88a, glow: 0.55 } : { color: 0x2b3a66, glow: 0.25 },
+    };
+  if (evening) {
     return {
       sun: { color: 0xffb36b, intensity: 1.3 },
       sky: { color: 0xf3d6c0, ground: 0x9c7f66, intensity: 0.75 },

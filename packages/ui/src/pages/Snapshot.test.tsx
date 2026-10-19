@@ -8,7 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Snapshot } from "./Snapshot";
 
 const stage = vi.hoisted(() => ({
-  opts: [] as { view?: string; still?: { spot?: string; gesture?: string }; room?: { name?: string } }[],
+  opts: [] as {
+    view?: string;
+    still?: { spot?: string; gesture?: string };
+    room?: { name?: string };
+    lights?: string;
+  }[],
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (
@@ -24,7 +29,7 @@ vi.mock("../avatar/stage", () => ({
   ) => {
     stage.opts.push(opts);
     setTimeout(() => opts.onReady?.(), 0);
-    return { dispose() {}, setView() {}, setInsets() {}, setRoom() {}, setCompany() {}, cue() {} };
+    return { dispose() {}, setView() {}, setInsets() {}, setRoom() {}, setCompany() {}, setLights() {}, cue() {} };
   },
 }));
 
@@ -45,7 +50,13 @@ beforeEach(() => {
     vi.fn(async (url: string) => {
       if (url.startsWith("/api/live")) return new Response(JSON.stringify(live));
       if (url === "/api/ext/builtin:places/guide")
-        return new Response(JSON.stringify({ place: { name: "guide's room", props: [], spots: [], start: "middle" } }));
+        return new Response(
+          JSON.stringify({ id: "home:guide", place: { name: "guide's room", props: [], spots: [], start: "middle" } }),
+        );
+      if (url === "/api/ext/builtin:places/planner")
+        return new Response(
+          JSON.stringify({ id: "room:local:trip", place: { name: "trip", props: [], spots: [], start: "middle" } }),
+        );
       return new Response("{}", { status: 404 });
     }),
   );
@@ -78,10 +89,17 @@ describe("the snapshot page", () => {
       view: "close",
       still: { spot: "couch", gesture: "wave" },
       room: { name: "guide's room" },
+      lights: "home",
     });
     expect(frame().dataset.snapshot).toBe("ready");
     // Nothing to click in a photo.
     expect(container.querySelector(".talk-view")).toBeNull();
+  });
+
+  it("lights a photo in a meeting room as anyone walking in sees it, bright after dark", async () => {
+    live = { enabled: true, avatar: "/api/live/avatar?agent=planner" };
+    await open("/snapshot?agent=planner");
+    expect(stage.opts[0]).toMatchObject({ room: { name: "trip" }, lights: "public" });
   });
 
   it("says why when there's nothing to photograph", async () => {

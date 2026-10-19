@@ -7,7 +7,7 @@
  * A door faces into its room. On the back wall it looks toward +Z, on the left
  * toward +X, and on the open front and right sides back into the room.
  */
-import type { AgentActivity } from "./doing";
+import { type AgentActivity, DOING_COLORS } from "./doing";
 import type { Obstacle } from "./locomotion";
 import type { Room, RoomDoor } from "./scene";
 
@@ -144,25 +144,82 @@ export function inDoorway(room: Pick<Room, "width" | "depth">, door: RoomDoor, a
 }
 
 /**
- * The colour of the light by a home's door, by what its agent is doing, and
- * how bright it is (0–1): full when it needs you, dim when it is idle or
- * asleep. Strong colours, drawn as they are, so each reads at a glance against
- * the plate beside it.
+ * The colour of the light by a home's door, by what its agent is doing (the
+ * colours every view of a doing uses), and how bright it is (0–1): full when
+ * it needs you, dim asleep, a plain grey idle. Drawn as they are, so each
+ * reads at a glance against the plate beside it.
  */
 export function doorLight(doing: AgentActivity["doing"] | undefined): { color: number; glow: number } {
-  switch (doing) {
-    case "working":
-      return { color: 0x22d65f, glow: 0.9 };
-    case "thinking":
-    case "talking":
-      return { color: 0x3388ff, glow: 0.9 };
-    case "waiting":
-      return { color: 0xff9a10, glow: 1 };
-    case "stuck":
-      return { color: 0xff2e2e, glow: 1 };
-    case "asleep":
-      return { color: 0x8a6cff, glow: 0.4 };
-    default:
-      return { color: 0xe6eaf0, glow: 0.45 };
+  const d = doing ?? "idle";
+  const glow = d === "waiting" || d === "stuck" ? 1 : d === "asleep" ? 0.4 : 0.9;
+  return { color: DOING_COLORS[d], glow };
+}
+
+/** Where a door goes, in words for a pointer over it: "to Residences E–N", "to analyst's home", "to #budget". */
+export function doorWords(door: Pick<RoomDoor, "kind" | "label" | "occupant">): string {
+  if (door.kind === "lobby") return "to the lobby";
+  if (door.kind === "home") {
+    const who = door.occupant ?? door.label;
+    return `to ${who === "default" ? "the default agent" : who}'s home`;
   }
+  return `to ${door.label}`;
+}
+
+/** How large words on a plate may be, as a share of its height: one line, two lines, and the least either may be. */
+const PLATE = { one: 0.58, two: 0.4, least: 0.22 };
+/** How much of a plate's width words may take: a margin either side. */
+const PLATE_WIDTH = 0.9;
+/** A name on one line smaller than this share of the plate's height reads better on two. */
+const ONE_LINE_AT_LEAST = 0.42;
+
+/**
+ * Where a name breaks across two lines: after a hyphen, an underscore, a dot
+ * or a space, or between a word and a capital, wherever leaves the two lines
+ * most even. In a name with none of those, in the middle, with a hyphen.
+ */
+export function plateBreak(label: string): [string, string] {
+  const at: number[] = [];
+  for (let i = 1; i < label.length; i++) {
+    const before = label[i - 1];
+    const here = label[i];
+    if (
+      "-_.".includes(before) ||
+      (here === " " && i < label.length - 1) ||
+      (/[a-z]/.test(before) && /[A-Z]/.test(here))
+    )
+      at.push(i);
+  }
+  if (!at.length) {
+    const mid = Math.ceil(label.length / 2);
+    return [`${label.slice(0, mid)}-`, label.slice(mid)];
+  }
+  // The break whose longer line is shortest; between two as good, the later, so the top line is the fuller.
+  const longer = (i: number) => Math.max(i, label.length - i);
+  const best = at.reduce((a, b) => (longer(b) <= longer(a) ? b : a));
+  return [label.slice(0, best).trimEnd(), label.slice(best).trimStart()];
+}
+
+/**
+ * How a name goes on a plate `width` by `height` pixels: on one line as large
+ * as fits; a name too long for that at a size worth reading goes on two lines,
+ * broken where it breaks best (`plateBreak`), when they can be larger; and the
+ * words are never smaller than a floor, past which they are squeezed rather
+ * than cut off. `measure` says how wide some words are at a size of 1.
+ */
+export function fitPlate(
+  label: string,
+  measure: (text: string) => number,
+  width: number,
+  height: number,
+): { lines: string[]; size: number } {
+  const room = width * PLATE_WIDTH;
+  const largest = (text: string, most: number) => Math.min(height * most, room / Math.max(1e-6, measure(text)));
+  const one = largest(label, PLATE.one);
+  if (one >= height * ONE_LINE_AT_LEAST || label.length < 4)
+    return { lines: [label], size: Math.max(one, height * PLATE.least) };
+  const lines = plateBreak(label);
+  const two = Math.min(...lines.map((l) => largest(l, PLATE.two)));
+  return two > one
+    ? { lines, size: Math.max(two, height * PLATE.least) }
+    : { lines: [label], size: Math.max(one, height * PLATE.least) };
 }

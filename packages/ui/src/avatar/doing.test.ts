@@ -3,7 +3,17 @@
  * record turned into a thing to hold, a sign, a place to be and a line to show.
  */
 import { describe, expect, it } from "vitest";
-import { type AgentActivity, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
+import {
+  type AgentActivity,
+  behaviorFor,
+  DOING_COLORS,
+  DOING_VARS,
+  doingCss,
+  heldFor,
+  hueFor,
+  sameBehavior,
+  stationSpot,
+} from "./doing";
 
 const act = (over: Partial<AgentActivity>): AgentActivity => ({
   agent: "planner",
@@ -164,5 +174,25 @@ describe("hueFor", () => {
       expect(h).toBeGreaterThanOrEqual(0);
       expect(h).toBeLessThan(360);
     }
+  });
+});
+
+describe("DOING_COLORS", () => {
+  it("are the page's colours too, as custom properties, so a doing looks the same on a door and on the map", () => {
+    expect(DOING_VARS["--doing-waiting"]).toBe("#ff9a1f");
+    expect(DOING_VARS["--doing-stuck"]).toBe(doingCss("stuck"));
+    expect(Object.keys(DOING_VARS)).toHaveLength(Object.keys(DOING_COLORS).length);
+  });
+
+  it("keep waiting on you and stuck apart, and neither the gold of a brass plate", () => {
+    const rgb = (c: number) => [(c >> 16) & 255, (c >> 8) & 255, c & 255];
+    const [wr, wg, wb] = rgb(DOING_COLORS.waiting);
+    // Orange: well short of gold's green.
+    expect(wg / wr).toBeLessThan(0.65);
+    expect(wb).toBeLessThan(40);
+    // Red: no more green in it than blue to speak of.
+    const [sr, sg, sb] = rgb(DOING_COLORS.stuck);
+    expect(sg / sr).toBeLessThan(0.4);
+    expect(Math.abs(sg - sb)).toBeLessThan(16);
   });
 });

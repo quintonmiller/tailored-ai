@@ -8,6 +8,7 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { doingCss } from "../avatar/doing";
 import type { StageInput } from "../avatar/stage";
 import { type ChatStageOptions, TalkButton, tasksFor, useChatStage } from "./ChatStage";
 
@@ -51,6 +52,10 @@ const stage = vi.hoisted(() => ({
   entered: [] as (string | undefined)[],
   /** For each room shown in place of the last, whether the agent had gone to another place. */
   moves: [] as boolean[],
+  /** How each stage was told to light its place, at the start and each time after. */
+  lights: [] as string[],
+  /** The last stage's way to say the pointer is over a door, or left it. */
+  onDoorHover: undefined as ((door: { to: string } | undefined, at?: { x: number; y: number }) => void) | undefined,
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (
@@ -69,10 +74,14 @@ vi.mock("../avatar/stage", () => ({
       company?: { agent: string }[];
       onDoor?: (door: { to: string }) => void;
       arriveFrom?: string;
+      lights?: string;
+      onDoorHover?: (door: { to: string } | undefined, at?: { x: number; y: number }) => void;
     },
   ) => {
     stage.onLine = opts.onLine;
     stage.onDoor = opts.onDoor;
+    stage.onDoorHover = opts.onDoorHover;
+    if (opts.lights) stage.lights.push(opts.lights);
     stage.arrivals.push(opts.arriveFrom);
     stage.visitors.push(!!opts.visitor);
     stage.onNear = opts.onNear;
@@ -98,6 +107,7 @@ vi.mock("../avatar/stage", () => ({
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
       setTasks: (t: { id: string }[]) => stage.tasks.push(t),
+      setLights: (l: string) => stage.lights.push(l),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
     };
   },
@@ -146,6 +156,8 @@ let tasksHeld: Promise<void> | null = null;
 let watcherInfo = { enabled: true, triggers: ["created", "updated"] };
 /** Agents that run on their own, as the exploratory worker keeps them. */
 let ownAgents: Record<string, unknown>[] = [];
+/** Places on the map besides the usual ones: an agent made since the page opened. */
+let mapExtra: Record<string, unknown>[] = [];
 
 /** The agent's own room, as the server keeps it. */
 const home = {
@@ -247,6 +259,7 @@ beforeEach(() => {
   chattedWith.length = 0;
   agentsInfo = {};
   speechRecords = [];
+  mapExtra = [];
   stage.agents.length = 0;
   activityRecords = [];
   taskRows = [
@@ -327,10 +340,27 @@ beforeEach(() => {
         return new Response(
           JSON.stringify({
             places: [
-              { id: "home:talker", name: "talker's room", kind: "home", owner: "talker", agents: ["talker"] },
-              { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: ["planner"] },
+              { id: "hall:main:homes-1", name: "Residences", kind: "hall", agents: [], via: "lobby" },
+              {
+                id: "home:talker",
+                name: "talker's room",
+                kind: "home",
+                owner: "talker",
+                agents: ["talker"],
+                via: "hall:main:homes-1",
+              },
+              {
+                id: "home:planner",
+                name: "planner's room",
+                kind: "home",
+                owner: "planner",
+                agents: ["planner"],
+                via: "hall:main:homes-1",
+              },
               { id: "room:local:trip", name: "trip", kind: "room", agents: ["planner", "writer"] },
+              ...mapExtra,
             ],
+            areas: [{ id: "main", name: "the main building", places: ["lobby", "hall:main:homes-1"] }],
           }),
         );
       if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("home:planner")}`)
@@ -509,6 +539,10 @@ describe("the chat page's scene", () => {
     expect(stage.calls.map((c) => c.url)).toEqual(["/api/live/avatar?agent=talker"]);
     expect(stage.calls[0].animations).toEqual(["/api/live/animations/0?agent=talker"]);
     expect(stage.insets.at(-1)).toBeGreaterThan(0);
+    // Everything over the stage says what agents are doing in the colours its doors and signs use.
+    const over = container.querySelector(".talk-stage") as HTMLElement;
+    expect(over.style.getPropertyValue("--doing-waiting")).toBe(doingCss("waiting"));
+    expect(over.style.getPropertyValue("--doing-stuck")).toBe(doingCss("stuck"));
   });
 
   it("shows the agent's own room, and redraws it the moment the agent changes it", async () => {
@@ -688,11 +722,11 @@ describe("the chat page's scene", () => {
     await act(async () => tool("Map").click());
     await settle();
     const rooms = [...container.querySelectorAll(".world-map-place")] as HTMLButtonElement[];
-    expect(rooms.map((r) => r.querySelector(".world-map-name")?.textContent)).toEqual([
-      "#trip",
-      "talker's roomyou are here",
-      "planner's room",
-    ]);
+    expect(rooms.map((r) => r.querySelector(".world-map-name")?.textContent)).toEqual(["#trip"]);
+    // Agents by name, the one whose home you are in marked.
+    const people = [...container.querySelectorAll(".world-map-who")];
+    expect(people.map((p) => p.querySelector(".world-map-who-name")?.textContent)).toEqual(["planner", "talker"]);
+    expect(people[1].getAttribute("aria-current")).toBe("location");
     await act(async () => rooms[0].click());
     await settle(60);
     // A new stage, the visitor's, with everyone in the room as company, and the map put away.
@@ -750,16 +784,17 @@ describe("the chat page's scene", () => {
     await render({ following: true });
     const tool = (label: string) =>
       [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    /** By the map, to a room by its name or an agent's home by the agent's. */
     const go = async (name: string) => {
       await act(async () => tool("Map").click());
       await settle();
-      const place = [...container.querySelectorAll(".world-map-place")].find((b) =>
-        b.querySelector(".world-map-name")?.textContent?.startsWith(name),
-      ) as HTMLButtonElement;
+      const place = [...container.querySelectorAll(".world-map-name, .world-map-who-name")]
+        .find((n) => n.textContent?.startsWith(name))
+        ?.closest("button") as HTMLButtonElement;
       await act(async () => place.click());
       await settle(60);
     };
-    await go("planner's room");
+    await go("planner");
     expect(chattedWith).toEqual(["planner"]);
     // Still you in your own body, come from talker's: the way back says so.
     expect(stage.visitors.at(-1)).toBe(true);
@@ -774,8 +809,8 @@ describe("the chat page's scene", () => {
     expect(stage.visitors.at(-1)).toBe(false);
     expect(stage.agents.at(-1)).toBe("talker");
     // Going to talker's own home on the map is coming back too.
-    await go("planner's room");
-    await go("talker's room");
+    await go("planner");
+    await go("talker");
     expect(chattedWith).toEqual(["planner", "talker", "planner", "talker"]);
     expect(stage.visitors.at(-1)).toBe(false);
   });
@@ -787,8 +822,8 @@ describe("the chat page's scene", () => {
       ([...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === "Map") as HTMLElement).click(),
     );
     await settle();
-    const planner = [...container.querySelectorAll(".world-map-place")].find((b) =>
-      b.querySelector(".world-map-name")?.textContent?.startsWith("planner's room"),
+    const planner = [...container.querySelectorAll(".world-map-who")].find(
+      (b) => b.querySelector(".world-map-who-name")?.textContent === "planner",
     ) as HTMLButtonElement;
     await act(async () => planner.click());
     await settle(60);
@@ -824,13 +859,79 @@ describe("the chat page's scene", () => {
 
   it("opens and closes the map with M, unless you are typing", async () => {
     await render();
-    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyM" })));
+    const press = new KeyboardEvent("keydown", { code: "KeyM", cancelable: true });
+    await act(async () => window.dispatchEvent(press));
     await settle();
     expect(container.querySelector(".world-map")).not.toBeNull();
+    // The M that opened it isn't typed into its search as it takes the focus.
+    expect(press.defaultPrevented).toBe(true);
     const field = document.createElement("textarea");
     container.appendChild(field);
     await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyM", bubbles: true })));
     expect(container.querySelector(".world-map")).not.toBeNull();
+  });
+
+  it("asks for the map again each time it opens, so an agent made since is on it", async () => {
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    const people = () =>
+      [...container.querySelectorAll(".world-map-who-name")].map((p) => p.textContent).filter((n) => n !== "talker");
+    await act(async () => tool("Map").click());
+    await settle();
+    expect(people()).toEqual(["planner"]);
+    // An agent made from the lobby's kiosk: nobody came or went, so nothing says so but the map itself.
+    mapExtra = [
+      { id: "home:newcomer", name: "newcomer's room", kind: "home", owner: "newcomer", agents: ["newcomer"] },
+    ];
+    await act(async () => tool("Map").click());
+    await settle();
+    await act(async () => tool("Map").click());
+    await settle();
+    expect(people()).toEqual(["newcomer", "planner"]);
+  });
+
+  it("says where you are over the stage, from the area down, and each step goes there", async () => {
+    await render({ following: true });
+    await settle(60);
+    const trail = () => container.querySelector(".world-trail");
+    expect(trail()?.textContent).toBe("Main building›Residences›talker's home");
+    expect(trail()?.querySelector("[aria-current]")?.textContent).toBe("talker's home");
+    // Through a door into the hall: the trail follows, and the hall is where you are.
+    await act(async () => stage.onDoor?.({ to: "hall:main:homes-1" }));
+    await settle(60);
+    expect(trail()?.textContent).toBe("Main building›Residences");
+    // The area's step goes to its way in: the lobby, in your own body.
+    const step = [...(trail()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Main building");
+    await act(async () => step?.click());
+    await settle(60);
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.entered.at(-1)).toBeUndefined();
+  });
+
+  it("lights a home as a home, and the halls and the lobby as public places, bright after dark", async () => {
+    await render({ following: true });
+    await settle(60);
+    expect(stage.lights.at(-1)).toBe("home");
+    await act(async () => stage.onDoor?.({ to: "hall:main:homes-1" }));
+    await settle(60);
+    expect(stage.lights.at(-1)).toBe("public");
+    await act(async () => stage.onDoor?.({ to: "home:planner" }));
+    await settle(60);
+    expect(stage.lights.at(-1)).toBe("home");
+  });
+
+  it("says where a door goes while the pointer is over it", async () => {
+    await render();
+    await settle(60);
+    await act(async () =>
+      stage.onDoorHover?.({ to: "hall:main:homes-1", kind: "hall", label: "Residences" } as never, { x: 40, y: 60 }),
+    );
+    const tip = container.querySelector(".door-tip") as HTMLElement;
+    expect(tip.textContent).toBe("to Residences");
+    expect([tip.style.left, tip.style.top]).toEqual(["40px", "60px"]);
+    await act(async () => stage.onDoorHover?.(undefined));
+    expect(container.querySelector(".door-tip")).toBeNull();
   });
 
   it("shows the agent's own tasks on the boards in its room", async () => {

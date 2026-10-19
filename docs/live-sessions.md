@@ -125,7 +125,10 @@ has somewhere to sit, a desk to work at, a window, lamps, and a picture or a
 painting for photos to hang in. The agent can change it (see
 [A room the agent can change](#a-room-the-agent-can-change)). It is lit for
 the time of day: daylight through the windows, the lamps on in the evening,
-the lamps alone at night.
+the lamps alone at night. That cosy dark is for homes and shared places. The
+lobby, the halls and the meeting rooms are public, somewhere anyone may be at
+any hour, so after dark their lights overhead stay on and they stay bright;
+only the windows say it is night.
 
 The view shows the whole room when that leaves the agent big enough to make
 out. A bigger room is seen from close by instead, centred on the agent as
@@ -325,7 +328,8 @@ a selfie from the couch, and the reply arrives with one attached. On the chat
 page, the picture shows under the reply. Pictures any tool makes in a turn
 show there now, as Discord already attached them.
 
-The photo is the room as the page draws it, lit for the time of day.
+The photo is the room as the page draws it, lit for the time of day the way
+anyone walking in sees it: a meeting room bright after dark, a home cosy.
 The server renders the page's bare `#/snapshot` view in headless Chromium and
 takes a screenshot: about five seconds a picture, on the CPU, with no
 GPU needed. The browser stays open for two minutes after a picture in case
@@ -346,33 +350,68 @@ says so and the agent can pass that on.
 
 #### Getting around: the map, walking and flying
 
-The **Map** button on the stage (or `M`) lists every place: the rooms agents
-talk in, the shared places, each agent's home, and the halls between them,
-with who is in each and a mark for anyone waiting on you (`!`), stuck (`?`) or
-asleep (`z`). Type to find a place or an agent. Click one to go there. Within
-a building, you can also walk from place to place through doors (see [Areas,
-halls and doors](#areas-halls-and-doors)).
+The **Map** button on the stage (or `M`) is for finding someone, so it leads
+with people and rooms: who is busy, then every agent, the meeting rooms, the
+shared places and any other areas. The lobby comes after them, and the halls
+and foyers between places last, folded away under **Halls** until you open
+them. Agents are listed by name, as many to a row as fit, so with forty of
+them the meeting rooms are still near the top. Each has a dot in the colour of
+what it is doing: green working, blue thinking or talking, orange waiting on
+you, red stuck, violet asleep, grey idle. They are the colours a door's light
+and the sign over a head use, and every dot on the map means the same. A busy
+agent has the word for it beside its name too ("working", "waiting on you").
+Click an agent to go into its home; when its body is somewhere else, "in
+#trip" beside its name goes there instead. Rooms and places show who is in
+each, with a mark for anyone waiting on you (`!`), stuck (`?`) or asleep (`z`).
+The map asks the server again each time it opens, so an agent or a room made
+since you last looked is on it.
+
+Typing filters it all as you go: agents by name, rooms by name or what they
+are for, places and areas by name (an area by what is in it too), and halls,
+which open up while you search and fold back as they were when you clear it. `Enter` goes to the first thing left, which
+is marked `↵`; `Esc` closes the map. So `M`, a few letters of a name, `Enter`
+takes you to anyone. Within a building, you can also walk from place to place
+through doors (see [Areas, halls and doors](#areas-halls-and-doors)).
+
+**Where you are** shows under the stage's buttons, from the area down: "Main
+building › Residences E–N › analyst's home", or "Main building › Meeting
+rooms › #trip". Each step is a click: the area goes to its way in (the lobby,
+for the main building), and the hall to the hall.
 
 **Busy now**, at the top, lists every agent that is doing something, most
 pressing first: waiting on you, then stuck, then talking, working and
 thinking. Each line says what it is doing and where its body is ("writing
 code · in the commons", "has a question for you · in #trip"); click it to go
 straight there. When nobody is busy it says so, which tells you a quiet world
-is idle rather than broken. In each group, places where something is
-happening come first, with a coloured edge and a word for the most pressing
-thing there and how many are doing it, then how many others are busy
-("waiting on you · 2 more busy", "2 working").
+is idle rather than broken. It steps aside while you search. Among the rooms
+and places, those where something is happening come first, with a coloured
+edge and a word for the most pressing thing there and how many are doing it,
+then how many others are busy ("waiting on you · 2 more busy", "2 working").
 
 You arrive in your own body ("you"), in a colour of its own. **Walk** with
 WASD or the arrow keys, which move you the way the camera faces, at a brisk
 2.75 metres a second; hold **Shift** to run at twice that. Click the floor to
-walk there round the furniture, at the same walking pace. Drag to look round
-and use the wheel to zoom. The camera moves with you every frame, so it keeps
-up however fast you go. **Fly** puts your body away and lets the camera go
+walk there round the furniture, at the same walking pace. Drag to look round.
+The camera moves with you every frame, so it keeps up however fast you go.
+
+**Zoom** with the wheel, or a pinch on a touch screen, from close behind you
+out to an overview of a whole hall or the lobby. It starts wide enough to see
+a good part of the room round you, about 4.5 metres either side, and the page
+keeps whatever you set for as long as it is open: through doors, by the map,
+and back. A small home stops zooming out sooner than the lobby, but the lobby
+still opens out as far as you left it. The zoom is measured in the part of
+the stage you can see: with the chat or a panel open over the right of it,
+the camera backs off so you see as much round you as with it closed, and you
+stay in the middle of what is left. A panel opening or closing slides the
+picture over rather than jumping.
+
+**Fly** puts your body away and lets the camera go
 anywhere, faster again (6 metres a second, twice that with Shift): WASD to
-move, `E` up, `Q` down, drag to turn. Agents keep their own calmer pace in
+move, `E` up, `Q` down, drag to turn, and the wheel moves you the way you look.
+Agents keep their own calmer pace in
 their rooms. Every speed is named in one place,
-`packages/ui/src/avatar/travel.ts`. Agents look up as you come near, and wave
+`packages/ui/src/avatar/travel.ts`, with how far the camera can zoom (`REACH`).
+Agents look up as you come near, and wave
 if they're free; standing next to one offers **Talk to** it, which switches
 the chat to that agent. Click any agent for its menu as usual.
 **Voices** (off until you switch it on) speaks what agents say near you: as
@@ -401,14 +440,24 @@ home. Halls are cut where the first letter changes, so a new agent only
 changes the hall its name falls in, unless that hall was full.
 
 A door on the back or left wall is a door in the wall, with a name plate over
-it: the agent's name, the room's `#name`, or where a hall leads. On the open
+it: the agent's name, the room's `#name`, or where a hall leads. A long name
+is drawn smaller to fit, and a name too long for that at a size worth reading
+goes on two lines, broken at a hyphen, a space or an underscore
+(`#quarterly-` / `planning-and-review`), so a name is never cut off. On the open
 front and right sides, where the wall is cut away so the camera can see in,
 the door is cut away too: a low gate with the plate across it, readable from
 either side, that never stands between you and the room. A door to a home has
 a light by its dark plate, and a lit strip along it, that says what that agent
-is doing, from its `activity` record: green working, blue thinking or talking,
-amber waiting on you, red stuck, white idle, and dim violet asleep. You can see
-who needs you from the hall, before you knock.
+is doing, from its `activity` record, in the colours the map uses: green
+working, blue thinking or talking, orange waiting on you, red stuck, grey idle,
+and dim violet asleep. You can see who needs you from the hall, before you
+knock.
+
+**Point at a door** and it lights up, an edge of light round the doorway and
+its mat, and a label by the pointer says where it goes: "to Residences E–N",
+"to analyst's home", "to #trip". The pointer turns into a hand. It keeps up
+as you walk or the view moves under a still pointer: once the door has slid
+out from under it, the light and the label go.
 
 **Walk into a door**, or click it, to go through. Up against the wall in
 front of a door, keep pressing toward it. The picture fades, the place behind
@@ -442,9 +491,10 @@ move, and it has no record of its own to say where it is. Splitting them out by
 theme would leave a string of one-room areas reached only by the map, which is
 what the building is for avoiding.
 
-**The map** groups places by area when there is more than one, the area you're
-in first, and says which one you're in. Halls are listed too, so you can jump
-straight to one.
+**The map** lists each other area under **Other areas**, with what is in it;
+a click goes in by its way in. Halls are listed too, folded away under
+**Halls**, so you can still jump straight to one. The trail under the stage's buttons
+says which area you're in.
 
 How it works: the building is worked out on every read from the places there
 are, by `places-world.ts` in the places plugin. Nothing about it is stored, so
@@ -771,8 +821,8 @@ The chat page draws it on every body in the room:
   its desk if it has one. In a meeting room it keeps its seat at the table.
 - **Talking** to an agent in the same room, the two turn to face each other
   under speech bubbles; to one who isn't there, it's on the phone.
-- **Waiting** on you, an amber `!` hangs over it and it waves once. **Stuck**,
-  an orange `?`, and a shrug.
+- **Waiting** on you, an orange `!` hangs over it and it waves once. **Stuck**,
+  a red `?`, and a shrug.
 - **Asleep**, it finds a seat if one is free, drops its chin, shuts its eyes
   and Zs drift up.
 
@@ -938,7 +988,7 @@ cues, and its text passes through untouched.
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
 | `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` or `visit` change means someone came or went |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |

@@ -507,6 +507,11 @@ export interface MapPlace {
   purpose?: string;
   /** A room of conversation's members with a body, wherever their bodies are. */
   members?: string[];
+  /**
+   * The place its way in is through: the hall its door opens off, or the lobby; in an area of two places, which
+   * open on each other, the other one. None for the lobby, another area's first hall, or a place alone in its area.
+   */
+  via?: string;
 }
 
 /** A room of conversation's place id. */
@@ -617,9 +622,21 @@ export async function worldMap(
   };
   const inside = new Map<string, string[]>();
   for (const a of bodies) inside.set(where(a), [...(inside.get(where(a)) ?? []), a]);
+  // Where each place is reached from, for "where am I": a hall from the one before it, anything else from its door.
+  const via = (id: string) => {
+    const from = world.halls.find((h) => h.id === id)?.entrance?.to ?? world.doors.get(id)?.to;
+    return from ? { via: from } : {};
+  };
   return [
     { id: LOBBY, name: "the lobby", kind: "lobby" as const, agents: [], area: MAIN },
-    ...world.halls.map((h) => ({ id: h.id, name: h.name, kind: "hall" as const, agents: [], area: h.area })),
+    ...world.halls.map((h) => ({
+      id: h.id,
+      name: h.name,
+      kind: "hall" as const,
+      agents: [],
+      area: h.area,
+      ...via(h.id),
+    })),
     ...bodies.map((a) => ({
       id: homeId(a),
       name: a === "default" ? "the default agent's room" : `${a}'s room`,
@@ -628,6 +645,7 @@ export async function worldMap(
       agents: (inside.get(homeId(a)) ?? []).sort(),
       area: area(homeId(a)),
       ...purpose(homeId(a)),
+      ...via(homeId(a)),
     })),
     ...shared.map((p) => ({
       id: p.id,
@@ -636,6 +654,7 @@ export async function worldMap(
       agents: (inside.get(p.id) ?? []).sort(),
       area: area(p.id),
       ...purpose(p.id),
+      ...via(p.id),
     })),
     ...rooms.map((r) => ({
       id: roomPlaceId(r.ref),
@@ -646,6 +665,7 @@ export async function worldMap(
       area: MAIN,
       // The purpose its members gave its meeting room, over the room's own.
       ...purpose(roomPlaceId(r.ref), r.purpose),
+      ...via(roomPlaceId(r.ref)),
     })),
   ];
 }

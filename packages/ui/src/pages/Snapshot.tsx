@@ -19,6 +19,8 @@ export function Snapshot() {
   const spot = query.get("spot") ?? undefined;
   const gesture = query.get("gesture") ?? undefined;
   const [scene, setScene] = useState<{
+    /** The place the agent is in, so it is lit as anyone walking in sees it: a meeting room as a public place. */
+    id?: string;
     avatar: string;
     animations: string[];
     room: Room;
@@ -38,6 +40,7 @@ export function Snapshot() {
       .then(([live, here]: [{ avatar?: string; animations?: string[] }, PlaceInfo | null]) => {
         if (!live.avatar) throw new Error(`${agent} has no avatar.`);
         setScene({
+          ...(here?.id ? { id: here.id } : {}),
           avatar: live.avatar,
           animations: live.animations ?? [],
           // With its doors, as the chat page draws it.
@@ -60,6 +63,7 @@ export function Snapshot() {
             url={scene.avatar}
             animations={scene.animations}
             room={scene.room}
+            place={scene.id}
             company={scene.company}
             view={view}
             state="idle"
