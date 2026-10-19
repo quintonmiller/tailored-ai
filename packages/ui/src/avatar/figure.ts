@@ -471,6 +471,9 @@ export class Figure {
       const { bubble, tail } = this.line;
       liftSprite(bubble, this.lifted.bubble, this.perPixel, this.lifted.across);
       bubble.renderOrder = order;
+      // Its tail just under it and over everyone's tags, so it can be followed down past a neighbour's to its own
+      // speaker; under the newer bubbles below it.
+      tail.renderOrder = order - 0.5;
       // The tail from the bubble down to just over the head, straight over the speaker wherever the bubble went.
       const long = this.lifted.bubble - GAP_PX;
       tail.scale.set(TAIL_WIDTH_PX * this.perPixel, Math.max(1, long) * this.perPixel, 1);

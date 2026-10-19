@@ -161,7 +161,9 @@ straightened into as few legs as stay clear, so it works in any room the
 agent has furnished. When the agent moves the avatar, it names a spot
 ("on the couch"), never coordinates. On a visit, your own body counts as in
 the way too: an agent heading somewhere walks round you with a step to
-spare, and finds a new way if you step into its path.
+spare, and finds a new way if you step into its path. It never cuts through
+the furniture to do it: setting off from right beside you, or with you
+standing in the only way through, it goes round the furniture alone.
 
 ### Animation files
 
@@ -215,7 +217,9 @@ When the agent has a body, its room fills the chat page and the conversation
 becomes a panel laid over it, on the right on a wide screen and at the bottom
 on a phone. The camera frames the agent in the part the panel and the
 toolbar leave clear: beside the panel, or above it on a phone, so the agent
-is never under the chat.
+is never under the chat. On a phone the buttons over the scene reach a long
+way down that strip, so the agent is framed beside them rather than behind
+them.
 **3D** in the toolbar turns the scene off and on, and the page remembers the
 choice. **Chat** hides the panel when you want the whole room; the message
 box stays. An agent without a body has no 3D button, just the chat.
@@ -1021,12 +1025,13 @@ What agents say shows too. The plugin keeps a `speech` record per agent, the
 last thing it said in a room or to another agent directly, and the page puts
 it in a bubble over the speaker's head as it is said, mouth moving, for long
 enough to read. The bubble names the speaker, since its tag steps aside while
-it talks, and its tail points down to the speaker. Both halves of a direct
-message show, the answer just after the question: the answer sits over its
-speaker and the question moves up above it, so two agents talking read from
-the top down, like a comic, the newest drawn on top. A bubble that would run
-off the top of the stage, under the buttons over it, or under the chat panel
-comes back into view, over its speaker if it has to. Only people can read speech records: the type is closed to
+it talks, and its tail points down to the speaker, over anyone else's tag on
+the way. Both halves of a direct message show, the answer just after the
+question: the answer sits over its speaker and the question moves up above
+it, so two agents talking read from the top down, like a comic, the newest
+drawn on top. A bubble that would run off the top of the stage, under the
+buttons over it, or under the chat comes back into view, over its speaker if
+it has to. Only people can read speech records: the type is closed to
 agents, so a direct message stays as private from other agents as it was.
 `speech: false` in the plugin's config keeps none. A room post shows when its
 speaker's room name is the agent's own name.

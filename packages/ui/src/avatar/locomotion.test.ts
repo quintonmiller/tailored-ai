@@ -154,6 +154,64 @@ describe("walking round you", () => {
     expect(inTheWay([-3, 0], [[0.2, 0]], you, 0.55)).toBe(false);
   });
 
+  it("leaves be a walk setting off from beside you, but not one that goes on through you", () => {
+    expect(inTheWay([0.4, 0], [[3, 0]], you, 0.55)).toBe(false);
+    expect(inTheWay([0.4, 0.2], [[3, 2]], you, 0.55)).toBe(false);
+    expect(inTheWay([-0.4, 0], [[3, 0]], you, 0.55)).toBe(true);
+  });
+
+  /** Whether any leg of a walk from `from` crosses `box`, sampled every centimetre or so. */
+  const crosses = (from: [number, number], way: [number, number][], box: Obstacle) => {
+    let a = from;
+    for (const b of way) {
+      const steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.01);
+      for (let k = 0; k <= steps; k++) {
+        const x = a[0] + ((b[0] - a[0]) * k) / steps;
+        const z = a[1] + ((b[1] - a[1]) * k) / steps;
+        if (x > box.minX && x < box.maxX && z > box.minZ && z < box.maxZ) return true;
+      }
+      a = b;
+    }
+    return false;
+  };
+  // A table between where the agent stands and where it is going.
+  const table: Obstacle = { minX: -0.8, maxX: 0.8, minZ: 0.9, maxZ: 1.5 };
+
+  it("still goes round the furniture when it sets off from right beside you", () => {
+    const from: [number, number] = [0, 0];
+    const to: [number, number] = [0, 2.4];
+    expect(crosses(from, findPath(room, from, to, [table], theirs), table)).toBe(false);
+    for (const at of [
+      [0.3, -0.2],
+      [0.5, 0.3],
+      [0, 0.45],
+    ] as [number, number][]) {
+      const way = findPath(room, from, to, [table, standingIn(at, yours)], theirs);
+      expect(crosses(from, way, table)).toBe(false);
+      expect(way.at(-1)).toEqual(to);
+    }
+  });
+
+  it("comes up to you round the furniture when it is going to where you stand", () => {
+    const from: [number, number] = [0, 0];
+    const at: [number, number] = [0.1, 2.3];
+    const way = findPath(room, from, [0, 2.4], [table, standingIn(at, yours)], theirs);
+    expect(crosses(from, way, table)).toBe(false);
+    expect(way.at(-1)).toEqual([0, 2.4]);
+  });
+
+  it("goes past you rather than through the furniture when you stand in the only way through", () => {
+    // A row of furniture across the room with a gap a metre wide in the middle, and you standing in it.
+    const left: Obstacle = { minX: -4, maxX: -0.5, minZ: 0, maxZ: 0.4 };
+    const right: Obstacle = { minX: 0.5, maxX: 4, minZ: 0, maxZ: 0.4 };
+    const from: [number, number] = [-3, -1.5];
+    const to: [number, number] = [3, 1.5];
+    const way = findPath(room, from, to, [left, right, standingIn([0, 0.2], yours)], theirs);
+    expect(crosses(from, way, left)).toBe(false);
+    expect(crosses(from, way, right)).toBe(false);
+    expect(way.at(-1)).toEqual(to);
+  });
+
   it("finds no one in the way once it has gone round", () => {
     const from: [number, number] = [-3, 0.05];
     const way = findPath(room, from, [3, -0.05], [standingIn(you, yours)], theirs);

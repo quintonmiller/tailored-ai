@@ -10,6 +10,12 @@ import type { Companion, Line, Stage, StageView, Travel } from "./stage";
 const VIEW_KEY = "tai.talk.avatarView";
 /** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
 const DOOR_TIP_ROOM = 240;
+/**
+ * What is laid over the stage, from the stage's parent: the view toggle, and
+ * each of the tools over the top. Each tool by itself, not the row they wrap
+ * in, whose box runs on past them as wide as all of them end to end.
+ */
+export const OVERLAYS = ":scope > .talk-view, :scope > .talk-tools > :not(.talk-tools-break)";
 
 /** One thing the menu on an agent's body offers. */
 export interface AgentAction {
@@ -285,10 +291,9 @@ export function Avatar({
               }
             : {}),
           lights: lightsFor(placeRef.current),
-          // The view toggle and the tools over the top of the stage: what is said stays out from under them.
-          overlays: () => [
-            ...(host.current?.parentElement?.querySelectorAll(":scope > .talk-view, :scope > .talk-tools") ?? []),
-          ],
+          // The view toggle and the tools over the top of the stage: what is said stays out from under them, and
+          // where they reach far down a short stage the agent is framed clear of them.
+          overlays: () => [...(host.current?.parentElement?.querySelectorAll(OVERLAYS) ?? [])],
           ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {

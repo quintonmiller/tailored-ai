@@ -32,6 +32,11 @@ export interface Obstacle {
   maxX: number;
   minZ: number;
   maxZ: number;
+  /**
+   * Someone standing, not furniture: walked round where there is a way,
+   * but never at the cost of walking through the furniture.
+   */
+  standing?: boolean;
 }
 
 /** Room left round someone standing when others walk past them, in metres: about a step, so nobody brushes them. */
@@ -40,7 +45,7 @@ export const PASSING_ROOM = 0.25;
 /** Someone standing at `at`, with a body `radius` across, as something to walk round with room to pass. */
 export function standingIn([x, z]: readonly [number, number], radius: number): Obstacle {
   const r = radius + PASSING_ROOM;
-  return { minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r };
+  return { minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r, standing: true };
 }
 
 /** The floor grid the way is searched on, in metres. */
@@ -53,6 +58,11 @@ const CELL = 0.1;
  * grown by the body's radius, and the way found is pulled straight wherever
  * it is clear, so the avatar walks a few legs rather than a staircase.
  * Straight there when nothing is in the way, or when there is no way round.
+ *
+ * Someone standing (`standingIn`) is walked round too, except by a walk
+ * that starts or ends beside them, leaving them or going up to them, or
+ * when they stand in the only way through: then the walk goes round the
+ * furniture alone, as near them as it must, rather than through it.
  */
 export function findPath(
   room: Room,
@@ -61,17 +71,35 @@ export function findPath(
   obstacles: Obstacle[],
   radius = 0.2,
 ): [number, number][] {
-  const inside = (p: [number, number], o: Obstacle) => p[0] > o.minX && p[0] < o.maxX && p[1] > o.minZ && p[1] < o.maxZ;
+  const furniture = obstacles.filter((o) => !o.standing);
+  if (furniture.length === obstacles.length) return searchWay(room, from, to, obstacles, radius) ?? [to];
+  const round = obstacles.filter((o) => o.standing && !inBox(from, o) && !inBox(to, o));
+  return (
+    (round.length ? searchWay(room, from, to, [...furniture, ...round], radius) : undefined) ??
+    searchWay(room, from, to, furniture, radius) ?? [to]
+  );
+}
+
+const inBox = (p: [number, number], o: Obstacle) => p[0] > o.minX && p[0] < o.maxX && p[1] > o.minZ && p[1] < o.maxZ;
+
+/** The way from `from` to `to` round `obstacles` (see `findPath`), or undefined when there is no way round. */
+function searchWay(
+  room: Room,
+  from: [number, number],
+  to: [number, number],
+  obstacles: Obstacle[],
+  radius: number,
+): [number, number][] | undefined {
   // Each obstacle grown by the body's radius, except one it starts or ends inside: a spot can be
   // close to its furniture, so that one keeps its true size and only its body is off limits.
   const boxes = obstacles.map((o) => {
     const g = { minX: o.minX - radius, maxX: o.maxX + radius, minZ: o.minZ - radius, maxZ: o.maxZ + radius };
-    return inside(from, g) || inside(to, g) ? o : g;
+    return inBox(from, g) || inBox(to, g) ? o : g;
   });
   const free = (p: [number, number]) =>
     Math.abs(p[0]) <= room.width / 2 - radius / 2 &&
     Math.abs(p[1]) <= room.depth / 2 - radius / 2 &&
-    !boxes.some((o) => inside(p, o));
+    !boxes.some((o) => inBox(p, o));
   /** Whether a straight leg misses every box: exact, so it never clips a corner between samples. */
   const clear = (a: [number, number], b: [number, number]) => {
     const dx = b[0] - a[0];
@@ -182,7 +210,7 @@ export function findPath(
       }
     }
   }
-  if (came[goal] === -1) return [to];
+  if (came[goal] === -1) return undefined;
 
   const cells: [number, number][] = [];
   for (let n = goal; n !== -1 && n !== start; n = came[n]) cells.push(centre(n % cols, Math.floor(n / cols)));
@@ -302,10 +330,15 @@ export class Walker {
   }
 }
 
+/** Metres nearer someone a walk has to come than it starts, for them to be in its way. */
+const NEARER = 0.05;
+
 /**
  * Whether the rest of a walk, from `from` through `way`, passes within
  * `clearance` of `at`: someone standing in the way. Not when the walk ends
- * that near them, since no way round gets it there.
+ * that near them, since no way round gets it there; and only where it comes
+ * nearer them than it is already, so a walk setting off from beside them is
+ * leaving them, not walking into them.
  */
 export function inTheWay(
   from: readonly [number, number],
@@ -315,6 +348,7 @@ export function inTheWay(
 ): boolean {
   const end = way.at(-1);
   if (!end || Math.hypot(end[0] - at[0], end[1] - at[1]) < clearance) return false;
+  const near = Math.min(clearance, Math.hypot(from[0] - at[0], from[1] - at[1]) - NEARER);
   let a = from;
   for (const b of way) {
     const dx = b[0] - a[0];
@@ -322,7 +356,7 @@ export function inTheWay(
     const long = dx * dx + dz * dz;
     // The nearest point of this leg to them.
     const k = long ? Math.max(0, Math.min(1, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dz) / long)) : 0;
-    if (Math.hypot(a[0] + k * dx - at[0], a[1] + k * dz - at[1]) < clearance) return true;
+    if (Math.hypot(a[0] + k * dx - at[0], a[1] + k * dz - at[1]) < near) return true;
     a = b;
   }
   return false;

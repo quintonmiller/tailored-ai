@@ -189,6 +189,91 @@ describe("stack", () => {
     expect(top("editor")).toBeGreaterThanOrEqual(top("writer") + 70 + GAP_PX);
   });
 
+  it("leaves an answer from further back above the question said nearer the camera, nowhere near an edge", () => {
+    // The one who asked stands near the camera, low on the screen; the one answering further back, higher up.
+    const cols = [
+      { id: "front", x: 500, y: 600, rank: 0, bubble: [220, 60] as [number, number], said: 1 },
+      { id: "back", x: 520, y: 300, rank: 0, bubble: [220, 60] as [number, number], said: 2 },
+    ];
+    const free = stack(cols);
+    const out = stack(cols, { left: 0, right: 1280, top: 45 });
+    // Each where the stacking put it, over its own speaker: the answer is not dragged down under the question.
+    expect(out.get("back")?.bubble).toBe(free.get("back")?.bubble);
+    expect(out.get("front")?.bubble).toBe(free.get("front")?.bubble);
+    expect(out.get("back")?.bubble).toBeGreaterThan(0);
+  });
+
+  it("lifts a bubble out from under a phone's chat, so what is said there can be read", () => {
+    // The chat covers the stage below 400 pixels; the speaker's head is under it.
+    const out = stack([{ id: "a", x: 200, y: 450, rank: 0, bubble: [200, 60], said: 1 }], {
+      left: 0,
+      right: 390,
+      top: 45,
+      bottom: 400,
+    });
+    expect(450 - (out.get("a")?.bubble ?? 0)).toBe(392);
+  });
+
+  it("finishes laying out where rounding leaves a bubble a hair short of what it went up past", () => {
+    // Positions as the screen gives them, to the last digit: lifting b2's bubble past b0's tag once landed it a
+    // hair inside that tag again, and it went on lifting to the same place for ever.
+    const cols: Column[] = [
+      { id: "b0", x: 619.363083885686, y: 84.8854685690652, rank: 0.9194681294818726, tag: [129.3773722878552, 20] },
+      { id: "b1", x: 563.5350530052256, y: 582.8531006550663, rank: 0.8581656608070087, tag: [123.18255935943805, 20] },
+      { id: "b2", x: 727.4445563030637, y: 55.01087092562153, rank: 0.0769478176147434, tag: [136.4438736980985, 20] },
+    ];
+    const bubbles: [number, number][] = [
+      [204.9868066073334, 91.97759483567327],
+      [150.9171802508259, 47.51454268932088],
+      [293.9508131397659, 97.3949320136546],
+    ];
+    for (const [i, c] of cols.entries()) Object.assign(c, { bubble: bubbles[i], said: i });
+    const out = stack(cols);
+    expect([...out.keys()].sort()).toEqual(["b0", "b1", "b2"]);
+  });
+
+  it("never lets one bubble cover another once they are brought on the screen, wherever the speakers stand", () => {
+    // A seeded walk through many crowds, near the edges and under the controls as often as not.
+    let seed = 7;
+    const rand = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    for (let n = 0; n < 300; n++) {
+      const count = 2 + Math.floor(rand() * 3);
+      const cols: Column[] = Array.from({ length: count }, (_, i) => ({
+        id: `b${i}`,
+        x: 40 + rand() * 720,
+        y: 20 + rand() * 620,
+        rank: rand(),
+        ...(rand() < 0.7 ? { tag: [80 + rand() * 60, 20] as [number, number] } : {}),
+        bubble: [120 + rand() * 200, 40 + rand() * 60] as [number, number],
+        said: i + rand() * 0.5,
+      }));
+      const screen = {
+        left: 0,
+        right: 800,
+        top: 40,
+        bottom: 560 + rand() * 100,
+        covered: [{ left: 0, right: 200 + rand() * 300, top: 40, bottom: 60 + rand() * 120 }],
+      };
+      const out = stack(cols, screen);
+      const boxes = cols.map((c) => {
+        const at = out.get(c.id) as { bubble: number; across: number };
+        const [w, h] = c.bubble as [number, number];
+        return {
+          left: c.x - w / 2 + at.across,
+          right: c.x + w / 2 + at.across,
+          bottom: c.y - at.bubble,
+          top: c.y - at.bubble - h,
+        };
+      });
+      for (const [i, a] of boxes.entries())
+        for (const b of boxes.slice(i + 1))
+          expect(a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom).toBe(false);
+    }
+  });
+
   it("never moves a bubble so far across that its tail misses it", () => {
     // Wider than the room there is: it stays over its speaker as far as its tail allows.
     const screen = { left: 0, right: 300, top: 0 };

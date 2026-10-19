@@ -55,12 +55,16 @@ const overlaps = (a: Box, b: Box, gap: number) =>
  */
 function clearOf(x: number, y: number, w: number, h: number, placed: Box[], gap: number): number {
   let up = 0;
+  // What it has gone up past. Rounding can leave it a hair short of clearing one, which must not count as
+  // meeting it again, or it would lift to the same place for ever.
+  const passed = new Set<Box>();
   for (;;) {
     const me = { left: x - w / 2, right: x + w / 2, top: y - up - h, bottom: y - up };
-    const hit = placed.find((p) => overlaps(me, p, gap));
+    const hit = placed.find((p) => !passed.has(p) && overlaps(me, p, gap));
     if (!hit) return up;
+    passed.add(hit);
     // Its bottom just above the top of what it hit, which is always further up than it is now.
-    up = y - hit.top + gap;
+    up = Math.max(up, y - hit.top + gap);
   }
 }
 
@@ -103,6 +107,8 @@ export interface Screen {
   left: number;
   right: number;
   top: number;
+  /** The foot of what can be seen, when something covers the stage's foot, like the chat on a phone. */
+  bottom?: number;
   covered?: Box[];
 }
 
@@ -120,9 +126,11 @@ const EDGE_PX = 8;
  * like a comic. A bubble never covers a tag either. Last, bubbles that would
  * run off what can be seen of the stage (`screen`), or under a control laid
  * over it, are brought back inside it: across rather than under a panel at
- * the side, and down rather than off the top, the newer ones below them
- * coming down too, so the conversation still reads in order, over its
- * speakers if it has to be.
+ * the side, up rather than under a phone's chat, and down rather than off
+ * the top, the newer ones under them coming down too, so the conversation
+ * still reads in order, over its speakers if it has to be. A bubble that sat
+ * above another stays above it; one lower down the screen, nearer the camera,
+ * is passed only when one would now cover the other.
  */
 export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<string, Stacked> {
   const out = new Map<string, Stacked>();
@@ -150,6 +158,8 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
     });
   }
   const placed: Box[] = [];
+  // Where each bubble sat once they were stacked, before any was brought back on the screen.
+  const sat = new Map<string, Box>();
   const bySaid = columns.filter((c) => c.bubble).sort((a, b) => (b.said ?? 0) - (a.said ?? 0));
   for (const c of bySaid) {
     const [w, h] = c.bubble as [number, number];
@@ -157,12 +167,14 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
     const base = c.y - at.bubble;
     const own = tagOf.get(c.id);
     const up = clearOf(c.x, base, w, h, [...tags.filter((t) => t !== own), ...placed], gap);
-    placed.push({ left: c.x - w / 2, right: c.x + w / 2, top: base - up - h, bottom: base - up });
+    const box = { left: c.x - w / 2, right: c.x + w / 2, top: base - up - h, bottom: base - up };
+    placed.push(box);
+    sat.set(c.id, box);
     at.bubble += up;
   }
   if (!screen) return out;
   // Oldest first, so each comes down only as far as it must, and the newer ones under it make way in turn.
-  const kept: Box[] = [];
+  const kept: (Box & { id: string })[] = [];
   for (const c of [...bySaid].reverse()) {
     const [w, h] = c.bubble as [number, number];
     const at = out.get(c.id) as Stacked;
@@ -176,15 +188,26 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
     at.across = Math.max(-reach, Math.min(reach, at.across));
     const l = left + at.across;
     const r = right + at.across;
+    const beside = (k: Box) => k.left < r + gap && l - gap < k.right;
+    // Under a phone's chat: up, so what is said there can be read above it.
+    if (screen.bottom !== undefined && c.y - at.bubble > screen.bottom - EDGE_PX)
+      at.bubble = c.y - (screen.bottom - EDGE_PX);
     // The highest its top may go: the top of the stage, the foot of any control over it, and below an earlier
-    // bubble it would otherwise cover.
+    // bubble that sat above it, so the conversation still reads from the top down.
+    const was = sat.get(c.id) as Box;
     let ceiling = screen.top + EDGE_PX;
     for (const k of screen.covered ?? [])
       if (k.left < r && l < k.right) ceiling = Math.max(ceiling, k.bottom + EDGE_PX);
-    for (const k of kept) if (k.left < r + gap && l - gap < k.right) ceiling = Math.max(ceiling, k.bottom + gap);
-    const top = c.y - at.bubble - h;
-    if (top < ceiling) at.bubble -= ceiling - top;
-    kept.push({ left: l, right: r, top: c.y - at.bubble - h, bottom: c.y - at.bubble });
+    for (const k of kept)
+      if (beside(k) && (sat.get(k.id) as Box).top < was.top) ceiling = Math.max(ceiling, k.bottom + gap);
+    let top = Math.max(c.y - at.bubble - h, ceiling);
+    // An earlier one lower down, said nearer the camera, it would now cover: on down past it.
+    for (let hit = kept.find((k) => beside(k) && k.top < top + h + gap && top < k.bottom + gap); hit; ) {
+      top = hit.bottom + gap;
+      hit = kept.find((k) => beside(k) && k.top < top + h + gap && top < k.bottom + gap);
+    }
+    at.bubble = c.y - top - h;
+    kept.push({ id: c.id, left: l, right: r, top, bottom: top + h });
   }
   return out;
 }

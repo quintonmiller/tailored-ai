@@ -33,6 +33,7 @@ import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
 import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
+import { type Fadeable, paintFaded } from "./fade";
 import { Figure, loadModel } from "./figure";
 import { faceToFace, sideFor } from "./greet";
 import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, seeded } from "./idle";
@@ -43,8 +44,10 @@ import { nearestUse, type Use } from "./pick";
 import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
 import {
   changesShown,
+  closeDistance,
   DEFAULT_ROOM,
   farFor,
+  framedIn,
   type Lighting,
   type Lights,
   lightingFor,
@@ -53,6 +56,7 @@ import {
   nearestWithin,
   OPEN_SIDES,
   ownZoom,
+  type Part,
   type Prop,
   ROOM_TARGET,
   ROOM_VIEW,
@@ -280,54 +284,8 @@ const REROUTE_SECONDS = 0.4;
 /** Seconds something in the way takes to fade, or to come back once the view is clear. */
 const SEE_THROUGH_SECONDS = 0.15;
 
-/**
- * Something that can fade so a body can be seen past it: a tall thing on the
- * floor, by the box round it, or a wall, or something hanging on one, by which
- * wall. How much of it shows now, and the see-through materials it wears while
- * it is faded, in place of the ones it was built with.
- */
-interface Fadeable {
-  group: THREE.Object3D;
-  solid?: Solid;
-  wall?: Wall;
-  level: number;
-  own?: Map<THREE.Mesh, THREE.Material | THREE.Material[]>;
-}
-
 /** The box round something, as one that can hide a body. */
 const solidOf = (box: THREE.Box3): Solid => ({ min: box.min.toArray(), max: box.max.toArray() });
-
-/** A see-through copy of a material, which remembers how opaque the material was. */
-function seeThroughCopy(m: THREE.Material): THREE.Material {
-  const c = m.clone();
-  c.userData.opacity = m.opacity;
-  c.transparent = true;
-  c.depthWrite = false;
-  return c;
-}
-
-/** Draw something that can fade at how much of it shows: in see-through copies while it is faded, its own once it isn't. */
-function paintFaded(f: Fadeable) {
-  if (f.level >= 0.995) {
-    for (const [mesh, was] of f.own ?? []) {
-      for (const m of [mesh.material].flat()) m.dispose();
-      mesh.material = was;
-    }
-    f.own = undefined;
-    return;
-  }
-  const own = (f.own ??= new Map());
-  f.group.traverse((o) => {
-    const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    // A photo hung after it faded is put in see-through copies when it comes.
-    if (!own.has(mesh)) {
-      own.set(mesh, mesh.material);
-      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(seeThroughCopy) : seeThroughCopy(mesh.material);
-    }
-    for (const m of [mesh.material].flat()) m.opacity = (m.userData.opacity ?? 1) * f.level;
-  });
-}
 
 const bare = (s: string) =>
   s
@@ -877,6 +835,9 @@ export async function createStage(
   let stageH = Math.max(1, host.clientHeight);
   /** Where the controls over the stage are, in pixels from its top left, as last measured. */
   let covered: Box[] = [];
+  /** The part of the stage the camera frames into: what is not covered, clear of the controls where they are in the way. */
+  let part: Part = { left: 0, right: stageW, top: 0, bottom: stageH };
+  /** Measure the controls over the stage, and so the part it frames into; whether that part changed. */
   const measureOverlays = () => {
     const box = host.getBoundingClientRect();
     covered = (opts.overlays?.() ?? [])
@@ -888,12 +849,20 @@ export async function createStage(
         top: r.top - box.top,
         bottom: r.bottom - box.top,
       }));
+    const was = part;
+    part = framedIn({ left: 0, right: stageW - insetRight, top: insetTop, bottom: stageH - insetBottom }, covered);
+    return (
+      Math.abs(part.left - was.left) +
+        Math.abs(part.right - was.right) +
+        Math.abs(part.top - was.top) +
+        Math.abs(part.bottom - was.bottom) >
+      1
+    );
   };
-  /** The shape of the part of the stage that can be seen: framing fits the room into that. */
-  const visibleAspect = () =>
-    Math.max(MIN_ASPECT, (stageW - insetRight) / Math.max(1, stageH - insetTop - insetBottom));
-  /** The share of the stage's height that can be seen, between the toolbar and a phone's chat: framing fits into it. */
-  const visibleTall = () => Math.min(1, Math.max(0.2, (stageH - insetTop - insetBottom) / stageH));
+  /** The shape of the part of the stage the camera frames into: framing fits the room into that. */
+  const visibleAspect = () => Math.max(MIN_ASPECT, (part.right - part.left) / Math.max(1, part.bottom - part.top));
+  /** The share of the stage's height the camera frames into, between the toolbar and a phone's chat. */
+  const visibleTall = () => Math.min(1, Math.max(0.2, (part.bottom - part.top) / stageH));
   /** How far back the camera following a visitor sits: the reach they zoomed to, in what can be seen of this room. */
   const followBack = () =>
     followDistance(clampReach(reachKept, widestReach(room)), visibleAspect(), ROOM_VIEW.fov, visibleTall());
@@ -902,11 +871,8 @@ export async function createStage(
     if (view === "close") {
       const top = me.bounds.max.y;
       const span = (top - me.hipsY) * 1.25;
-      const vfov = rad(ROOM_VIEW.fov);
-      const hfov = 2 * Math.atan(Math.tan(vfov / 2) * visibleAspect());
       // A selfie stands back a little further than the chat page's close-up, so the room shows behind.
-      const distance =
-        Math.max(span / 2 / Math.tan(vfov / 2), (span * 0.9) / 2 / Math.tan(hfov / 2)) * (selfie ? 1.5 : 1);
+      const distance = closeDistance(span, visibleAspect(), visibleTall()) * (selfie ? 1.5 : 1);
       const target = me.head();
       // In front of its face when that side of the room is open; at a desk or
       // a shelf it faces a wall, so the camera takes the nearest open angle.
@@ -969,14 +935,13 @@ export async function createStage(
   };
 
   host.appendChild(renderer.domElement);
-  // How far the picture is shifted left and up, in pixels: half the covered strip on each side, so the scene is
-  // centred in the part of the stage nothing is laid over. A panel opening or closing eases it there, rather than
-  // jumping.
+  // How far the picture is shifted left and up, in pixels, so the scene is centred in the part of the stage it is
+  // framed in (`part`). A panel opening or closing eases it there, rather than jumping.
   let shift: [number, number] = [0, 0];
   let framed = false;
   const wantShift = (): [number, number] => [
-    insetRight > 0 && insetRight < stageW ? insetRight / 2 : 0,
-    insetTop + insetBottom < stageH ? (insetBottom - insetTop) / 2 : 0,
+    part.right > part.left ? (stageW - part.right - part.left) / 2 : 0,
+    part.bottom > part.top ? (stageH - part.bottom - part.top) / 2 : 0,
   ];
   const project = () => {
     if (Math.abs(shift[0]) > 0.5 || Math.abs(shift[1]) > 0.5)
@@ -990,6 +955,10 @@ export async function createStage(
     renderer.setSize(stageW, stageH, false);
     camera.aspect = stageW / stageH;
     measureOverlays();
+    refit();
+  };
+  /** Fit the camera to the part of the stage it frames into, as that is now. */
+  const refit = () => {
     if (!framed || opts.reducedMotion) shift = wantShift();
     project();
     // A visitor's camera eases to its distance each frame (`frameUp`); flying, it stays where it was flown.
@@ -1688,8 +1657,9 @@ export async function createStage(
     camera.position.add(step);
   }
 
-  // When each body last found a new way round you, so it looks again only a few times a second.
-  const rerouted = new WeakMap<Figure, number>();
+  // When each body last found a new way round you, and where you stood then: it looks again only a few times a
+  // second, and only once you have moved, since from the same place it would find the same way.
+  const rerouted = new WeakMap<Figure, { t: number; you: [number, number] }>();
   /**
    * An agent on its way somewhere, whose way you have stepped into (or who
    * set off before you were there), goes round you instead.
@@ -1698,10 +1668,13 @@ export async function createStage(
     if (travel !== "walk") return;
     const you: [number, number] = [me.walker.place.x, me.walker.place.z];
     for (const f of [...companions.values(), ...departing.map((d) => d.fig)]) {
-      if (!f.walker.way.length || t - (rerouted.get(f) ?? Number.NEGATIVE_INFINITY) < REROUTE_SECONDS) continue;
+      if (!f.walker.way.length) continue;
+      const last = rerouted.get(f);
+      if (last && (t - last.t < REROUTE_SECONDS || Math.hypot(you[0] - last.you[0], you[1] - last.you[1]) < 0.1))
+        continue;
       const here: [number, number] = [f.walker.place.x, f.walker.place.z];
       if (!inTheWay(here, f.walker.way, you, me.radius + f.radius + 0.1)) continue;
-      rerouted.set(f, t);
+      rerouted.set(f, { t, you });
       f.reroute(room, ways());
     }
   }
@@ -1757,7 +1730,8 @@ export async function createStage(
     const behind = wallsBehind(room, eye);
     for (const f of fadeable) {
       const want = f.wall ? (behind.has(f.wall) ? FADED_WALL : 1) : hiding.has(f) ? FADED : 1;
-      if (f.level === want && want < 1 === !!f.own) continue;
+      // At rest and its own self, there is nothing to draw; faded, it is drawn every frame, keeping up.
+      if (f.level === want && !f.own) continue;
       f.level = opts.reducedMotion ? want : ease(f.level, want, dt, SEE_THROUGH_SECONDS);
       paintFaded(f);
     }
@@ -1779,6 +1753,8 @@ export async function createStage(
     camera.updateMatrixWorld();
     const columns: Column[] = [];
     for (const [id, f] of bodies) {
+      // A body put away, like yours while you fly, shows nothing over its head for others to make way for.
+      if (!f.body.visible) continue;
       const crown = f.crown();
       const depth = -onScreen.copy(crown).applyMatrix4(camera.matrixWorldInverse).z;
       // Behind the camera, nothing over its head is on the screen to lay out.
@@ -1789,7 +1765,13 @@ export async function createStage(
       const rank = (closeTo(id) ? 2 : f.speaking(clock) ? 1 : 0) * 1000 - depth;
       columns.push({ id, x: ((onScreen.x + 1) / 2) * stageW, y: ((1 - onScreen.y) / 2) * stageH, rank, ...over });
     }
-    const laid = stack(columns, { left: 0, right: stageW - insetRight, top: insetTop, covered });
+    const laid = stack(columns, {
+      left: 0,
+      right: stageW - insetRight,
+      top: insetTop,
+      bottom: stageH - insetBottom,
+      covered,
+    });
     const said = columns
       .filter((c) => c.bubble)
       .sort((a, b) => (a.said ?? 0) - (b.said ?? 0))
@@ -1952,7 +1934,9 @@ export async function createStage(
         if (agent && f) show(agent, f);
       }
       // The controls over the stage change with what is on it (a button to talk to who you stand by, where you are).
-      measureOverlays();
+      // Where that moves the part the agent is framed in, a close-up is fitted to it again; the other views ease
+      // there by themselves, frame by frame.
+      if (measureOverlays() && view === "close") refit();
       // What the renderer holds, for anyone inspecting the page, like `data-motion`: shapes and pictures on the
       // GPU. A count that keeps growing place after place is something not let go.
       const { geometries, textures } = renderer.info.memory;

@@ -195,8 +195,9 @@ export function speechBubble(text: string, who?: string): THREE.Sprite {
 /**
  * A bubble's tail: a narrow wedge, wide where it meets the bubble and coming
  * to a point at the speaker's head, stretched to whatever length the gap
- * between them is. Drawn under tags and bubbles, so one passing behind
- * another's never hides the words.
+ * between them is. Drawn just under its own bubble (`Figure.placeOver`):
+ * over the tags it passes, so it is never lost behind a neighbour's, and
+ * under the newer bubbles.
  */
 export function bubbleTail(): THREE.Sprite {
   const canvas = document.createElement("canvas");

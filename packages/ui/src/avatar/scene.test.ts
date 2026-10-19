@@ -8,8 +8,10 @@ import { describe, expect, it } from "vitest";
 import {
   bodyFor,
   changesShown,
+  closeDistance,
   DEFAULT_ROOM,
   farFor,
+  framedIn,
   GESTURES,
   lightingFor,
   lightsFor,
@@ -213,6 +215,60 @@ describe("ownDistance", () => {
     const upright = ownDistance(0.46);
     expect(2 * upright * tanV * 0.46).toBeCloseTo(OWN_VIEW.width, 6);
     expect(upright).toBeGreaterThan(ownDistance(1.6));
+  });
+});
+
+describe("closeDistance", () => {
+  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360);
+
+  it("fits the head and shoulders to the height of a wide stage", () => {
+    expect(2 * closeDistance(1, 1.6) * tanV).toBeCloseTo(1, 6);
+  });
+
+  it("fits them to the strip above a phone's chat, not to the whole stage, and backs off for a narrow one", () => {
+    // A phone 390 by 844 with the chat open: 305 pixels of the stage show, 1.28 times as wide as they are tall.
+    const strip = closeDistance(1, 1.28, 305 / 844);
+    expect(2 * strip * tanV * (305 / 844)).toBeCloseTo(1, 6);
+    expect(strip).toBeGreaterThan(2.7 * closeDistance(1, 1.28));
+    // Upright with nothing over it, the width is what limits it.
+    expect(2 * closeDistance(1, 0.46) * tanV * 0.46).toBeCloseTo(0.9, 6);
+  });
+});
+
+describe("framedIn", () => {
+  // A phone 390 by 844 with the chat open: the toolbar down to 90, the chat from 395.
+  const strip = { left: 0, right: 390, top: 90, bottom: 395 };
+  // The stage's own controls down its left side: the view toggle, the tools, and where you are.
+  const phoneControls = [
+    { left: 16, right: 150, top: 105, bottom: 131 },
+    { left: 16, right: 180, top: 145, bottom: 169 },
+    { left: 16, right: 205, top: 182, bottom: 245 },
+  ];
+
+  it("frames in all that the page leaves uncovered while the controls sit up in a corner", () => {
+    // A wide stage with the chat panel down its right: the controls are over the far wall, not where the agent is.
+    const open = { left: 0, right: 610, top: 91, bottom: 760 };
+    const controls = [
+      { left: 16, right: 170, top: 102, bottom: 128 },
+      { left: 16, right: 260, top: 142, bottom: 166 },
+      { left: 16, right: 360, top: 180, bottom: 207 },
+    ];
+    expect(framedIn(open, controls)).toEqual(open);
+    expect(framedIn(strip, [])).toEqual(strip);
+  });
+
+  it("frames beside the controls where they reach into the middle of the strip above a phone's chat", () => {
+    const part = framedIn(strip, phoneControls);
+    // Clear of them, the whole height of the strip, where the agent comes out bigger than under them.
+    expect(part.left).toBeGreaterThanOrEqual(205);
+    expect(part).toMatchObject({ right: 390, top: 90, bottom: 395 });
+  });
+
+  it("frames under the controls when they run across the stage, where there is no room beside them", () => {
+    const controls = [{ left: 16, right: 374, top: 100, bottom: 300 }];
+    const part = framedIn({ left: 0, right: 390, top: 90, bottom: 700 }, controls);
+    expect(part.top).toBeGreaterThanOrEqual(300);
+    expect(part).toMatchObject({ left: 0, right: 390, bottom: 700 });
   });
 });
 

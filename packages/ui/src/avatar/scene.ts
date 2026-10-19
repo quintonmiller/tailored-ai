@@ -577,6 +577,64 @@ export function roomFocus(
 }
 
 /**
+ * How far back the close-up sits to fit `span` metres of the agent, from
+ * its head down, into what can be seen: `tall` is the share of the stage's
+ * height that can be seen, and `aspect` the shape of that part. Above a
+ * phone's chat it backs off by the share the chat covers, so the head and
+ * shoulders fill the strip that shows rather than the whole stage.
+ */
+export function closeDistance(span: number, aspect: number, tall = 1): number {
+  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * tall;
+  return Math.max(span / 2 / tanV, (span * 0.9) / 2 / (tanV * aspect));
+}
+
+/** A part of the stage, in pixels from its top left. */
+export interface Part {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** Pixels kept between the controls over the stage and the part the agent is framed in beside or under them. */
+const CONTROLS_MARGIN = 8;
+
+/**
+ * The part of the stage to frame the agent in. Mostly `open`, what the page
+ * leaves uncovered: the controls over the stage (`controls`) sit up in a
+ * corner, over the far wall. But where they reach into the middle third of
+ * it, where the framed agent stands, as they do in the short strip above a
+ * phone's chat, the agent is framed clear of them: under them or beside
+ * them, whichever it comes out bigger in, taking in `OWN_VIEW`.
+ */
+export function framedIn(open: Part, controls: Part[]): Part {
+  const w = open.right - open.left;
+  const h = open.bottom - open.top;
+  const on = controls.filter(
+    (c) => c.left < open.right && open.left < c.right && c.top < open.bottom && open.top < c.bottom,
+  );
+  const middle = {
+    left: open.left + w / 3,
+    right: open.right - w / 3,
+    top: open.top + h / 3,
+    bottom: open.bottom - h / 3,
+  };
+  if (!on.some((c) => c.left < middle.right && middle.left < c.right && c.top < middle.bottom && middle.top < c.bottom))
+    return open;
+  const centre = (open.left + open.right) / 2;
+  const under = { ...open, top: Math.max(...on.map((c) => c.bottom)) + CONTROLS_MARGIN };
+  const beside = { ...open };
+  for (const c of on) {
+    if ((c.left + c.right) / 2 < centre) beside.left = Math.max(beside.left, c.right + CONTROLS_MARGIN);
+    else beside.right = Math.min(beside.right, c.left - CONTROLS_MARGIN);
+  }
+  /** How big the agent comes out framed in a part: what limits it, its height or its width. */
+  const size = (p: Part) => Math.min((p.bottom - p.top) / OWN_VIEW.height, (p.right - p.left) / OWN_VIEW.width);
+  const best = size(beside) > size(under) ? beside : under;
+  return size(best) > 0 ? best : open;
+}
+
+/**
  * Which lights to keep when a room has more than the frame rate allows: fires
  * first, since they burn by day too, then each next one as far as it can be
  * from those already kept, so a big room is lit all over rather than in one
