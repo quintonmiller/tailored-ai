@@ -1473,10 +1473,32 @@ function toolsToSchemas(tools: Tool[]): ToolSchema[] {
  * the composer.
  */
 export async function runAgentLoop(userMessage: string | InboundMessage, opts: AgentLoopOptions): Promise<string> {
+  const turn = {
+    sessionId: opts.session.id,
+    agent: opts.toolContextExtras?.agentName as string | undefined,
+    projectId: opts.session.projectId ?? null,
+  };
+  let stop: LoopStop | undefined;
+  let error: string | undefined;
+  opts.events?.emit("agent.turn_started", turn);
   try {
-    return await _runAgentLoopInner(userMessage, opts);
+    return await _runAgentLoopInner(userMessage, {
+      ...opts,
+      onStop: (s) => {
+        stop = s;
+        opts.onStop?.(s);
+      },
+    });
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    throw err;
   } finally {
     opts.onActivity?.(null);
+    opts.events?.emit("agent.turn_ended", {
+      ...turn,
+      ...(stop ? { stop } : {}),
+      ...(error !== undefined ? { error } : {}),
+    });
   }
 }
 

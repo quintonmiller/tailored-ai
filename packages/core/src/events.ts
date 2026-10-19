@@ -349,6 +349,31 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * An agent turn began: a chat message, a Discord reply, a room wake, a
+   * scheduled run, a delegation — any surface, because they all run the same
+   * loop and this is emitted from it.
+   *
+   * Before these, a turn could only be seen from the inside, a tool call at a
+   * time, or from the surfaces that happened to announce their own (a room's
+   * `room.turn_ended`, a task's `agent.completed`). Something showing what an
+   * agent is doing right now could tell it had picked up a tool, and never that
+   * it had started thinking or stopped.
+   */
+  "agent.turn_started": TurnBoundary;
+
+  /**
+   * An agent turn finished, however it finished: the counterpart to
+   * `agent.turn_started`, emitted once for every one of those, including a turn
+   * that threw.
+   */
+  "agent.turn_ended": TurnBoundary & {
+    /** Why the loop ended. Absent when it threw before saying. */
+    stop?: LoopStop;
+    /** Set when the turn ended by throwing. */
+    error?: string;
+  };
+
+  /**
    * The runtime finished a config reload. Subscribers re-arming
    * themselves after a reload can use this rather than wiring into
    * the existing `onReload` hook directly.
@@ -751,6 +776,15 @@ export interface ToolUsed {
   durationMs: number;
 }
 
+/** Payload for `agent.turn_started`, and the head of `agent.turn_ended`'s. */
+export interface TurnBoundary {
+  sessionId: string;
+  /** The agent whose turn this is, when it has a name. */
+  agent?: string;
+  /** Project scope, mirroring `session.projectId`. */
+  projectId: string | null;
+}
+
 /**
  * Payload for `agent.request_assembled`.
  *
@@ -1013,6 +1047,8 @@ export const KNOWN_BROADCAST_EVENTS = [
   "agent.post_tool_use",
   "agent.request_assembled",
   "agent.stalled",
+  "agent.turn_ended",
+  "agent.turn_started",
   "agents.pause_changed",
   "approval.requested",
   "approval.settled",
@@ -1092,6 +1128,8 @@ export const AGENT_SCOPED_EVENTS = [
   "agent.pre_tool_use",
   "agent.request_assembled",
   "agent.stalled",
+  "agent.turn_ended",
+  "agent.turn_started",
   "approval.requested",
   "approval.settled",
   "interface.action",

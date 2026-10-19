@@ -1,11 +1,14 @@
 /**
- * The built-in SQLite state provider: storage only, so these tests talk to it
- * directly, without the service's validation or access rules in the way.
+ * The built-in state providers: storage only, so these tests talk to them
+ * directly, without the service's validation or access rules in the way. Both
+ * run the same contract — a type moved from one to the other must read the same.
  */
 import Database from "better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
+import { stateProviderRegistry } from "../state/index.js";
+import { MemoryStateProvider } from "../state/memory-provider.js";
 import { SqliteStateProvider } from "../state/sqlite-provider.js";
-import { type Actor, StateConflictError, StateError, type StateWrite } from "../state/types.js";
+import { type Actor, StateConflictError, StateError, type StateProvider, type StateWrite } from "../state/types.js";
 
 const agent: Actor = { kind: "agent", name: "planner" };
 const person: Actor = { kind: "user", name: "owner" };
@@ -18,20 +21,50 @@ function write(id: string, data: Record<string, unknown>, scope = "global"): Sta
 }
 
 describe("SqliteStateProvider", () => {
-  let db: Database.Database;
-  let provider: SqliteStateProvider;
-
-  beforeEach(() => {
-    clock = 0;
-    db = new Database(":memory:");
-    provider = new SqliteStateProvider(db, now);
-  });
-
   it("creates its own tables, so core's schema carries none of them", () => {
+    const db = new Database(":memory:");
+    new SqliteStateProvider(db, now);
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'state_%' ORDER BY name")
       .all() as { name: string }[];
     expect(tables.map((t) => t.name)).toEqual(["state_changes", "state_records"]);
+  });
+});
+
+describe("MemoryStateProvider", () => {
+  it("is registered beside sqlite, so a type can name it", () => {
+    expect(stateProviderRegistry.has("memory")).toBe(true);
+  });
+
+  it("keeps only a record's latest changes", async () => {
+    const provider = new MemoryStateProvider(now, { history: 2 });
+    for (const n of [1, 2, 3]) await provider.put(write("trip", { n }));
+    const history = await provider.history({ type: "plan", id: "trip" });
+    expect(history.map((c) => c.version)).toEqual([3, 2]);
+  });
+
+  it("hands out copies, so a caller changing what it read changes nothing stored", async () => {
+    const provider = new MemoryStateProvider(now);
+    const data = { list: ["a"] };
+    const { record } = await provider.put(write("trip", data));
+    data.list.push("b");
+    record.data.list = [];
+    expect((await provider.get({ type: "plan", id: "trip" }))?.data).toEqual({ list: ["a"] });
+  });
+});
+
+/** Both keep history and can delete, which the optional parts of the contract leave open. */
+type Store = StateProvider & Required<Pick<StateProvider, "delete" | "history" | "purge">>;
+
+describe.each([
+  ["sqlite", (): Store => new SqliteStateProvider(new Database(":memory:"), now)],
+  ["memory", (): Store => new MemoryStateProvider(now)],
+])("%s provider", (_name, make) => {
+  let provider: Store;
+
+  beforeEach(() => {
+    clock = 0;
+    provider = make();
   });
 
   it("stores a record with its provenance and reads it back", async () => {
@@ -127,6 +160,20 @@ describe("SqliteStateProvider", () => {
       expect(await by({ status: { ne: "done" } })).toEqual(["a", "c"]);
       expect(await by({ priority: { gte: 3, lt: 5 } })).toEqual(["a"]);
       expect(await by({ status: { in: [] } })).toEqual([]);
+      // Missing is null, and null is not equal to a value.
+      expect(await by({ "owner.name": { ne: "sam" } })).toEqual(["a", "b"]);
+    });
+
+    it("reads booleans as 1 and 0, as SQLite's JSON does", async () => {
+      const ids = (await provider.query({ type: "plan", where: { done: 1 } })).map((r) => r.id);
+      expect(ids).toEqual(["b"]);
+    });
+
+    it("breaks a tie by id, whatever order the records were written in", async () => {
+      await provider.put(write("z", { name: "Z", priority: 9 }));
+      await provider.put(write("y", { name: "Y", priority: 9 }));
+      const ids = (await provider.query({ type: "plan", orderBy: { field: "priority" }, limit: 2 })).map((r) => r.id);
+      expect(ids).toEqual(["y", "z"]);
     });
 
     it("orders by a data field and pages", async () => {

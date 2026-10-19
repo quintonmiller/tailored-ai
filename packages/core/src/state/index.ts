@@ -1,5 +1,6 @@
 import "./builtin.js";
 
+export { type MemoryStateOptions, MemoryStateProvider } from "./memory-provider.js";
 export {
   registerStateProvider,
   registerStateType,
