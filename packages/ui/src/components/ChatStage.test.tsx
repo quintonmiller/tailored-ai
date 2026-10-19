@@ -9,7 +9,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StageInput } from "../avatar/stage";
-import { type ChatStageOptions, TalkButton, useChatStage } from "./ChatStage";
+import { type ChatStageOptions, TalkButton, tasksFor, useChatStage } from "./ChatStage";
 
 const stage = vi.hoisted(() => ({
   calls: [] as {
@@ -21,6 +21,10 @@ const stage = vi.hoisted(() => ({
   }[],
   /** Whether each stage made was a visitor's. */
   visitors: [] as boolean[],
+  /** The last stage's way to say a kiosk or a board was clicked. */
+  onUse: undefined as ((action: string) => void) | undefined,
+  /** What the boards were told to show, each time. */
+  tasks: [] as { id: string }[][],
   /** The last visitor stage's report of who you are standing next to. */
   onNear: undefined as ((agent: string | undefined) => void) | undefined,
   /** What the stage was told each agent last said, each time. */
@@ -50,11 +54,13 @@ vi.mock("../avatar/stage", () => ({
       onPick?: (agent: string, at: { x: number; y: number }) => void;
       visitor?: boolean;
       onNear?: (agent: string | undefined) => void;
+      onUse?: (action: string) => void;
       company?: { agent: string }[];
     },
   ) => {
     stage.visitors.push(!!opts.visitor);
     stage.onNear = opts.onNear;
+    stage.onUse = opts.onUse;
     stage.calls.push({ url, input, animations: opts.animations, chooseIdle: opts.chooseIdle, onPick: opts.onPick });
     stage.agents.push(opts.agent);
     stage.mounted++;
@@ -68,6 +74,7 @@ vi.mock("../avatar/stage", () => ({
       setCompany: (company: { agent: string }[]) => stage.company.push(company.map((c) => c.agent)),
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
+      setTasks: (t: { id: string }[]) => stage.tasks.push(t),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
     };
   },
@@ -100,6 +107,8 @@ let agentsInfo: Record<string, { online?: { enabled?: boolean } }> = {};
 let speechRecords: { id: string; data: { agent: string; text: string; at: string } }[] = [];
 /** Agents the page was asked to switch to. */
 const chattedWith: string[] = [];
+/** New chats the page was asked to start, with what to say. */
+const drafts: [string, string][] = [];
 /** What every agent is doing, as the server's activity records say. */
 let activityRecords: { id: string; data: { agent: string; doing: string; what: string } }[] = [];
 
@@ -185,6 +194,8 @@ beforeEach(() => {
   stage.activities.length = 0;
   stage.speech.length = 0;
   stage.visitors.length = 0;
+  stage.tasks.length = 0;
+  drafts.length = 0;
   chattedWith.length = 0;
   agentsInfo = {};
   speechRecords = [];
@@ -250,6 +261,20 @@ beforeEach(() => {
             company: ["planner", "writer"].map((a) => ({ agent: a, name: a, avatar: `/api/live/avatar?agent=${a}` })),
           }),
         );
+      if (url.startsWith("/api/project-tasks") && init?.method === "POST") {
+        posts.push({ url: "/api/project-tasks", body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ id: "t9" }), { status: 201 });
+      }
+      if (url.startsWith("/api/project-tasks"))
+        return new Response(
+          JSON.stringify({
+            tasks: [
+              { id: "t1", title: "Book flights", status: "backlog", assignee: "talker" },
+              { id: "t2", title: "Pack", status: "in_progress", assignee: "someone-else" },
+            ],
+            total: 2,
+          }),
+        );
       if (url.startsWith("/api/exploratory/agents/")) {
         posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
         return new Response("{}");
@@ -296,6 +321,7 @@ function Harness(props: Partial<ChatStageOptions>) {
     onSpoken: (conversation, key) => spoken.push([conversation, key]),
     setTurnExtras: (e) => extras.push(e),
     onChatWith: (name) => chattedWith.push(name),
+    onDraft: (name, text) => drafts.push([name, text]),
     ...props,
   });
   return (
@@ -524,6 +550,46 @@ describe("the chat page's scene", () => {
     expect(container.querySelector(".world-map")).not.toBeNull();
   });
 
+  it("shows the agent's own tasks on the boards in its room", async () => {
+    await render();
+    await settle(60);
+    expect(stage.tasks.at(-1)?.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("makes a task from the kiosk, assigned to whoever you pick", async () => {
+    agentsInfo = { planner: {}, writer: {} };
+    await render();
+    await act(async () => stage.onUse?.("new-task"));
+    const form = container.querySelector(".new-task") as HTMLFormElement;
+    expect(form).not.toBeNull();
+    const set = (el: HTMLInputElement | HTMLSelectElement, value: string) => {
+      const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, value);
+      el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+    };
+    await act(async () => set(form.querySelector("input") as HTMLInputElement, "Book the ferry"));
+    await act(async () => set(form.querySelector("select") as HTMLSelectElement, "writer"));
+    expect(form.textContent).toMatch(/writer starts on it/);
+    await act(async () => form.requestSubmit());
+    await settle();
+    expect(posts.find((p) => p.url === "/api/project-tasks")?.body).toEqual({
+      title: "Book the ferry",
+      assignee: "writer",
+    });
+    expect(container.querySelector(".new-task-made")?.textContent).toBe('Made "Book the ferry" for writer.');
+  });
+
+  it("starts a chat with the default agent to make an agent or a room, and opens the task list from a board", async () => {
+    await render();
+    await act(async () => stage.onUse?.("new-agent"));
+    await act(async () => stage.onUse?.("new-room"));
+    expect(drafts.map(([agent]) => agent)).toEqual(["default", "default"]);
+    expect(drafts[0][1]).toMatch(/new agent/);
+    expect(drafts[1][1]).toMatch(/new room/);
+    await act(async () => stage.onUse?.("tasks"));
+    expect(window.location.hash).toBe("#/tasks");
+  });
+
   it("has no 3D view for an agent without a body, but can still talk", async () => {
     liveInfo = { enabled: true };
     await render();
@@ -646,5 +712,19 @@ describe("talking on the chat page", () => {
     });
     await settle();
     expect(posts.some((p) => p.url.endsWith("/turn"))).toBe(true);
+  });
+});
+
+describe("tasksFor", () => {
+  const tasks = [
+    { id: "a", title: "a", status: "backlog", assignee: "planner" },
+    { id: "b", title: "b", status: "backlog", assignee: "writer" },
+    { id: "c", title: "c", status: "backlog", assignee: null },
+  ];
+  it("shows everyone's in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
+    expect(tasksFor("lobby", [], tasks).map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(tasksFor("home:writer", ["planner"], tasks).map((t) => t.id)).toEqual(["b"]);
+    expect(tasksFor("room:local:trip", ["planner", "writer"], tasks).map((t) => t.id)).toEqual(["a", "b"]);
+    expect(tasksFor(undefined, ["planner"], tasks)).toEqual([]);
   });
 });

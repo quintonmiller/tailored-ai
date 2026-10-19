@@ -42,6 +42,8 @@ import {
   footprintOf,
   KINDS,
   LIMITS,
+  LOBBY,
+  lobby,
   meetingRoom,
   moveItem,
   newId,
@@ -180,7 +182,7 @@ export interface TalkRoom {
 export interface MapPlace {
   id: string;
   name: string;
-  kind: "home" | "shared" | "room";
+  kind: "lobby" | "home" | "shared" | "room";
   agents: string[];
   /** The agent whose home it is. */
   owner?: string;
@@ -217,6 +219,7 @@ export async function worldMap(
   const inside = new Map<string, string[]>();
   for (const a of bodies) inside.set(where(a), [...(inside.get(where(a)) ?? []), a]);
   return [
+    { id: LOBBY, name: "the lobby", kind: "lobby" as const, agents: [] },
     ...bodies.map((a) => ({
       id: homeId(a),
       name: a === "default" ? "the default agent's room" : `${a}'s room`,
@@ -252,11 +255,12 @@ export async function scene(
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
 ): Promise<{ id: string; place: Place; agents: string[] } | null> {
+  if (id === LOBBY) return { id, place: lobby(), agents: [] };
   if (id.startsWith("room:")) {
     const room = rooms.find((r) => roomPlaceId(r.ref) === id);
     if (!room) return null;
     const agents = room.members.filter((m) => hasBody(m)).sort();
-    return { id, place: meetingRoom(room.name, agents.length), agents };
+    return { id, place: meetingRoom(room.name, agents.length, room.purpose ?? ""), agents };
   }
   if (id.startsWith("home:")) {
     const owner = id.slice("home:".length);

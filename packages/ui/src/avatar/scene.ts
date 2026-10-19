@@ -34,6 +34,10 @@ export type PropKind =
   | "plant"
   | "window"
   | "picture"
+  | "board"
+  | "kiosk"
+  | "palm"
+  | "umbrella"
   | "clock"
   | "shelf"
   | "laptop"
@@ -67,6 +71,10 @@ export interface Prop {
   scale?: number;
   /** The basic shapes' width, height and depth. */
   size?: [number, number, number];
+  /** Words it shows: a kiosk's screen, a board's heading. */
+  label?: string;
+  /** What clicking it does on the page: make an agent, a task or a room, or see the tasks. */
+  action?: string;
 }
 
 /** What the avatar does once it gets to a spot. */

@@ -1,11 +1,14 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fetchProjectTasks } from "../api";
 import { type AgentAction, Avatar, type AvatarControls } from "../avatar/Avatar";
+import type { BoardTask } from "../avatar/boards";
 import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
 import type { Companion, Line } from "../avatar/stage";
 import { subscribeStateChanges } from "../lib/state-events";
+import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
 import { useWorldMap, WorldMap } from "./WorldMap";
 
@@ -118,9 +121,43 @@ export function useRecords<T>(type: string, enabled: boolean): Record<string, T>
   return records;
 }
 
+/** How often the boards ask for tasks again. */
+const BOARD_REFRESH_MS = 30_000;
+
+/** Tasks for the boards on the walls: the open ones and the latest done, asked again every half minute. */
+export function useBoardTasks(enabled: boolean): BoardTask[] {
+  const [tasks, setTasks] = useState<BoardTask[]>([]);
+  useEffect(() => {
+    if (!enabled) return;
+    let gone = false;
+    const load = () =>
+      fetchProjectTasks({ status: "backlog,in_progress,in_review,blocked,done", limit: 120 })
+        .then((res) => {
+          if (!gone)
+            setTasks(res.tasks.map((t) => ({ id: t.id, title: t.title, status: t.status, assignee: t.assignee })));
+        })
+        .catch(() => {});
+    void load();
+    const timer = setInterval(load, BOARD_REFRESH_MS);
+    return () => {
+      gone = true;
+      clearInterval(timer);
+    };
+  }, [enabled]);
+  return tasks;
+}
+
+/** Which tasks a place's boards show: everyone's in the lobby, otherwise those of whoever is there. */
+export function tasksFor(place: string | undefined, agents: string[], tasks: BoardTask[]): BoardTask[] {
+  if (!place) return [];
+  if (place === "lobby") return tasks;
+  const who = place.startsWith("home:") ? [place.slice("home:".length)] : agents;
+  return tasks.filter((t) => !!t.assignee && who.includes(t.assignee));
+}
+
 /** What the agents themselves are configured as: whether one runs on its own, which is what can be paused. */
-function useOnlineAgents(enabled: boolean): Set<string> {
-  const [online, setOnline] = useState<Set<string>>(new Set());
+function useAgentRoster(enabled: boolean): { online: Set<string>; names: string[] } {
+  const [roster, setRoster] = useState<{ online: Set<string>; names: string[] }>({ online: new Set(), names: [] });
   useEffect(() => {
     if (!enabled) return;
     let gone = false;
@@ -128,14 +165,17 @@ function useOnlineAgents(enabled: boolean): Set<string> {
       .then((res) => (res.ok ? res.json() : {}))
       .then((agents: Record<string, { online?: { enabled?: boolean } }>) => {
         if (!gone)
-          setOnline(new Set(Object.entries(agents ?? {}).flatMap(([name, a]) => (a?.online?.enabled ? [name] : []))));
+          setRoster({
+            online: new Set(Object.entries(agents ?? {}).flatMap(([name, a]) => (a?.online?.enabled ? [name] : []))),
+            names: Object.keys(agents ?? {}).sort(),
+          });
       })
       .catch(() => {});
     return () => {
       gone = true;
     };
   }, [enabled]);
-  return online;
+  return roster;
 }
 
 async function must(res: Promise<Response>, what: string): Promise<void> {
@@ -216,6 +256,8 @@ export interface ChatStageOptions {
   setTurnExtras?: (extras: { body?: unknown; onCue?: (cue: { name: string; target?: string }) => void }) => void;
   /** Talk to another agent instead: clicked on in the room. */
   onChatWith?: (agent: string) => void;
+  /** Start a new chat with an agent, a message already written for the person to send. */
+  onDraft?: (agent: string, text: string) => void;
 }
 
 export function useChatStage({
@@ -226,6 +268,7 @@ export function useChatStage({
   onSpoken,
   setTurnExtras,
   onChatWith,
+  onDraft,
 }: ChatStageOptions) {
   const [info, setInfo] = useState<LiveInfo>({});
   useEffect(() => {
@@ -263,12 +306,14 @@ export function useChatStage({
   const visited = useScene(visiting);
   const { room, company, id: placeId } = visited ?? own;
   const map = useWorldMap(mapOpen && showStage);
+  const [taskForm, setTaskForm] = useState(false);
+  const allTasks = useBoardTasks(showStage);
   useEffect(() => {
     if (!visiting) setNear(undefined);
   }, [visiting]);
   const activities = useRecords<AgentActivity>("activity", showStage);
   const speech = useRecords<Line>("speech", showStage);
-  const online = useOnlineAgents(showStage);
+  const { online, names: agentNames } = useAgentRoster(showStage);
   const shown = agent || "default";
   // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it.
   const menuFor = useCallback(
@@ -440,6 +485,29 @@ export function useChatStage({
   );
 
   const state: BodyState = voice.phase !== "idle" ? voice.phase : sending ? "thinking" : "idle";
+  // The boards show the tasks of whoever is in the place: on the agent's own view, the agent too.
+  const boardTasks = useMemo(
+    () => tasksFor(placeId, [...(visiting ? [] : [shown]), ...company.map((c) => c.agent)], allTasks),
+    [placeId, visiting, shown, company, allTasks],
+  );
+  // What the lobby's kiosks and the boards do when clicked.
+  const onUse = useCallback(
+    (action: string) => {
+      if (action === "tasks") window.location.hash = "/tasks";
+      else if (action === "new-task") setTaskForm(true);
+      else if (action === "new-agent")
+        onDraft?.(
+          "default",
+          "I'd like a new agent. Ask me what it should do and how it should come across, then set it up.",
+        );
+      else if (action === "new-room")
+        onDraft?.(
+          "default",
+          "I'd like a new room for agents to talk in. Ask me its name, what it's for and who should be in it, then make it.",
+        );
+    },
+    [onDraft],
+  );
   const tools = (
     <>
       <button
@@ -485,8 +553,12 @@ export function useChatStage({
         visitor={!!visiting}
         onNear={setNear}
         tools={tools}
+        tasks={boardTasks}
+        onUse={onUse}
         overlay={
-          mapOpen ? (
+          taskForm ? (
+            <NewTask agents={agentNames} onClose={() => setTaskForm(false)} />
+          ) : mapOpen ? (
             <WorldMap
               places={map.places}
               problem={map.problem}

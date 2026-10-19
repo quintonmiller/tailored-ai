@@ -8688,6 +8688,17 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-map-nobody { font-style: italic; }
 .world-map-problem { margin: 8px 10px; font-size: 12px; color: #f08a4b; }
 
+/* Making a task from the room. */
+.new-task { position: absolute; top: 44px; left: 8px; z-index: 6; width: min(340px, calc(100% - 16px)); display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); }
+.talk-stage.fill .new-task { top: 134px; left: 16px; }
+.new-task-head { display: flex; align-items: center; justify-content: space-between; }
+.new-task-head strong { font-size: 13px; color: var(--text); }
+.new-task label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); }
+.new-task input, .new-task textarea, .new-task select { font-family: var(--font); font-size: 12px; padding: 6px 8px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); resize: vertical; }
+.new-task button[type="submit"] { align-self: flex-start; }
+.new-task-note { margin: 0; font-size: 11px; color: var(--text-dim); }
+.new-task-made { margin: 0; font-size: 12px; color: var(--green); }
+
 /* What clicking an agent's body opens: who, what it is doing, what you can do. */
 .agent-menu { position: absolute; z-index: 5; transform: translateX(-50%); min-width: 200px; max-width: 260px; display: flex; flex-direction: column; gap: 2px; padding: 6px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-family: var(--font); }
 .agent-menu-head { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px 6px; border-bottom: 1px solid var(--border); margin-bottom: 2px; }

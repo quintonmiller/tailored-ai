@@ -331,6 +331,28 @@ table with a seat for every member with a body, wider the more there are.
 Its members are all shown in it, wherever their bodies are, because an agent
 can belong to several rooms at once.
 
+A meeting room is dressed for what the room is for, read from its name and
+purpose: a trip or a vacation gets a beach (sand floor, sky-blue walls, a palm
+and an umbrella), a campaign a tavern (dark wood, candles on the table), a
+podcast a studio, code a workshop, research a library. A room whose words
+match none is plain.
+
+#### Task boards and the lobby
+
+A **task board** (`board`) hangs on the wall and shows tasks as sticky notes
+in four columns (to do, doing, blocked, done): in a home, its owner's; in a
+shared place or a meeting room, those of whoever is there. Every meeting room
+has one on its back wall, and an agent can put one in its own room ("add a
+task board on the back wall"). Click a board to open the Tasks page.
+
+**The lobby** is first on the map. Its three kiosks start things: **New
+agent** and **New room** open a fresh chat with the default agent, a request
+already written for you to send ("I'd like a new agent. Ask me what it should
+do…"), so the agent asks what it needs and sets it up. **New task** opens a
+small form: a title, details, and who should do it. An agent picked there
+starts on the task as soon as it's made. The lobby's board shows every open
+task.
+
 Rooms come from the built-in `builtin:places` plugin. It does nothing unless
 some agent has a body. An agent with its own `tools:` list needs `place`
 in it. The page asks for the room at `GET /api/ext/builtin:places/:agent`

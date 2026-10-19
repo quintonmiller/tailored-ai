@@ -68,6 +68,13 @@ describe("WorldMap", () => {
     expect(container.querySelector(".world-map-agent.doing-waiting")?.textContent).toMatch(/!writer/);
   });
 
+  it("puts the lobby first, as where to start", () => {
+    render({ places: [{ id: "lobby", name: "the lobby", kind: "lobby", agents: [] }, ...places] });
+    expect(container.querySelector("h3")?.textContent).toBe("Start here");
+    expect(tiles()[0].textContent).toMatch(/Make a new agent, task or room/);
+    expect(tiles()[0].textContent).not.toMatch(/nobody here/);
+  });
+
   it("goes where you click", () => {
     const { onGo } = render();
     act(() => tiles()[0].click());
