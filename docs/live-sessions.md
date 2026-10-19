@@ -185,8 +185,17 @@ choice. **Chat** hides the panel when you want the whole room; the message
 box stays. An agent without a body has no 3D button, just the chat.
 
 During a conversation the avatar stays where it is, or where it was sent.
-The first turn after three quiet minutes calls it back to face you, and
-between conversations it wanders.
+The first turn after three quiet minutes calls it back to face you.
+
+Between conversations the agent decides what its body does. Every two to
+four quiet minutes, while the page is in view, the page asks it: where it is
+and the time of day go to the agent's own model, in voice mode with its body,
+and the cues it writes back are played. It might go sit on the couch, look
+out of the window, or stay where it is. The ask is one small completion
+(60 tokens, reasoning off), and nothing is written to any conversation. The
+server takes at most one ask per agent every 45 seconds, whatever pages are
+open. With live sessions off, or when the ask fails, the avatar wanders on
+its own instead.
 
 ### Each agent its own body
 
@@ -264,6 +273,7 @@ cues, and its text passes through untouched.
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
+| `POST /api/live/idle` | what the agent does with a quiet moment: `{agent?, body, here?, hour?}` → `{cues}`. `429` within 45 s of the last ask for that agent; `400` for a body that can't go in a prompt |
 | `POST /api/live/sessions` | start: `{agent?, body?, sessionKey?}`. With `sessionKey`, its turns go into that chat's conversation, otherwise a fresh one; the session's `conversation` names it; `201` with the session and its limits; `400` when the body is not one that can go in a prompt (names must be short plain words); `409` when live sessions are off. `body` is `{looks?, gestures, aimed?}`, where each `aimed` move is `{verb, prep, does, targets}`, e.g. `{"verb": "go", "prep": "to", "does": "walk somewhere", "targets": ["the couch"]}` |
 | `GET /api/live/sessions/:id` | the session, with `endedAt` and `endReason` once it has ended |
 | `DELETE /api/live/sessions/:id` | end it |

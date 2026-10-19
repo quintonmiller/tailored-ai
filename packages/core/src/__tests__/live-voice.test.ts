@@ -16,6 +16,7 @@ import type { AgentConfig } from "../config.js";
 import { getSessionMessages } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
 import type { Body } from "../live/cues.js";
+import { chooseIdle } from "../live/idle.js";
 import { SentenceSplitter, speakable } from "../live/sentences.js";
 import { LiveSessionError, LiveSessions } from "../live/session.js";
 import {
@@ -200,7 +201,10 @@ describe("runVoiceTurn", () => {
 
   const streaming: AIProvider = {
     name: "fake",
-    chat: async () => ({ content: reply, usage: { input: 0, output: 0 }, finishReason: "stop" }),
+    chat: async (params: ChatParams) => {
+      requests.push(params);
+      return { content: reply, usage: { input: 0, output: 0 }, finishReason: "stop" };
+    },
     async *chatStream(params: ChatParams): AsyncIterable<ChatStreamEvent> {
       requests.push(params);
       for (const piece of reply.match(/.{1,7}/g) ?? []) {
@@ -396,6 +400,25 @@ describe("runVoiceTurn", () => {
 
     config.live.enabled = false;
     expect(() => startLiveSession(runtime, { transport: "web" })).toThrow("Live sessions are off");
+  });
+
+  it("asks the agent what it does with a quiet moment, and reads its answer for cues alone", async () => {
+    reply = 'I think I\'ll stretch my legs. <go to="the couch"/> <think/> <wave/>';
+    const runtime = runtimeWith();
+    const body: Body = {
+      gestures: ["think", "wave"],
+      aimed: [{ verb: "go", prep: "to", does: "walk somewhere", targets: ["the couch", "the desk"] }],
+    };
+    const cues = await chooseIdle(runtime, { agent: "planner", body, here: "at the desk", hour: 19 });
+    // At most two moves, and nothing it said.
+    expect(cues).toEqual([{ name: "go", target: "the couch" }, { name: "think" }]);
+    const asked = requests.at(-1);
+    expect(asked?.maxTokens).toBe(60);
+    expect(asked?.thinking).toBe("off");
+    expect(String(asked?.messages.at(-1)?.content)).toBe("You are at the desk. It is evening. What do you do?");
+    expect(String(asked?.messages[0]?.content)).toContain("You have a body the person can see.");
+    // A quiet moment is not a conversation: nothing is stored.
+    expect(getSessionMessages(db, "idle")).toEqual([]);
   });
 
   it("teaches a typed turn the body too, when the page shows one", () => {

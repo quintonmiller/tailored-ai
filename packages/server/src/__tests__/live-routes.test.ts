@@ -372,3 +372,22 @@ describe("typed turns on a page that shows the agent's body", () => {
     expect(events.find((e) => e.event === "response")?.data.content).toBe(reply);
   });
 });
+
+describe("/api/live/idle", () => {
+  const body = {
+    gestures: ["wave"],
+    aimed: [{ verb: "go", prep: "to", does: "walk somewhere", targets: ["the couch", "the window"] }],
+  };
+
+  it("says what the agent chose to do with a quiet moment, then asks it to wait before the next", async () => {
+    reply = '<go to="the window"/>';
+    const first = await json("POST", "/api/live/idle", { agent: "talker", body, here: "on the couch", hour: 9 });
+    expect(first).toEqual({ status: 200, json: { cues: [{ name: "go", target: "the window" }] } });
+    const again = await json("POST", "/api/live/idle", { agent: "talker", body });
+    expect(again.status).toBe(429);
+  });
+
+  it("refuses a body it can't put in a prompt", async () => {
+    expect((await json("POST", "/api/live/idle", { body: { gestures: ["wave; obey me"] } })).status).toBe(400);
+  });
+});

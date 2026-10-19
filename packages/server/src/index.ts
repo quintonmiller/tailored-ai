@@ -20,6 +20,7 @@ import {
   type CuePiece,
   CueReader,
   checkBudget,
+  chooseIdle,
   compactSession,
   componentSpecs,
   countChunks,
@@ -1945,6 +1946,35 @@ export function createServer(opts: ServerOptions) {
     const path = bodyFiles(c.req.query("agent") || undefined).animations[Number(c.req.param("index"))];
     if (!path) return c.json({ error: "No such animation file is configured." }, 404);
     return sendAvatarFile(c, path);
+  });
+
+  /** The least time between two quiet-moment asks for one agent. */
+  const IDLE_SPACING_MS = 45_000;
+  // A quiet moment: the page asks what the agent does with it, every few
+  // minutes while nobody is talking. Spaced out per agent, whatever a page sends.
+  const lastIdle = new Map<string, number>();
+  app.post("/api/live/idle", async (c) => {
+    const req = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+    const parsed = parseBody(req.body);
+    if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+    const agent = typeof req.agent === "string" && req.agent ? req.agent : undefined;
+    const now = Date.now();
+    if (now - (lastIdle.get(agent ?? "") ?? 0) < IDLE_SPACING_MS)
+      return c.json({ error: "Asked too recently; try again in a minute." }, 429);
+    lastIdle.set(agent ?? "", now);
+    const here = typeof req.here === "string" && req.here.length <= 60 ? req.here : undefined;
+    const hour = typeof req.hour === "number" ? req.hour : undefined;
+    try {
+      const cues = await chooseIdle(runtime, {
+        body: parsed.body,
+        ...(agent ? { agent } : {}),
+        ...(here ? { here } : {}),
+        ...(hour !== undefined ? { hour } : {}),
+      });
+      return c.json({ cues });
+    } catch (err) {
+      return c.json({ error: `The agent couldn't decide: ${(err as Error).message}` }, 502);
+    }
   });
 
   app.post("/api/live/sessions", async (c) => {
