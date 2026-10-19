@@ -305,6 +305,23 @@ Photos need Playwright with Chromium (`npm install playwright && npx
 playwright install chromium`), as the browser tool does. Without it, the tool
 says so and the agent can pass that on.
 
+#### Getting around: the map, walking and flying
+
+The **Map** button on the stage (or `M`) lists every place: the rooms agents
+talk in, the shared places, and each agent's home, with who is in each and
+a mark for anyone waiting on you (`!`), stuck (`?`) or asleep (`z`). Type to
+find a place or an agent. Click one to go there.
+
+You arrive in your own body ("you"), in a colour of its own. **Walk** with
+WASD or the arrow keys, which move you the way the camera faces, or click the
+floor to walk there round the furniture; drag to look round and use the wheel
+to zoom. **Fly** puts your body away and lets the camera go anywhere: WASD to
+move, `E` up, `Q` down, drag to turn. Agents look up as you come near, and
+wave if they're free; standing next to one offers **Talk to** it, which
+switches the chat to that agent. Click any agent for its menu as usual.
+**Back to** returns to the agent's own view. While you visit, your body is
+yours: the agent's turns still run, but its cues have nothing to move.
+
 #### Every place, and the rooms agents talk in
 
 The plugin also answers for the whole world: every agent's home, the shared

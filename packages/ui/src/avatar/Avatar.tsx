@@ -1,9 +1,9 @@
-import { type MutableRefObject, useEffect, useRef, useState } from "react";
+import { type MutableRefObject, type ReactNode, useEffect, useRef, useState } from "react";
 import type { Cue } from "./cues";
 import type { AgentActivity } from "./doing";
 import type { BodyState } from "./motion";
 import type { Room } from "./scene";
-import type { Companion, Line, Stage, StageView } from "./stage";
+import type { Companion, Line, Stage, StageView, Travel } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
 
@@ -54,6 +54,10 @@ export function Avatar({
   activities,
   speech,
   menuFor,
+  visitor = false,
+  onNear,
+  tools,
+  overlay,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -90,6 +94,14 @@ export function Avatar({
   speech?: Record<string, Line>;
   /** What clicking an agent's body offers; without it, bodies aren't clickable. */
   menuFor?: (agent: string) => AgentAction[];
+  /** The body is the visitor's own: walked with the keys, or put away to fly. */
+  visitor?: boolean;
+  /** The agent a visitor is standing next to, as it changes. */
+  onNear?: (agent: string | undefined) => void;
+  /** Controls laid over the top left of the stage. */
+  tools?: ReactNode;
+  /** Something laid over the whole stage, like a map. */
+  overlay?: ReactNode;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -132,6 +144,9 @@ export function Avatar({
   menuRef.current = menuFor;
   const picking = !!menuFor;
   const [picked, setPicked] = useState<{ agent: string; x: number; y: number } | null>(null);
+  const nearRef = useRef(onNear);
+  nearRef.current = onNear;
+  const [travel, setTravel] = useState<Travel>("walk");
   const agentRef = useRef(agent);
   agentRef.current = agent;
   const roomRef = useRef(room);
@@ -155,11 +170,12 @@ export function Avatar({
       .then(({ createStage }) =>
         createStage(el, url, () => live.current, {
           reducedMotion,
-          view: viewRef.current,
+          view: visitor ? "room" : viewRef.current,
           animations: animationsRef.current,
           ...(roomRef.current ? { room: roomRef.current } : {}),
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
           ...(agentRef.current ? { agent: agentRef.current } : {}),
+          ...(visitor ? { visitor: true, onNear: (who: string | undefined) => nearRef.current?.(who) } : {}),
           ...(picking
             ? {
                 onPick: (who: string, at: { x: number; y: number }) => {
@@ -211,7 +227,10 @@ export function Avatar({
       stage.current = null;
       if (controlsRef.current) controlsRef.current.current = null;
     };
-  }, [url, animationsKey, choosing, picking]);
+  }, [url, animationsKey, choosing, picking, visitor]);
+  useEffect(() => {
+    if (visitor) setTravel("walk");
+  }, [visitor]);
 
   const choose = (next: StageView) => {
     setView(next);
@@ -241,7 +260,33 @@ export function Avatar({
           onClose={() => setPicked(null)}
         />
       )}
-      {!fixedView && (
+      {tools && <div className="talk-tools">{tools}</div>}
+      {overlay}
+      {visitor && (
+        <>
+          <fieldset className="talk-view" aria-label="How you get around">
+            {(["walk", "fly"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                aria-pressed={travel === t}
+                onClick={() => {
+                  setTravel(t);
+                  stage.current?.setTravel(t);
+                }}
+              >
+                {t === "walk" ? "Walk" : "Fly"}
+              </button>
+            ))}
+          </fieldset>
+          <p className="talk-keys">
+            {travel === "walk"
+              ? "WASD or arrows to walk · click the floor to go there · drag to look round"
+              : "WASD to fly · E up, Q down · drag to turn · wheel to zoom"}
+          </p>
+        </>
+      )}
+      {!fixedView && !visitor && (
         <fieldset className="talk-view" aria-label="Avatar view">
           {(["room", "close"] as const).map((v) => (
             <button key={v} type="button" aria-pressed={view === v} onClick={() => choose(v)}>

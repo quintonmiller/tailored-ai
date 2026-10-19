@@ -19,6 +19,10 @@ const stage = vi.hoisted(() => ({
     chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown>;
     onPick?: (agent: string, at: { x: number; y: number }) => void;
   }[],
+  /** Whether each stage made was a visitor's. */
+  visitors: [] as boolean[],
+  /** The last visitor stage's report of who you are standing next to. */
+  onNear: undefined as ((agent: string | undefined) => void) | undefined,
   /** What the stage was told each agent last said, each time. */
   speech: [] as Record<string, { text: string; at: string }>[],
   cues: [] as string[],
@@ -44,8 +48,13 @@ vi.mock("../avatar/stage", () => ({
       chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown>;
       agent?: string;
       onPick?: (agent: string, at: { x: number; y: number }) => void;
+      visitor?: boolean;
+      onNear?: (agent: string | undefined) => void;
+      company?: { agent: string }[];
     },
   ) => {
+    stage.visitors.push(!!opts.visitor);
+    stage.onNear = opts.onNear;
     stage.calls.push({ url, input, animations: opts.animations, chooseIdle: opts.chooseIdle, onPick: opts.onPick });
     stage.agents.push(opts.agent);
     stage.mounted++;
@@ -175,6 +184,7 @@ beforeEach(() => {
   stage.company.length = 0;
   stage.activities.length = 0;
   stage.speech.length = 0;
+  stage.visitors.length = 0;
   chattedWith.length = 0;
   agentsInfo = {};
   speechRecords = [];
@@ -223,6 +233,23 @@ beforeEach(() => {
       if (url.startsWith("/api/state/activity")) return new Response(JSON.stringify({ records: activityRecords }));
       if (url.startsWith("/api/state/speech")) return new Response(JSON.stringify({ records: speechRecords }));
       if (url === "/api/agents") return new Response(JSON.stringify(agentsInfo));
+      if (url === "/api/ext/builtin:places/map")
+        return new Response(
+          JSON.stringify({
+            places: [
+              { id: "home:talker", name: "talker's room", kind: "home", owner: "talker", agents: ["talker"] },
+              { id: "room:local:trip", name: "trip", kind: "room", agents: ["planner", "writer"] },
+            ],
+          }),
+        );
+      if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("room:local:trip")}`)
+        return new Response(
+          JSON.stringify({
+            id: "room:local:trip",
+            place: { ...home, name: "trip" },
+            company: ["planner", "writer"].map((a) => ({ agent: a, name: a, avatar: `/api/live/avatar?agent=${a}` })),
+          }),
+        );
       if (url.startsWith("/api/exploratory/agents/")) {
         posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
         return new Response("{}");
@@ -455,6 +482,46 @@ describe("the chat page's scene", () => {
     expect(buttons.map((b) => b.textContent)).toEqual(["Open its page"]);
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(container.querySelector(".agent-menu")).toBeNull();
+  });
+
+  it("opens the map, goes to a room in your own body, and comes back to the agent", async () => {
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Map").click());
+    await settle();
+    const rooms = [...container.querySelectorAll(".world-map-place")] as HTMLButtonElement[];
+    expect(rooms.map((r) => r.querySelector(".world-map-name")?.textContent)).toEqual([
+      "#trip",
+      "talker's roomyou are here",
+    ]);
+    await act(async () => rooms[0].click());
+    await settle(60);
+    // A new stage, the visitor's, with everyone in the room as company, and the map put away.
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.company.at(-1)).toEqual(["planner", "writer"]);
+    expect(container.querySelector(".world-map")).toBeNull();
+    // The agent's cues have no body to move while you visit.
+    expect(extras.at(-1)?.body).toBeUndefined();
+    // Standing next to someone offers to talk to them.
+    await act(async () => stage.onNear?.("writer"));
+    await act(async () => tool("Talk to writer").click());
+    expect(chattedWith).toEqual(["writer"]);
+    await act(async () => tool("Back to talker").click());
+    await settle(60);
+    expect(stage.visitors.at(-1)).toBe(false);
+    expect(extras.at(-1)?.body).toBeDefined();
+  });
+
+  it("opens and closes the map with M, unless you are typing", async () => {
+    await render();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyM" })));
+    await settle();
+    expect(container.querySelector(".world-map")).not.toBeNull();
+    const field = document.createElement("textarea");
+    container.appendChild(field);
+    await act(async () => field.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyM", bubbles: true })));
+    expect(container.querySelector(".world-map")).not.toBeNull();
   });
 
   it("has no 3D view for an agent without a body, but can still talk", async () => {

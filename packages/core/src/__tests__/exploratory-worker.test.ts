@@ -194,7 +194,10 @@ describe("ExploratoryWorker.evaluate", () => {
       },
     });
     const worker = new ExploratoryWorker({ runtime: mockRuntime(config) });
-    const result = worker.evaluate("watcher", config.agents.watcher, new Date());
+    // Midday, not now: a window ending 23:59 doesn't cover the last minute of the day.
+    const noon = new Date();
+    noon.setHours(12, 0, 0, 0);
+    const result = worker.evaluate("watcher", config.agents.watcher, noon);
     expect(result.kind).toBe("run");
   });
 

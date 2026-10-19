@@ -3,7 +3,7 @@
  * after turning to face the way, and when to wander or come back.
  */
 import { describe, expect, it } from "vitest";
-import { ASK, Director, findPath, type Obstacle, route, turnBetween, Walker } from "./locomotion";
+import { ASK, Director, findPath, type Obstacle, route, slide, turnBetween, Walker } from "./locomotion";
 import { DEFAULT_ROOM, spotById } from "./scene";
 
 const at = (id: string) => spotById(DEFAULT_ROOM, id)?.at;
@@ -69,6 +69,34 @@ describe("findPath", () => {
     const desk: Obstacle = { minX: 0.75, maxX: 1.95, minZ: -1.77, maxZ: -1.17 };
     const way = findPath(DEFAULT_ROOM, [-0.85, -0.72], [1.35, -0.98], [desk, sofa], 0.2);
     expect(way.at(-1)).toEqual([1.35, -0.98]);
+  });
+});
+
+describe("slide", () => {
+  const room = { width: 4, depth: 4 };
+  const table: Obstacle = { minX: -0.5, maxX: 0.5, minZ: -0.5, maxZ: 0.5 };
+  const r = 0.2;
+
+  it("walks as far as it is told when nothing is in the way", () => {
+    expect(slide(room, [1, 1], [0.1, -0.2], [table], r)).toEqual([1.1, 0.8]);
+  });
+
+  it("stays on the floor", () => {
+    expect(slide(room, [1.7, 0], [0.5, 0], [], r)).toEqual([1.8, 0]);
+    expect(slide(room, [0, -1.7], [0, -0.5], [], r)).toEqual([0, -1.8]);
+  });
+
+  it("slides along furniture instead of stopping dead, and never walks into it", () => {
+    // Walking diagonally into the table's side: the part along it still goes.
+    const [x, z] = slide(room, [-0.8, 0], [0.2, 0.1], [table], r);
+    expect(x).toBeCloseTo(-0.8);
+    expect(z).toBeCloseTo(0.1);
+    // Straight into it: no further.
+    expect(slide(room, [-0.75, 0], [0.2, 0], [table], r)).toEqual([-0.75, 0]);
+  });
+
+  it("lets a body already inside something walk out", () => {
+    expect(slide(room, [0, 0], [0.1, 0], [table], r)).toEqual([0.1, 0]);
   });
 });
 
