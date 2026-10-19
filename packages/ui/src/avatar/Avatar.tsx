@@ -1,5 +1,6 @@
 import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import type { Cue } from "./cues";
+import type { AgentActivity } from "./doing";
 import type { BodyState } from "./motion";
 import type { Room } from "./scene";
 import type { Companion, Stage, StageView } from "./stage";
@@ -43,6 +44,8 @@ export function Avatar({
   onReady,
   onProblem,
   view: fixedView,
+  agent,
+  activities,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -71,6 +74,10 @@ export function Avatar({
   onProblem?: (reason: string) => void;
   /** Show this view and offer no toggle, instead of the one the person last chose. */
   view?: StageView;
+  /** The agent whose body this is: its colour, and which activity is its own. */
+  agent?: string;
+  /** What each agent is doing, by agent; every body in the room shows its own. */
+  activities?: Record<string, AgentActivity>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -99,6 +106,13 @@ export function Avatar({
   useEffect(() => {
     stage.current?.setCompany(companyRef.current ?? []);
   }, [companyKey]);
+  const activitiesRef = useRef(activities);
+  activitiesRef.current = activities;
+  useEffect(() => {
+    if (activities) stage.current?.setActivities(activities);
+  }, [activities]);
+  const agentRef = useRef(agent);
+  agentRef.current = agent;
   const roomRef = useRef(room);
   roomRef.current = room;
   useEffect(() => {
@@ -124,6 +138,7 @@ export function Avatar({
           animations: animationsRef.current,
           ...(roomRef.current ? { room: roomRef.current } : {}),
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
+          ...(agentRef.current ? { agent: agentRef.current } : {}),
           ...(stillRef.current.still
             ? { still: stillRef.current.still, onReady: () => stillRef.current.onReady?.() }
             : {}),
@@ -147,6 +162,7 @@ export function Avatar({
         // The room, or who is in it, may have arrived or changed while the stage was loading.
         if (roomRef.current) s.setRoom(roomRef.current);
         s.setCompany(companyRef.current ?? []);
+        if (activitiesRef.current) s.setActivities(activitiesRef.current);
       })
       .catch((err: unknown) => {
         if (gone) return;

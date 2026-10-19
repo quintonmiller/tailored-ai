@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, type AvatarControls } from "../avatar/Avatar";
 import type { Cue } from "../avatar/cues";
+import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
 import type { Companion } from "../avatar/stage";
@@ -78,6 +79,41 @@ export function useRoom(agent: string, enabled: boolean): { room: Room; company:
   return scene;
 }
 
+/**
+ * What every agent is doing, by agent, as the server's `activity` records say
+ * (from `builtin:activity`), kept current as they change. Empty when the
+ * server keeps none.
+ */
+export function useActivities(enabled: boolean): Record<string, AgentActivity> {
+  const [activities, setActivities] = useState<Record<string, AgentActivity>>({});
+  useEffect(() => {
+    if (!enabled) return;
+    let gone = false;
+    fetch("/api/state/activity?limit=500")
+      .then((res) => (res.ok ? (res.json() as Promise<{ records?: { id: string; data: AgentActivity }[] }>) : null))
+      .then((body) => {
+        if (gone || !body?.records) return;
+        // Changes heard while this was loading are newer: they win.
+        setActivities((heard) => ({ ...Object.fromEntries(body.records?.map((r) => [r.id, r.data]) ?? []), ...heard }));
+      })
+      .catch(() => {});
+    const off = subscribeStateChanges((change) => {
+      if (change.type !== "activity") return;
+      setActivities((all) => {
+        const next = { ...all };
+        if (change.op === "delete" || !change.after) delete next[change.id];
+        else next[change.id] = change.after as unknown as AgentActivity;
+        return next;
+      });
+    });
+    return () => {
+      gone = true;
+      off();
+    };
+  }, [enabled]);
+  return activities;
+}
+
 /** What the server says about the place an agent is in. */
 export interface PlaceInfo {
   id?: string;
@@ -142,6 +178,7 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
   }, []);
 
   const { room, company } = useRoom(agent, has3d);
+  const activities = useActivities(showStage);
   // What the body can do in this room: its moves, the things it can go to, look at and point at, and who is with it.
   const body = useMemo(
     () =>
@@ -269,6 +306,8 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
         insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
         room={room}
         company={company}
+        agent={agent || "default"}
+        activities={activities}
         {...(info.enabled ? { chooseIdle } : {})}
       />
     ) : null;

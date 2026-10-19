@@ -8,10 +8,14 @@ import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
+import type { Hold, Sign } from "./doing";
 import { armClearance, bodyPoints } from "./fit";
 import { Director, findPath, type Obstacle, route, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
+import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
+import { disposeSprite, SignPost, tag } from "./signs";
+import { tintModel } from "./tint";
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 
@@ -31,6 +35,24 @@ export async function loadModel(url: string): Promise<VRM> {
   });
   return vrm;
 }
+
+/**
+ * Where a held thing sits from the hand, in metres for a grown-up (scaled to
+ * the body), and how it is turned, in the body's own frame: +Z ahead, +X to
+ * its left.
+ */
+const GRIPS: Record<Hold, { at: [number, number, number]; turn: [number, number, number] }> = {
+  // Up to the eyes, lens ahead, the hand on its right end.
+  up: { at: [0.05, 0.01, 0.04], turn: [0, 0, 0] },
+  // On its edge at the ear, screen to the head, tipped toward the mouth.
+  ear: { at: [0.02, 0.03, 0], turn: [0.7, 0, -Math.PI / 2] },
+  // In front of the chest, tilted up toward the eyes.
+  chest: { at: [0.07, 0.03, 0.03], turn: [-0.4, 0, 0] },
+  // Out ahead, the far end tipped down to look through.
+  out: { at: [0, 0.01, 0.02], turn: [0.5, 0, 0] },
+};
+/** A microphone held up points at the mouth, not ahead. */
+const MIC_UP: [number, number, number] = [-1.2, 0, 0];
 
 /** What a figure is doing this frame: the turn's moment and the voice's loudness, for the one that speaks. */
 export interface FigureInput {
@@ -68,6 +90,14 @@ export class Figure {
   private readonly hipsNode: THREE.Object3D | null;
   private lastWalkAt = Number.NEGATIVE_INFINITY;
   private disposed = false;
+  private readonly hand: THREE.Object3D | null;
+  /** How big it is beside a grown-up, for what it holds. */
+  private readonly size: number;
+  private held: { kind: string; how: Hold; thing: THREE.Group } | undefined;
+  private dozing = false;
+  private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
+  /** The sign over its head. */
+  readonly signs = new SignPost();
 
   constructor(
     readonly vrm: VRM,
@@ -82,9 +112,12 @@ export class Figure {
       facing?: number;
       /** The animation files took over. */
       onClips?: () => void;
+      /** Degrees round the colour wheel, so it can be told from others in the same model. */
+      hue?: number;
     } = {},
   ) {
     this.flip = vrm.meta.metaVersion === "0" ? -1 : 1;
+    if (opts.hue) tintModel(vrm.scene, opts.hue);
     this.body.add(vrm.scene);
     if (start) {
       this.body.position.set(start.at[0], 0, start.at[1]);
@@ -118,6 +151,11 @@ export class Figure {
       vrm.update(0);
     });
     this.hipsNode = vrm.humanoid.getNormalizedBoneNode("hips");
+    this.hand = vrm.humanoid.getNormalizedBoneNode("rightHand");
+    // A little larger than life, so what it holds reads from across the room.
+    this.size = 1.3 * Math.min(1.25, Math.max(0.6, (this.bounds.max.y - this.bounds.min.y) / 1.6));
+    this.signs.group.position.y = this.bounds.max.y + 0.16;
+    this.body.add(this.signs.group);
     if (vrm.lookAt) vrm.lookAt.target = this.gaze;
     // Animation files take over the base pose once they load; until then, and if they can't, code moves it.
     this.clipsSettled = !opts.animations?.length;
@@ -184,6 +222,51 @@ export class Figure {
     if (point) this.motion.gesture("point", clock);
   }
 
+  /** Nod off, or wake up. */
+  doze(asleep: boolean) {
+    this.dozing = asleep;
+    this.motion.doze(asleep);
+  }
+
+  /** Hold something, or nothing: the arm comes up and the thing is in its hand. */
+  hold(kind: string | undefined, how: Hold | undefined) {
+    const want = kind && how ? `${kind}:${how}` : "";
+    const have = this.held ? `${this.held.kind}:${this.held.how}` : "";
+    if (want === have) return;
+    if (this.held) {
+      this.held.thing.removeFromParent();
+      disposeHeld(this.held.thing);
+      this.held = undefined;
+    }
+    this.motion.hold(kind && how ? how : undefined);
+    if (!kind || !how) return;
+    const thing = buildHeld(kind);
+    thing.scale.setScalar(this.size);
+    const turn = kind === "microphone" && how === "up" ? MIC_UP : GRIPS[how].turn;
+    thing.rotation.set(...turn);
+    thing.visible = false;
+    this.body.add(thing);
+    this.held = { kind, how, thing };
+  }
+
+  /**
+   * The tag over its head: its name, what it is doing, both, or neither.
+   * Redrawn only when the words change.
+   */
+  label(name: string | undefined, status: string | undefined) {
+    const key = `${name ?? ""}\n${status ?? ""}`;
+    if (key === this.shownTag.key) return;
+    if (this.shownTag.sprite) disposeSprite(this.shownTag.sprite);
+    const sprite = tag({ ...(name ? { name } : {}), ...(status ? { status } : {}) });
+    if (sprite) {
+      sprite.position.y = this.bounds.max.y + 0.08 + sprite.scale.y / 2;
+      this.body.add(sprite);
+    }
+    this.shownTag = { sprite, key };
+    // The sign sits just above the tag, or just above the head.
+    this.signs.group.position.y = (sprite ? sprite.position.y + sprite.scale.y / 2 : this.bounds.max.y) + 0.16;
+  }
+
   /** A gesture: a nod or a head shake from the files when they have one, the rest by code. */
   gesture(name: string, clock: number) {
     if (!this.clips?.shot(name as ClipRole, clock)) this.motion.gesture(name, clock);
@@ -206,7 +289,9 @@ export class Figure {
     const walked = this.pending ? 0 : this.walker.step(dt);
     const here = this.here;
     const spot = this.current ? spotById(room, this.current) : undefined;
-    const activity = doing ? doing.activity : here ? spot?.activity : undefined;
+    // Asleep, it does nothing where it is but sit: no typing in its sleep.
+    const there = here && !(this.dozing && spot?.activity !== "sit") ? spot?.activity : undefined;
+    const activity = doing ? doing.activity : there;
     if (walked > 0) this.lastWalkAt = t;
     const pose = this.motion.step(t, input.state, input.loudness, {
       walked,
@@ -246,14 +331,30 @@ export class Figure {
     }
     this.body.position.set(x, y, z);
     this.body.rotation.y = this.walker.place.facing;
+    this.signs.update(t);
     const size = Math.max(0.05, this.bounds.max.y - this.hipsY) * 0.5;
     this.gaze.position.set(eyesOn.x + pose.gaze[0] * size, eyesOn.y + pose.gaze[1] * size, eyesOn.z);
     this.vrm.update(dt);
+    this.placeHeld();
     return { walked };
+  }
+
+  /** Put what it holds in its hand, wherever the hand has got to this frame. */
+  private placeHeld() {
+    if (!this.held || !this.hand) return;
+    const { thing, how } = this.held;
+    this.body.updateMatrixWorld(true);
+    const at = this.body.worldToLocal(this.hand.getWorldPosition(new THREE.Vector3()));
+    const grip = GRIPS[how].at;
+    thing.position.set(at.x + grip[0] * this.size, at.y + grip[1] * this.size, at.z + grip[2] * this.size);
+    thing.visible = true;
   }
 
   dispose() {
     this.disposed = true;
+    this.hold(undefined, undefined);
+    this.label(undefined, undefined);
+    this.signs.dispose();
     this.clips?.dispose();
     this.body.removeFromParent();
     this.gaze.removeFromParent();

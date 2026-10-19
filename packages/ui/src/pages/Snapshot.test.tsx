@@ -57,10 +57,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/**
+ * Open the page and wait until it says whether it can be photographed: short
+ * turns until it does, rather than a fixed sleep a slow runner outlasts.
+ */
 async function open(hash: string) {
   window.location.hash = hash;
   await act(async () => root.render(<Snapshot />));
-  for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  const settled = () => ["ready", "failed"].includes(frame()?.dataset.snapshot ?? "");
+  for (let waited = 0; !settled() && waited < 3000; waited += 10)
+    await act(async () => new Promise((r) => setTimeout(r, 10)));
 }
 
 const frame = () => container.querySelector("[data-snapshot]") as HTMLElement;
