@@ -76,6 +76,11 @@ export interface Place {
   start: string;
   /** Photos taken here, newest first: the pictures on the walls show them, in order. */
   photos?: PlacePhoto[];
+  /**
+   * The area it belongs to, in words ("the summer house"): places in one area
+   * are joined by doors, and areas by the map. None is the main building.
+   */
+  area?: string;
 }
 
 /** A photo taken in a place, kept in the media store. */
@@ -249,6 +254,9 @@ export const KINDS: Record<string, Kind> = {
   poster: { noun: "poster", mount: "wall", footprint: [0.6, 0.02], height: 0.85, elevation: 1.3 },
   pegboard: { noun: "pegboard", mount: "wall", footprint: [1.2, 0.06], height: 0.75, elevation: 1.2 },
   table_lamp: { round: true, noun: "table lamp", mount: "on", footprint: [0.22, 0.22], height: 0.45 },
+  bench: { noun: "bench", mount: "floor", footprint: [1.3, 0.42], height: 0.46, use: sit(0.45, 0.02, 0.44) },
+  /** A plate on the wall that shows its words: a hall's name. */
+  sign: { noun: "sign", mount: "wall", footprint: [1.4, 0.04], height: 0.36, elevation: 1.6 },
 };
 
 export const LIMITS = {
@@ -1134,6 +1142,56 @@ export interface Doorway {
   width: number;
 }
 
+/** Kept back from the corners, so a door never meets the other wall or the open side. */
+const DOOR_END = 0.3;
+
+/** How far a point on the floor is from one side of the room. */
+function fromSide(place: Place, side: Wall, [x, z]: [number, number]): number {
+  if (side === "back") return z + place.depth / 2;
+  if (side === "front") return place.depth / 2 - z;
+  if (side === "left") return x + place.width / 2;
+  return place.width / 2 - x;
+}
+
+/** How long a side of the room is: the back and front run across it, the left and right from back to front. */
+const sideSpan = (place: Place, side: Wall) => (side === "back" || side === "front" ? place.width : place.depth);
+
+/**
+ * The stretches of one side of the room wide enough for a doorway, as
+ * [from, to] along it: nothing hangs there, and nothing stands on the floor in
+ * front of it. Rugs don't count, since they can be walked over. Nothing hangs
+ * on the open front and right, so there only the floor counts.
+ */
+function clearStretches(place: Place, side: Wall): [number, number][] {
+  const span = sideSpan(place, side);
+  const taken: [number, number][] = [];
+  for (const item of place.props) {
+    if (item.on) continue;
+    if (KINDS[item.kind]?.mount === "wall") {
+      if ((side !== "back" && side !== "left") || wallOf(place, item) !== side) continue;
+      const along = side === "back" ? item.at[0] : item.at[1];
+      const [w] = footprintOf(item);
+      taken.push([along - w / 2, along + w / 2]);
+      continue;
+    }
+    if (!blocks(item)) continue;
+    const points = corners(rectOf(item));
+    const out = Math.min(...points.map((p) => fromSide(place, side, p)));
+    if (out >= DOORWAY.depth) continue;
+    const alongs = points.map(([x, z]) => (side === "back" || side === "front" ? x : z));
+    taken.push([Math.min(...alongs), Math.max(...alongs)]);
+  }
+  taken.sort((a, b) => a[0] - b[0]);
+  let from = -span / 2 + DOOR_END;
+  const free: [number, number][] = [];
+  for (const [a, b] of taken) {
+    if (a > from) free.push([from, a]);
+    from = Math.max(from, b);
+  }
+  if (span / 2 - DOOR_END > from) free.push([from, span / 2 - DOOR_END]);
+  return free.filter(([a, b]) => b - a >= DOORWAY.width - 1e-6);
+}
+
 /**
  * Every stretch of the back and left walls wide enough for a doorway, widest
  * first: nothing hangs there, and nothing stands on the floor in front of it.
@@ -1142,39 +1200,125 @@ export interface Doorway {
  */
 export function doorways(place: Place): Doorway[] {
   const found: Doorway[] = [];
-  // Kept back from the corners, so a door never meets the other wall or the open side.
-  const end = 0.3;
-  for (const wall of ["back", "left"] as const) {
-    const span = wall === "back" ? place.width : place.depth;
-    const taken: [number, number][] = [];
+  for (const wall of ["back", "left"] as const)
+    for (const [a, b] of clearStretches(place, wall))
+      found.push({ wall, along: round((a + b) / 2), width: round(b - a) });
+  return found.sort((a, b) => b.width - a.width);
+}
+
+/** Where a door is: which side of the room, and its middle along it (x on the back and front, z on the left and right). */
+export interface DoorSlot {
+  wall: Wall;
+  along: number;
+}
+
+/**
+ * Where a room's door goes: in a clear stretch of the back or left wall, at
+ * its end nearest the open side, which is where the rooms the world starts
+ * with keep their doorway (see `places-rooms.ts`). A room whose walls are full
+ * has its door at the open front or right edge instead, standing on its own;
+ * one with no clear floor anywhere along its sides has none. The door depends
+ * only on what is in the room, so the same room always has it in the same
+ * place, and the `place` tool keeps furniture out of it (`withDoorwayHeld`).
+ */
+export function doorOf(place: Place): DoorSlot | undefined {
+  const best = (sides: Wall[]): DoorSlot | undefined => {
+    let found: (DoorSlot & { short: number }) | undefined;
+    for (const side of sides)
+      for (const [, b] of clearStretches(place, side)) {
+        // How far short of the open side the stretch stops: nearest wins, the back wall on a tie.
+        const short = sideSpan(place, side) / 2 - b;
+        if (!found || short < found.short - 1e-6) found = { wall: side, along: round(b - DOORWAY.width / 2), short };
+      }
+    return found && { wall: found.wall, along: found.along };
+  };
+  return best(["back", "left"]) ?? best(["front", "right"]);
+}
+
+/** The floor in front of a door: as wide as the doorway with a little to spare, and `DOORWAY.depth` deep. */
+export function doorwayFloor(place: Place, door: DoorSlot): { at: [number, number]; size: [number, number] } {
+  const span = DOORWAY.width + 0.2;
+  const d = DOORWAY.depth;
+  switch (door.wall) {
+    case "back":
+      return { at: [door.along, round(-place.depth / 2 + d / 2)], size: [span, d] };
+    case "front":
+      return { at: [door.along, round(place.depth / 2 - d / 2)], size: [span, d] };
+    case "left":
+      return { at: [round(-place.width / 2 + d / 2), door.along], size: [d, span] };
+    case "right":
+      return { at: [round(place.width / 2 - d / 2), door.along], size: [d, span] };
+  }
+}
+
+/**
+ * The room with its doorway held, for finding where something goes: a block
+ * as tall as the room stands in front of the door, so nothing is put in the
+ * way, over it, or where someone would have to stand to use it. It is called
+ * "the door", so "near the door" finds it. What is found is put in the room
+ * as it is, without the block.
+ */
+export function withDoorwayHeld(place: Place, door: DoorSlot | undefined = doorOf(place)): Place {
+  if (!door) return place;
+  const { at, size } = doorwayFloor(place, door);
+  // A shape with no top, so nothing is ever put on it.
+  const hold: PlaceItem = {
+    id: "doorway-hold",
+    name: "the door",
+    kind: "ball",
+    at,
+    facing: 0,
+    size: [size[0], 9, size[1]],
+  };
+  return { ...place, props: [...place.props.filter((p) => p.id !== hold.id), hold] };
+}
+
+/**
+ * Problems with a room's doors, as sentences: a door off the end of its side,
+ * two doors in each other's way, something standing in front of a door, or
+ * hanging where it is. Empty when every door can be walked through.
+ */
+export function doorProblems(place: Place, doors: DoorSlot[]): string[] {
+  const problems: string[] = [];
+  const floorOf = (door: DoorSlot): Rect => {
+    const { at, size } = doorwayFloor(place, door);
+    // The door itself, without the spare the tool keeps either side of it.
+    const along = door.wall === "back" || door.wall === "front";
+    return { at, hw: along ? DOORWAY.width / 2 : size[0] / 2, hd: along ? size[1] / 2 : DOORWAY.width / 2, facing: 0 };
+  };
+  for (const [i, door] of doors.entries()) {
+    const name = `The door ${doorWords(place, door)}`;
+    if (Math.abs(door.along) > sideSpan(place, door.wall) / 2 - DOORWAY.width / 2 + 1e-6)
+      problems.push(`${name} runs off the end of its side.`);
+    for (const other of doors.slice(i + 1))
+      if (overlaps(floorOf(door), floorOf(other), -0.01))
+        problems.push(`${name} and the door ${doorWords(place, other)} are in each other's way.`);
     for (const item of place.props) {
       if (item.on) continue;
       if (KINDS[item.kind]?.mount === "wall") {
-        if (wallOf(place, item) !== wall) continue;
-        const along = wall === "back" ? item.at[0] : item.at[1];
-        const [w] = footprintOf(item);
-        taken.push([along - w / 2, along + w / 2]);
-        continue;
+        if (door.wall !== wallOf(place, item) || (door.wall !== "back" && door.wall !== "left")) continue;
+        const along = door.wall === "back" ? item.at[0] : item.at[1];
+        if (Math.abs(along - door.along) < (footprintOf(item)[0] + DOORWAY.width) / 2 - 1e-6)
+          problems.push(`${item.name} hangs where ${name.toLowerCase()} is.`);
+      } else if (blocks(item) && overlaps(floorOf(door), rectOf(item), -0.01)) {
+        problems.push(`${item.name} stands in front of ${name.toLowerCase()}.`);
       }
-      if (!blocks(item)) continue;
-      const points = corners(rectOf(item));
-      const out = Math.min(...points.map(([x, z]) => (wall === "back" ? z + place.depth / 2 : x + place.width / 2)));
-      if (out >= DOORWAY.depth) continue;
-      const alongs = points.map(([x, z]) => (wall === "back" ? x : z));
-      taken.push([Math.min(...alongs), Math.max(...alongs)]);
     }
-    taken.sort((a, b) => a[0] - b[0]);
-    let from = -span / 2 + end;
-    const free: [number, number][] = [];
-    for (const [a, b] of taken) {
-      if (a > from) free.push([from, a]);
-      from = Math.max(from, b);
-    }
-    if (span / 2 - end > from) free.push([from, span / 2 - end]);
-    for (const [a, b] of free)
-      if (b - a >= DOORWAY.width - 1e-6) found.push({ wall, along: round((a + b) / 2), width: round(b - a) });
   }
-  return found.sort((a, b) => b.width - a.width);
+  return problems;
+}
+
+/** Where a door is, in words: "on the back wall, toward the right". */
+export function doorWords(place: Place, door: DoorSlot): string {
+  const span = sideSpan(place, door.wall);
+  const part = door.along > span / 6 ? 1 : door.along < -span / 6 ? -1 : 0;
+  const toward =
+    door.wall === "back" || door.wall === "front"
+      ? ["toward the left", "in the middle", "toward the right"][part + 1]
+      : ["toward the back", "in the middle", "toward the front"][part + 1];
+  const side =
+    door.wall === "back" || door.wall === "left" ? `on the ${door.wall} wall` : `at the open ${door.wall} side`;
+  return `${side}, ${toward}`;
 }
 
 // --------------------------------------------------------------------------
@@ -1342,6 +1486,7 @@ export const PLACE_SCHEMA = {
     floor: { type: "string", enum: FLOORS },
     floorColor: { type: "string", pattern: "^#[0-9a-f]{6}$" },
     start: { type: "string" },
+    area: { type: "string", maxLength: 60 },
     photos: {
       type: "array",
       maxItems: PHOTOS_KEPT,

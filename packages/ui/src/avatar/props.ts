@@ -5,7 +5,7 @@
  * own origin, front toward +Z; the stage places and turns it.
  */
 import * as THREE from "three";
-import type { PropKind, Room } from "./scene";
+import type { PropKind, Room, RoomDoor } from "./scene";
 
 const materials = new Map<string, THREE.MeshStandardMaterial>();
 
@@ -732,7 +732,140 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       c.scale.set(w, h, d);
       return { group: g };
     }
+    case "bench": {
+      // Three slats on two solid ends, the way a bench in a corridor is.
+      const wood = main(0xa87650);
+      for (const z of [-0.13, 0, 0.13]) box(g, 1.3, 0.045, 0.12, wood, 0, 0.44, z);
+      for (const x of [-0.56, 0.56]) box(g, 0.07, 0.42, 0.38, tint(wood, -0.4), x, 0.21, 0);
+      box(g, 1.05, 0.04, 0.05, tint(wood, -0.4), 0, 0.12, 0).castShadow = false;
+      return { group: g };
+    }
+    case "sign": {
+      // A dark plate with its words lit, so it reads from across a hall.
+      box(g, 1.44, 0.4, 0.03, 0x2a2e38, 0, 0.18, 0).castShadow = false;
+      const face = canvasFace(1.36, 0.32, 420);
+      drawPlate(face.canvas, look.label ?? "", "#2a2e38", "#f3efe6");
+      const plate = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 0.32), face.material);
+      plate.position.set(0, 0.18, 0.017);
+      g.add(plate);
+      return { group: g };
+    }
   }
+}
+
+/** Words on a plate, as large as fit, on a ground of their own. */
+function drawPlate(canvas: HTMLCanvasElement, label: string, ground: string, ink: string) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.fillStyle = ground;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = ink;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  let size = Math.round(canvas.height * 0.58);
+  ctx.font = `600 ${size}px system-ui, sans-serif`;
+  // Smaller for a long name, down to a point, rather than squashed.
+  while (size > canvas.height * 0.3 && ctx.measureText(label).width > canvas.width * 0.9) {
+    size -= 2;
+    ctx.font = `600 ${size}px system-ui, sans-serif`;
+  }
+  ctx.fillText(label, canvas.width / 2, canvas.height * 0.54, canvas.width * 0.92);
+}
+
+/** A door's panel and plate colours, by what it opens on: a home's warm wood, a meeting room's slate, glass to a hall. */
+const DOOR_LOOKS: Record<RoomDoor["kind"], { panel?: number; plate: string; ink: string }> = {
+  home: { panel: 0x8a5a3b, plate: "#c9a24a", ink: "#2a1d0c" },
+  shared: { panel: 0x5f7f5a, plate: "#e4dcc6", ink: "#23301f" },
+  room: { panel: 0x4f6278, plate: "#2f3a4a", ink: "#f3efe6" },
+  hall: { plate: "#24303f", ink: "#eef1fa" },
+  lobby: { plate: "#24303f", ink: "#eef1fa" },
+};
+
+/** One shared see-through pane for doors to halls and the lobby. */
+let glass: THREE.MeshStandardMaterial | undefined;
+
+/**
+ * A door, standing at its own origin with its back to the wall and its front
+ * toward +Z. On a wall: a frame, a panel (glass for a hall or the lobby), a
+ * name plate over it and a mat in front. At an open side of the room the wall
+ * is cut away, so the door is too: a low gate of two posts with the plate
+ * across them, readable from either side, that never stands between the
+ * camera and the room. A home's door has a light by its plate that the stage
+ * colours by what its agent is doing.
+ */
+export function buildDoor(
+  door: Pick<RoomDoor, "label" | "kind" | "occupant">,
+  opts: { freestanding: boolean; trim?: string },
+): { group: THREE.Group; light?: THREE.MeshStandardMaterial } {
+  const g = new THREE.Group();
+  const look = DOOR_LOOKS[door.kind] ?? DOOR_LOOKS.room;
+  const trim = hex(opts.trim, 0xf2efe8);
+  // How high the plate is, and which faces of it can be seen.
+  const plateY = opts.freestanding ? 0.9 : 2.5;
+  const faces = opts.freestanding ? [1, -1] : [1];
+  if (opts.freestanding) {
+    for (const x of [-0.66, 0.66]) box(g, 0.1, 1.06, 0.12, trim, x, 0.53, 0.06);
+    // A sill across the opening, where the cut-away wall would meet the floor.
+    box(g, 1.22, 0.03, 0.12, tint(trim, -0.2), 0, 0.015, 0.06).castShadow = false;
+  } else {
+    for (const x of [-0.66, 0.66]) box(g, 0.1, 2.25, 0.14, trim, x, 1.125, 0.07);
+    box(g, 1.42, 0.12, 0.14, trim, 0, 2.24, 0.07);
+    if (look.panel !== undefined) {
+      box(g, 1.2, 2.16, 0.05, look.panel, 0, 1.08, 0.06);
+      // Two sunk panels and a handle, so it reads as a door and not a board.
+      for (const y of [0.6, 1.55]) box(g, 0.92, 0.7, 0.012, tint(look.panel, -0.18), 0, y, 0.09).castShadow = false;
+      cylinder(g, 0.035, 0.035, 0.08, 0xd4b264, 0.46, 1.02, 0.12, 10).rotation.x = Math.PI / 2;
+    } else {
+      glass ??= new THREE.MeshStandardMaterial({
+        color: 0xbcd6e8,
+        transparent: true,
+        opacity: 0.35,
+        roughness: 0.15,
+        metalness: 0.1,
+        depthWrite: false,
+      });
+      const pane = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.16, 0.03), glass);
+      pane.position.set(0, 1.08, 0.06);
+      g.add(pane);
+      box(g, 1.2, 0.06, 0.05, trim, 0, 1.05, 0.06);
+    }
+  }
+  // The plate: a backing, and the words on each face that can be seen. A long name gets a wider plate, up to
+  // what fits over the door, so it stays as easy to read as a short one.
+  const wide = Math.min(opts.freestanding ? 1.36 : 1.8, Math.max(1.1, 0.35 + 0.075 * door.label.length));
+  box(
+    g,
+    opts.freestanding ? Math.max(1.42, wide + 0.06) : wide + 0.06,
+    0.32,
+    0.04,
+    0x2a2e38,
+    0,
+    plateY,
+    0.06,
+  ).castShadow = false;
+  const face = canvasFace(wide, 0.27, 440);
+  drawPlate(face.canvas, door.label, look.plate, look.ink);
+  for (const side of faces) {
+    const plate = new THREE.Mesh(new THREE.PlaneGeometry(wide, 0.27), face.material);
+    plate.position.set(0, plateY, 0.06 + side * 0.022);
+    if (side < 0) plate.rotation.y = Math.PI;
+    g.add(plate);
+  }
+  // A mat in front, so a door is found by where it meets the floor as well.
+  box(g, 1.3, 0.014, 0.55, 0x4a4038, 0, 0.007, 0.45).castShadow = false;
+  if (!door.occupant) return { group: g };
+  const light = glowing(0xd8dde6);
+  // Beside the plate on a wall; on top of a gate's post, seen from all round.
+  const bulb = solid(
+    new THREE.SphereGeometry(0.06, 12, 8),
+    light,
+    opts.freestanding ? -0.66 : -wide / 2 - 0.12,
+    opts.freestanding ? plateY + 0.24 : plateY,
+    opts.freestanding ? 0.06 : 0.11,
+  );
+  bulb.castShadow = false;
+  g.add(bulb);
+  return { group: g, light };
 }
 
 /**
@@ -862,4 +995,5 @@ export function disposeTree(root: THREE.Object3D) {
     else if (m) free(m);
   });
   materials.clear();
+  glass = undefined;
 }

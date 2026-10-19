@@ -19,6 +19,7 @@
  */
 import {
   DOORWAY,
+  type DoorSlot,
   type Floor,
   findPlacement,
   fitsOnFloor,
@@ -1215,6 +1216,17 @@ export function meetingRoom(name: string, seats: number, purpose = ""): Place {
 export const LOBBY = "lobby";
 
 /**
+ * The lobby's doorways, in the order the main building's halls take them: the
+ * residences at the back on the right, the meeting rooms at the back on the
+ * left, the shared places at the front of the left wall.
+ */
+export const LOBBY_DOORS: DoorSlot[] = [
+  { wall: "back", along: 5.7 },
+  { wall: "back", along: -5.4 },
+  { wall: "left", along: 3.7 },
+];
+
+/**
  * Where everyone starts, and the biggest room there is, with doorways kept
  * clear on both walls for the halls that lead off it: kiosks to make a new
  * agent, a new task or a new room, a board of every open task, a lounge by the
@@ -1275,11 +1287,7 @@ export function lobby(): Place {
     palette: { walls: "#e4e1ec", floor: "tile", floorColor: "#cfd3dc" },
     look,
     // Halls lead off both ends of the back wall and the front of the left one.
-    doors: [
-      { wall: "back", at: round(-width / 2 + 1.6) },
-      { wall: "back", at: round(width / 2 - 1.3) },
-      { wall: "left", at: round(depth / 2 - 1.3) },
-    ],
+    doors: LOBBY_DOORS.map((d) => ({ wall: d.wall as "back" | "left", at: d.along })),
     centre,
     start: { id: "middle", name: "in the middle", place: "the middle of the lobby", at: [0, 0.6], facing: 180 },
     back: [],

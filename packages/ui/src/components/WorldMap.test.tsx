@@ -75,6 +75,38 @@ describe("WorldMap", () => {
     expect(tiles()[0].textContent).not.toMatch(/nobody here/);
   });
 
+  it("groups places by area when some are elsewhere, the one you are in first, and lists the halls", () => {
+    render({
+      places: [
+        { id: "lobby", name: "the lobby", kind: "lobby", agents: [], area: "main" },
+        { id: "hall:main:homes-1", name: "Residences", kind: "hall", agents: [], area: "main" },
+        { ...places[0], area: "main" },
+        { id: "shared:porch", name: "the summer porch", kind: "shared", agents: [], area: "summer-house" },
+        { id: "shared:kitchen", name: "the summer kitchen", kind: "shared", agents: ["writer"], area: "summer-house" },
+      ],
+      areas: [
+        { id: "main", name: "the main building", places: ["lobby", "hall:main:homes-1", "home:planner"] },
+        { id: "summer-house", name: "the summer house", places: ["shared:kitchen", "shared:porch"] },
+      ],
+      here: "shared:porch",
+    });
+    expect([...container.querySelectorAll("h2")].map((h) => h.textContent)).toEqual([
+      "The summer houseyou are here",
+      "The main building",
+    ]);
+    expect(container.querySelector(".world-map-area-here")?.textContent).toMatch(/You're in the summer house/);
+    const main = container.querySelectorAll(".world-map-area")[1];
+    expect([...main.querySelectorAll("h3")].map((h) => h.textContent)).toEqual(["Start here", "Homes", "Halls"]);
+    // A hall has nobody living in it to list.
+    expect(main.querySelector(".world-map-hall")?.textContent).not.toMatch(/nobody here/);
+  });
+
+  it("shows no areas while everything is in the main building", () => {
+    render({ areas: [{ id: "main", name: "the main building", places: [] }] });
+    expect(container.querySelector("h2")).toBeNull();
+    expect(container.querySelector(".world-map-area-here")).toBeNull();
+  });
+
   it("goes where you click", () => {
     const { onGo } = render();
     act(() => tiles()[0].click());

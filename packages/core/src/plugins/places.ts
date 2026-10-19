@@ -35,6 +35,8 @@ import { PlaceCamera, type Shot } from "./places-camera.js";
 import {
   colorWord,
   describe,
+  doorOf,
+  doorWords,
   FLOORS,
   type Floor,
   findItem,
@@ -61,9 +63,22 @@ import {
   type Wall,
   type Where,
   whereWords,
+  withDoorwayHeld,
   withSpots,
 } from "./places-layout.js";
 import { homePlace, LOBBY, lobby, meetingRoom, sharedPlace } from "./places-rooms.js";
+import {
+  type Area,
+  areaId,
+  doorsIn,
+  hallPlace,
+  layWorld,
+  MAIN,
+  MAIN_NAME,
+  type PlaceDoor,
+  type World,
+  type WorldPlace,
+} from "./places-world.js";
 
 export const PLACE_TYPE = "place";
 
@@ -267,12 +282,52 @@ export async function whoIsIn(
   return [...names].filter((name) => hasBody(name)).sort();
 }
 
-/** The shared places, by id and name. */
-async function sharedPlaces(service: StateService, caller: StateCaller): Promise<{ id: string; name: string }[]> {
+/** The shared places, by id and name, and the area each is in when it says. */
+async function sharedPlaces(
+  service: StateService,
+  caller: StateCaller,
+): Promise<{ id: string; name: string; area?: string }[]> {
   const records = await service.query(caller, { type: PLACE_TYPE, scope: "global", limit: 50 });
   return records
     .filter((r) => r.id.startsWith(SHARED))
-    .map((r) => ({ id: r.id, name: String((r.data as unknown as Place).name ?? r.id) }));
+    .map((r) => {
+      const data = r.data as unknown as Place;
+      return { id: r.id, name: String(data.name ?? r.id), ...(data.area ? { area: data.area } : {}) };
+    });
+}
+
+/**
+ * The building every place is in (see `places-world.ts`): the homes of the
+ * agents with bodies, the shared places, and the rooms agents talk in, each
+ * in the area its record says. Only records that name an area are read for
+ * it, so a building of fifty homes costs two queries, not fifty reads.
+ */
+export async function buildWorld(
+  service: StateService,
+  caller: StateCaller,
+  agents: string[],
+  rooms: TalkRoom[],
+  hasBody: (agent: string | undefined) => boolean,
+): Promise<World> {
+  const shared = await sharedPlaces(service, caller).catch(() => []);
+  const elsewhere = await service
+    .query(caller, { type: PLACE_TYPE, where: { area: { ne: null } }, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  const areaOf = new Map(elsewhere.map((r) => [r.id, String((r.data as unknown as Place).area ?? "")]));
+  const places: WorldPlace[] = [
+    ...agents
+      .filter((a) => hasBody(a))
+      .map((a) => ({
+        id: homeId(a),
+        name: a === "default" ? "your room" : `${a}'s room`,
+        kind: "home" as const,
+        owner: a,
+        ...(areaOf.get(homeId(a)) ? { area: areaOf.get(homeId(a)) } : {}),
+      })),
+    ...shared.map((p) => ({ id: p.id, name: p.name, kind: "shared" as const, ...(p.area ? { area: p.area } : {}) })),
+    ...rooms.map((r) => ({ id: roomPlaceId(r.ref), name: r.name, kind: "room" as const })),
+  ];
+  return layWorld(places);
 }
 
 /** A room of conversation, as the map shows it: its members are in it, wherever their bodies are. */
@@ -284,12 +339,14 @@ export interface TalkRoom {
   members: string[];
 }
 
-/** One place on the map: a home, a shared place, or a room of conversation, and who is in it. */
+/** One place on the map: the lobby, a hall, a home, a shared place, or a room of conversation, and who is in it. */
 export interface MapPlace {
   id: string;
   name: string;
-  kind: "lobby" | "home" | "shared" | "room";
+  kind: "lobby" | "hall" | "home" | "shared" | "room";
   agents: string[];
+  /** The area it is in, by id: `main` for the main building. */
+  area: string;
   /** The agent whose home it is. */
   owner?: string;
   purpose?: string;
@@ -368,9 +425,10 @@ export async function transcript(
 }
 
 /**
- * Every place there is: each agent's home, the shared places, and the rooms
- * agents talk in. A body is in one home or shared place at a time; a room
- * shows all its members, since an agent can belong to several.
+ * Every place there is: the lobby and the halls, each agent's home, the
+ * shared places, and the rooms agents talk in, each with the area it is in.
+ * A body is in one home or shared place at a time; a room shows all its
+ * members, since an agent can belong to several.
  */
 export async function worldMap(
   service: StateService,
@@ -378,7 +436,10 @@ export async function worldMap(
   agents: string[],
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
+  built?: World,
 ): Promise<MapPlace[]> {
+  const world = built ?? (await buildWorld(service, caller, agents, rooms, hasBody));
+  const area = (id: string) => world.areaOf.get(id) ?? MAIN;
   const bodies = agents.filter((a) => hasBody(a));
   const shared = await sharedPlaces(service, caller).catch(() => []);
   const sharedIds = new Set(shared.map((p) => p.id));
@@ -394,34 +455,39 @@ export async function worldMap(
   const inside = new Map<string, string[]>();
   for (const a of bodies) inside.set(where(a), [...(inside.get(where(a)) ?? []), a]);
   return [
-    { id: LOBBY, name: "the lobby", kind: "lobby" as const, agents: [] },
+    { id: LOBBY, name: "the lobby", kind: "lobby" as const, agents: [], area: MAIN },
+    ...world.halls.map((h) => ({ id: h.id, name: h.name, kind: "hall" as const, agents: [], area: h.area })),
     ...bodies.map((a) => ({
       id: homeId(a),
       name: a === "default" ? "the default agent's room" : `${a}'s room`,
       kind: "home" as const,
       owner: a,
       agents: (inside.get(homeId(a)) ?? []).sort(),
+      area: area(homeId(a)),
     })),
     ...shared.map((p) => ({
       id: p.id,
       name: p.name,
       kind: "shared" as const,
       agents: (inside.get(p.id) ?? []).sort(),
+      area: area(p.id),
     })),
     ...rooms.map((r) => ({
       id: roomPlaceId(r.ref),
       name: r.name,
       kind: "room" as const,
       agents: r.members.filter((m) => hasBody(m)).sort(),
+      area: MAIN,
       ...(r.purpose ? { purpose: r.purpose } : {}),
     })),
   ];
 }
 
 /**
- * Any place, to look at: what it looks like and who is in it. A room of
- * conversation is a meeting room with a seat for each member, made fresh
- * each time rather than kept.
+ * Any place, to look at: what it looks like, who is in it, and, given the
+ * building, its doors. A room of conversation is a meeting room with a seat
+ * for each member, and a hall a corridor with a door for each place off it,
+ * both made fresh each time rather than kept.
  */
 export async function scene(
   service: StateService,
@@ -429,8 +495,30 @@ export async function scene(
   id: string,
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
+  world?: World,
+): Promise<{ id: string; place: Place; agents: string[]; doors: PlaceDoor[] } | null> {
+  const found = await sceneOf(service, caller, id, rooms, hasBody, world);
+  return found && { ...found, doors: world ? doorsIn(id, found.place, world) : [] };
+}
+
+async function sceneOf(
+  service: StateService,
+  caller: StateCaller,
+  id: string,
+  rooms: TalkRoom[],
+  hasBody: (agent: string | undefined) => boolean,
+  world: World | undefined,
 ): Promise<{ id: string; place: Place; agents: string[] } | null> {
   if (id === LOBBY) return { id, place: drawOnce(LOBBY, lobby), agents: [] };
+  if (id.startsWith("hall:")) {
+    const hall = world?.halls.find((h) => h.id === id);
+    if (!hall) return null;
+    return {
+      id,
+      place: drawOnce(`hall\n${id}\n${hall.name}\n${hall.rooms.length}`, () => hallPlace(hall)),
+      agents: [],
+    };
+  }
   if (id.startsWith("room:")) {
     const room = rooms.find((r) => roomPlaceId(r.ref) === id);
     if (!room) return null;
@@ -541,6 +629,16 @@ const hasPlacement = (w: Where) =>
 
 const say = (item: PlaceItem, place: Place) => `${item.name}, ${whereWords(place, item)}`;
 
+/** What a sign says: the name it was given, without "the". */
+const signWords = (name: string | undefined) => (name ?? "Welcome").replace(/^(the|a|an)\s+/i, "").slice(0, 40);
+
+/** Which area a place is in, and where its door is, for the agent looking round it. */
+function whereaboutsWords(place: Place): string {
+  const area = place.area && areaId(place.area) !== MAIN ? place.area : MAIN_NAME;
+  const door = doorOf(place);
+  return `It is in ${area}.${door ? ` Its door is ${doorWords(place, door)}; nothing can stand in front of it.` : ""}`;
+}
+
 export interface Outcome {
   ok: boolean;
   text: string;
@@ -611,7 +709,19 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       next = { ...next, name: name.slice(0, 80) };
       changes.push(`it is called ${name}`);
     }
-    if (!changes.length) return no("Say what to change about the room: width, depth, height, walls, floor or name.");
+    const area = text(args.area);
+    if (area) {
+      if (areaId(area) === MAIN) {
+        const { area: _left, ...rest } = next;
+        next = rest;
+        changes.push(`it is in ${MAIN_NAME}, with a door off its hall`);
+      } else {
+        next = { ...next, area: area.slice(0, 60) };
+        changes.push(`it is in ${area}: doors join it to the other places there, and the map to everywhere else`);
+      }
+    }
+    if (!changes.length)
+      return no("Say what to change about the room: width, depth, height, walls, floor, name or area.");
     return { ok: true, text: `Changed the room: ${changes.join("; ")}.`, place: next };
   }
 
@@ -647,9 +757,11 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       ...(item.scale ? { scale: item.scale } : {}),
       ...(item.size ? { size: item.size } : {}),
     };
-    const spot = findPlacement(place, placing, where);
+    // Never in front of the door, or over it.
+    const spot = findPlacement(withDoorwayHeld(place), placing, where);
     if (typeof spot === "string") return no(spot);
     item.name = newName(place, kind, colorWord(colorText), text(args.name));
+    if (kind === "sign") item.label = signWords(text(args.name));
     const added: PlaceItem = { ...item, at: spot.at, facing: spot.facing };
     if (spot.elevation !== undefined) added.elevation = spot.elevation;
     if (spot.on) {
@@ -690,11 +802,12 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       ...(item.size ? { size: item.size } : {}),
     };
     let spot: ReturnType<typeof findPlacement>;
+    const held = withDoorwayHeld(place);
     if (hasPlacement(where)) {
-      spot = findPlacement(place, placing, where);
+      spot = findPlacement(held, placing, where);
     } else if (where.facing !== undefined) {
       // Turning it where it stands.
-      spot = findPlacement(place, placing, { x: item.at[0], z: item.at[1], facing: where.facing });
+      spot = findPlacement(held, placing, { x: item.at[0], z: item.at[1], facing: where.facing });
       if (typeof spot !== "string" && item.on) spot = { ...spot, at: item.at, on: item.on, elevation: item.elevation };
     } else {
       return no("Say where to move it: near, side, wall, corner, on, or x and z.");
@@ -716,6 +829,7 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       undefined,
       name,
     );
+    if (item.kind === "sign") changed.label = signWords(name);
     changes.push(`it is now called ${changed.name}`);
   }
   const colorText = text(args.color);
@@ -751,11 +865,13 @@ export function applyAction(place: Place, args: Record<string, unknown>): Outcom
       ...(changed.scale ? { scale: changed.scale } : {}),
       ...(changed.size ? { size: changed.size } : {}),
     };
+    // The door stays where it was before the change.
+    const held = withDoorwayHeld(next, doorOf(place));
     const spot = item.on
-      ? findPlacement(next, placing, { on: item.on, facing: item.facing })
+      ? findPlacement(held, placing, { on: item.on, facing: item.facing })
       : KINDS[item.kind]?.mount === "wall"
-        ? findPlacement(next, placing, { near: item.name })
-        : findPlacement(next, placing, { x: item.at[0], z: item.at[1], facing: item.facing });
+        ? findPlacement(held, placing, { near: item.name })
+        : findPlacement(held, placing, { x: item.at[0], z: item.at[1], facing: item.facing });
     if (typeof spot === "string") return no(`At that size it doesn't fit: ${spot}`);
     next = moveItem(next, item.id, spot);
     changed = next.props.find((p) => p.id === item.id) as PlaceItem;
@@ -788,7 +904,7 @@ export class PlaceTool implements Tool {
         type: "string",
         enum: [...ACTIONS],
         description:
-          "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
+          "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor, area. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
       },
       item: { type: "string", description: "move, change, remove: the thing, by name or id." },
       kind: { type: "string", description: "add: what to add, e.g. armchair, rug, bookshelf, lamp, vase, block." },
@@ -823,6 +939,11 @@ export class PlaceTool implements Tool {
       at: { type: "string", description: "photo: where you are in it, a spot like the couch." },
       gesture: { type: "string", description: 'photo: a gesture to make, e.g. "wave".' },
       to: { type: "string", description: 'go: "home", or a shared place by name.' },
+      area: {
+        type: "string",
+        description:
+          'room or new: the area the place is in, e.g. "the summer house". Places in one area are joined by doors; "main" is the main building.',
+      },
     },
     required: ["action"],
   };
@@ -844,13 +965,13 @@ export class PlaceTool implements Tool {
       if (action === "photo") return await this.photo(args, context, agent);
       if (action === "places") return { success: true, output: await this.places(service, caller, agent) };
       if (action === "go") return await this.go(service, caller, agent, text(args.to) ?? text(args.name));
-      if (action === "new") return await this.open(service, caller, agent, text(args.name));
+      if (action === "new") return await this.open(service, caller, agent, text(args.name), text(args.area));
       if (action === "look") {
         const { id, place } = await readCurrent(service, caller, agent);
         const others = await whoIsIn(service, caller, id, this.hasBody, agent);
         const where = id === homeId(agent) ? "You are at home." : `You are in ${place.name}, a shared place.`;
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
-        return { success: true, output: `${where}${company}\n\n${describe(place)}` };
+        return { success: true, output: `${where}${company} ${whereaboutsWords(place)}\n\n${describe(place)}` };
       }
       if (action === "undo") {
         const { id } = await readCurrent(service, caller, agent);
@@ -901,7 +1022,11 @@ export class PlaceTool implements Tool {
       );
     };
     await describeOne(homeId(agent), "home, your own room");
-    for (const place of shared) await describeOne(place.id, place.name);
+    for (const place of shared)
+      await describeOne(
+        place.id,
+        place.area && areaId(place.area) !== MAIN ? `${place.name} (in ${place.area})` : place.name,
+      );
     lines.push('Make a new shared place with action "new" and a name.');
     return lines.join("\n");
   }
@@ -940,22 +1065,25 @@ export class PlaceTool implements Tool {
     caller: StateCaller,
     agent: string,
     name: string | undefined,
+    area: string | undefined,
   ): Promise<ToolResult> {
     if (!name || !slug(name)) return fail('Give the new place a name, like "the lounge".');
     const id = `${SHARED}${slug(name)}`;
     if (await service.get(caller, { type: PLACE_TYPE, id }))
       return fail(`There's already a place called ${name}. Go there with action "go".`);
     const named = /^(the|a|an)\s/i.test(name) ? name : `the ${name}`;
+    const elsewhere = area && areaId(area) !== MAIN ? area.slice(0, 60) : undefined;
+    const place: Place = { ...sharedPlace(id, named.slice(0, 80)), ...(elsewhere ? { area: elsewhere } : {}) };
     await service.put(caller, {
       type: PLACE_TYPE,
       id,
       scope: "global",
-      data: sharedPlace(id, named.slice(0, 80)) as unknown as Record<string, unknown>,
+      data: place as unknown as Record<string, unknown>,
     });
     await service.put(caller, { type: WHEREABOUTS_TYPE, id: agent, scope: "global", data: { place: id } });
     return {
       success: true,
-      output: `Made ${named}, a shared place furnished like a new room, and you're in it. Others can join with go. Change it like your own room.`,
+      output: `Made ${named}, a shared place furnished like a new room${elsewhere ? `, in ${elsewhere}` : ""}, and you're in it. Others can join with go. Change it like your own room.`,
     };
   }
 
@@ -1093,8 +1221,12 @@ const plugin: Plugin = (ctx) => {
     method: "GET",
     path: "map",
     handler: async (): Promise<TaiHttpResponse> => {
-      const places = await worldMap(runtime.getStateService(), PLUGIN_CALLER, agentNames(), talkRooms(), hasBody);
-      return { json: { places } };
+      const service = runtime.getStateService();
+      const rooms = talkRooms();
+      const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
+      const places = await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world);
+      const areas: Area[] = world.areas;
+      return { json: { places, areas } };
     },
   });
 
@@ -1103,9 +1235,21 @@ const plugin: Plugin = (ctx) => {
     path: "scene/:id",
     handler: async (req: TaiHttpRequest): Promise<TaiHttpResponse> => {
       const id = req.params.id ?? "";
-      const found = await scene(runtime.getStateService(), PLUGIN_CALLER, id, talkRooms(), hasBody);
+      const service = runtime.getStateService();
+      const rooms = talkRooms();
+      const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
+      const found = await scene(service, PLUGIN_CALLER, id, rooms, hasBody, world);
       if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
-      return { json: { type: PLACE_TYPE, id: found.id, place: found.place, company: found.agents.map(bodyOf) } };
+      return {
+        json: {
+          type: PLACE_TYPE,
+          id: found.id,
+          place: found.place,
+          company: found.agents.map(bodyOf),
+          doors: found.doors,
+          area: world.areaOf.get(found.id) ?? MAIN,
+        },
+      };
     },
   });
 
@@ -1135,7 +1279,9 @@ const plugin: Plugin = (ctx) => {
       const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent);
       // Everyone else whose body is here, with what the page needs to draw them.
       const company = (await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent)).map(bodyOf);
-      return { json: { type: PLACE_TYPE, id, version, place, company } };
+      const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), talkRooms(), hasBody);
+      const doors = doorsIn(id, place, world);
+      return { json: { type: PLACE_TYPE, id, version, place, company, doors, area: world.areaOf.get(id) ?? MAIN } };
     },
   });
 };

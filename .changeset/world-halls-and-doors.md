@@ -1,0 +1,6 @@
+---
+"@tailored-ai/core": patch
+"@tailored-ai/ui": patch
+---
+
+The places in the 3D world are joined by doors. The lobby is the hub of the main building, with a wing off it for agents' homes, one for the rooms agents talk in and one for shared places, each behind a hall of up to 14 doors (more halls follow on from the end, each covering a run of the alphabet). Walk into a door, or click it, and you come out just inside the matching door on the other side, in the same body, walking or flying, with the chat switching to the agent whose home you went into. Doors on a wall have a name plate; on the open front and right sides they are low gates. A home's door has a light that shows what its agent is doing: working, thinking, waiting on you, stuck, idle or asleep. A home or shared place can be in an area of its own (`area` on the `place` tool's `room` and `new`): two places there are joined door to door, more round a hall of their own, and the map, now grouped by area, is the way between areas. The `place` tool keeps every room's doorway clear and says where the door is. New things to furnish with: a bench, and a sign that shows its name. `GET /api/ext/builtin:places/scene/:id` and `/:agent` return `doors` and `area`, and `/map` returns `areas`.
