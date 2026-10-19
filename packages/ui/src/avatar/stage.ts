@@ -18,7 +18,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
 import type { Cue } from "./cues";
 import { armClearance, bodyPoints } from "./fit";
-import { Director, route, turnBetween, Walker } from "./locomotion";
+import { Director, findPath, type Obstacle, route, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { buildProp, buildShell, disposeTree } from "./props";
 import {
@@ -71,6 +71,9 @@ interface Framing {
 }
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
+
+/** Things that hang on a wall, so they are never in the way of a walk. */
+const WALL_KINDS = new Set(["window", "picture", "clock", "shelf"]);
 
 export async function createStage(
   host: HTMLElement,
@@ -138,6 +141,8 @@ export async function createStage(
   // Lamps light the room after dark; a fire lights it always. At most a few, for the frame rate.
   const warm: { light: THREE.PointLight; fire: boolean }[] = [];
   let furniture = new THREE.Group();
+  // What stands on the floor in the way: walks go round these.
+  let obstacles: Obstacle[] = [];
   // Things that just appeared, growing into place.
   const appearing: { group: THREE.Group; started: number; scale: number }[] = [];
 
@@ -151,12 +156,18 @@ export async function createStage(
     furniture.add(shell);
     scenery.push(shell);
     const lights: { at: THREE.Vector3; fire: boolean }[] = [];
+    obstacles = [];
     for (const prop of room.props) {
       const built = buildProp(prop.kind, { color: prop.color, size: prop.size });
       built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
       built.group.rotation.y = rad(prop.facing);
       const scale = prop.size ? 1 : (prop.scale ?? 1);
       built.group.scale.setScalar(scale);
+      // Its outline on the floor, measured from what was built, before it grows in.
+      if (!prop.on && !WALL_KINDS.has(prop.kind) && prop.kind !== "rug") {
+        const box = new THREE.Box3().setFromObject(built.group);
+        obstacles.push({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z });
+      }
       furniture.add(built.group);
       scenery.push(built.group);
       if (prop.spot) {
@@ -258,6 +269,8 @@ export async function createStage(
     Math.max(0.3, hipsY * 1.35),
   );
   const stride = Math.max(0.15, hipsY * 1.1);
+  /** How much room it needs to pass between things: half its width, near enough. */
+  const bodyRadius = Math.min(0.3, Math.max(0.16, ((bounds.max.x - bounds.min.x) / 2) * 0.8));
   const director = new Director(room, Math.random, !!opts.chooseIdle);
   /** Where the spot it stands at was, so a moved couch takes it along. */
   let currentAt: [number, number] | undefined = start?.at;
@@ -276,7 +289,11 @@ export async function createStage(
       return true;
     }
     pending = undefined;
-    walker.go(route(room, walker.busy ? undefined : current, id), rad(to.facing));
+    // Round the furniture from where it stands; with nothing in the room, the old way through the middle.
+    const way = obstacles.length
+      ? findPath(room, [walker.place.x, walker.place.z], to.at, obstacles, bodyRadius)
+      : route(room, walker.busy ? undefined : current, id);
+    walker.go(way, rad(to.facing));
     current = id;
     currentAt = to.at;
     return true;
