@@ -23,6 +23,7 @@ import { mediaPart, textPart } from "../content/types.js";
 import type { TaiHttpRequest, TaiHttpResponse } from "../http/registry.js";
 import { resolveAvatar } from "../live/avatar.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
+import { formatRoomRef } from "../rooms/types.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { StateConflictError, StateError } from "../state/types.js";
@@ -41,6 +42,7 @@ import {
   footprintOf,
   KINDS,
   LIMITS,
+  meetingRoom,
   moveItem,
   newId,
   newName,
@@ -69,6 +71,7 @@ export const meta: PluginMeta = {
     { kind: "stateType", id: "place" },
     { kind: "tool", id: "place" },
     { kind: "httpRoutes", id: "places" },
+    { kind: "httpRoutes", id: "map" },
   ],
 };
 
@@ -162,6 +165,108 @@ async function sharedPlaces(service: StateService, caller: StateCaller): Promise
   return records
     .filter((r) => r.id.startsWith(SHARED))
     .map((r) => ({ id: r.id, name: String((r.data as unknown as Place).name ?? r.id) }));
+}
+
+/** A room of conversation, as the map shows it: its members are in it, wherever their bodies are. */
+export interface TalkRoom {
+  /** `<backend>:<id>`. */
+  ref: string;
+  name: string;
+  purpose?: string;
+  members: string[];
+}
+
+/** One place on the map: a home, a shared place, or a room of conversation, and who is in it. */
+export interface MapPlace {
+  id: string;
+  name: string;
+  kind: "home" | "shared" | "room";
+  agents: string[];
+  /** The agent whose home it is. */
+  owner?: string;
+  purpose?: string;
+}
+
+/** A room of conversation's place id. */
+export const roomPlaceId = (ref: string) => `room:${ref}`;
+
+/**
+ * Every place there is: each agent's home, the shared places, and the rooms
+ * agents talk in. A body is in one home or shared place at a time; a room
+ * shows all its members, since an agent can belong to several.
+ */
+export async function worldMap(
+  service: StateService,
+  caller: StateCaller,
+  agents: string[],
+  rooms: TalkRoom[],
+  hasBody: (agent: string | undefined) => boolean,
+): Promise<MapPlace[]> {
+  const bodies = agents.filter((a) => hasBody(a));
+  const shared = await sharedPlaces(service, caller).catch(() => []);
+  const sharedIds = new Set(shared.map((p) => p.id));
+  const went = await service
+    .query(caller, { type: WHEREABOUTS_TYPE, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  const gone = new Map(went.map((r) => [r.id, typeof r.data.place === "string" ? r.data.place : ""]));
+  // Where each body is: somewhere that still exists, or home.
+  const where = (a: string) => {
+    const id = gone.get(a);
+    return id && (sharedIds.has(id) || (id.startsWith("home:") && bodies.includes(id.slice(5)))) ? id : homeId(a);
+  };
+  const inside = new Map<string, string[]>();
+  for (const a of bodies) inside.set(where(a), [...(inside.get(where(a)) ?? []), a]);
+  return [
+    ...bodies.map((a) => ({
+      id: homeId(a),
+      name: a === "default" ? "the default agent's room" : `${a}'s room`,
+      kind: "home" as const,
+      owner: a,
+      agents: (inside.get(homeId(a)) ?? []).sort(),
+    })),
+    ...shared.map((p) => ({
+      id: p.id,
+      name: p.name,
+      kind: "shared" as const,
+      agents: (inside.get(p.id) ?? []).sort(),
+    })),
+    ...rooms.map((r) => ({
+      id: roomPlaceId(r.ref),
+      name: r.name,
+      kind: "room" as const,
+      agents: r.members.filter((m) => hasBody(m)).sort(),
+      ...(r.purpose ? { purpose: r.purpose } : {}),
+    })),
+  ];
+}
+
+/**
+ * Any place, to look at: what it looks like and who is in it. A room of
+ * conversation is a meeting room with a seat for each member, made fresh
+ * each time rather than kept.
+ */
+export async function scene(
+  service: StateService,
+  caller: StateCaller,
+  id: string,
+  rooms: TalkRoom[],
+  hasBody: (agent: string | undefined) => boolean,
+): Promise<{ id: string; place: Place; agents: string[] } | null> {
+  if (id.startsWith("room:")) {
+    const room = rooms.find((r) => roomPlaceId(r.ref) === id);
+    if (!room) return null;
+    const agents = room.members.filter((m) => hasBody(m)).sort();
+    return { id, place: meetingRoom(room.name, agents.length), agents };
+  }
+  if (id.startsWith("home:")) {
+    const owner = id.slice("home:".length);
+    if (!hasBody(owner)) return null;
+    const { place } = await readHome(service, caller, owner);
+    return { id, place, agents: await whoIsIn(service, caller, id, hasBody) };
+  }
+  const found = await service.get(caller, { type: PLACE_TYPE, id });
+  if (!found) return null;
+  return { id, place: found.data as unknown as Place, agents: await whoIsIn(service, caller, id, hasBody) };
 }
 
 const slug = (name: string) =>
@@ -735,7 +840,53 @@ const plugin: Plugin = (ctx) => {
     return [new PlaceTool(tctx.getStateService, hasBody, (shot) => camera.take(shot))];
   });
 
-  // Plugin routes are namespaced by module, so this is GET /api/ext/builtin:places/:agent.
+  // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
+  // `map` and `scene/:id` go first, so they aren't read as an agent's name.
+  const talkRooms = (): TalkRoom[] => {
+    const store = runtime.getRoomStore();
+    return store.listRooms().map((r) => {
+      const ref = formatRoomRef(r.ref);
+      return {
+        ref,
+        name: r.name,
+        ...(r.purpose ? { purpose: r.purpose } : {}),
+        members: [...new Set(store.listSubscriptionsForRoom(ref).map((s) => s.agent))],
+      };
+    });
+  };
+  const agentNames = () => ["default", ...Object.keys(runtime.getConfig().agents ?? {}).filter((a) => a !== "default")];
+  const bodyOf = (name: string) => {
+    const own = runtime.avatarFor(name === "default" ? undefined : name);
+    const files = resolveAvatar(runtime.getConfig().live, own);
+    const q = name === "default" ? "" : `?agent=${encodeURIComponent(name)}`;
+    return {
+      agent: name,
+      name,
+      avatar: `/api/live/avatar${q}`,
+      animations: files.animations.map((_, i) => `/api/live/animations/${i}${q}`),
+    };
+  };
+
+  ctx.http.register({
+    method: "GET",
+    path: "map",
+    handler: async (): Promise<TaiHttpResponse> => {
+      const places = await worldMap(runtime.getStateService(), PLUGIN_CALLER, agentNames(), talkRooms(), hasBody);
+      return { json: { places } };
+    },
+  });
+
+  ctx.http.register({
+    method: "GET",
+    path: "scene/:id",
+    handler: async (req: TaiHttpRequest): Promise<TaiHttpResponse> => {
+      const id = req.params.id ?? "";
+      const found = await scene(runtime.getStateService(), PLUGIN_CALLER, id, talkRooms(), hasBody);
+      if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
+      return { json: { type: PLACE_TYPE, id: found.id, place: found.place, company: found.agents.map(bodyOf) } };
+    },
+  });
+
   ctx.http.register({
     method: "GET",
     path: ":agent",
@@ -745,17 +896,7 @@ const plugin: Plugin = (ctx) => {
       const service = runtime.getStateService();
       const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent);
       // Everyone else whose body is here, with what the page needs to draw them.
-      const company = (await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent)).map((name) => {
-        const own = runtime.avatarFor(name === "default" ? undefined : name);
-        const files = resolveAvatar(runtime.getConfig().live, own);
-        const q = name === "default" ? "" : `?agent=${encodeURIComponent(name)}`;
-        return {
-          agent: name,
-          name,
-          avatar: `/api/live/avatar${q}`,
-          animations: files.animations.map((_, i) => `/api/live/animations/${i}${q}`),
-        };
-      });
+      const company = (await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent)).map(bodyOf);
       return { json: { type: PLACE_TYPE, id, version, place, company } };
     },
   });

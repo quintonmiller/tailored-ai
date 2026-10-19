@@ -305,6 +305,15 @@ Photos need Playwright with Chromium (`npm install playwright && npx
 playwright install chromium`), as the browser tool does. Without it, the tool
 says so and the agent can pass that on.
 
+#### Every place, and the rooms agents talk in
+
+The plugin also answers for the whole world: every agent's home, the shared
+places, and each room agents talk in (a Discord channel, a local room), with
+who is in each. A room of conversation is drawn as a meeting room: a long
+table with a seat for every member with a body, wider the more there are.
+Its members are all shown in it, wherever their bodies are, because an agent
+can belong to several rooms at once.
+
 Rooms come from the built-in `builtin:places` plugin. It does nothing unless
 some agent has a body. An agent with its own `tools:` list needs `place`
 in it. The page asks for the room at `GET /api/ext/builtin:places/:agent`
@@ -444,6 +453,8 @@ cues, and its text passes through untouched.
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
 | `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company}`, its home made from the starting room on first use. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` change means someone came or went |
+| `GET /api/ext/builtin:places/map` | every place: `{places: [{id, name, kind, agents, owner?, purpose?}]}`. `kind` is `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `agents` is who is in it: a body is in one home or shared place at a time, while a room lists every member with a body |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, made fresh each time. `404` for a place that isn't there |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/idle` | what the agent does with a quiet moment: `{agent?, body, here?, hour?}` → `{cues}`. `429` within 45 s of the last ask for that agent; `400` for a body that can't go in a prompt |
