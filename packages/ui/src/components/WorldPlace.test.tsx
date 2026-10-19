@@ -37,18 +37,22 @@ describe("a change, as the agent who made it says it", () => {
     expect(said.reviewer).toBeUndefined();
     // No changes, nothing made anew.
     expect(withChangeLines(speech, undefined, now)).toBe(speech);
+    // Yours have no body to show over.
+    const yours = withChangeLines({}, [{ who: "sam", what: "moved the couch", at: iso(1_000), person: true }], now);
+    expect(yours).toEqual({});
   });
 });
 
 describe("who can change a place", () => {
   const can = (a: string) => a !== "writer";
-  it("is a home's owner, a meeting room's members, or anyone in a shared place", () => {
-    expect(keepersWords("home:planner", [], can)).toBe("planner, with its place tool");
-    expect(keepersWords("home:writer", [], can)).toBe("writer, once place is among its tools");
+  it("is a home's owner, a meeting room's members, or anyone in a shared place, and you", () => {
+    expect(keepersWords("home:planner", [], can)).toBe("planner, with its place tool; and you, with Edit room");
+    expect(keepersWords("home:writer", [], can)).toBe("writer, once place is among its tools; and you, with Edit room");
     expect(keepersWords("room:local:trip", ["planner", "writer", "reviewer"], can)).toBe(
-      "planner and reviewer, its members",
+      "planner and reviewer, its members; and you, with Edit room",
     );
-    expect(keepersWords("shared:lounge", [], can)).toMatch(/Any agent/);
+    expect(keepersWords("shared:lounge", [], can)).toMatch(/^Any agent.*and you/);
+    expect(keepersWords("lobby", [], can)).toBe("You, with Edit room; agents leave the lobby as it is");
   });
 
   it("leaves out an agent whose own list of tools has no place", () => {
@@ -77,6 +81,7 @@ describe("a place's card", () => {
     theme: "library",
     purpose: "reading up on Lisbon",
     changes: [
+      { who: "sam", what: "moved the couch", at: new Date(Date.now() - 60_000).toISOString(), person: true },
       { who: "planner", what: "added the bookshelf", at: new Date(Date.now() - 120_000).toISOString() },
       { who: "planner", what: "painted the walls sage", at: new Date(Date.now() - 3 * 3_600_000).toISOString() },
     ],
@@ -103,7 +108,11 @@ describe("a place's card", () => {
     expect(text).toMatch(/Library/);
     expect(text).toMatch(/planner, with its place tool/);
     const rows = [...container.querySelectorAll(".world-changes li")].map((li) => li.textContent);
-    expect(rows).toEqual(["planner added the bookshelf2 min ago", "planner painted the walls sage3 h ago"]);
+    expect(rows).toEqual([
+      "You moved the couch1 min ago",
+      "planner added the bookshelf2 min ago",
+      "planner painted the walls sage3 h ago",
+    ]);
     const ask = [...container.querySelectorAll("button")].find((b) => /make it fit its work/.test(b.textContent ?? ""));
     act(() => ask?.click());
     expect(onAsk).toHaveBeenCalledWith("planner");

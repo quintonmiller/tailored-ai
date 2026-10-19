@@ -91,11 +91,13 @@ export interface Place {
 
 /** One change to a place, as the room's recent changes list it: "planner added the bookshelf". */
 export interface PlaceChange {
-  /** The agent that made it. */
+  /** The agent that made it, or the person, by what agents call them in rooms (`rooms.ownerLabel`). */
   who: string;
   /** What it did, in a few words that follow its name: "added the bookshelf by the window". */
   what: string;
   at: string;
+  /** Made by the person on the page, not by an agent: the page says "you". */
+  person?: boolean;
 }
 
 /** Changes a place remembers: enough for a glance at who has been at it lately. */
@@ -618,51 +620,85 @@ function carried(place: Place, id: string): Set<string> {
   return out;
 }
 
-/** Whether a floor thing fits here: inside, clear of the rest, and not standing on anyone's spot. */
-function floorFits(place: Place, placing: Placing, rect: Rect): boolean {
+/** Whether a thing is a door's hold (see `withDoorwayHeld`): what is in its way is the way through the door. */
+const isHold = (item: PlaceItem) => item.id.startsWith(DOOR_HOLD);
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/**
+ * Why a floor thing doesn't fit here, as a sentence; undefined when it does:
+ * inside, clear of the rest, not standing where anyone stands to use
+ * something, not hiding what hangs on the wall behind it, and with room in
+ * front of it to use it.
+ */
+function floorTrouble(place: Place, placing: Placing, rect: Rect): string | undefined {
   const kind = KINDS[placing.kind];
   const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
   const margin = 0.01;
   for (const [x, z] of corners(rect))
-    if (Math.abs(x) > place.width / 2 - margin || Math.abs(z) > place.depth / 2 - margin) return false;
-  if (kind?.walkable) return true;
+    if (Math.abs(x) > place.width / 2 - margin || Math.abs(z) > place.depth / 2 - margin)
+      return "It would stick out of the room.";
+  if (kind?.walkable) return undefined;
   for (const other of place.props) {
     if (ignore.has(other.id) || !blocks(other)) continue;
     const ro = rectOf(other);
-    if (overlaps(rect, ro, 0.03) && !tucks({ kind: placing.kind, at: rect.at }, rect, other, ro)) return false;
+    if (overlaps(rect, ro, 0.03) && !tucks({ kind: placing.kind, at: rect.at }, rect, other, ro))
+      return isHold(other) ? "It would block the way through the door." : `It would bump into ${other.name}.`;
   }
   for (const spot of place.spots) {
     if (spot.item && ignore.has(spot.item)) continue;
-    if (contains(rect, spot.at, 0.18)) return false;
+    if (contains(rect, spot.at, 0.18))
+      return spot.item
+        ? `It would be where someone stands to use ${spot.place}.`
+        : `It would be where someone stands: ${spot.place}.`;
   }
   // A tall thing against a wall must not cover a window or picture there.
   const tall = heightOf(placing);
   for (const other of place.props) {
     if (ignore.has(other.id) || KINDS[other.kind]?.mount !== "wall") continue;
     const w = rectOf(other);
-    if (tall > (other.elevation ?? 0) && overlaps({ ...rect }, { ...w, hd: w.hd + 0.25 })) return false;
+    if (tall > (other.elevation ?? 0) && overlaps({ ...rect }, { ...w, hd: w.hd + 0.25 }))
+      return `It would hide ${other.name}.`;
   }
-  return useFits(place, placing, rect, ignore);
+  return useTrouble(place, placing, rect, ignore);
 }
 
-/** The spot a thing brings must be somewhere the avatar can stand. */
-function useFits(place: Place, placing: Placing, rect: Rect, ignore: Set<string>): boolean {
+/** Whether a floor thing fits here: inside, clear of the rest, and not standing on anyone's spot. */
+function floorFits(place: Place, placing: Placing, rect: Rect): boolean {
+  return !floorTrouble(place, placing, rect);
+}
+
+/** Why there's nowhere to stand to use the thing, when the spot it brings is outside the room or in something. */
+function useTrouble(place: Place, placing: Placing, rect: Rect, ignore: Set<string>): string | undefined {
   const use = KINDS[placing.kind]?.use;
-  if (!use) return true;
+  if (!use) return undefined;
   const [sx, sz] = offset(rect.at, rect.facing, 0, use.offset * (placing.scale ?? 1));
   const m = 0.15;
-  if (Math.abs(sx) > place.width / 2 - m || Math.abs(sz) > place.depth / 2 - m) return false;
+  if (Math.abs(sx) > place.width / 2 - m || Math.abs(sz) > place.depth / 2 - m)
+    return "There'd be nowhere in the room to stand to use it.";
   for (const other of place.props) {
     if (ignore.has(other.id) || !blocks(other)) continue;
-    if (contains(rectOf(other), [sx, sz], 0.15)) return false;
+    if (contains(rectOf(other), [sx, sz], 0.15))
+      return isHold(other)
+        ? "You'd have to stand in the doorway to use it."
+        : `${capital(other.name)} is where you'd stand to use it.`;
   }
-  return true;
+  return undefined;
 }
 
 /** Whether a floor thing fits at exactly this point, turned this way: what a room drawn from a seed checks each piece with. */
 export function fitsOnFloor(place: Place, placing: Placing, at: [number, number], facing: number): boolean {
+  return !whyNotOnFloor(place, placing, at, facing);
+}
+
+/** Why a floor thing doesn't fit at exactly this point, turned this way, as a sentence; undefined when it does. */
+export function whyNotOnFloor(
+  place: Place,
+  placing: Placing,
+  at: [number, number],
+  facing: number,
+): string | undefined {
   const [w, d] = footprintOf(placing);
-  return floorFits(place, placing, { at, hw: w / 2, hd: d / 2, facing: KINDS[placing.kind]?.round ? 0 : facing });
+  return floorTrouble(place, placing, { at, hw: w / 2, hd: d / 2, facing: KINDS[placing.kind]?.round ? 0 : facing });
 }
 
 /** Whether a wall thing fits on this wall, this far along it (its middle) and this high up. */
@@ -673,7 +709,18 @@ export function fitsOnWall(
   along: number,
   elevation: number,
 ): boolean {
-  return wallItemFits(place, placing, wall, along, elevation);
+  return !wallTrouble(place, placing, wall, along, elevation);
+}
+
+/** Why a wall thing doesn't fit on this wall, this far along it and this high up, as a sentence; undefined when it does. */
+export function whyNotOnWall(
+  place: Place,
+  placing: Placing,
+  wall: "back" | "left",
+  along: number,
+  elevation: number,
+): string | undefined {
+  return wallTrouble(place, placing, wall, along, elevation);
 }
 
 /** Points around `[x, z]`, nearest first, out to `reach` metres. */
@@ -706,11 +753,16 @@ function facingFrom(place: Place, value: string | number | undefined, at: [numbe
 }
 
 function wallItemFits(place: Place, placing: Placing, wall: Wall, along: number, elevation: number): boolean {
+  return !wallTrouble(place, placing, wall, along, elevation);
+}
+
+function wallTrouble(place: Place, placing: Placing, wall: Wall, along: number, elevation: number): string | undefined {
   const [w] = footprintOf(placing);
   const h = heightOf(placing);
   const span = wall === "back" ? place.width : place.depth;
-  if (Math.abs(along) > span / 2 - w / 2 - 0.05) return false;
-  if (elevation < 0.05 || elevation + h > place.height - 0.05) return false;
+  if (Math.abs(along) > span / 2 - w / 2 - 0.05) return "It would run off the end of the wall.";
+  if (elevation < 0.05 || elevation + h > place.height - 0.05)
+    return "It wouldn't fit between the floor and the ceiling.";
   const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
   for (const other of place.props) {
     if (ignore.has(other.id)) continue;
@@ -721,7 +773,7 @@ function wallItemFits(place: Place, placing: Placing, wall: Wall, along: number,
       const otherAlong = wall === "back" ? other.at[0] : other.at[1];
       const oe = other.elevation ?? 0;
       const vertical = elevation < oe + heightOf(other) + 0.05 && oe < elevation + h + 0.05;
-      if (vertical && Math.abs(otherAlong - along) < (w + ow) / 2 + 0.05) return false;
+      if (vertical && Math.abs(otherAlong - along) < (w + ow) / 2 + 0.05) return `It would overlap ${other.name}.`;
     } else if (blocks(other) && heightOf(other) > elevation) {
       // A tall bookcase against the wall would hide it.
       const r = rectOf(other);
@@ -729,11 +781,12 @@ function wallItemFits(place: Place, placing: Placing, wall: Wall, along: number,
         wall === "back"
           ? { at: [along, -place.depth / 2 + 0.2], hw: w / 2, hd: 0.2, facing: 0 }
           : { at: [-place.width / 2 + 0.2, along], hw: 0.2, hd: w / 2, facing: 0 };
-      if (overlaps(probe, r)) return false;
+      if (overlaps(probe, r))
+        return isHold(other) ? "It would hang over the door." : `${capital(other.name)} would hide it.`;
     }
   }
   const at = wallPoint(place, wall, along);
-  return useFits(place, placing, { at, hw: w / 2, hd: 0.04, facing: WALL_FACING[wall] }, ignore);
+  return useTrouble(place, placing, { at, hw: w / 2, hd: 0.04, facing: WALL_FACING[wall] }, ignore);
 }
 
 /** Where on the floor plan a wall thing hangs: this far along the back or left wall. */
@@ -809,6 +862,33 @@ function placeOn(place: Place, placing: Placing, baseWords: string | undefined, 
     return { at, facing, elevation: top, on: base.id };
   }
   return `There's no room left on ${base.name}.`;
+}
+
+/**
+ * Why a thing can't stand on top of another at exactly this point, as a
+ * sentence; undefined when it can: the base has a top, the thing isn't
+ * itself or under it, and it fits on the top, clear of what else is there.
+ */
+export function whyNotOnTop(place: Place, placing: Placing, baseId: string, at: [number, number]): string | undefined {
+  const base = place.props.find((p) => p.id === baseId);
+  if (!base) return "There's nothing there to put it on.";
+  if (surfaceOf(base) === undefined) return `You can't put things on ${base.name}.`;
+  if (placing.id && carried(place, placing.id).has(base.id)) return "It can't go on top of itself.";
+  const [bw, bd] = footprintOf(base);
+  const [w, d] = footprintOf(placing);
+  if (w > bw + 0.001 || d > bd + 0.001) return `It's too big to fit on ${base.name}.`;
+  const [lx, lz] = local(at, base.at, base.facing);
+  if (Math.abs(lx) > bw / 2 - w / 2 + 0.001 || Math.abs(lz) > bd / 2 - d / 2 + 0.001)
+    return `It would hang off the edge of ${base.name}.`;
+  const rect: Rect = { at, hw: w / 2, hd: d / 2, facing: base.facing };
+  const other = place.props.find((o) => o.on === base.id && o.id !== placing.id && overlaps(rect, rectOf(o), 0.01));
+  return other ? `It would bump into ${other.name}.` : undefined;
+}
+
+/** How high up a thing's top is, for things that can hold others; undefined for one that can't, or isn't there. */
+export function topOf(place: Place, id: string): number | undefined {
+  const item = place.props.find((p) => p.id === id);
+  return item ? surfaceOf(item) : undefined;
 }
 
 function placeOnFloor(place: Place, placing: Placing, where: Where): Placement | string {
@@ -1356,24 +1436,35 @@ export function doorwayFloor(
  * room as it is, without the block.
  */
 export function withDoorwayHeld(place: Place, door: DoorSlot | undefined = doorOf(place)): Place {
-  if (!door) return place;
-  const open = door.wall === "front" || door.wall === "right";
-  const across = door.wall === "back" || door.wall === "front" ? place.depth : place.width;
-  const { at, size } = doorwayFloor(
-    place,
-    door,
-    Math.min(open ? DOOR_APPROACH.open : DOOR_APPROACH.wall, round(across / 2)),
-  );
-  // A shape with no top, so nothing is ever put on it.
-  const hold: PlaceItem = {
-    id: DOOR_HOLD,
-    name: "the door",
-    kind: "ball",
-    at,
-    facing: 0,
-    size: [size[0], 9, size[1]],
-  };
-  return { ...place, props: [...place.props.filter((p) => p.id !== hold.id), hold] };
+  return withDoorsHeld(place, door ? [door] : []);
+}
+
+/**
+ * The room with each of these doorways held, as {@link withDoorwayHeld} holds
+ * one: the lobby has several. The first is called "the door" with the id
+ * `DOOR_HOLD`, the rest the same with a number after it.
+ */
+export function withDoorsHeld(place: Place, doors: DoorSlot[]): Place {
+  if (!doors.length) return place;
+  const holds = doors.map((door, i): PlaceItem => {
+    const open = door.wall === "front" || door.wall === "right";
+    const across = door.wall === "back" || door.wall === "front" ? place.depth : place.width;
+    const { at, size } = doorwayFloor(
+      place,
+      door,
+      Math.min(open ? DOOR_APPROACH.open : DOOR_APPROACH.wall, round(across / 2)),
+    );
+    // A shape with no top, so nothing is ever put on it.
+    return {
+      id: i ? `${DOOR_HOLD}-${i + 1}` : DOOR_HOLD,
+      name: "the door",
+      kind: "ball",
+      at,
+      facing: 0,
+      size: [size[0], 9, size[1]],
+    };
+  });
+  return { ...place, props: [...place.props.filter((p) => !isHold(p)), ...holds] };
 }
 
 /**
@@ -1612,6 +1703,7 @@ export const PLACE_SCHEMA = {
           who: { type: "string", maxLength: 80 },
           what: { type: "string", maxLength: CHANGE_LENGTH },
           at: { type: "string" },
+          person: { type: "boolean" },
         },
       },
     },

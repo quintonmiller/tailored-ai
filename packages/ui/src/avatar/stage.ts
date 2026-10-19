@@ -34,9 +34,11 @@ import { type CalendarView, drawCalendar } from "./calendar";
 import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
+import { footprint, heightOf, type Kinds, type Move, moveKey, onFloor, onTop, onWall, ridersOf } from "./editing";
 import { type Fadeable, paintFaded } from "./fade";
 import { Figure, loadModel } from "./figure";
 import { faceToFace, sideFor } from "./greet";
+import { type Fit, Handles, type Patch } from "./handles";
 import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, seeded } from "./idle";
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import type { BodyState } from "./motion";
@@ -185,8 +187,35 @@ export interface Stage {
    * visitor only: an agent's own view has no body of yours to move.
    */
   standBefore(agent: string): void;
+  /**
+   * Rearrange the room, or stop (null): the camera takes in the whole room,
+   * the walking keys rest, and things are picked and dragged instead of gone
+   * to. Called again as what is picked, or where it is being put, changes.
+   */
+  setEditing(edit: StageEdit | null): void;
   dispose(): void;
 }
+
+/**
+ * Rearranging the room on the stage (see `editing.ts`): the kinds of thing
+ * there are, what is picked, where it is being put if that isn't saved yet
+ * and whether it fits there, and what the page hears as you pick and drag.
+ */
+export interface StageEdit {
+  kinds: Kinds;
+  selected?: string;
+  /** Where the picked thing is shown instead of where it stands; `fits` unknown while the server is asked. */
+  pending?: Move & { fits?: boolean };
+  /** A thing was clicked or tapped, or nothing was. */
+  onSelect(id: string | undefined): void;
+  /** Where the thing being dragged would go now. */
+  onDrag(move: Move): void;
+  /** It was let go here. */
+  onDrop(move: Move): void;
+}
+
+/** The nearest the camera comes while you rearrange a room, as a share of how far back it takes in the whole room. */
+const EDIT_NEAREST = 0.3;
 
 /**
  * Read every frame: the turn's moment, the voice's loudness right now (0–1),
@@ -321,6 +350,8 @@ const bare = (s: string) =>
     .replace(/^(the|a|an)\s+/, "")
     .trim();
 
+const UP = new THREE.Vector3(0, 1, 0);
+
 export async function createStage(
   host: HTMLElement,
   url: string,
@@ -413,6 +444,14 @@ export async function createStage(
     return light;
   });
   let furniture = new THREE.Group();
+  // Each thing in the room as built, by its id: what is picked and dragged while the room is rearranged.
+  let things = new Map<string, THREE.Group>();
+  // Rearranging the room (see `setEditing`): what the page says, and how far back the camera sits for it, as a share
+  // of taking in the whole room. Here, ahead of everything that asks whether the room is being rearranged.
+  let editing: StageEdit | null = null;
+  let editZoom = 1;
+  // Things drawn somewhere other than where the room has them: what is being moved, and what stands on it.
+  const shifted = new Set<string>();
   // What stands on the floor in the way: walks go round these.
   let obstacles: Obstacle[] = [];
   /** What an agent walks round: the furniture, and you, standing here in your own body, with room to pass. */
@@ -505,6 +544,8 @@ export async function createStage(
   /** Build the room's shell and furniture; `fresh` names props to grow in, as just added, and `moved` where others were. */
   const furnish = (fresh: Set<string> = new Set(), moved: Map<string, Prop> = new Map()) => {
     furniture = new THREE.Group();
+    things = new Map();
+    shifted.clear();
     scenery.length = 0;
     clickable.length = 0;
     glows = [];
@@ -552,6 +593,8 @@ export async function createStage(
       if (wall) fadeable.push({ group: built.group, wall, level: 1 });
       furniture.add(built.group);
       scenery.push(built.group);
+      built.group.userData.prop = prop.id;
+      things.set(prop.id, built.group);
       const action = prop.action ?? USES[prop.kind];
       if (prop.spot) built.group.userData.spot = prop.spot;
       if (action) built.group.userData.action = action;
@@ -1035,7 +1078,7 @@ export async function createStage(
     // A visitor's camera eases to its distance each frame (`frameUp`); flying, it stays where it was flown.
     if (tween || opts.visitor) return;
     // Keep the angle the person dragged to; only the distance follows the frame's shape.
-    const fitted = framing(view);
+    const fitted = editing ? editFraming() : framing(view);
     const offset = camera.position.clone().sub(controls.target);
     if (offset.lengthSq() === 0) settle(fitted);
     else camera.position.copy(controls.target).add(offset.setLength(fitted.position.distanceTo(fitted.target)));
@@ -1059,7 +1102,7 @@ export async function createStage(
         : [ease(shift[0], want[0], dt, ZOOM_SECONDS), ease(shift[1], want[1], dt, ZOOM_SECONDS)];
       project();
     }
-    if (!opts.visitor || travel !== "walk" || tween) return;
+    if (!opts.visitor || travel !== "walk" || tween || editing) return;
     const offset = camera.position.clone().sub(controls.target);
     const now = offset.length();
     if (now < 1e-6) return;
@@ -1079,7 +1122,16 @@ export async function createStage(
   };
   /** The chat page's view of the agent, which the wheel and a pinch bring nearer or take further back. */
   const ownView = () => !opts.visitor && !opts.still && view === "room";
+  /** A zoom while rearranging, kept between the nearest it comes and the whole room. */
+  const editZoomTo = (zoom: number) => {
+    editZoom = Math.min(1, Math.max(EDIT_NEAREST, zoom));
+  };
   const onWheel = (e: WheelEvent) => {
+    if (editing) {
+      e.preventDefault();
+      editZoomTo(editZoom * REACH_PER_NOTCH ** (wheelPixels(e) / 100));
+      return;
+    }
     if (ownView()) {
       e.preventDefault();
       zoomKept = ownZoom(zoomKept * REACH_PER_NOTCH ** (wheelPixels(e) / 100), room, visibleAspect(), visibleTall());
@@ -1105,7 +1157,7 @@ export async function createStage(
    * waits until a finger is lifted.
    */
   const pinching = () => {
-    const now = touches.size === 2 && ((!!opts.visitor && travel === "walk") || ownView());
+    const now = touches.size === 2 && (!!editing || (!!opts.visitor && travel === "walk") || ownView());
     controls.enableRotate = !now;
     return now;
   };
@@ -1117,7 +1169,8 @@ export async function createStage(
     const now = spread();
     const widest = widestReach(room);
     if (apart > 0 && now > 0) {
-      if (ownView()) zoomKept = ownZoom((zoomKept * apart) / now, room, visibleAspect(), visibleTall());
+      if (editing) editZoomTo((editZoom * apart) / now);
+      else if (ownView()) zoomKept = ownZoom((zoomKept * apart) / now, room, visibleAspect(), visibleTall());
       else zoomTo(pinchReach(clampReach(reachKept, widest), apart, now, widest));
     }
     apart = now;
@@ -1201,6 +1254,11 @@ export async function createStage(
     downAt = null;
     const pinch = pinched;
     untouch(e);
+    // Rearranging, a click picks a thing or nothing, and a drag moves it: nobody is gone to, and no door opens.
+    if (editing) {
+      letGo(moved > 6 || pinch);
+      return;
+    }
     if (moved > 6 || pinch) return;
     // An agent first: a body stands in front of the furniture it is at.
     const who = opts.onPick ? agentAt(e) : undefined;
@@ -1235,6 +1293,8 @@ export async function createStage(
   };
   /** What is under the pointer now: a body's tag says more, a door lights up and says where it goes. */
   const hoverAt = (e: At) => {
+    // Rearranging, what is under the pointer is something to pick up (see `onEditMove`), not somewhere to go.
+    if (editing) return;
     const who = agentAt(e);
     if (who !== hovered) hover(who);
     const it = pick(e);
@@ -1307,6 +1367,8 @@ export async function createStage(
   // into a door at the back would otherwise walk you straight back out of the one you came in by.
   const waiting = new Set<string>();
   const onKeyDown = (e: KeyboardEvent) => {
+    // Rearranging, the keys turn and remove things (the page's), and you stay where you are.
+    if (editing) return;
     const run = RUN_KEYS.has(e.code);
     if (!opts.visitor || !(run || e.code in MOVE_KEYS) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
     // Shift alone does nothing in the page to keep from it, so it is only listened to.
@@ -1329,6 +1391,241 @@ export async function createStage(
     // Free to look all the way round. Walking, the wheel and a pinch zoom the camera following you (`onWheel`).
     controls.enableZoom = false;
   }
+  // --- Rearranging the room (see `editing.ts`) ---
+
+  const handles = new Handles();
+  scene.add(handles.group);
+  /**
+   * A thing being dragged: which, how far from its middle it was picked up,
+   * where the pointer went down, whether it has moved yet, and the last place
+   * it would go, with its key. `dropped` is where it was let go, shown until
+   * the page answers, so it never jumps back for a frame.
+   */
+  let drag:
+    | { item: string; grab: [number, number]; from: [number, number]; moving: boolean; last?: Move; key?: string }
+    | undefined;
+  let dropped: Move | undefined;
+
+  /** The camera while rearranging: from the room view's angle, back as far as the zoom says from taking in the room. */
+  const editFraming = (): Framing => {
+    const target = new THREE.Vector3(...ROOM_TARGET);
+    const distance = roomDistance(room, visibleAspect(), visibleTall()) * editZoom;
+    return {
+      target,
+      position: new THREE.Vector3()
+        .setFromSphericalCoords(distance, Math.PI / 2 - ROOM_VIEW.elevation, ROOM_VIEW.azimuth)
+        .add(target),
+      azimuth: [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY],
+      polar: [0.12, 1.35],
+    };
+  };
+  /** Point the ray at where the pointer is. */
+  const aim = (e: At) => {
+    const r = canvas.getBoundingClientRect();
+    ray.setFromCamera(
+      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
+      camera,
+    );
+  };
+  /** The thing under the pointer, by id: what a click picks up while rearranging. */
+  const thingAt = (e: At): string | undefined => {
+    aim(e);
+    for (const hit of ray.intersectObjects([...things.values()], true))
+      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent)
+        if (typeof o.userData.prop === "string") return o.userData.prop as string;
+    return undefined;
+  };
+  /** Where the pointer's line of sight crosses a height, on the floor plan. */
+  const crossing = (height: number): [number, number] | undefined => {
+    const hit = ray.ray.intersectPlane(new THREE.Plane(UP, -height), new THREE.Vector3());
+    return hit ? [hit.x, hit.z] : undefined;
+  };
+  /** Where on the walls the pointer is, on the floor plan: the nearer of the back and left walls it points at, else the floor. */
+  const onWalls = (): [number, number] | undefined => {
+    const hits: { at: [number, number]; far: number }[] = [];
+    const back = ray.ray.intersectPlane(
+      new THREE.Plane(new THREE.Vector3(0, 0, 1), room.depth / 2),
+      new THREE.Vector3(),
+    );
+    if (back && Math.abs(back.x) <= room.width / 2 && back.y >= 0 && back.y <= room.height)
+      hits.push({ at: [back.x, -room.depth / 2], far: back.distanceTo(camera.position) });
+    const left = ray.ray.intersectPlane(
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), room.width / 2),
+      new THREE.Vector3(),
+    );
+    if (left && Math.abs(left.z) <= room.depth / 2 && left.y >= 0 && left.y <= room.height)
+      hits.push({ at: [-room.width / 2, left.z], far: left.distanceTo(camera.position) });
+    hits.sort((a, b) => a.far - b.far);
+    return hits[0]?.at ?? crossing(0);
+  };
+  /** Where the thing being dragged would go, for the pointer here: on the floor, along a wall, or on a top. */
+  const moveFor = (e: PointerEvent): Move | undefined => {
+    const prop = drag && editing ? room.props.find((p) => p.id === drag?.item) : undefined;
+    if (!drag || !editing || !prop) return undefined;
+    aim(e);
+    const kinds = editing.kinds;
+    const kind = kinds[prop.kind];
+    const free = e.shiftKey;
+    const pending = editing.pending?.item === prop.id ? editing.pending : undefined;
+    const facing = pending?.facing ?? prop.facing;
+    if (kind?.mount === "wall") {
+      const point = onWalls();
+      if (!point) return undefined;
+      const hung = onWall(room, point, footprint(prop, kinds)[0], free);
+      return { item: prop.id, at: hung.at, facing: hung.facing, elevation: prop.elevation ?? kind.elevation };
+    }
+    if (kind?.mount === "on" || prop.on) {
+      const top = onTop(room, kinds, prop, crossing, free);
+      if (top) return { item: prop.id, at: top.at, facing, on: top.on, elevation: top.elevation };
+      // Over nothing with a top: shown on the floor, where it can't stay.
+      const floor = crossing(0);
+      return floor ? { item: prop.id, at: onFloor(room, floor, free), facing, elevation: 0, loose: true } : undefined;
+    }
+    const floor = crossing(0);
+    if (!floor) return undefined;
+    const size = footprint(prop, kinds);
+    const at = onFloor(room, [floor[0] - drag.grab[0], floor[1] - drag.grab[1]], free, size, kind?.round ? 0 : facing);
+    return { item: prop.id, at, facing };
+  };
+
+  /** Everything shown somewhere else, back where the room has it. */
+  const putBack = () => {
+    for (const id of shifted) {
+      const prop = room.props.find((p) => p.id === id);
+      const g = things.get(id);
+      if (!prop || !g) continue;
+      g.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
+      g.rotation.y = rad(prop.facing);
+    }
+    shifted.clear();
+  };
+  /** Show a thing where it is being put, turned as it is turned, and what stands on it along with it. */
+  const shiftTo = (move: Move) => {
+    const prop = room.props.find((p) => p.id === move.item);
+    if (!prop) return;
+    const hangs = editing?.kinds[prop.kind]?.mount === "wall";
+    const lift = move.elevation ?? (hangs || prop.on ? (prop.elevation ?? 0) : 0);
+    const turn = rad(move.facing - prop.facing);
+    const from = new THREE.Vector3(prop.at[0], prop.elevation ?? 0, prop.at[1]);
+    const to = new THREE.Vector3(move.at[0], lift, move.at[1]);
+    for (const id of [prop.id, ...ridersOf(room, prop.id)]) {
+      const p = room.props.find((x) => x.id === id);
+      const g = things.get(id);
+      if (!p || !g) continue;
+      const offset = new THREE.Vector3(p.at[0], p.elevation ?? 0, p.at[1]).sub(from).applyAxisAngle(UP, turn);
+      g.position.copy(to).add(offset);
+      g.rotation.y = rad(p.facing) + turn;
+      shifted.add(id);
+    }
+  };
+  /** The footprint to draw for a thing, where it is shown: on the floor or its top, or the patch of wall it covers. */
+  const patchOf = (prop: Prop, move: Move | undefined, kinds: Kinds): Patch => {
+    const at = move?.at ?? prop.at;
+    const [width, depth] = footprint(prop, kinds);
+    const kind = kinds[prop.kind];
+    if (kind?.mount === "wall")
+      return {
+        on: wallOf(room, at, Number.POSITIVE_INFINITY) ?? "back",
+        at,
+        elevation: move?.elevation ?? prop.elevation ?? kind.elevation ?? 1.2,
+        width,
+        height: heightOf(prop, kinds),
+      };
+    const y = move?.elevation ?? (prop.on ? (prop.elevation ?? 0) : 0);
+    return { on: "floor", at, y, width, depth, facing: kind?.round ? 0 : (move?.facing ?? prop.facing) };
+  };
+  /**
+   * Draw what is picked and where it is going: the thing itself, moved there
+   * ahead of being saved, with a box round it and its footprint coloured by
+   * whether it fits, as the page last heard for that place.
+   */
+  const markEdit = () => {
+    putBack();
+    const prop = editing?.selected ? room.props.find((p) => p.id === editing?.selected) : undefined;
+    // For anyone inspecting the page, like `data-motion`: what is picked, and whether it fits where it is going.
+    host.dataset.picked = prop?.id ?? "";
+    if (!editing || !prop) {
+      host.dataset.fit = "";
+      handles.show(undefined, undefined, "picked");
+      return;
+    }
+    const pending = editing.pending?.item === prop.id ? editing.pending : undefined;
+    const held = drag?.moving && drag.item === prop.id ? drag.last : dropped?.item === prop.id ? dropped : undefined;
+    const shown = held ?? pending;
+    if (shown) shiftTo(shown);
+    const fit: Fit = !shown
+      ? "picked"
+      : shown.loose
+        ? "no"
+        : moveKey(shown) !== moveKey(pending) || pending?.fits === undefined
+          ? "asking"
+          : pending.fits
+            ? "fits"
+            : "no";
+    host.dataset.fit = fit;
+    handles.show(things.get(prop.id), patchOf(prop, shown, editing.kinds), fit);
+  };
+  /** A thing picked up: pressed on, it is picked, and dragging moves it rather than turning the view. */
+  const onEditDown = (e: PointerEvent) => {
+    if (!editing || (e.pointerType === "mouse" && e.button !== 0)) return;
+    // A second finger is a pinch: whatever the first was dragging goes back.
+    if (e.pointerType === "touch" && touches.size > 0) {
+      drag = undefined;
+      if (!tween) controls.enabled = true;
+      markEdit();
+      return;
+    }
+    const id = thingAt(e);
+    if (!id) return;
+    const prop = room.props.find((p) => p.id === id);
+    const pending = editing.pending?.item === id ? editing.pending : undefined;
+    const at = pending?.at ?? prop?.at ?? [0, 0];
+    const floor = crossing(0) ?? at;
+    drag = { item: id, grab: [floor[0] - at[0], floor[1] - at[1]], from: [e.clientX, e.clientY], moving: false };
+    controls.enabled = false;
+    canvas.setPointerCapture?.(e.pointerId);
+    editing.onSelect(id);
+  };
+  /** The pointer moving while rearranging: what is held follows it, and the hand says what can be picked up. */
+  const onEditMove = (e: PointerEvent) => {
+    if (!editing) return;
+    if (!drag) {
+      if (e.pointerType === "mouse" && !downAt) canvas.style.cursor = thingAt(e) ? "grab" : "";
+      return;
+    }
+    if (!drag.moving && Math.hypot(e.clientX - drag.from[0], e.clientY - drag.from[1]) < 4) return;
+    drag.moving = true;
+    canvas.style.cursor = "grabbing";
+    const move = moveFor(e);
+    if (!move || moveKey(move) === drag.key) return;
+    drag.key = moveKey(move);
+    drag.last = move;
+    markEdit();
+    editing.onDrag(move);
+  };
+  /** Let go: what was dragged is put down where it is, for the page to check and save; a click on nothing picks nothing. */
+  function letGo(turnedTheView: boolean) {
+    const held = drag;
+    drag = undefined;
+    if (!tween) controls.enabled = true;
+    canvas.style.cursor = "";
+    if (held?.moving && held.last) {
+      dropped = held.last;
+      editing?.onDrop(held.last);
+    } else if (!held && !turnedTheView) editing?.onSelect(undefined);
+    markEdit();
+  }
+  const onEditCancel = () => {
+    if (!drag) return;
+    drag = undefined;
+    if (!tween) controls.enabled = true;
+    markEdit();
+  };
+  // Ahead of the controls, so a thing pressed on is held before they start turning the view.
+  canvas.addEventListener("pointerdown", onEditDown, { capture: true });
+  canvas.addEventListener("pointermove", onEditMove);
+  canvas.addEventListener("pointercancel", onEditCancel);
+
   // Agents who have noticed the visitor, until the visitor walks away.
   const noticed = new Set<string>();
   canvas.addEventListener("pointerdown", onDown);
@@ -1726,7 +2023,7 @@ export async function createStage(
     const through =
       travel === "walk" && !leaving ? doorReached(room, [p.x, p.z], [moved[0], moved[2]], pushing) : undefined;
     if (through) leave(through);
-    if (tween || travel !== "walk") return;
+    if (tween || travel !== "walk" || editing) return;
     const head = me.head();
     const t = controls.target;
     const step = new THREE.Vector3(...keepUp([t.x, t.y, t.z], [head.x, head.y, head.z], moved, dt));
@@ -1931,7 +2228,7 @@ export async function createStage(
     // Talking with you comes first; otherwise it turns to whoever came to see it.
     if (myCompany && !engaged) keepCompany(me, myCompany, false, t);
     if (opts.visitor) {
-      visit(dt);
+      if (!editing) visit(dt);
       giveWay(t);
     }
     me.step(
@@ -1950,11 +2247,12 @@ export async function createStage(
     frameUp(dt);
     // Arrived somewhere: the close-up finds its best angle again, unless the
     // person turned the view themselves a moment ago.
-    if (wasBusy && !me.walker.busy && view === "close" && !tween && t - lastDragAt > 8) moveCamera(framing("close"));
+    if (wasBusy && !me.walker.busy && view === "close" && !tween && !editing && t - lastDragAt > 8)
+      moveCamera(framing("close"));
     wasBusy = me.walker.busy;
     // The close-up keeps the torso in frame wherever the avatar goes, from
     // the angle the person last left the view at.
-    if (view === "close" && !tween) {
+    if (view === "close" && !tween && !editing) {
       const follow = me
         .head()
         .sub(controls.target)
@@ -1964,7 +2262,7 @@ export async function createStage(
     }
     // The chat page's view keeps the agent in frame as it moves round a room too big to see whole from near
     // enough, slowly; and comes in or backs off to the zoom quickly, from whatever angle it was turned to.
-    if (view === "room" && !tween && !opts.visitor && !opts.still) {
+    if (view === "room" && !tween && !opts.visitor && !opts.still && !editing) {
       const focus = roomFocus(room, visibleAspect(), me.walker.place, zoomKept, visibleTall());
       const follow = new THREE.Vector3(...focus.target).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.8));
       controls.target.add(follow);
@@ -1976,6 +2274,28 @@ export async function createStage(
         camera.position.copy(controls.target).add(offset.setLength(back));
       }
     }
+    // Rearranging, the wheel and a pinch bring the camera nearer or take it back to the whole room, from wherever it
+    // was turned and panned to; and panning goes no further than the room's edges.
+    if (editing && !tween) {
+      const want = roomDistance(room, visibleAspect(), visibleTall()) * editZoom;
+      const offset = camera.position.clone().sub(controls.target);
+      const away = offset.length();
+      if (away > 1e-6 && Math.abs(away - want) > 1e-4)
+        camera.position
+          .copy(controls.target)
+          .add(offset.setLength(opts.reducedMotion ? want : ease(away, want, dt, ZOOM_SECONDS)));
+      const t0 = controls.target;
+      const kept = new THREE.Vector3(
+        Math.max(-room.width / 2, Math.min(room.width / 2, t0.x)),
+        ROOM_TARGET[1],
+        Math.max(-room.depth / 2, Math.min(room.depth / 2, t0.z)),
+      );
+      if (!kept.equals(t0)) {
+        camera.position.add(kept.clone().sub(t0));
+        t0.copy(kept);
+      }
+    }
+    handles.update();
     // The others wander on their own, and keep an eye on the agent you are talking to.
     const meHead = me.head();
     for (const [agent, c] of companions) {
@@ -2125,9 +2445,12 @@ export async function createStage(
       room = next;
       camera.far = farFor(room);
       camera.updateProjectionMatrix();
-      furnish(changed?.fresh, changed?.moved);
+      // Rearranging, what you moved is where you put it already: it doesn't glide over from where it was.
+      furnish(changed?.fresh, editing ? undefined : changed?.moved);
       if (lit) light(lit);
       fitShadows();
+      dropped = undefined;
+      markEdit();
       // A visitor stays where they are standing: the room changing round them doesn't walk them anywhere.
       if (!opts.visitor) reseat(me, () => (spotById(room, room.start) ? room.start : undefined));
       for (const c of companions.values()) reseat(c, () => freeSpot(c)?.id);
@@ -2150,6 +2473,7 @@ export async function createStage(
       furnish();
       if (lit) light(lit);
       fitShadows();
+      markEdit();
       me.director.setRoom(room);
       const door = doorTo(room, from);
       const first = spotById(room, room.start) ?? room.spots[0];
@@ -2232,6 +2556,29 @@ export async function createStage(
       speech = next;
       for (const [agent, line] of Object.entries(next)) hear(agent, line);
     },
+    setEditing(next) {
+      const was = editing;
+      editing = next;
+      // What the page says now is where anything let go is shown.
+      dropped = undefined;
+      if (!was && next) {
+        // The keys held to walk are let go, and the view takes in the whole room, panned with the right button.
+        held.clear();
+        hover(undefined);
+        hoverDoor(undefined);
+        controls.enablePan = true;
+        controls.screenSpacePanning = false;
+        editZoom = 1;
+        moveCamera(editFraming());
+      } else if (was && !next) {
+        drag = undefined;
+        controls.enablePan = false;
+        canvas.style.cursor = "";
+        // Back to the view you had: following you on a visit, the agent on the chat page.
+        moveCamera(framing(view));
+      }
+      markEdit();
+    },
     dispose() {
       disposed = true;
       if (leaving) clearTimeout(leaving.giveUp);
@@ -2244,6 +2591,10 @@ export async function createStage(
       canvas.removeEventListener("pointermove", onTouch);
       canvas.removeEventListener("pointerleave", onLeave);
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("pointerdown", onEditDown, { capture: true });
+      canvas.removeEventListener("pointermove", onEditMove);
+      canvas.removeEventListener("pointercancel", onEditCancel);
+      handles.dispose();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);

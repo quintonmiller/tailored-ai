@@ -51,6 +51,7 @@ import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
 import { whyAsleep } from "./activity.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
+import { applyEdit, editFrom } from "./places-edit.js";
 import {
   CHANGE_LENGTH,
   CHANGES_KEPT,
@@ -826,8 +827,11 @@ export async function worldMap(
  * building, its doors. A room of conversation is a meeting room with a seat
  * for each member, and in it the members there now, drawn fresh until one of
  * them changes it and kept from then on; a hall is a corridor with a door for
- * each place off it, always drawn fresh. Anyone in it who came to see someone
- * else there is named in `with`.
+ * each place off it, always drawn fresh; the lobby is drawn fresh until a
+ * person changes it. Anyone in it who came to see someone else there is
+ * named in `with`. What a write to it needs comes too: its record's version
+ * (0 while it is drawn fresh, so the first change makes the record), the
+ * scope it is in, and `lent`, the fields shown that aren't the record's own.
  */
 export async function scene(
   service: StateService,
@@ -837,11 +841,28 @@ export async function scene(
   hasBody: (agent: string | undefined) => boolean,
   world?: World,
   homes?: HomeFor,
-): Promise<{ id: string; place: Place; agents: string[]; doors: PlaceDoor[]; with?: Record<string, string> } | null> {
+): Promise<
+  | (SceneOf & {
+      doors: PlaceDoor[];
+      with?: Record<string, string>;
+    })
+  | null
+> {
   const found = await sceneOf(service, caller, id, rooms, hasBody, world, homes);
   if (!found) return null;
   const pairs = found.agents.length > 1 ? together(await seeing(service, caller), found.agents) : undefined;
   return { ...found, doors: world ? doorsIn(id, found.place, world) : [], ...(pairs ? { with: pairs } : {}) };
+}
+
+/** A place as {@link scene} finds it, before its doors. */
+interface SceneOf {
+  id: string;
+  place: Place;
+  agents: string[];
+  version: number;
+  scope: string;
+  /** Fields shown that come from elsewhere, not the record: a meeting room's purpose, from its room. */
+  lent?: string[];
 }
 
 async function sceneOf(
@@ -852,8 +873,14 @@ async function sceneOf(
   hasBody: (agent: string | undefined) => boolean,
   world: World | undefined,
   homes: HomeFor | undefined,
-): Promise<{ id: string; place: Place; agents: string[] } | null> {
-  if (id === LOBBY) return { id, place: drawOnce(LOBBY, lobby), agents: [] };
+): Promise<SceneOf | null> {
+  if (id === LOBBY) {
+    // Drawn fresh until a person changes it, and kept as they left it from then on.
+    const kept = await service.get(caller, { type: PLACE_TYPE, id }).catch(() => null);
+    return kept
+      ? { id, place: kept.data as unknown as Place, agents: [], version: kept.version, scope: kept.scope }
+      : { id, place: drawOnce(LOBBY, lobby), agents: [], version: 0, scope: "global" };
+  }
   if (id.startsWith("hall:")) {
     const hall = world?.halls.find((h) => h.id === id);
     if (!hall) return null;
@@ -861,6 +888,8 @@ async function sceneOf(
       id,
       place: drawOnce(`hall\n${id}\n${hall.name}\n${hall.rooms.length}`, () => hallPlace(hall)),
       agents: [],
+      version: 0,
+      scope: "global",
     };
   }
   if (id.startsWith("room:")) {
@@ -868,19 +897,33 @@ async function sceneOf(
     if (!room) return null;
     // Once a member has changed it, it is kept: drawn from the record, never from its name again.
     const kept = await service.get(caller, { type: PLACE_TYPE, id }).catch(() => null);
-    const place = shownPurpose(kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place, room);
-    return { id, place, agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms) };
+    const own = kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place;
+    const place = shownPurpose(own, room);
+    return {
+      id,
+      place,
+      agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms),
+      version: kept?.version ?? 0,
+      scope: kept?.scope ?? "global",
+      ...(place.purpose !== own.purpose ? { lent: ["purpose"] } : {}),
+    };
   }
   if (id.startsWith("home:")) {
     const owner = id.slice("home:".length);
     if (!hasBody(owner)) return null;
-    const { place } = await readHome(service, caller, owner, homes);
-    return { id, place, agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms) };
+    const { place, version } = await readHome(service, caller, owner, homes);
+    return {
+      id,
+      place,
+      agents: await whoIsIn(service, caller, id, hasBody, undefined, rooms),
+      version,
+      scope: `agent:${owner}`,
+    };
   }
   const found = await service.get(caller, { type: PLACE_TYPE, id });
   if (!found) return null;
   const agents = await whoIsIn(service, caller, id, hasBody, undefined, rooms);
-  return { id, place: found.data as unknown as Place, agents };
+  return { id, place: found.data as unknown as Place, agents, version: found.version, scope: found.scope };
 }
 
 // --------------------------------------------------------------------------
@@ -1868,6 +1911,13 @@ export class PlaceTool implements Tool {
         const { id } = await readCurrent(service, caller, agent, meetings, this.homes);
         const ref = { type: PLACE_TYPE, id };
         const [last] = await service.history(caller, ref, { limit: 1 }).catch(() => []);
+        // What a person changed on the page is theirs to take back, not the agent's.
+        if (last?.actor.kind === "user") {
+          const by = (last.after as unknown as Place | undefined)?.changes?.[0];
+          return fail(
+            `The last change here was made on the page by ${by?.person ? by.who : "a person"}, so it's theirs to take back, not yours.`,
+          );
+        }
         // A meeting room's first change made its record: taking that back is the room as it was drawn.
         if (last?.op === "create" && id.startsWith("room:") && !byPlugin(last.actor)) {
           await service.delete(caller, ref);
@@ -2268,8 +2318,41 @@ const plugin: Plugin = (ctx) => {
           })),
           doors: found.doors,
           area: world.areaOf.get(found.id) ?? MAIN,
+          // What a person changing it on the page writes with: halls are the building's, drawn fresh every time.
+          version: found.version,
+          scope: found.scope,
+          editable: !found.id.startsWith("hall:"),
+          ...(found.lent ? { lent: found.lent } : {}),
         },
       };
+    },
+  });
+
+  // A person rearranging a place on the page: every kind of thing there is, and what agents call the person, so
+  // what they change reads right in the room's recent changes ("sam moved the couch").
+  ctx.http.register({
+    method: "GET",
+    path: "edit/kinds",
+    handler: (): TaiHttpResponse => ({
+      json: { kinds: KINDS, person: runtime.getConfig().rooms?.ownerLabel ?? "owner" },
+    }),
+  });
+
+  // What a place becomes with a person's change, checked as the place tool checks its own (see `places-edit.ts`).
+  // Nothing is written: the page writes what comes back through the world-state API, with the record's version.
+  ctx.http.register({
+    method: "POST",
+    path: "edit",
+    handler: async (req: TaiHttpRequest): Promise<TaiHttpResponse> => {
+      const body = (await req.json().catch(() => null)) as { id?: unknown; place?: unknown; edit?: unknown } | null;
+      const place = body?.place as Place | undefined;
+      if (typeof body?.id !== "string" || !place || typeof place !== "object" || !Array.isArray(place.props))
+        return { status: 400, json: { error: "Send `id`, `place` and `edit`." } };
+      const edit = editFrom(body.edit);
+      if (typeof edit === "string") return { status: 400, json: { error: edit } };
+      // A change that can't be made is an answer, not a failure: the page shows why, in the tool's own words.
+      const done = applyEdit(body.id, place, edit);
+      return { json: typeof done === "string" ? { why: done } : done };
     },
   });
 
@@ -2297,7 +2380,7 @@ const plugin: Plugin = (ctx) => {
       if (!hasBody(agent)) return { status: 404, json: { error: `${agent} has no avatar, so no room.` } };
       const service = runtime.getStateService();
       const rooms = talkRooms();
-      const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody }, homes);
+      const { id, place, version, scope } = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody }, homes);
       // Everyone else whose body is here, with what the page needs to draw them, and who any of them came to see.
       const others = await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent, rooms);
       const pairs = others.length ? together(await seeing(service, PLUGIN_CALLER), [...others, agent]) : undefined;
@@ -2310,6 +2393,8 @@ const plugin: Plugin = (ctx) => {
           type: PLACE_TYPE,
           id,
           version,
+          scope,
+          editable: true,
           place,
           company,
           doors,

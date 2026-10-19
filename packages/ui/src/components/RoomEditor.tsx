@@ -1,0 +1,662 @@
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  catalogue,
+  changeWords,
+  type Edit,
+  type Kinds,
+  type Move,
+  moveKey,
+  noSteps,
+  palette,
+  redoing,
+  type Steps,
+  stepped,
+  TURNS,
+  turned,
+  undoing,
+  withYourChange,
+} from "../avatar/editing";
+import type { Room } from "../avatar/scene";
+import type { StageEdit } from "../avatar/stage";
+import { WorldPanel } from "./WorldPanel";
+
+/**
+ * Rearranging a room yourself, from inside the world: the Edit room button's
+ * mode. Pick a thing and drag it; turn, copy, repaint or remove it; add more
+ * from the catalogue. Each change is checked by the server the way the
+ * agents' `place` tool checks theirs, then saved to the place's record
+ * through the world-state API with the version it was made to, as yours: so
+ * the redraw of untouched homes never replaces it, the room's recent changes
+ * say "you moved the couch", and the agent whose room it is sees it the next
+ * time it looks. If an agent changed the room meanwhile, nothing is written
+ * over it: the room comes back as it is now, and you are told. Undo and redo
+ * take back and make again your own changes, while you stay in the place.
+ */
+
+/** A place as the page has it, with what a write to it needs. */
+export interface EditablePlace {
+  id: string;
+  /** As shown: the record, with its doors and anything lent to it. */
+  room: Room;
+  /** The record's version; 0 while it is drawn fresh, so the first change makes it. */
+  version: number;
+  scope: string;
+  /** Fields shown that aren't the record's own: a meeting room's purpose, its room's. */
+  lent?: string[];
+}
+
+/** The record a room is kept as: without its doors, which the server works out, or anything it only borrows. */
+export function recordOf(room: Room, lent: string[] = []): Room {
+  const { doors: _doors, ...rest } = room;
+  const out: Record<string, unknown> = { ...rest };
+  for (const field of lent) delete out[field];
+  return out as unknown as Room;
+}
+
+/** What a change made: the room as the server checked it, and the thing it added or changed. */
+interface Checked {
+  place?: Room;
+  item?: string;
+  /** Why it can't be made, in the server's words. */
+  why?: string;
+}
+
+/** Ask the server what a change makes of the room. Nothing is written. */
+async function tryEdit(id: string, place: Room, edit: Edit): Promise<Checked> {
+  const { loose: _loose, elevation: _elevation, ...sent } = edit as Edit & Partial<Move>;
+  try {
+    const res = await fetch("/api/ext/builtin:places/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, place, edit: sent }),
+    });
+    const body = (await res.json().catch(() => ({}))) as Checked & { error?: string };
+    if (!res.ok) return { why: body.error ?? `The room couldn't be checked (${res.status}).` };
+    return body.place ? body : { why: body.why ?? "That can't be done here." };
+  } catch (err) {
+    return { why: `The room couldn't be checked: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/** A version that moved under a write: someone else changed the place first. */
+class Changed extends Error {}
+
+/** Write a place's record as the person, if it is still at `version`; the version it is at after. */
+async function write(place: EditablePlace, data: Room, version: number): Promise<number> {
+  const res = await fetch(`/api/state/place/${encodeURIComponent(place.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data, expectedVersion: version, scope: place.scope }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { version?: number; error?: string };
+  if (res.status === 409) throw new Changed(body.error);
+  if (!res.ok) throw new Error(body.error ?? `Couldn't save the room (${res.status}).`);
+  return body.version ?? version + 1;
+}
+
+/** Take a place back to being drawn fresh, if it is still at `version`: undoing the change that first kept it. */
+async function unkeep(place: EditablePlace, version: number): Promise<void> {
+  const url = `/api/state/place/${encodeURIComponent(place.id)}`;
+  const now = (await fetch(url).then((r) => (r.ok ? r.json() : null))) as { version?: number } | null;
+  if (now?.version !== version) throw new Changed();
+  const res = await fetch(url, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(`Couldn't undo (${res.status}).`);
+}
+
+/** A place's record as it is now, and who wrote it last: for showing the room an agent just changed. */
+async function readRecord(
+  id: string,
+): Promise<{ data: Room; version: number; updatedBy?: { kind?: string; name?: string } } | undefined> {
+  try {
+    const res = await fetch(`/api/state/place/${encodeURIComponent(id)}`);
+    return res.ok ? ((await res.json()) as { data: Room; version: number }) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every kind of thing, and what agents call the person: asked once, when the page first rearranges a room. */
+let kindsAsked: Promise<{ kinds: Kinds; person: string }> | undefined;
+function askKinds(): Promise<{ kinds: Kinds; person: string }> {
+  kindsAsked ??= fetch("/api/ext/builtin:places/edit/kinds").then(async (res) => {
+    if (!res.ok) throw new Error(`The kinds of thing couldn't be had (${res.status}).`);
+    return (await res.json()) as { kinds: Kinds; person: string };
+  });
+  kindsAsked.catch(() => {
+    kindsAsked = undefined;
+  });
+  return kindsAsked;
+}
+
+/** What a thing that stands on others says when dragged over nothing it can stand on. */
+const NEEDS_A_TOP = "It needs something with a top to stand on: a desk, a table or a shelf.";
+
+/**
+ * A change you saved, shown until the page hears of something newer: the
+ * room as saved, the version it is at, and `was`, the version it was at
+ * before you took the place back to being drawn fresh (0), while the page
+ * may not have heard yet.
+ */
+interface Saved {
+  id: string;
+  room: Room;
+  version: number;
+  was?: number;
+}
+
+/** Whether your saved change is still ahead of what the page has: the same place, and nothing newer heard. */
+function ahead(saved: Saved, place: EditablePlace): boolean {
+  if (saved.id !== place.id) return false;
+  return saved.was !== undefined ? place.version === saved.was : saved.version >= place.version;
+}
+
+/** Where a thing is being put, before it is saved, and whether it fits there: unknown while the server is asked. */
+type Pending = Move & { fits?: boolean; why?: string };
+
+export interface RoomEditor {
+  /** Rearranging now. */
+  editing: boolean;
+  start: () => void;
+  stop: () => void;
+  /** The room to show while a change you saved is newer than what the page last heard; undefined otherwise. */
+  room?: Room;
+  /** What the stage needs while rearranging. */
+  stage?: StageEdit;
+  /** The catalogue is open, in the chat's column. */
+  adding: boolean;
+  /** The buttons over the stage while rearranging: done, undo, redo, add. */
+  tools: ReactNode;
+  /** The bar over the foot of the stage while rearranging: what is picked, and what you can do with it. */
+  bar: ReactNode;
+  /** The catalogue, while it is open. */
+  shelf: ReactNode;
+}
+
+/** Rearranging the place on screen: `place` is it as the page last heard, undefined when it can't be rearranged. */
+export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
+  const [editing, setEditing] = useState(false);
+  const [kinds, setKinds] = useState<{ kinds: Kinds; person: string } | null>(null);
+  const [local, setLocal] = useState<Saved | null>(null);
+  const [selected, setSelected] = useState<string | undefined>(undefined);
+  const [pending, setPending] = useState<Pending | undefined>(undefined);
+  const [steps, setSteps] = useState<Steps<Room>>(noSteps);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [adding, setAdding] = useState(false);
+  const [working, setWorking] = useState(0);
+  const busy = working > 0;
+
+  // Your last saved change, the moment it is saved (the state above follows on the next render): what the next change
+  // is made to, and the version it is written with.
+  const latest = useRef<Saved | null>(null);
+  const keep = useCallback((saved: Saved | null) => {
+    latest.current = saved;
+    setLocal(saved);
+  }, []);
+  const mine = local && place && ahead(local, place) ? local : null;
+  const id = place?.id;
+  const shown = mine?.room ?? place?.room;
+
+  // Somewhere else, or something newer heard: your saved change is the page's now, or behind it.
+  useEffect(() => {
+    if (local && (!place || !ahead(local, place))) keep(null);
+  }, [local, place, keep]);
+  // Another place: done rearranging this one, and nothing of it to undo there.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: arriving somewhere else is what clears it.
+  useEffect(() => {
+    setEditing(false);
+    setSelected(undefined);
+    setPending(undefined);
+    setSteps(noSteps());
+    setNotice(undefined);
+    setAdding(false);
+  }, [id]);
+
+  // The latest of what the page has, for the handlers the stage and the keys call.
+  const now = useRef({ place, selected, pending, kinds, steps });
+  now.current = { place, selected, pending, kinds, steps };
+
+  /** The place as your next change is made to it: its record as the server takes it, and the version it is at. */
+  const current = (): { place: EditablePlace; record: Room; version: number } | undefined => {
+    const p = now.current.place;
+    if (!p) return undefined;
+    const l = latest.current;
+    const use = l && ahead(l, p) ? l : undefined;
+    return { place: p, record: recordOf(use?.room ?? p.room, p.lent), version: use?.version ?? p.version };
+  };
+  /** Shown as saved: the record, with its doors and anything lent to it, as the page last had them. */
+  const asShown = (data: Room): Room => {
+    const p = now.current.place;
+    const extra: Record<string, unknown> = {};
+    for (const field of p?.lent ?? []) extra[field] = (p?.room as unknown as Record<string, unknown>)[field];
+    return { ...data, ...extra, ...(p?.room.doors ? { doors: p.room.doors } : {}) };
+  };
+
+  // Changes go one at a time, each made to the room as the last left it: a quick second drag never writes over the
+  // first, nor is checked against the room before it.
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  const run = (job: () => Promise<void>): Promise<void> => {
+    setWorking((n) => n + 1);
+    const next = queue.current.then(job).finally(() => setWorking((n) => n - 1));
+    queue.current = next.catch(() => {});
+    return next;
+  };
+
+  const start = useCallback(() => {
+    askKinds()
+      .then((k) => {
+        setKinds(k);
+        setEditing(true);
+        setNotice(undefined);
+      })
+      .catch((err: unknown) => setNotice(err instanceof Error ? err.message : String(err)));
+  }, []);
+  const stop = useCallback(() => {
+    setEditing(false);
+    setSelected(undefined);
+    setPending(undefined);
+    setAdding(false);
+    setNotice(undefined);
+  }, []);
+
+  /**
+   * Your change didn't save because the place moved on: shown as it is now,
+   * read again rather than waiting for the page to hear of it, and said who by.
+   */
+  const changedUnder = async (where: string) => {
+    setPending(undefined);
+    now.current.steps = noSteps();
+    setSteps(now.current.steps);
+    const record = await readRecord(where);
+    keep(
+      record?.data && typeof record.version === "number"
+        ? { id: where, room: asShown(record.data), version: record.version }
+        : null,
+    );
+    const who = record?.updatedBy?.kind === "agent" ? record.updatedBy.name : undefined;
+    setNotice(
+      `${who ?? "Someone"} changed this room while you were rearranging it, so your last change wasn't saved. This is the room as it is now.`,
+    );
+  };
+  /** Something went wrong saving: said, and the thing back where it was. */
+  const failed = async (err: unknown, where: string) => {
+    if (err instanceof Changed) return changedUnder(where);
+    setPending(undefined);
+    setNotice(err instanceof Error ? err.message : String(err));
+  };
+
+  /** Save what a change made, with yours at the top of the room's recent changes; `picked`, what to pick after. */
+  const save = async (edit: Edit, after: Room, picked?: string) => {
+    const c = current();
+    const k = now.current.kinds;
+    if (!c || !k) return;
+    const what = changeWords(edit, c.record, after);
+    const data = withYourChange(recordOf(after, c.place.lent), { who: k.person, what, at: new Date().toISOString() });
+    try {
+      const version = await write(c.place, data, c.version);
+      keep({ id: c.place.id, room: asShown(data), version });
+      now.current.steps = stepped(now.current.steps, { before: c.record, after: data, from: c.version, what });
+      setSteps(now.current.steps);
+      setPending(undefined);
+      setNotice(undefined);
+      if (picked !== undefined) setSelected(picked || undefined);
+    } catch (err) {
+      await failed(err, c.place.id);
+    }
+  };
+
+  /** Make a change: asked of the server, then saved; what it says when it can't be made is shown. */
+  const change = (edit: Edit, pick?: (made: Checked) => string | undefined) =>
+    run(async () => {
+      const c = current();
+      if (!c) return;
+      const made = await tryEdit(c.place.id, c.record, edit);
+      if (!made.place) {
+        setNotice(made.why);
+        return;
+      }
+      await save(edit, made.place, pick ? (pick(made) ?? "") : undefined);
+    });
+
+  // What the server said about each place a thing was dragged to, while the room stays at one version.
+  const asked = useRef({ id: "", version: -1, answers: new Map<string, Promise<Checked>>() });
+  const check = (move: Move): Promise<Checked> => {
+    const c = current();
+    if (!c) return Promise.resolve({ why: "There's no room to change." });
+    if (asked.current.id !== c.place.id || asked.current.version !== c.version)
+      asked.current = { id: c.place.id, version: c.version, answers: new Map() };
+    const key = moveKey(move);
+    let answer = asked.current.answers.get(key);
+    if (!answer) {
+      answer = tryEdit(c.place.id, c.record, { op: "move", ...move });
+      asked.current.answers.set(key, answer);
+    }
+    return answer;
+  };
+  // One question at a time while dragging: the latest place waits for the one being asked, and the rest are skipped.
+  const asking = useRef<{ busy: boolean; next?: Move }>({ busy: false });
+  const ask = (move: Move) => {
+    if (asking.current.busy) {
+      asking.current.next = move;
+      return;
+    }
+    asking.current.busy = true;
+    void check(move)
+      .then((got) => {
+        // Only for where it is now: the thing may have been dragged on, or let go and saved, since.
+        setPending((p) => (p && moveKey(p) === moveKey(move) ? { ...p, fits: !!got.place, why: got.why } : p));
+      })
+      .finally(() => {
+        asking.current.busy = false;
+        const next = asking.current.next;
+        asking.current.next = undefined;
+        if (next) ask(next);
+      });
+  };
+
+  /** Where a thing is being put: shown there at once, and asked whether it fits. */
+  const propose = (move: Move) => {
+    if (move.loose) {
+      setPending({ ...move, fits: false, why: NEEDS_A_TOP });
+      return;
+    }
+    setPending({ ...move });
+    ask(move);
+  };
+
+  /** Put a thing here: saved if it fits, otherwise back where it was, saying why. */
+  const put = (move: Move) => {
+    if (move.loose) {
+      setPending(undefined);
+      setNotice(NEEDS_A_TOP);
+      return;
+    }
+    setPending({ ...move });
+    void run(async () => {
+      // Asked of the room as it is once any change before it is saved: the answer for an older room is asked again.
+      const got = await check(move);
+      if (!got.place) {
+        setPending((p) => (p && moveKey(p) === moveKey(move) ? undefined : p));
+        setNotice(got.why);
+        return;
+      }
+      await save({ op: "move", ...move }, got.place);
+    });
+  };
+
+  const thing = (id: string | undefined) => {
+    const c = current();
+    return id ? c?.record.props.find((p) => p.id === id) : undefined;
+  };
+
+  /** Turn what is picked by `by` degrees: saved if it fits turned there, otherwise shown turned in red, to drag on. */
+  const turn = (by: number) => {
+    const n = now.current;
+    const prop = thing(n.selected);
+    if (!prop || !n.kinds) return;
+    if (n.kinds.kinds[prop.kind]?.mount === "wall") {
+      setNotice(`${prop.name.charAt(0).toUpperCase()}${prop.name.slice(1)} hangs flat on its wall.`);
+      return;
+    }
+    const from = n.pending?.item === prop.id ? n.pending : undefined;
+    const on = from?.on ?? prop.on;
+    const move: Move = {
+      item: prop.id,
+      at: from?.at ?? prop.at,
+      facing: turned(from?.facing ?? prop.facing, by),
+      ...(on ? { on } : {}),
+      ...(from?.elevation !== undefined ? { elevation: from.elevation } : {}),
+    };
+    setPending({ ...move });
+    void run(async () => {
+      const got = await check(move);
+      if (got.place) await save({ op: "move", ...move }, got.place);
+      else setPending((p) => (p && moveKey(p) === moveKey(move) ? { ...p, fits: false, why: got.why } : p));
+    });
+  };
+  const remove = () => {
+    const prop = thing(now.current.selected);
+    if (prop) void change({ op: "remove", item: prop.id }, () => undefined);
+  };
+  const copy = () => {
+    const prop = thing(now.current.selected);
+    if (prop) void change({ op: "add", kind: prop.kind, like: prop.id }, (made) => made.item);
+  };
+  const paint = (color: string) => {
+    const prop = thing(now.current.selected);
+    if (prop) void change({ op: "color", item: prop.id, color });
+  };
+  const add = (kind: string) => void change({ op: "add", kind }, (made) => made.item);
+
+  const undo = () =>
+    run(async () => {
+      const c = current();
+      const u = undoing(now.current.steps);
+      if (!c || !u) return;
+      try {
+        if (u.step.from === 0) {
+          // The change that first kept the place: back to it being drawn fresh.
+          await unkeep(c.place, c.version);
+          keep({ id: c.place.id, room: asShown(u.step.before), version: 0, was: c.version });
+        } else {
+          const version = await write(c.place, u.step.before, c.version);
+          keep({ id: c.place.id, room: asShown(u.step.before), version });
+        }
+        now.current.steps = u.steps;
+        setSteps(u.steps);
+        setPending(undefined);
+        setNotice(undefined);
+      } catch (err) {
+        await failed(err, c.place.id);
+      }
+    });
+  const redo = () =>
+    run(async () => {
+      const c = current();
+      const r = redoing(now.current.steps);
+      if (!c || !r) return;
+      try {
+        const version = await write(c.place, r.step.after, c.version);
+        keep({ id: c.place.id, room: asShown(r.step.after), version });
+        now.current.steps = r.steps;
+        setSteps(r.steps);
+        setPending(undefined);
+        setNotice(undefined);
+      } catch (err) {
+        await failed(err, c.place.id);
+      }
+    });
+
+  // The handlers as they are now, for keys and the stage, which hold on to what they were first given.
+  const act = useRef({ turn, remove, undo, redo, stop, propose, put });
+  act.current = { turn, remove, undo, redo, stop, propose, put };
+
+  // The keys: R turns, Delete removes, Ctrl+Z undoes, Ctrl+Shift+Z or Ctrl+Y redoes, Escape lets go and then stops.
+  useEffect(() => {
+    if (!editing) return;
+    const key = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if ((e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      const a = act.current;
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (adding) setAdding(false);
+        else if (now.current.pending) setPending(undefined);
+        else a.stop();
+      } else if (mod && e.code === "KeyZ") {
+        e.preventDefault();
+        void (e.shiftKey ? a.redo() : a.undo());
+      } else if (mod && e.code === "KeyY") {
+        e.preventDefault();
+        void a.redo();
+      } else if (!mod && !e.altKey && e.code === "KeyR" && now.current.selected) {
+        e.preventDefault();
+        a.turn(e.shiftKey ? TURNS.big : -TURNS.big);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && now.current.selected) {
+        e.preventDefault();
+        a.remove();
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [editing, adding]);
+
+  const onSelect = useCallback((picked: string | undefined) => {
+    // Picking something else lets go of where the last thing was being put.
+    setPending((p) => (p && p.item !== picked ? undefined : p));
+    setSelected(picked);
+  }, []);
+  const onDrag = useCallback((move: Move) => act.current.propose(move), []);
+  const onDrop = useCallback((move: Move) => act.current.put(move), []);
+  const stage = useMemo(
+    (): StageEdit | undefined =>
+      editing && kinds
+        ? {
+            kinds: kinds.kinds,
+            ...(selected ? { selected } : {}),
+            ...(pending ? { pending } : {}),
+            onSelect,
+            onDrag,
+            onDrop,
+          }
+        : undefined,
+    [editing, kinds, selected, pending, onSelect, onDrag, onDrop],
+  );
+
+  const picked = thing(selected);
+  const swatches = useMemo(() => (shown ? palette(shown) : []), [shown]);
+  const groups = useMemo(() => (kinds ? catalogue(kinds.kinds) : []), [kinds]);
+  const hangs = !!picked && kinds?.kinds[picked.kind]?.mount === "wall";
+  // A thing being put somewhere it can't go says why; otherwise the last thing the server or a save said.
+  const said = pending?.fits === false ? pending.why : notice;
+
+  const tools = editing ? (
+    <>
+      <button type="button" className="talk-tool room-edit-done" onClick={stop} title="Stop rearranging (Esc)">
+        Done
+      </button>
+      <button
+        type="button"
+        className="talk-tool"
+        disabled={!steps.done.length || busy}
+        onClick={() => void undo()}
+        title="Take back your last change (Ctrl+Z)"
+      >
+        Undo
+      </button>
+      <button
+        type="button"
+        className="talk-tool"
+        disabled={!steps.undone.length || busy}
+        onClick={() => void redo()}
+        title="Make it again (Ctrl+Shift+Z)"
+      >
+        Redo
+      </button>
+      <button
+        type="button"
+        className="talk-tool"
+        aria-expanded={adding}
+        onClick={() => setAdding(!adding)}
+        title="Furniture, plants, lights and things for the walls"
+      >
+        Add things
+      </button>
+    </>
+  ) : null;
+
+  // The bar keeps one shape, picked or not, so the room framed above it never shifts as you pick things: what can't
+  // be done yet is greyed, and the line at its foot says what you can do when there is nothing else to say.
+  const off = !picked || busy;
+  const bar = editing ? (
+    <div className="room-edit-bar" role="toolbar" aria-label="Rearranging the room">
+      <div className="room-edit-row">
+        <strong className={`room-edit-name${picked ? "" : " room-edit-none"}`}>
+          {picked?.name ?? "Nothing picked"}
+        </strong>
+        <button type="button" disabled={off || hangs} onClick={() => turn(TURNS.big)} title="A quarter turn (Shift+R)">
+          ↺ 90°
+        </button>
+        <button type="button" disabled={off || hangs} onClick={() => turn(TURNS.small)} title="A little">
+          ↺ 15°
+        </button>
+        <button type="button" disabled={off || hangs} onClick={() => turn(-TURNS.small)} title="A little">
+          15° ↻
+        </button>
+        <button type="button" disabled={off || hangs} onClick={() => turn(-TURNS.big)} title="A quarter turn (R)">
+          90° ↻
+        </button>
+        <button type="button" disabled={off} onClick={copy} title="Another one, beside it">
+          Copy
+        </button>
+        <button type="button" className="room-edit-remove" disabled={off} onClick={remove} title="Remove (Delete)">
+          Remove
+        </button>
+      </div>
+      <fieldset className="room-edit-swatches" aria-label="Colours" disabled={off}>
+        {swatches.map((s) => (
+          <button
+            key={s.color}
+            type="button"
+            className="room-edit-swatch"
+            aria-pressed={!!picked && picked.color === s.color}
+            aria-label={s.word ?? (s.from ? `Like ${s.from}` : s.color)}
+            title={s.word ?? (s.from ? `Like ${s.from}` : s.color)}
+            style={{ background: s.color }}
+            onClick={() => paint(s.color)}
+          />
+        ))}
+        {busy && <span className="room-edit-saving">Saving…</span>}
+      </fieldset>
+      {said ? (
+        <output className="room-edit-said">{said}</output>
+      ) : (
+        <p className="room-edit-keys">
+          {picked
+            ? "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
+            : "Pick something to move it, or add things · drag the floor to look round, the wheel to zoom · Esc when done"}
+        </p>
+      )}
+    </div>
+  ) : null;
+
+  const shelf =
+    editing && adding ? (
+      <WorldPanel kicker="Rearranging" title="Add things" className="room-edit-add" onClose={() => setAdding(false)}>
+        <p className="world-panel-quiet">
+          Pick one: it goes somewhere free near the middle, ready to drag where you want it.
+        </p>
+        {groups.map((g) => (
+          <section key={g.id} className="room-edit-group" aria-label={g.label}>
+            <h3>{g.label}</h3>
+            <div className="room-edit-kinds">
+              {g.kinds.map((k) => (
+                <button
+                  key={k.kind}
+                  type="button"
+                  disabled={busy}
+                  title={k.goes ? `Goes ${k.goes}` : undefined}
+                  onClick={() => add(k.kind)}
+                >
+                  {k.noun.charAt(0).toUpperCase() + k.noun.slice(1)}
+                  {k.goes && <span className="room-edit-goes">{k.goes}</span>}
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+      </WorldPanel>
+    ) : null;
+
+  return {
+    editing,
+    start,
+    stop,
+    ...(mine ? { room: mine.room } : {}),
+    ...(stage ? { stage } : {}),
+    adding: editing && adding,
+    tools,
+    bar,
+    shelf,
+  };
+}

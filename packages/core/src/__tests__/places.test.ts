@@ -1872,6 +1872,101 @@ describe("what was done to a room lately", () => {
   });
 });
 
+describe("a person changing a place on the page", () => {
+  const types = [
+    { name: PLACE_TYPE, scope: "agent" as const, schema: PLACE_SCHEMA as never },
+    { name: WHEREABOUTS_TYPE, scope: "global" as const },
+  ];
+  // As the world-state HTTP API writes: the person, through http.
+  const person: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "http" } };
+  const hasBody = (a: string | undefined) => a === "assistant" || a === "guest";
+  const rooms = [{ ref: "local:trip", name: "trip", purpose: "Plan the trip", members: ["assistant", "guest"] }];
+  const as = { agentName: "assistant" } as ToolContext;
+  let state: StateService;
+  let tool: PlaceTool;
+  beforeEach(() => {
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    tool = new PlaceTool(
+      () => state,
+      hasBody,
+      undefined,
+      () => rooms,
+    );
+  });
+  /** What the page writes after a move: the room the edit made, with the person's change on top. */
+  const moved = (place: Place): Place =>
+    withChange(
+      {
+        ...place,
+        props: place.props.map((p) => (p.id === "plant" ? { ...p, at: [-1.2, 1.4] as [number, number] } : p)),
+      },
+      { who: "sam", what: "moved the plant", at: "2026-10-19T09:00:00.000Z", person: true },
+    );
+
+  it("tells the page what a write needs: the version, the scope, and what is only lent", async () => {
+    const home = await scene(state, person, homeId("assistant"), rooms, hasBody);
+    expect(home).toMatchObject({ version: 1, scope: "agent:assistant" });
+    expect(home?.lent).toBeUndefined();
+    const meeting = await scene(state, person, roomPlaceId("local:trip"), rooms, hasBody);
+    // Drawn fresh, so the first change makes the record; its purpose is its room's, shown but not kept.
+    expect(meeting).toMatchObject({ version: 0, scope: "global", lent: ["purpose"] });
+    expect(meeting?.place.purpose).toBe("Plan the trip");
+    expect(await scene(state, person, LOBBY, rooms, hasBody)).toMatchObject({ version: 0, scope: "global" });
+  });
+
+  it("keeps the lobby as a person left it, once they change it, and draws it fresh until then", async () => {
+    const drawn = (await scene(state, person, LOBBY, rooms, hasBody))?.place as Place;
+    expect(drawn).toEqual(lobby());
+    const changed = { ...drawn, props: drawn.props.filter((p) => p.kind !== "kiosk") };
+    await state.put(person, { type: PLACE_TYPE, id: LOBBY, scope: "global", data: changed as never }, 0);
+    expect(await scene(state, person, LOBBY, rooms, hasBody)).toMatchObject({ version: 1, place: changed });
+  });
+
+  it("is never redrawn under a person's change, and the agent sees it the next time it looks", async () => {
+    const { place, version } = await readHome(state, person, "assistant");
+    // The room an older way of drawing would give it: a person's change counts as anyone's, and stands.
+    const mine = moved(place);
+    await state.put(person, { type: PLACE_TYPE, id: homeId("assistant"), data: mine as never }, version);
+    expect((await readHome(state, person, "assistant")).place).toEqual(mine);
+    const looked = String((await tool.execute({ action: "look" }, as)).output);
+    expect(looked).toMatch(/Lately: sam moved the plant\./);
+  });
+
+  it("won't let the agent's undo take back what the person did", async () => {
+    const { place, version } = await readHome(state, person, "assistant");
+    await state.put(person, { type: PLACE_TYPE, id: homeId("assistant"), data: moved(place) as never }, version);
+    const undone = await tool.execute({ action: "undo" }, as);
+    expect(undone.success).toBe(false);
+    expect(undone.error).toMatch(/made on the page by sam, so it's theirs to take back/);
+    expect((await readHome(state, person, "assistant")).place.changes?.[0]).toMatchObject({ who: "sam", person: true });
+  });
+
+  it("makes a meeting room's record with the first change, as a member's first change does", async () => {
+    const shown = (await scene(state, person, roomPlaceId("local:trip"), rooms, hasBody)) as NonNullable<
+      Awaited<ReturnType<typeof scene>>
+    >;
+    // What is only lent stays out of the record.
+    const { purpose: _lent, ...own } = shown.place;
+    const data = withChange(own as Place, { who: "sam", what: "added the lamp", at: "x", person: true });
+    await state.put(person, { type: PLACE_TYPE, id: shown.id, scope: shown.scope, data: data as never }, shown.version);
+    const kept = await scene(state, person, shown.id, rooms, hasBody);
+    expect(kept).toMatchObject({ version: 1, scope: "global", lent: ["purpose"] });
+    expect(kept?.place.changes?.[0].what).toBe("added the lamp");
+    // And a member's change from then on goes on top of it, instead of starting the room again.
+    const added = await tool.execute({ action: "go", to: "trip" }, as);
+    expect(added.success, added.error).toBe(true);
+    const again = await tool.execute({ action: "add", kind: "plant" }, as);
+    expect(again.success, again.error).toBe(true);
+    expect((await scene(state, person, shown.id, rooms, hasBody))?.place.changes?.map((c) => c.who)).toEqual([
+      "assistant",
+      "sam",
+    ]);
+  });
+});
+
 describe("whether there is anything to do", () => {
   it("only when some agent has a body", () => {
     expect(anyAvatar({ agents: {} } as never)).toBe(false);

@@ -35,6 +35,7 @@ import { countTasks, LIVE_STATUSES } from "../lib/tasks";
 import { trailTo } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
+import { type EditablePlace, useRoomEditor } from "./RoomEditor";
 import { useVoice } from "./voice";
 import { type Said, WorldAgent } from "./WorldAgent";
 import { WorldCalendar } from "./WorldCalendar";
@@ -115,6 +116,7 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
             ...(id ? { id } : {}),
             ...areaOf(body),
             ...(body?.wear ? { wear: body.wear } : {}),
+            ...recordOfPlace(body),
           };
           setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
         })
@@ -131,7 +133,11 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
         // Shown as changed at once; and since where its door goes depends on what is in it, asked again for that.
-        setScene((s) => ({ ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } }));
+        setScene((s) => ({
+          ...s,
+          room: { ...(change.after as unknown as Room), doors: s.room.doors },
+          version: change.version,
+        }));
         void load(true);
       }
     });
@@ -151,6 +157,13 @@ export interface SceneInfo {
   area?: string;
   /** What the agent whose place this is wears, for its own body: an agent's own place only. */
   wear?: string[];
+  /** What a person rearranging it writes with: the record's version (0 while drawn fresh) and scope. */
+  version?: number;
+  scope?: string;
+  /** A person may rearrange it: anywhere but a hall, which the building lays out. */
+  editable?: boolean;
+  /** Fields shown that aren't the record's own: a meeting room's purpose, from its room. */
+  lent?: string[];
 }
 
 /** The room the server sent, with its doors; the built-in room when it sent none. */
@@ -160,6 +173,25 @@ export function roomOf(info: PlaceInfo | null | undefined): Room {
 }
 
 const areaOf = (info: PlaceInfo | null | undefined) => (info?.area ? { area: info.area } : {});
+
+/** What a write to the place needs, as the server sent it. */
+function recordOfPlace(info: PlaceInfo | null | undefined): Pick<SceneInfo, "version" | "scope" | "editable" | "lent"> {
+  if (!info || typeof info.version !== "number" || !info.scope) return {};
+  return {
+    version: info.version,
+    scope: info.scope,
+    editable: !!info.editable,
+    ...(info.lent?.length ? { lent: info.lent } : {}),
+  };
+}
+
+/** A room as changed, with what was lent to it before still lent while the record has none of its own. */
+function lentTo(room: Room, was: SceneInfo): Room {
+  const out: Record<string, unknown> = { ...room };
+  for (const field of was.lent ?? [])
+    if (out[field] === undefined) out[field] = (was.room as unknown as Record<string, unknown>)[field];
+  return out as unknown as Room;
+}
 
 /**
  * The place as asked for again, keeping the room it had when nothing in it
@@ -635,7 +667,7 @@ export function useScene(id: string | null): SceneInfo | null {
         .then((body) => {
           if (gone || n !== asked) return;
           owed = false;
-          const next = { room: roomOf(body), company: companyOf(body), id, ...areaOf(body) };
+          const next = { room: roomOf(body), company: companyOf(body), id, ...areaOf(body), ...recordOfPlace(body) };
           setScene((s) => (doorsOnly && s && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
         })
         .catch(() => {
@@ -655,7 +687,16 @@ export function useScene(id: string | null): SceneInfo | null {
       if (change.type !== "place" || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
-        setScene((s) => (s ? { ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } } : s));
+        setScene((s) =>
+          s
+            ? {
+                ...s,
+                // A meeting room's purpose is its room's until its members give it one: still lent, if the record has none.
+                room: { ...lentTo(change.after as unknown as Room, s), doors: s.room.doors },
+                version: change.version,
+              }
+            : s,
+        );
         void load(true);
       }
     });
@@ -688,6 +729,11 @@ export interface PlaceInfo {
   /** Asked for an agent's own place: what the agent is, in a word, and what it wears. */
   role?: string;
   wear?: string[];
+  /** The record's version, 0 while it is drawn fresh, and its scope: what a person rearranging it writes with. */
+  version?: number;
+  scope?: string;
+  editable?: boolean;
+  lent?: string[];
 }
 
 /** The others in the place, as the stage takes them; anyone without a body file is left out. */
@@ -831,8 +877,6 @@ export function useChatStage({
   // What is open over the stage, one thing at a time: the map, a task, the task list, an agent, a form.
   const [panel, setPanel] = useState<Panel | null>(null);
   const mapOpen = panel?.kind === "map";
-  // Everything but the map sits in the chat's column while it is open, so the scene stays in view beside it.
-  const side = !!panel && panel.kind !== "map";
   const closePanel = useCallback(() => setPanel(null), []);
   const [listView, setListView] = useState<ListView>({ filter: "open", who: undefined });
   const [near, setNear] = useState<string | undefined>(undefined);
@@ -843,7 +887,43 @@ export function useChatStage({
   const last = useRef<{ visiting: string | null; scene: SceneInfo }>({ visiting: null, scene: own });
   const showing = loading ? last.current : { visiting, scene: visiting ? (visited as SceneInfo) : own };
   last.current = showing;
-  const { room, company, id: placeId } = showing.scene;
+  const { company, id: placeId } = showing.scene;
+  // Rearranging the place on screen yourself (`RoomEditor.tsx`): anywhere the server says a person may, once it has
+  // come. What you just saved shows until the page hears of it, so it never jumps back while the word goes round.
+  const sceneNow = showing.scene;
+  const editable = useMemo(
+    (): EditablePlace | undefined =>
+      sceneNow.id && sceneNow.editable && sceneNow.version !== undefined && sceneNow.scope && !loading
+        ? {
+            id: sceneNow.id,
+            room: sceneNow.room,
+            version: sceneNow.version,
+            scope: sceneNow.scope,
+            ...(sceneNow.lent ? { lent: sceneNow.lent } : {}),
+          }
+        : undefined,
+    [sceneNow.id, sceneNow.editable, sceneNow.version, sceneNow.scope, sceneNow.lent, sceneNow.room, loading],
+  );
+  const editor = useRoomEditor(editable);
+  const room = editor.room ?? sceneNow.room;
+  // How tall the bar over the stage's foot is while rearranging, for framing the room above it.
+  const dock = useRef<HTMLDivElement>(null);
+  const [dockTall, setDockTall] = useState(0);
+  useEffect(() => {
+    const el = dock.current;
+    setDockTall(0);
+    if (!editor.editing || !el) return;
+    // Only ever taller while you rearrange: a longer notice for a moment doesn't nudge the room up and down.
+    const measure = () => setDockTall((was) => Math.max(was, Math.round(el.getBoundingClientRect().height)));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [editor.editing]);
+  // Everything but the map sits in the chat's column while it is open, so the scene stays in view beside it; while
+  // you rearrange the room, the catalogue does too.
+  const side = (!!panel && panel.kind !== "map") || editor.adding;
   // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
   // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
   const map = useWorldMap(
@@ -1040,9 +1120,9 @@ export function useChatStage({
     }
   }, [sessionKey, end]);
 
-  // M opens the map, unless the person is typing.
+  // M opens the map, unless the person is typing, or rearranging the room.
   useEffect(() => {
-    if (!showStage) return;
+    if (!showStage || editor.editing) return;
     const toggle = (e: KeyboardEvent) => {
       const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
       if (e.code !== "KeyM" || typing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1052,7 +1132,7 @@ export function useChatStage({
     };
     window.addEventListener("keydown", toggle);
     return () => window.removeEventListener("keydown", toggle);
-  }, [showStage]);
+  }, [showStage, editor.editing]);
 
   // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel.
   const { hold, release } = voice;
@@ -1212,8 +1292,8 @@ export function useChatStage({
     },
     [placeId, setVisiting],
   );
-  // Homes, shared places and meeting rooms are agents' to change; the lobby and the halls are the building's.
-  const changeable = !!placeId && /^(home|shared|room):/.test(placeId);
+  // Homes, shared places and meeting rooms are agents' to change, and the lobby a person's; the halls are the building's.
+  const changeable = !!placeId && (/^(home|shared|room):/.test(placeId) || placeId === "lobby");
   // Going somewhere: to the agent you came from is back with it.
   const go = (id: string) => {
     setVisiting(id === own.id ? null : id);
@@ -1293,6 +1373,21 @@ export function useChatStage({
           onClick={() => setPanel(panel?.kind === "place" ? null : { kind: "place" })}
         >
           Room
+        </button>
+      )}
+      {editable && (
+        <button
+          type="button"
+          className="talk-tool"
+          title="Move, turn, add and take away things in this room yourself"
+          onClick={(e) => {
+            // The button goes as the edit tools come: the focus it had isn't left on whichever takes its place.
+            e.currentTarget.blur();
+            setPanel(null);
+            editor.start();
+          }}
+        >
+          Edit room
         </button>
       )}
       {visiting && (
@@ -1548,7 +1643,8 @@ export function useChatStage({
         controls={controls}
         insetRight={(panelOpen || side) && wide ? PANEL_WIDTH : 0}
         insetTop={covered?.top ?? 0}
-        insetBottom={covered?.bottom ?? 0}
+        // Rearranging, the room is framed above the bar over the stage's foot, so what you drag is never under it.
+        insetBottom={(covered?.bottom ?? 0) + (editor.editing && dockTall ? dockTall + 24 : 0)}
         room={room}
         place={placeId}
         arriveFrom={showing.visiting ? cameFrom : undefined}
@@ -1562,16 +1658,37 @@ export function useChatStage({
         menuFor={menuFor}
         visitor={!!showing.visiting}
         onNear={setNear}
-        tools={tools}
+        tools={editor.editing ? editor.tools : tools}
         tasks={boardTasks}
         {...(screenCards ? { screen: screenCards } : {})}
         {...(calendarView ? { calendar: calendarView } : {})}
         onUse={onUse}
         onLine={hearLine}
-        overlay={overlay}
+        overlay={
+          editor.editing ? (
+            <>
+              {/* On a phone the catalogue is a sheet over the foot of the scene, where the bar would be: one at a time. */}
+              <div
+                hidden={editor.adding && !wide}
+                ref={dock}
+                className="room-edit-dock"
+                style={{
+                  right: ((panelOpen || side) && wide ? PANEL_WIDTH : 0) + 16,
+                  bottom: (covered?.bottom ?? 0) + 16,
+                }}
+              >
+                {editor.bar}
+              </div>
+              {editor.shelf}
+            </>
+          ) : (
+            overlay
+          )
+        }
         greet={greet}
         onGreeted={greeted}
         onBody={onBody}
+        {...(editor.stage ? { edit: editor.stage } : {})}
         {...(info.enabled && !showing.visiting ? { chooseIdle } : {})}
       />
     ) : null;
@@ -1597,14 +1714,17 @@ export function useChatStage({
     activities,
     /** The name of the place on screen, when it has one. */
     placeName: room.name,
-    /** Something is open over the stage: on a phone it needs the screen the chat would take. */
-    worldPanel: !!panel,
+    /** Something is open over the stage, or the room is being rearranged: on a phone it needs the chat's screen. */
+    worldPanel: !!panel || editor.editing,
     /** What is open sits in the chat's column: the chat steps aside until it closes. */
     sidePanel: side,
     /** The chat is out of sight for what is open: a panel in its column, or on a phone anything at all. */
-    chatCovered: showStage && (side || (!wide && !!panel)),
-    /** Close what is open over the stage. */
-    closePanel,
+    chatCovered: showStage && (side || (!wide && (!!panel || editor.editing))),
+    /** Close what is open over the stage, and stop rearranging the room. */
+    closePanel: () => {
+      closePanel();
+      editor.stop();
+    },
   };
 }
 
