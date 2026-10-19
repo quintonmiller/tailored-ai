@@ -10,6 +10,12 @@ import type { Companion, Line, Stage, StageView, Travel } from "./stage";
 const VIEW_KEY = "tai.talk.avatarView";
 /** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
 const DOOR_TIP_ROOM = 240;
+/**
+ * What is laid over the stage, from the stage's parent: the view toggle, and
+ * each of the tools over the top. Each tool by itself, not the row they wrap
+ * in, whose box runs on past them as wide as all of them end to end.
+ */
+export const OVERLAYS = ":scope > .talk-view, :scope > .talk-tools > :not(.talk-tools-break)";
 
 /** One thing the menu on an agent's body offers. */
 export interface AgentAction {
@@ -47,6 +53,8 @@ export function Avatar({
   controls,
   fill = false,
   insetRight = 0,
+  insetTop = 0,
+  insetBottom = 0,
   chooseIdle,
   room,
   company,
@@ -85,6 +93,9 @@ export function Avatar({
   fill?: boolean;
   /** Pixels of the right side covered by something laid over the scene; the camera frames what is left. */
   insetRight?: number;
+  /** The same for the top (a toolbar) and the bottom (a phone's chat). */
+  insetTop?: number;
+  insetBottom?: number;
   /** Ask the agent what it does with a quiet moment; without it, the avatar wanders at random. */
   chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
   /** The room it lives in; a new one is shown as it changes, without rebuilding the stage. */
@@ -153,11 +164,11 @@ export function Avatar({
   const chooseRef = useRef(chooseIdle);
   chooseRef.current = chooseIdle;
   const choosing = !!chooseIdle;
-  const insetRef = useRef(insetRight);
-  insetRef.current = insetRight;
+  const insetRef = useRef({ right: insetRight, top: insetTop, bottom: insetBottom });
+  insetRef.current = { right: insetRight, top: insetTop, bottom: insetBottom };
   useEffect(() => {
-    stage.current?.setInsets({ right: insetRight });
-  }, [insetRight]);
+    stage.current?.setInsets({ right: insetRight, top: insetTop, bottom: insetBottom });
+  }, [insetRight, insetTop, insetBottom]);
   const stillRef = useRef({ still, onReady, onProblem });
   stillRef.current = { still, onReady, onProblem };
   const companyRef = useRef(company);
@@ -280,6 +291,9 @@ export function Avatar({
               }
             : {}),
           lights: lightsFor(placeRef.current),
+          // The view toggle and the tools over the top of the stage: what is said stays out from under them, and
+          // where they reach far down a short stage the agent is framed clear of them.
+          overlays: () => [...(host.current?.parentElement?.querySelectorAll(OVERLAYS) ?? [])],
           ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {
@@ -317,7 +331,7 @@ export function Avatar({
         }
         stage.current = s;
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
-        s.setInsets({ right: insetRef.current });
+        s.setInsets(insetRef.current);
         // The room, or who is in it, may have arrived or changed while the stage was loading.
         s.setLights(lightsFor(placeRef.current));
         if (roomRef.current) s.setRoom(roomRef.current);

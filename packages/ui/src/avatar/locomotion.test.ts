@@ -3,7 +3,19 @@
  * after turning to face the way, and when to wander or come back.
  */
 import { describe, expect, it } from "vitest";
-import { ASK, Director, findPath, type Obstacle, route, slide, turnBetween, Walker } from "./locomotion";
+import {
+  ASK,
+  Director,
+  findPath,
+  inTheWay,
+  type Obstacle,
+  PASSING_ROOM,
+  route,
+  slide,
+  standingIn,
+  turnBetween,
+  Walker,
+} from "./locomotion";
 import { DEFAULT_ROOM, spotById } from "./scene";
 import { VISITOR_TURN, WALK_SPEED } from "./travel";
 
@@ -82,6 +94,145 @@ describe("findPath", () => {
     const desk: Obstacle = { minX: 0.75, maxX: 1.95, minZ: -1.77, maxZ: -1.17 };
     const way = findPath(DEFAULT_ROOM, [-0.85, -0.72], [1.35, -0.98], [desk, sofa], 0.2);
     expect(way.at(-1)).toEqual([1.35, -0.98]);
+  });
+});
+
+describe("walking round you", () => {
+  // An empty room 8 by 6.5, you standing in the middle of it, an agent crossing it from left to right.
+  const room = { ...DEFAULT_ROOM, width: 8, depth: 6.5, props: [] };
+  const you: [number, number] = [0, 0];
+  const yours = 0.25;
+  const theirs = 0.2;
+  /** The nearest the walk from `from` along `way` comes to where you stand. */
+  const closest = (from: [number, number], way: [number, number][]) => {
+    let near = Number.POSITIVE_INFINITY;
+    let a = from;
+    for (const b of way) {
+      for (let k = 0; k <= 50; k++) {
+        const x = a[0] + ((b[0] - a[0]) * k) / 50;
+        const z = a[1] + ((b[1] - a[1]) * k) / 50;
+        near = Math.min(near, Math.hypot(x - you[0], z - you[1]));
+      }
+      a = b;
+    }
+    return near;
+  };
+
+  it("goes round you with room to pass, rather than through you", () => {
+    const from: [number, number] = [-3, 0.05];
+    const to: [number, number] = [3, -0.05];
+    // Without you in the reckoning, straight through.
+    expect(closest(from, findPath(room, from, to, [], theirs))).toBeLessThan(0.1);
+    const way = findPath(room, from, to, [standingIn(you, yours)], theirs);
+    expect(closest(from, way)).toBeGreaterThanOrEqual(yours + PASSING_ROOM + theirs - 0.01);
+    expect(way.at(-1)).toEqual(to);
+  });
+
+  it("knows when you are in the way of a walk, and when you are not", () => {
+    expect(inTheWay([-3, 0], [[3, 0]], you, 0.55)).toBe(true);
+    // A leg that passes you by a metre.
+    expect(inTheWay([-3, 1], [[3, 1]], you, 0.55)).toBe(false);
+    // You are on the second leg.
+    expect(
+      inTheWay(
+        [-3, 2],
+        [
+          [-1, 0],
+          [3, 0],
+        ],
+        you,
+        0.55,
+      ),
+    ).toBe(true);
+    // Behind it: what it has walked already doesn't count.
+    expect(inTheWay([1, 0], [[3, 0]], you, 0.55)).toBe(false);
+    // Nowhere to walk.
+    expect(inTheWay([1, 0], [], you, 0.55)).toBe(false);
+  });
+
+  it("leaves be a walk that ends where you stand, since no way round gets it there", () => {
+    expect(inTheWay([-3, 0], [[0.2, 0]], you, 0.55)).toBe(false);
+  });
+
+  it("leaves be a walk setting off from beside you, but not one that goes on through you", () => {
+    expect(inTheWay([0.4, 0], [[3, 0]], you, 0.55)).toBe(false);
+    expect(inTheWay([0.4, 0.2], [[3, 2]], you, 0.55)).toBe(false);
+    expect(inTheWay([-0.4, 0], [[3, 0]], you, 0.55)).toBe(true);
+  });
+
+  /** Whether any leg of a walk from `from` crosses `box`, sampled every centimetre or so. */
+  const crosses = (from: [number, number], way: [number, number][], box: Obstacle) => {
+    let a = from;
+    for (const b of way) {
+      const steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 0.01);
+      for (let k = 0; k <= steps; k++) {
+        const x = a[0] + ((b[0] - a[0]) * k) / steps;
+        const z = a[1] + ((b[1] - a[1]) * k) / steps;
+        if (x > box.minX && x < box.maxX && z > box.minZ && z < box.maxZ) return true;
+      }
+      a = b;
+    }
+    return false;
+  };
+  // A table between where the agent stands and where it is going.
+  const table: Obstacle = { minX: -0.8, maxX: 0.8, minZ: 0.9, maxZ: 1.5 };
+
+  it("still goes round the furniture when it sets off from right beside you", () => {
+    const from: [number, number] = [0, 0];
+    const to: [number, number] = [0, 2.4];
+    expect(crosses(from, findPath(room, from, to, [table], theirs), table)).toBe(false);
+    for (const at of [
+      [0.3, -0.2],
+      [0.5, 0.3],
+      [0, 0.45],
+    ] as [number, number][]) {
+      const way = findPath(room, from, to, [table, standingIn(at, yours)], theirs);
+      expect(crosses(from, way, table)).toBe(false);
+      expect(way.at(-1)).toEqual(to);
+    }
+  });
+
+  it("comes up to you round the furniture when it is going to where you stand", () => {
+    const from: [number, number] = [0, 0];
+    const at: [number, number] = [0.1, 2.3];
+    const way = findPath(room, from, [0, 2.4], [table, standingIn(at, yours)], theirs);
+    expect(crosses(from, way, table)).toBe(false);
+    expect(way.at(-1)).toEqual([0, 2.4]);
+  });
+
+  it("goes past you rather than through the furniture when you stand in the only way through", () => {
+    // A row of furniture across the room with a gap a metre wide in the middle, and you standing in it.
+    const left: Obstacle = { minX: -4, maxX: -0.5, minZ: 0, maxZ: 0.4 };
+    const right: Obstacle = { minX: 0.5, maxX: 4, minZ: 0, maxZ: 0.4 };
+    const from: [number, number] = [-3, -1.5];
+    const to: [number, number] = [3, 1.5];
+    const way = findPath(room, from, to, [left, right, standingIn([0, 0.2], yours)], theirs);
+    expect(crosses(from, way, left)).toBe(false);
+    expect(crosses(from, way, right)).toBe(false);
+    expect(way.at(-1)).toEqual(to);
+  });
+
+  it("finds no one in the way once it has gone round", () => {
+    const from: [number, number] = [-3, 0.05];
+    const way = findPath(room, from, [3, -0.05], [standingIn(you, yours)], theirs);
+    expect(inTheWay(from, way, you, yours + theirs + 0.1)).toBe(false);
+  });
+
+  it("walks on by a new way and still turns as it meant to at the end", () => {
+    const w = new Walker({ x: -3, z: 0, facing: Math.PI / 2 }, 2);
+    w.go([[3, 0]], 0);
+    w.reroute([
+      [-1, 1],
+      [3, 0],
+    ]);
+    expect(w.way).toEqual([
+      [-1, 1],
+      [3, 0],
+    ]);
+    for (let i = 0; i < 400; i++) w.step(0.02);
+    expect([w.place.x, w.place.z]).toEqual([3, 0]);
+    expect(w.place.facing).toBeCloseTo(0, 2);
+    expect(w.busy).toBe(false);
   });
 });
 

@@ -10,6 +10,7 @@ import { MessageBubble, ThinkingDisclosure, ToolLogPanel } from "../components/M
 import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
 import { useActiveProject } from "../hooks/useActiveProject";
+import { useCovered } from "../hooks/useCovered";
 import type { MediaRef } from "../lib/content.js";
 import { agentOfKey, askedIn, rowFor } from "../lib/conversations";
 
@@ -93,11 +94,20 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const [panelOpen, setPanelOpen] = useState(true);
   // In a meeting room: the room's own conversation is on screen, rather than yours with one of its members.
   const [reading, setReading] = useState(true);
+  // What covers the scene: the toolbar along the top, and on a phone the chat along the bottom, or whatever
+  // opened in its place. The camera frames the agent in what is left.
+  const chatBox = useRef<HTMLDivElement>(null);
+  const covered = useCovered(chatBox, {
+    top: ":scope > .chat-toolbar",
+    bottom:
+      ":scope > .chat-with, :scope > .chat-room-note, :scope > .chat-messages, :scope > .chat-input-bar, .world-panel, .new-task",
+  });
   const scene = useChatStage({
     agent: store.selectedAgent,
     sessionKey: store.sessionKey,
     sending: store.sending,
     panelOpen,
+    covered,
     setTurnExtras: store.setTurnExtras,
     setSpeaking: store.setSpeaking,
     onChatWith: (name) => {
@@ -283,6 +293,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       )}
 
       <div
+        ref={chatBox}
         className={`chat${scene.showStage ? " chat-with-stage" : ""}${scene.showStage && !panelOpen ? " chat-panel-hidden" : ""}${scene.showStage && scene.worldPanel ? " chat-world-open" : ""}${scene.showStage && scene.sidePanel ? " chat-side-open" : ""}`}
       >
         {scene.stage && <div className="chat-stage">{scene.stage}</div>}

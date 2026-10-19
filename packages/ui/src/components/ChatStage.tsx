@@ -546,6 +546,8 @@ export interface ChatStageOptions {
   sending: boolean;
   /** The chat panel is open over the scene. */
   panelOpen: boolean;
+  /** Pixels of the scene's top and bottom the page covers: its toolbar, and on a phone the chat. */
+  covered?: { top: number; bottom: number };
   /** A spoken turn finished in this conversation: show it with the rest. */
   onSpoken: (conversation: string | undefined, sessionKey: string) => void;
   /** Hand typed turns the body and a place for their cues, while the body is on screen. */
@@ -577,6 +579,7 @@ export function useChatStage({
   sessionKey,
   sending,
   panelOpen,
+  covered,
   onSpoken,
   setTurnExtras,
   setSpeaking,
@@ -1239,6 +1242,8 @@ export function useChatStage({
         engaged={showing.visiting ? false : busy || conversing}
         controls={controls}
         insetRight={(panelOpen || side) && wide ? PANEL_WIDTH : 0}
+        insetTop={covered?.top ?? 0}
+        insetBottom={covered?.bottom ?? 0}
         room={room}
         place={placeId}
         arriveFrom={showing.visiting ? cameFrom : undefined}
