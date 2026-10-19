@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { ASK, Director, findPath, type Obstacle, route, slide, turnBetween, Walker } from "./locomotion";
 import { DEFAULT_ROOM, spotById } from "./scene";
+import { VISITOR_TURN, WALK_SPEED } from "./travel";
 
 const at = (id: string) => spotById(DEFAULT_ROOM, id)?.at;
 
@@ -138,6 +139,17 @@ describe("Walker", () => {
     expect(w.place).toMatchObject({ x: 1, z: 1 });
     expect(w.place.facing).toBeCloseTo(Math.PI);
     expect(w.busy).toBe(false);
+  });
+
+  it("crosses a room behind it in under a second and a half at a visitor's pace, turning quickly first", () => {
+    const visitor = new Walker({ x: 0, z: 0, facing: 0 }, WALK_SPEED);
+    visitor.turnSpeed = VISITOR_TURN;
+    visitor.go([[0, -3]], Math.PI);
+    expect(walk(visitor, 10).seconds).toBeLessThan(1.5);
+    // At an agent's turning pace the same walk takes longer: the turn alone is most of a second.
+    const agent = new Walker({ x: 0, z: 0, facing: 0 }, WALK_SPEED);
+    agent.go([[0, -3]], Math.PI);
+    expect(walk(agent, 10).seconds).toBeGreaterThan(1.6);
   });
 
   it("drops a walk under way for a new one", () => {

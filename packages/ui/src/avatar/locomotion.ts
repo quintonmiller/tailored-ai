@@ -210,6 +210,8 @@ export function turnBetween(from: number, to: number): number {
 
 export class Walker {
   readonly place: Place;
+  /** Radians a second it turns: a visitor's body turns quicker, to keep up with a brisker walk. */
+  turnSpeed = TURN_SPEED;
   private legs: [number, number][] = [];
   private finalFacing: number | undefined;
 
@@ -240,7 +242,7 @@ export class Walker {
     const p = this.place;
     const turn = (to: number) => {
       const d = turnBetween(p.facing, to);
-      p.facing += Math.max(-TURN_SPEED * dt, Math.min(TURN_SPEED * dt, d));
+      p.facing += Math.max(-this.turnSpeed * dt, Math.min(this.turnSpeed * dt, d));
       return d;
     };
     const next = this.legs[0];

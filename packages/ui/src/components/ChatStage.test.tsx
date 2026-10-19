@@ -5,7 +5,7 @@
  * browser's microphone, recorder and audio are faked; the stream is real
  * enough to split an event across two network chunks.
  */
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StageInput } from "../avatar/stage";
@@ -148,12 +148,18 @@ const deleted: string[] = [];
 const audios: { src: string; onended: (() => void) | null }[] = [];
 const spoken: [string | undefined, string][] = [];
 
-function streamed(chunks: string[]): Response {
+/** When set, a spoken turn's last event waits for this: a reply still on its way. */
+let turnHeld: Promise<void> | null = null;
+
+function streamed(chunks: string[], wait: Promise<void> | null = null): Response {
   const encoder = new TextEncoder();
   return new Response(
     new ReadableStream({
-      start(controller) {
-        for (const c of chunks) controller.enqueue(encoder.encode(c));
+      async start(controller) {
+        for (const [i, c] of chunks.entries()) {
+          if (wait && i === chunks.length - 1) await wait;
+          controller.enqueue(encoder.encode(c));
+        }
         controller.close();
       },
     }),
@@ -185,6 +191,7 @@ beforeEach(() => {
     animations: ["/api/live/animations/0?agent=talker"],
   };
   sessionStatus = 201;
+  turnHeld = null;
   posts.length = 0;
   deleted.length = 0;
   audios.length = 0;
@@ -253,8 +260,17 @@ beforeEach(() => {
           JSON.stringify({
             places: [
               { id: "home:talker", name: "talker's room", kind: "home", owner: "talker", agents: ["talker"] },
+              { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: ["planner"] },
               { id: "room:local:trip", name: "trip", kind: "room", agents: ["planner", "writer"] },
             ],
+          }),
+        );
+      if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("home:planner")}`)
+        return new Response(
+          JSON.stringify({
+            id: "home:planner",
+            place: { ...home, name: "planner's room" },
+            company: [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner" }],
           }),
         );
       if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("room:local:trip")}`)
@@ -305,7 +321,7 @@ beforeEach(() => {
       }
       if (url.endsWith("/turn")) {
         posts.push({ url, body: "audio" });
-        return streamed(turnChunks);
+        return streamed(turnChunks, turnHeld);
       }
       return new Response("{}");
     }),
@@ -320,15 +336,20 @@ afterEach(() => {
 
 const extras: { body?: unknown; onCue?: (c: { name: string; target?: string }) => void }[] = [];
 
-function Harness(props: Partial<ChatStageOptions>) {
+function Harness({ following, ...props }: Partial<ChatStageOptions> & { following?: boolean }) {
+  // As the chat page does: switching who you talk to changes the agent the scene is told about.
+  const [agent, setAgent] = useState("talker");
   const scene = useChatStage({
-    agent: "talker",
+    agent,
     sessionKey: "web:kitchen",
     sending: false,
     panelOpen: true,
     onSpoken: (conversation, key) => spoken.push([conversation, key]),
     setTurnExtras: (e) => extras.push(e),
-    onChatWith: (name) => chattedWith.push(name),
+    onChatWith: (name) => {
+      chattedWith.push(name);
+      if (following) setAgent(name);
+    },
     onDraft: (name, text) => drafts.push([name, text]),
     ...props,
   });
@@ -352,7 +373,7 @@ async function settle(ms = 30) {
   });
 }
 
-async function render(props: Partial<ChatStageOptions> = {}) {
+async function render(props: Partial<ChatStageOptions> & { following?: boolean } = {}) {
   await act(async () => {
     root.render(<Harness {...props} />);
   });
@@ -528,6 +549,7 @@ describe("the chat page's scene", () => {
     expect(rooms.map((r) => r.querySelector(".world-map-name")?.textContent)).toEqual([
       "#trip",
       "talker's roomyou are here",
+      "planner's room",
     ]);
     await act(async () => rooms[0].click());
     await settle(60);
@@ -545,6 +567,61 @@ describe("the chat page's scene", () => {
     await settle(60);
     expect(stage.visitors.at(-1)).toBe(false);
     expect(extras.at(-1)?.body).toBeDefined();
+  });
+
+  it("talks to the agent whose home you go to, and to the one you came from when you come back", async () => {
+    await render({ following: true });
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    const go = async (name: string) => {
+      await act(async () => tool("Map").click());
+      await settle();
+      const place = [...container.querySelectorAll(".world-map-place")].find((b) =>
+        b.querySelector(".world-map-name")?.textContent?.startsWith(name),
+      ) as HTMLButtonElement;
+      await act(async () => place.click());
+      await settle(60);
+    };
+    await go("planner's room");
+    expect(chattedWith).toEqual(["planner"]);
+    // Still you in your own body, come from talker's: the way back says so.
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.calls.at(-1)?.url).toBe("/api/live/avatar?agent=talker");
+    expect(tool("Back to talker")).toBeDefined();
+    // A meeting room has nobody in particular to talk to: the conversation goes on.
+    await go("#trip");
+    expect(chattedWith).toEqual(["planner"]);
+    await act(async () => tool("Back to talker").click());
+    await settle(60);
+    expect(chattedWith).toEqual(["planner", "talker"]);
+    expect(stage.visitors.at(-1)).toBe(false);
+    expect(stage.agents.at(-1)).toBe("talker");
+    // Going to talker's own home on the map is coming back too.
+    await go("planner's room");
+    await go("talker's room");
+    expect(chattedWith).toEqual(["planner", "talker", "planner", "talker"]);
+    expect(stage.visitors.at(-1)).toBe(false);
+  });
+
+  it("says who you came back to even when the switch away never happened, so a waiting one is called off", async () => {
+    // Not following: as when the switch to planner is still waiting for a reply.
+    await render();
+    await act(async () =>
+      ([...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === "Map") as HTMLElement).click(),
+    );
+    await settle();
+    const planner = [...container.querySelectorAll(".world-map-place")].find((b) =>
+      b.querySelector(".world-map-name")?.textContent?.startsWith("planner's room"),
+    ) as HTMLButtonElement;
+    await act(async () => planner.click());
+    await settle(60);
+    await act(async () =>
+      (
+        [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === "Back to talker") as HTMLElement
+      ).click(),
+    );
+    await settle(60);
+    expect(chattedWith).toEqual(["planner", "talker"]);
   });
 
   it("speaks what agents say near you, once you turn voices on, quieter further away", async () => {
@@ -710,7 +787,8 @@ describe("talking on the chat page", () => {
     await render({ sessionKey: undefined });
     await talk();
     const start = posts.find((p) => p.url === "/api/live/sessions")?.body as { sessionKey: string };
-    expect(start.sessionKey).toMatch(/^web:\d+$/);
+    // Named for the agent it is with, so going to that agent finds it again.
+    expect(start.sessionKey).toMatch(/^web:talker:\d+$/);
     expect(spoken[0]?.[1]).toBe(start.sessionKey);
   });
 
@@ -721,6 +799,31 @@ describe("talking on the chat page", () => {
     expect(posts.filter((p) => p.url === "/api/live/sessions")).toHaveLength(1);
     await render({ sessionKey: "web:study" });
     expect(deleted).toEqual(["/api/live/sessions/live-1"]);
+  });
+
+  it("says a spoken reply is on its way until it has been heard, so going elsewhere waits for it", async () => {
+    const speaking: boolean[] = [];
+    await render({ setSpeaking: (on) => speaking.push(on) });
+    await talk();
+    // Heard and answered, the answer still playing.
+    expect(speaking.at(-1)).toBe(true);
+    await act(async () => audios[0].onended?.());
+    await settle();
+    expect(speaking.at(-1)).toBe(false);
+  });
+
+  it("leaves the page where it is when it went on to another conversation while a turn was on its way", async () => {
+    let release = () => {};
+    turnHeld = new Promise<void>((r) => {
+      release = r;
+    });
+    await render();
+    await talk();
+    await render({ sessionKey: "web:study" });
+    await act(async () => release());
+    await settle();
+    // Not the old conversation brought back under the new one's key.
+    expect(spoken).toEqual([]);
   });
 
   it("says why when it can't start talking", async () => {

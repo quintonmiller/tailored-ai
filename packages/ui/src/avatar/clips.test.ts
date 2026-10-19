@@ -44,6 +44,8 @@ describe("rolesFor", () => {
     "Idle_TalkingPhone_Loop",
     "Walk_Loop",
     "Walk_Carry_Loop",
+    "Sprint_Loop",
+    "Jog_Fwd_Loop",
     "Sitting_Idle_Loop",
     "Sitting_Talking_Loop",
     "Idle_FoldArms_Loop",
@@ -58,12 +60,18 @@ describe("rolesFor", () => {
       idle: "Idle_Loop",
       talk: "Idle_Talking_Loop",
       walk: "Walk_Loop",
+      run: "Jog_Fwd_Loop",
       sit: "Sitting_Idle_Loop",
       sitTalk: "Sitting_Talking_Loop",
       foldArms: "Idle_FoldArms_Loop",
       shake: "Idle_No_Loop",
       dance: "Dance_Loop",
     });
+  });
+
+  it("runs with a sprint when there is no jog, and has no run when there is neither", () => {
+    expect(rolesFor(["Idle_Loop", "Walk_Loop", "Sprint_Loop"]).run).toBe("Sprint_Loop");
+    expect(rolesFor(["Idle_Loop", "Walk_Loop", "Jog_Bwd_Loop"]).run).toBeUndefined();
   });
 
   it("does not take a thumbs-up called Yes for a nod: the nod stays code-driven", () => {

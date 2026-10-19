@@ -23,7 +23,9 @@ import { mediaPart, textPart } from "../content/types.js";
 import type { TaiHttpRequest, TaiHttpResponse } from "../http/registry.js";
 import { resolveAvatar } from "../live/avatar.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
-import { formatRoomRef } from "../rooms/types.js";
+import { enrichRoomMessage, IdentityResolver } from "../rooms/identities.js";
+import { getRoomBackend, listRoomBackends } from "../rooms/registry.js";
+import { formatRoomRef, type RoomBackend, type RoomMessage, type Room as TalkRoomRecord } from "../rooms/types.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { StateConflictError, StateError } from "../state/types.js";
@@ -193,6 +195,75 @@ export interface MapPlace {
 
 /** A room of conversation's place id. */
 export const roomPlaceId = (ref: string) => `room:${ref}`;
+
+/** How many of a room's latest messages a visitor reads in the chat panel. */
+export const TRANSCRIPT_LINES = 30;
+
+/** One thing said in a room of conversation, as a visitor reads it. */
+export interface SaidLine {
+  id: string;
+  /** Who said it: their name in the room. */
+  who: string;
+  /** The agent behind that name, when it is one: what the page colours the line by. */
+  agent?: string;
+  /** Who it was said to; empty for the whole room. */
+  to: string[];
+  text: string;
+  at: string;
+  /** How many files came with it. */
+  files?: number;
+}
+
+/** A time as ISO: SQLite's own `YYYY-MM-DD HH:MM:SS` is UTC without saying so, which a browser reads as local. */
+const isoTime = (at: string) => (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(at) ? `${at.replace(" ", "T")}Z` : at);
+
+/** A room's messages as lines to read, each speaker named the way the room tool and the watcher name them. */
+export function saidLines(messages: RoomMessage[], identities: IdentityResolver, backend: string): SaidLine[] {
+  return messages.map((raw) => {
+    const m = enrichRoomMessage(raw, identities);
+    const who = m.speaker ?? identities.byNativeId(backend, m.authorId)?.label ?? m.authorLabel;
+    const agent = identities.agentForLabel(who);
+    // A speaker the room doesn't know as anyone (the room's own announcements) keeps its tag in the text: once is enough.
+    const tag = `[${who}]`;
+    const text = m.body.startsWith(tag) ? m.body.slice(tag.length).trimStart() : m.body;
+    return {
+      id: m.id,
+      who,
+      ...(agent ? { agent } : {}),
+      to: m.to,
+      text,
+      at: isoTime(m.createdAt),
+      ...(m.media?.length ? { files: m.media.length } : {}),
+    };
+  });
+}
+
+/**
+ * What a room of conversation has said lately, for a visitor standing in its
+ * meeting room: the latest lines, oldest first, and who its members are. Read
+ * only: nobody's read cursor moves, and nothing is posted. An error says why
+ * when the room's transport can't be read right now.
+ */
+export async function transcript(
+  room: TalkRoomRecord,
+  backend: RoomBackend | undefined,
+  identities: IdentityResolver,
+  members: string[],
+  limit = TRANSCRIPT_LINES,
+): Promise<{ name: string; purpose?: string; members: string[]; lines: SaidLine[] } | { error: string }> {
+  if (!backend) return { error: `The ${room.ref.backend} rooms aren't connected right now.` };
+  try {
+    const messages = await backend.fetchSince(room.ref.id, null, limit);
+    return {
+      name: room.name,
+      ...(room.purpose ? { purpose: room.purpose } : {}),
+      members,
+      lines: saidLines(messages, identities, room.ref.backend),
+    };
+  } catch (err) {
+    return { error: `Couldn't read #${room.name}: ${(err as Error).message}` };
+  }
+}
 
 /**
  * Every place there is: each agent's home, the shared places, and the rooms
@@ -869,7 +940,7 @@ const plugin: Plugin = (ctx) => {
   });
 
   // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
-  // `map` and `scene/:id` go first, so they aren't read as an agent's name.
+  // `map`, `scene/:id` and `transcript/:id` go first, so they aren't read as an agent's name.
   const talkRooms = (): TalkRoom[] => {
     const store = runtime.getRoomStore();
     return store.listRooms().map((r) => {
@@ -883,6 +954,22 @@ const plugin: Plugin = (ctx) => {
     });
   };
   const agentNames = () => ["default", ...Object.keys(runtime.getConfig().agents ?? {}).filter((a) => a !== "default")];
+  // Who is who in a room, rebuilt per read so a config reload takes effect at once: the same as the watcher's.
+  const identities = () => {
+    const config = runtime.getConfig();
+    const ownerNativeIds: Record<string, string> = {};
+    for (const backend of listRoomBackends()) {
+      const owner = runtime.getOwnerId(backend.id);
+      if (owner) ownerNativeIds[backend.id] = owner;
+    }
+    return new IdentityResolver({
+      agentNames: Object.keys(config.agents ?? {}),
+      declared: config.rooms?.identities,
+      ownerNativeIds,
+      ownerLabel: config.rooms?.ownerLabel,
+      defaultBackend: config.defaultChannel,
+    });
+  };
   const bodyOf = (name: string) => {
     const own = runtime.avatarFor(name === "default" ? undefined : name);
     const files = resolveAvatar(runtime.getConfig().live, own);
@@ -912,6 +999,22 @@ const plugin: Plugin = (ctx) => {
       const found = await scene(runtime.getStateService(), PLUGIN_CALLER, id, talkRooms(), hasBody);
       if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
       return { json: { type: PLACE_TYPE, id: found.id, place: found.place, company: found.agents.map(bodyOf) } };
+    },
+  });
+
+  ctx.http.register({
+    method: "GET",
+    path: "transcript/:id",
+    handler: async (req: TaiHttpRequest): Promise<TaiHttpResponse> => {
+      const id = req.params.id ?? "";
+      const store = runtime.getRoomStore();
+      const room = id.startsWith("room:") ? store.getRoomByRef(id.slice("room:".length)) : null;
+      if (!room) return { status: 404, json: { error: `There's no room "${id}".` } };
+      const ref = formatRoomRef(room.ref);
+      const members = [...new Set(store.listSubscriptionsForRoom(ref).map((s) => s.agent))].sort();
+      const said = await transcript(room, getRoomBackend(room.ref.backend), identities(), members);
+      if ("error" in said) return { status: 503, json: said };
+      return { json: { id, ...said } };
     },
   });
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type AgentActivity, hueFor } from "../avatar/doing";
+import { nameOf } from "../lib/conversations";
 import { subscribeStateChanges } from "../lib/state-events";
 
 /** One place on the map, as `builtin:places` lists it. */
@@ -156,7 +157,7 @@ export function WorldMap({
                               <span className="world-map-dot" style={{ background: agentColor(a) }} aria-hidden="true">
                                 {mark}
                               </span>
-                              {a === "default" ? "default" : a}
+                              {nameOf(a)}
                             </span>
                           );
                         })}

@@ -7,6 +7,7 @@ import type { AgentActivity } from "../avatar/doing";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
 import type { Companion, Line } from "../avatar/stage";
+import { nameOf, newChatKey } from "../lib/conversations";
 import { subscribeStateChanges } from "../lib/state-events";
 import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
@@ -295,6 +296,7 @@ interface LiveInfo {
 }
 
 export interface ChatStageOptions {
+  /** The agent the conversation on the page is with; "" is the default agent. */
   agent: string;
   /** The conversation on the page; undefined for a new chat. */
   sessionKey: string | undefined;
@@ -306,7 +308,13 @@ export interface ChatStageOptions {
   onSpoken: (conversation: string | undefined, sessionKey: string) => void;
   /** Hand typed turns the body and a place for their cues, while the body is on screen. */
   setTurnExtras?: (extras: { body?: unknown; onCue?: (cue: { name: string; target?: string }) => void }) => void;
-  /** Talk to another agent instead: clicked on in the room. */
+  /** Say when a spoken turn is on its way and when it is done, so switching agents waits for it. */
+  setSpeaking?: (speaking: boolean) => void;
+  /**
+   * Talk to another agent instead: clicked on in the room, stood next to, or
+   * gone to. Going to an agent's home is going to talk to it; coming back to
+   * the agent you came from is talking to it again.
+   */
   onChatWith?: (agent: string) => void;
   /** Start a new chat with an agent, a message already written for the person to send. */
   onDraft?: (agent: string, text: string) => void;
@@ -319,13 +327,25 @@ export function useChatStage({
   panelOpen,
   onSpoken,
   setTurnExtras,
+  setSpeaking,
   onChatWith,
   onDraft,
 }: ChatStageOptions) {
+  // Visiting a place in your own body, walking or flying; null is the agent's own view.
+  const [visiting, setVisiting] = useState<string | null>(null);
+  // Whose own view the scene shows: the agent you talk to, until you go visiting. Then it stays the agent you
+  // came from, whoever you talk to on the way, so "Back to" knows where back is.
+  const [home, setHome] = useState(agent);
+  const away = useRef(visiting);
+  away.current = visiting;
+  useEffect(() => {
+    if (!away.current) setHome(agent);
+  }, [agent]);
+
   const [info, setInfo] = useState<LiveInfo>({});
   useEffect(() => {
     let gone = false;
-    fetch(`/api/live${agent ? `?agent=${encodeURIComponent(agent)}` : ""}`)
+    fetch(`/api/live${home ? `?agent=${encodeURIComponent(home)}` : ""}`)
       .then((res) => (res.ok ? (res.json() as Promise<LiveInfo>) : {}))
       .then((body) => {
         if (!gone) setInfo(body ?? {});
@@ -336,7 +356,7 @@ export function useChatStage({
     return () => {
       gone = true;
     };
-  }, [agent]);
+  }, [home]);
 
   const [stageOn, setStageOn] = useState(() => saved(STAGE_KEY, true));
   const has3d = typeof info.avatar === "string";
@@ -350,9 +370,7 @@ export function useChatStage({
     return () => q.removeEventListener?.("change", on);
   }, []);
 
-  const own = useRoom(agent, has3d);
-  // Visiting a place in your own body, walking or flying; null is the agent's own view.
-  const [visiting, setVisiting] = useState<string | null>(null);
+  const own = useRoom(home, has3d);
   const [mapOpen, setMapOpen] = useState(false);
   const [near, setNear] = useState<string | undefined>(undefined);
   const visited = useScene(visiting);
@@ -368,12 +386,25 @@ export function useChatStage({
   const activities = useRecords<AgentActivity>("activity", showStage);
   const speech = useRecords<Line>("speech", showStage);
   const { online, names: agentNames } = useAgentRoster(showStage);
-  const shown = agent || "default";
+  const shown = home || "default";
+  const talking = agent || "default";
+  // Where you are says who you talk to: an agent's own home is a conversation with it, and coming back to the
+  // agent you came from is one with it again. Anywhere else, the conversation you had goes on.
+  const host = visiting ? (visiting.startsWith("home:") ? visiting.slice("home:".length) : undefined) : shown;
+  // On every arrival, even at the agent you are talking to already: that calls off a switch still waiting for a
+  // reply, so coming back before it is done keeps you where you came back to.
+  const arrived = useRef(host);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: arriving decides; who you talk to there is yours to change.
+  useEffect(() => {
+    if (host === arrived.current) return;
+    arrived.current = host;
+    if (host) onChatWith?.(host);
+  }, [host]);
   // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it.
   const menuFor = useCallback(
     (who: string): AgentAction[] => {
       const actions: AgentAction[] = [];
-      if (who !== shown && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => onChatWith(who) });
+      if (who !== talking && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => onChatWith(who) });
       if (placeId?.startsWith("shared:"))
         actions.push({
           label: who === shown ? "Go home" : "Send home",
@@ -410,7 +441,7 @@ export function useChatStage({
         actions.push({ label: "Open its page", run: () => void (window.location.hash = `/agents/${who}`) });
       return actions;
     },
-    [shown, onChatWith, placeId, online, activities],
+    [shown, talking, onChatWith, placeId, online, activities],
   );
   // What the body can do in this room: its moves, the things it can go to, look at and point at, and who is with it.
   // Always the agent's own place: its cues move its own body, which a visit doesn't change.
@@ -426,12 +457,14 @@ export function useChatStage({
   const controls = useRef<AvatarControls | null>(null);
   // The conversation a voice session talks in. A new chat gets a key on its
   // first spoken turn; the chat adopts it, so what is typed next joins it.
-  const minted = useRef<string | null>(null);
+  const minted = useRef<{ agent: string; key: string } | null>(null);
   const inUse = useRef<string | null>(null);
   const [heard, setHeard] = useState<string | null>(null);
   const [replying, setReplying] = useState("");
   const keyFor = () => {
-    const key = sessionKey ?? (minted.current ??= `web:${Date.now()}`);
+    // A key made for one agent's new chat is never another's.
+    if (!sessionKey && minted.current?.agent !== agent) minted.current = { agent, key: newChatKey(agent) };
+    const key = sessionKey ?? (minted.current as { key: string }).key;
     inUse.current = key;
     return key;
   };
@@ -448,10 +481,12 @@ export function useChatStage({
     },
     onText: (delta) => setReplying((r) => r + delta),
     onDone: (turn) => {
-      const key = inUse.current ?? keyFor();
+      // The conversation the turn was spoken in. None when the page has gone on to another one since: the turn
+      // is saved in its own, and the page stays where the person took it.
+      const key = inUse.current;
       setHeard(null);
       setReplying("");
-      if (turn.transcript) onSpoken(turn.conversation, key);
+      if (turn.transcript && key) onSpoken(turn.conversation, key);
     },
   });
 
@@ -462,6 +497,12 @@ export function useChatStage({
     setTurnExtras(showStage && !visiting ? { body, onCue: (cue) => controls.current?.cue(cue) } : {});
     return () => setTurnExtras({});
   }, [showStage, setTurnExtras, body, visiting]);
+
+  // A spoken turn is a reply on its way too: going to another agent waits for it.
+  useEffect(() => {
+    setSpeaking?.(voice.phase !== "idle");
+  }, [voice.phase, setSpeaking]);
+  useEffect(() => () => setSpeaking?.(false), [setSpeaking]);
 
   // Another conversation on the page, or a new chat: the voice session is for the old one.
   const end = voice.end;
@@ -529,13 +570,13 @@ export function useChatStage({
       const res = await fetch("/api/live/idle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(agent ? { agent } : {}), body, here, hour }),
+        body: JSON.stringify({ ...(home ? { agent: home } : {}), body, here, hour }),
       });
       if (!res.ok) throw new Error(`idle choice failed (${res.status})`);
       const data = (await res.json()) as { cues?: Cue[] };
       return Array.isArray(data.cues) ? data.cues : [];
     },
-    [agent, body],
+    [home, body],
   );
 
   const state: BodyState = voice.phase !== "idle" ? voice.phase : sending ? "thinking" : "idle";
@@ -575,7 +616,7 @@ export function useChatStage({
       </button>
       {visiting && (
         <button type="button" className="talk-tool" onClick={() => setVisiting(null)}>
-          Back to {shown === "default" ? "the agent" : shown}
+          Back to {nameOf(shown)}
         </button>
       )}
       {visiting && (
@@ -592,7 +633,7 @@ export function useChatStage({
           {voicesOn ? "Voices on" : "Voices off"}
         </button>
       )}
-      {visiting && near && near !== shown && onChatWith && (
+      {visiting && near && near !== talking && onChatWith && (
         <button type="button" className="talk-tool talk-near" onClick={() => onChatWith(near)}>
           Talk to {near}
         </button>
@@ -634,7 +675,8 @@ export function useChatStage({
               here={visiting ?? own.id}
               activities={activities}
               onGo={(id) => {
-                setVisiting(id);
+                // Where the agent you came from is, is back with it.
+                setVisiting(id === own.id ? null : id);
                 setMapOpen(false);
               }}
               onClose={() => setMapOpen(false)}
@@ -658,6 +700,14 @@ export function useChatStage({
     voice,
     /** A spoken turn in progress: what was heard, and the reply so far. */
     spoken: heard === null ? null : { heard, replying },
+    /** The place you are visiting, by id; null at the agent's own view. */
+    visiting,
+    /** Whose own view the scene shows, and where "Back to" goes. */
+    home: shown,
+    /** What every agent is doing, while the scene is on. */
+    activities,
+    /** The name of the place on screen, when it has one. */
+    placeName: room.name,
   };
 }
 

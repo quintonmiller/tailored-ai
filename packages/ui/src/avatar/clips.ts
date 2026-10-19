@@ -351,12 +351,14 @@ function bake(source: Source, clip: THREE.AnimationClip, vrm: VRM, target: Avata
 }
 
 /** What the stage plays for each moment, found by name in the library. */
-export type ClipRole = "idle" | "talk" | "walk" | "sit" | "sitTalk" | "foldArms" | "nod" | "shake" | "dance";
+export type ClipRole = "idle" | "talk" | "walk" | "run" | "sit" | "sitTalk" | "foldArms" | "nod" | "shake" | "dance";
 
 const ROLE_PATTERNS: Record<ClipRole, RegExp[]> = {
   idle: [/^idle(_loop)?$/i, /^idle/i],
   talk: [/^idle_talking(_loop)?$/i, /talk(?!ingphone)/i],
   walk: [/^walk(_loop)?$/i, /^walk(?!.*(carry|zombie|formal))/i],
+  // A jog before a sprint: a run on a visit is about twice a brisk walk, nearer a jog's pace.
+  run: [/^jog(?!.*(carry|zombie|bwd|back|left|right))/i, /^run(?!.*(carry|zombie|bwd|back|left|right))/i, /^sprint/i],
   sit: [/^sitting_idle/i, /sit.*idle/i],
   sitTalk: [/^sitting_talking/i],
   foldArms: [/fold.?arms/i],

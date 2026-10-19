@@ -5,7 +5,8 @@
  * thing moves with it, and the tool keeps the room in world state.
  */
 import Database from "better-sqlite3";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { initDatabase } from "../db/schema.js";
 import {
   anyAvatar,
   applyAction,
@@ -16,6 +17,8 @@ import {
   readHome,
   roomPlaceId,
   scene,
+  TRANSCRIPT_LINES,
+  transcript,
   WHEREABOUTS_TYPE,
   whereIs,
   whoIsIn,
@@ -35,6 +38,10 @@ import {
   spotOf,
   themeFor,
 } from "../plugins/places-layout.js";
+import { IdentityResolver } from "../rooms/identities.js";
+import { LocalRoomBackend } from "../rooms/local.js";
+import { RoomStore } from "../rooms/store.js";
+import type { Room as TalkRoom } from "../rooms/types.js";
 import "../state/builtin.js";
 import { type StateCaller, StateService } from "../state/service.js";
 import type { ToolContext } from "../tools/interface.js";
@@ -581,6 +588,67 @@ describe("the map, and any place on it", () => {
       expect(room.width).toBeGreaterThanOrEqual(last);
       last = room.width;
     }
+  });
+});
+
+describe("a room's conversation, for a visitor to read", () => {
+  let db: Database.Database;
+  let store: RoomStore;
+  let backend: LocalRoomBackend;
+  const ids = new IdentityResolver({ agentNames: ["planner", "writer"], ownerLabel: "alex" });
+  const trip = () => store.getRoomByRef("local:trip") as TalkRoom;
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+    store = new RoomStore(db);
+    backend = new LocalRoomBackend(db, store);
+    store.upsertRoom({ ref: { backend: "local", id: "trip" }, name: "trip", purpose: "Plan the trip" });
+  });
+  afterEach(() => db.close());
+
+  it("reads the latest lines oldest first, each speaker named, with the agent behind the name", async () => {
+    await backend.post("trip", { body: "Flights are booked.", speaker: "planner" });
+    await backend.post("trip", { body: "Lovely, thanks.", speaker: "writer", to: ["planner"] });
+    // A person typing in the room's own app: no envelope, just their account.
+    db.prepare("INSERT INTO room_messages (room_ref, author_id, author_label, content) VALUES (?, ?, ?, ?)").run(
+      "local:trip",
+      "u-1",
+      "Sam",
+      "Make it a window seat.",
+    );
+    const said = await transcript(trip(), backend, ids, ["planner", "writer"]);
+    expect(said).toMatchObject({ name: "trip", purpose: "Plan the trip", members: ["planner", "writer"] });
+    if ("error" in said) throw new Error(said.error);
+    expect(said.lines.map((l) => [l.who, l.agent, l.to, l.text])).toEqual([
+      ["planner", "planner", [], "Flights are booked."],
+      ["writer", "writer", ["planner"], "Lovely, thanks."],
+      // A person is named, with no agent behind them.
+      ["Sam", undefined, [], "Make it a window seat."],
+    ]);
+    // The room's own announcements are named once, not twice.
+    await backend.post("trip", { body: "**writer** joined this room.", speaker: "room" });
+    const again = await transcript(trip(), backend, ids, []);
+    if ("error" in again) throw new Error(again.error);
+    expect(again.lines.at(-1)).toMatchObject({ who: "room", text: "**writer** joined this room." });
+    // Times are ISO, so a browser reads them as the UTC they are.
+    expect(said.lines[0]?.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  });
+
+  it("shows only the latest lines, and moves nobody's read cursor", async () => {
+    store.subscribe({ agent: "planner", roomRef: "local:trip", initialCursor: null });
+    for (let i = 0; i < TRANSCRIPT_LINES + 5; i++) await backend.post("trip", { body: `line ${i}`, speaker: "writer" });
+    const said = await transcript(trip(), backend, ids, ["planner"]);
+    if ("error" in said) throw new Error(said.error);
+    expect(said.lines).toHaveLength(TRANSCRIPT_LINES);
+    expect(said.lines.at(-1)?.text).toBe(`line ${TRANSCRIPT_LINES + 4}`);
+    expect(store.getSubscription("planner", "local:trip")?.cursor ?? null).toBeNull();
+  });
+
+  it("says why when the room's transport isn't there to read", async () => {
+    expect(await transcript(trip(), undefined, ids, [])).toEqual({
+      error: "The local rooms aren't connected right now.",
+    });
+    const broken = { ...backend, fetchSince: async () => Promise.reject(new Error("gateway down")) } as never;
+    expect(await transcript(trip(), broken, ids, [])).toEqual({ error: "Couldn't read #trip: gateway down" });
   });
 });
 

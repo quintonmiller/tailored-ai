@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 36 | 107 |
+| `agents` | object | {} | 36 | 108 |
 
 ### `autopilot`
 
@@ -149,7 +149,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `state.backend` | string | `sqlite` | 22 | 3 |
+| `state.backend` | string | `sqlite` | 23 | 3 |
 
 ### `suggestions`
 
@@ -164,7 +164,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tasks.backend` | string | `native` | 22 | 5 |
+| `tasks.backend` | string | `native` | 23 | 5 |
 
 ### `taskWatcher`
 

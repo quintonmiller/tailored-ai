@@ -198,10 +198,13 @@ export function fetchHealth(): Promise<HealthInfo> {
   return jsonFetch("/api/health");
 }
 
-export function fetchSessions(opts?: { project?: string | "global" | null }): Promise<SessionRow[]> {
+export function fetchSessions(opts?: { project?: string | "global" | null; limit?: number }): Promise<SessionRow[]> {
   const project = opts?.project ?? getActiveProjectId();
-  const qs = project ? `?project=${encodeURIComponent(project)}` : "";
-  return jsonFetch(`/api/sessions${qs}`);
+  const params = new URLSearchParams();
+  if (project) params.set("project", project);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return jsonFetch(`/api/sessions${qs ? `?${qs}` : ""}`);
 }
 
 export function fetchMessages(sessionId: string): Promise<Message[]> {
