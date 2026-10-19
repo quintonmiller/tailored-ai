@@ -59,6 +59,7 @@ export function WorldAgent({
   onSendHome,
   onTasks,
   onRedoRoom,
+  onNeed,
   onClose,
 }: {
   agent: string;
@@ -82,6 +83,8 @@ export function WorldAgent({
   onTasks: () => void;
   /** Ask it, in a chat with the words written, to make its room show what it has been working on. */
   onRedoRoom?: () => void;
+  /** Open what it is waiting on you for; undefined when it waits on nothing. */
+  onNeed?: () => void;
   onClose: () => void;
 }) {
   const [own, setOwn] = useState<{ agent: ExploratoryAgent | undefined; allOn: boolean } | null>(null);
@@ -161,6 +164,14 @@ export function WorldAgent({
           {doing ? doing.what : "Idle"}
           {doing?.doing === "asleep" ? ` · ${asleepWords(doing)}` : doing?.detail ? ` · ${doing.detail}` : ""}
           {lasting(activity?.since) ? `${doing ? " ·" : ""} for ${lasting(activity?.since)}` : ""}
+          {onNeed && (
+            <>
+              {" · "}
+              <button type="button" className="world-panel-inline" onClick={onNeed}>
+                see what it needs
+              </button>
+            </>
+          )}
         </dd>
         {lastDid(activity?.last) && (
           <>

@@ -1,5 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchProjectTasks, fetchTaskWatcher, type ProjectTask } from "../api";
+import {
+  fetchPendingApprovals,
+  fetchProjectTasks,
+  fetchTaskWatcher,
+  type PendingApprovalRequest,
+  type ProjectTask,
+} from "../api";
 import { type AgentAction, Avatar, type AvatarControls } from "../avatar/Avatar";
 import type { BoardSpot, BoardTask } from "../avatar/boards";
 import type { Cue } from "../avatar/cues";
@@ -8,6 +14,7 @@ import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import type { Companion } from "../avatar/stage";
 import { nameOf, newChatKey } from "../lib/conversations";
+import { type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
 import { trailTo } from "../lib/wayfinding";
@@ -15,7 +22,8 @@ import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
 import { type Said, WorldAgent } from "./WorldAgent";
-import { comeOrGone, useWorldMap, WorldMap } from "./WorldMap";
+import { comeOrGone, type MapPlace, useWorldMap, WorldMap } from "./WorldMap";
+import { NeedCard, NeedsList } from "./WorldNeeds";
 import { ROOM_ASK, WorldPlace, withChangeLines } from "./WorldPlace";
 import { type ListView, TaskCard, TaskList } from "./WorldTasks";
 
@@ -312,6 +320,54 @@ function useTaskWatcher(enabled: boolean): { created: boolean; updated: boolean 
   return watcher;
 }
 
+/**
+ * The approvals this page can answer, from the server's queue: asked for
+ * again whenever the requests agents wait on change (`asking`, their ids), and
+ * when `fresh` turns true (a card about one opening). Says which requests it
+ * was asked for, so a card can tell details still coming from a request the
+ * server doesn't hold (asked on Discord, say).
+ */
+function usePendingApprovals(
+  enabled: boolean,
+  asking: string,
+  fresh: boolean,
+): { list: PendingApprovalRequest[]; asked: string | null; failed: boolean } {
+  const [got, setGot] = useState<{ list: PendingApprovalRequest[]; asked: string | null; failed: boolean }>({
+    list: [],
+    asked: null,
+    failed: false,
+  });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `fresh` turning true is how a card asks again.
+  useEffect(() => {
+    if (!enabled) return;
+    if (!asking) {
+      setGot({ list: [], asked: "", failed: false });
+      return;
+    }
+    let gone = false;
+    fetchPendingApprovals()
+      .then((list) => {
+        if (!gone) setGot({ list, asked: asking, failed: false });
+      })
+      .catch(() => {
+        if (!gone) setGot({ list: [], asked: asking, failed: true });
+      });
+    return () => {
+      gone = true;
+    };
+  }, [enabled, asking, fresh]);
+  return got;
+}
+
+/** Where an agent's body is, from the map, in a few words for a list: "here", "at home", "in #trip". */
+export function whereWords(agent: string, places: MapPlace[], here: string | undefined): string | undefined {
+  const spot = places.find((p) => p.kind !== "lobby" && p.agents.includes(agent));
+  if (!spot) return undefined;
+  if (spot.id === here) return "here";
+  if (spot.kind === "room") return `in #${spot.name}`;
+  return spot.kind === "home" && spot.owner === agent ? "at home" : `in ${spot.name}`;
+}
+
 /** Which tasks a place's boards show: everyone's in the lobby, otherwise those of whoever is there. */
 export function tasksFor(place: string | undefined, agents: string[], tasks: BoardTask[]): BoardTask[] {
   if (!place) return [];
@@ -471,7 +527,9 @@ type Panel =
   | { kind: "agent"; agent: string }
   | { kind: "place" }
   | { kind: "new-task" }
-  | { kind: "new-room" };
+  | { kind: "new-room" }
+  | { kind: "needs" }
+  | { kind: "need"; agent: string; fromList?: boolean };
 
 interface LiveInfo {
   enabled?: boolean;
@@ -578,9 +636,9 @@ export function useChatStage({
   const showing = loading ? last.current : { visiting, scene: visiting ? (visited as SceneInfo) : own };
   last.current = showing;
   const { room, company, id: placeId } = showing.scene;
-  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card. Opening
-  // either asks again, for anything new that nobody moved to tell it about.
-  const map = useWorldMap(showStage, mapOpen || panel?.kind === "agent");
+  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
+  // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
+  const map = useWorldMap(showStage, mapOpen || panel?.kind === "agent" || panel?.kind === "needs");
   const trail = useMemo(() => trailTo(placeId, map.places, map.areas), [placeId, map.places, map.areas]);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
@@ -595,7 +653,13 @@ export function useChatStage({
   useEffect(() => {
     setNear(undefined);
   }, [visiting]);
-  const activities = useRecords<AgentActivity>("activity", showStage);
+  const doings = useRecords<AgentActivity>("activity", showStage);
+  // What every agent is doing as the world shows it: a question on a task answered (here, or on the Tasks page) is
+  // done with, and one still waiting on you is, whatever became of the turn that asked it.
+  const activities = useMemo(() => withQuestions(doings, allTasks), [doings, allTasks]);
+  const approvals = usePendingApprovals(showStage, requestsOf(doings), panel?.kind === "need");
+  // Everything waiting on you, for the "Needs you" list and each agent's card.
+  const needs = useMemo(() => needsFrom(activities, approvals.list, allTasks), [activities, approvals.list, allTasks]);
   const speech = useRecords<Said>("speech", showStage);
   const { online, names: agentNames, placeless: cantPlace } = useAgentRoster(showStage);
   const canPlace = useCallback((who: string) => !cantPlace.has(who), [cantPlace]);
@@ -615,9 +679,10 @@ export function useChatStage({
   // by the map, arriving is the same.
   const host = visiting ? (visiting.startsWith("home:") ? visiting.slice("home:".length) : undefined) : shown;
   // Talking to someone is the chat: a panel in its column steps aside, or the click would seem to do nothing.
+  // Arriving at an agent's home to see to what it waits on keeps that card open: it is what you came for.
   const chatWith = useCallback(
-    (who: string) => {
-      setPanel((open) => (open && open.kind !== "map" ? null : open));
+    (who: string, arriving = false) => {
+      setPanel((open) => (open && open.kind !== "map" && !(arriving && open.kind === "need") ? null : open));
       onChatWith?.(who);
     },
     [onChatWith],
@@ -629,12 +694,16 @@ export function useChatStage({
   useEffect(() => {
     if (host === arrived.current) return;
     arrived.current = host;
-    if (host) chatWith(host);
+    if (host) chatWith(host, true);
   }, [host]);
-  // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it.
+  // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it. One
+  // waiting on you opens what it waits on instead (`onBody`); one busy with something else that still has a question
+  // on a task for you offers it first.
   const menuFor = useCallback(
     (who: string): AgentAction[] => {
       const actions: AgentAction[] = [];
+      if (needs.some((n) => n.agent === who))
+        actions.push({ label: "What it needs from you", run: () => setPanel({ kind: "need", agent: who }) });
       if (who !== talking && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => chatWith(who) });
       // Gone to a shared place, or to a meeting room to talk: home is where it goes back to.
       if (placeId?.startsWith("shared:") || placeId?.startsWith("room:"))
@@ -675,7 +744,16 @@ export function useChatStage({
       });
       return actions;
     },
-    [shown, talking, onChatWith, chatWith, placeId, online, activities],
+    [shown, talking, onChatWith, chatWith, placeId, online, activities, needs],
+  );
+  // A click on an agent waiting on you opens what it waits on, rather than the menu.
+  const onBody = useCallback(
+    (who: string) => {
+      if (activities[who]?.doing !== "waiting") return false;
+      setPanel({ kind: "need", agent: who });
+      return true;
+    },
+    [activities],
   );
   // What the body can do in this room: its moves, the things it can go to, look at and point at, and who is with it.
   // Always the agent's own place: its cues move its own body, which a visit doesn't change.
@@ -871,8 +949,38 @@ export function useChatStage({
     setVisiting(id === own.id ? null : id);
     setPanel(null);
   };
+  // An agent to stand in front of once in its place, asked for by number so asking again is a new ask.
+  const [greet, setGreet] = useState<{ agent: string; place: string; n: number } | null>(null);
+  /**
+   * Straight to an agent waiting on you, with what it waits on open: into the
+   * place its body is in, standing in front of it. In the agent's own view, or
+   * when its body is nowhere, the card alone.
+   */
+  const seeTo = (who: string, fromList = false) => {
+    setPanel({ kind: "need", agent: who, ...(fromList ? { fromList: true } : {}) });
+    const spot = map.places.find((p) => p.kind !== "lobby" && p.agents.includes(who));
+    if (!spot) return;
+    if (spot.id === own.id) {
+      // Back to the agent you came from, whose own view has no body of yours to stand anywhere.
+      if (visiting) setVisiting(null);
+      return;
+    }
+    if (spot.id !== placeId) setVisiting(spot.id);
+    setGreet((g) => ({ agent: who, place: spot.id, n: (g?.n ?? 0) + 1 }));
+  };
   const tools = (
     <>
+      {needs.length > 0 && (
+        <button
+          type="button"
+          className="talk-tool talk-needs"
+          aria-expanded={panel?.kind === "needs"}
+          title="What agents are waiting on you for"
+          onClick={() => setPanel(panel?.kind === "needs" ? null : { kind: "needs" })}
+        >
+          Needs you · {needs.length}
+        </button>
+      )}
       <button
         type="button"
         className="talk-tool"
@@ -963,10 +1071,47 @@ export function useChatStage({
         here={placeId}
         activities={activities}
         onGo={go}
+        onNeed={(who) => seeTo(who)}
         onClose={closePanel}
       />
     );
-  else if (panel?.kind === "new-task")
+  else if (panel?.kind === "needs")
+    overlay = (
+      <NeedsList
+        needs={needs}
+        whereOf={(who) => whereWords(who, map.places, placeId)}
+        onOpen={(need: Need) => seeTo(need.agent, true)}
+        onClose={closePanel}
+      />
+    );
+  else if (panel?.kind === "need") {
+    const who = panel.agent;
+    overlay = (
+      <NeedCard
+        key={who}
+        agent={who}
+        needs={needs.filter((n) => n.agent === who)}
+        loading={approvals.asked !== requestsOf(doings)}
+        failed={approvals.failed}
+        onOpenTask={(id) => setPanel({ kind: "task", id })}
+        onAnswered={(task) => {
+          board.put(task);
+          board.reload();
+        }}
+        {...(onDraft
+          ? {
+              onDraft: (text: string) => {
+                setPanel(null);
+                onDraft(who, text);
+              },
+            }
+          : {})}
+        onAbout={() => setPanel({ kind: "agent", agent: who })}
+        {...(panel.fromList ? { onBack: () => setPanel({ kind: "needs" }) } : {})}
+        onClose={closePanel}
+      />
+    );
+  } else if (panel?.kind === "new-task")
     overlay = <NewTask agents={agentNames} wakes={watcher?.created} onMade={board.reload} onClose={closePanel} />;
   else if (panel?.kind === "new-room")
     overlay = (
@@ -1038,6 +1183,7 @@ export function useChatStage({
         openTasks={countTasks(allTasks, who).open}
         online={online.has(who)}
         talking={who === talking}
+        {...(needs.some((n) => n.agent === who) ? { onNeed: () => setPanel({ kind: "need", agent: who }) } : {})}
         tasksWake={watcher ? watcher.created || watcher.updated : undefined}
         onChat={() => chatWith(who)}
         {...(where && where.id !== (visiting ?? own.id) ? { onVisit: () => go(where.id) } : {})}
@@ -1081,6 +1227,8 @@ export function useChatStage({
         onUse={onUse}
         onLine={hearLine}
         overlay={overlay}
+        greet={greet}
+        onBody={onBody}
         {...(info.enabled && !showing.visiting ? { chooseIdle } : {})}
       />
     ) : null;

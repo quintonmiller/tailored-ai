@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
+import { ApprovalArgs } from "../components/ApprovalArgs";
 import { useChatStore } from "../components/ChatContext";
 import { TalkButton, useChatStage } from "../components/ChatStage";
 import { ChatWith, RoomLines, RoomWith, useRoomTalk } from "../components/ChatWith";
@@ -612,52 +613,6 @@ function ApprovalPanel(props: {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-/** One arg value rendered compactly — strings inline, objects stringified. */
-function formatArgValue(v: unknown): { display: string; truncated: boolean } {
-  let s: string;
-  if (typeof v === "string") s = v;
-  else {
-    try {
-      s = JSON.stringify(v);
-    } catch {
-      s = String(v);
-    }
-  }
-  if (s.length > 140) return { display: `${s.slice(0, 140)}…`, truncated: true };
-  return { display: s, truncated: false };
-}
-
-/** Compact key: value list for a tool-call's args, with raw JSON on demand. */
-function ApprovalArgs({ args }: { args: Record<string, unknown> }) {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return null;
-  let raw: string;
-  try {
-    raw = JSON.stringify(args, null, 2);
-  } catch {
-    raw = String(args);
-  }
-  const anyTruncated = entries.some(([, v]) => formatArgValue(v).truncated);
-  return (
-    <div className="chat-approval-args">
-      <dl className="chat-approval-arg-list">
-        {entries.map(([k, v]) => (
-          <div key={k} className="chat-approval-arg">
-            <dt>{k}</dt>
-            <dd>{formatArgValue(v).display}</dd>
-          </div>
-        ))}
-      </dl>
-      {(anyTruncated || entries.length > 1) && (
-        <details className="chat-approval-raw">
-          <summary>Raw JSON</summary>
-          <pre>{raw}</pre>
-        </details>
-      )}
     </div>
   );
 }

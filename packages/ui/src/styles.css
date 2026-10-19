@@ -8845,6 +8845,34 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-agent-said { font-style: italic; }
 .world-agent-when, .world-agent-run { color: var(--text-dim); }
 .world-agent-actions { padding-top: 10px; border-top: 1px solid var(--border); }
+/* What needs you: a button among the stage's tools while anything does, the list of it, and an agent's card. */
+.talk-tool.talk-needs { font-weight: 600; color: var(--doing-waiting); border-color: color-mix(in srgb, var(--doing-waiting) 70%, var(--border)); background: color-mix(in srgb, var(--doing-waiting) 10%, var(--bg-surface)); }
+.talk-tool.talk-needs:hover, .talk-tool.talk-needs:focus-visible, .talk-tool.talk-needs[aria-expanded="true"] { color: var(--doing-waiting); border-color: var(--doing-waiting); background: color-mix(in srgb, var(--doing-waiting) 18%, var(--bg-surface)); }
+.world-needs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.world-needs-row { width: 100%; display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 3px 8px; padding: 8px 10px; text-align: left; font-family: var(--font); font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--doing-waiting); border-radius: calc(var(--radius) - 2px); cursor: pointer; }
+.world-needs-row:hover, .world-needs-row:focus-visible { border-color: var(--accent); border-left-color: var(--doing-waiting); outline: none; }
+.world-needs-who { font-size: 13px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.world-needs-when { font-size: 11px; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.world-needs-what { grid-column: 2 / -1; color: var(--text); line-height: 1.4; overflow-wrap: anywhere; }
+.world-needs-where { grid-column: 2 / -1; font-size: 11px; color: var(--text-dim); }
+.world-need-item { display: flex; flex-direction: column; gap: 8px; }
+.world-need-item + .world-need-item { padding-top: 12px; border-top: 1px solid var(--border); }
+.world-need-head { margin: 0; font-size: 13px; line-height: 1.4; color: var(--doing-waiting); }
+.world-need-head strong { font-weight: 600; }
+.world-need-head.over { color: var(--text-dim); }
+.world-need-when { color: var(--text-dim); }
+/* The call as it will run: what the approver is told, and every argument. */
+.world-need-call { padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); font-size: 12px; }
+.world-need-desc { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.world-need-call .chat-approval-args { background: var(--bg-surface); }
+.world-need-about { margin: 0; font-size: 12px; color: var(--text-dim); }
+.world-need-question { margin: 0; padding: 6px 0 6px 10px; font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; border-left: 2px solid var(--doing-waiting); }
+.world-need-note { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); }
+.world-need-strict { margin: 0; padding: 8px 10px; font-size: 12px; line-height: 1.45; color: var(--text); background: color-mix(in srgb, var(--doing-stuck) 10%, var(--bg)); border: 1px solid color-mix(in srgb, var(--doing-stuck) 45%, var(--border)); border-radius: calc(var(--radius) - 2px); }
+.world-need-strict a { color: var(--accent); }
+.talk-tool.world-need-approve { color: #fff; background: var(--accent); border-color: var(--accent); }
+.talk-tool.world-need-approve:hover, .talk-tool.world-need-approve:focus-visible { background: var(--accent-dim); border-color: var(--accent-dim); }
+.world-need-item .talk-tool:disabled { opacity: 0.55; cursor: default; }
 /* A place's card: what agents changed in it lately, newest first. */
 .world-changes h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
 .world-changes ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }

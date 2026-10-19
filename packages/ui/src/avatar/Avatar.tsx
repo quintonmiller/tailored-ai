@@ -68,6 +68,8 @@ export function Avatar({
   place,
   arriveFrom,
   onDoor,
+  greet,
+  onBody,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -127,6 +129,13 @@ export function Avatar({
   arriveFrom?: string;
   /** A door was gone through: bring the place behind it. */
   onDoor?: (door: RoomDoor) => void;
+  /**
+   * An agent to stand in front of, once in its place: going straight to it
+   * from a list. A new `n` is a new ask, for the same agent too.
+   */
+  greet?: { agent: string; place: string; n: number } | null;
+  /** A click on a body that the page deals with itself, instead of opening the menu: true when it did. */
+  onBody?: (agent: string) => boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -193,6 +202,19 @@ export function Avatar({
   const doors = !!onDoor;
   const arriveRef = useRef(arriveFrom);
   arriveRef.current = arriveFrom;
+  const bodyRef = useRef(onBody);
+  bodyRef.current = onBody;
+  const greetRef = useRef(greet);
+  greetRef.current = greet;
+  // The last ask to stand by someone that was carried out: coming back to that place later isn't another.
+  const greeted = useRef<number | undefined>(undefined);
+  /** Stand in front of the agent asked for, when the stage is in its place and hasn't done so for this ask. */
+  const greetIn = (s: Stage, at: string | undefined) => {
+    const g = greetRef.current;
+    if (!g || g.place !== at || greeted.current === g.n) return;
+    greeted.current = g.n;
+    s.standBefore(g.agent);
+  };
   // The place the stage shows. A different one arriving is a place come into: on a visit, through a door or by the
   // map; otherwise, the agent gone somewhere else. For the first room to arrive, and any change to the same place,
   // it is the same stage's room changing.
@@ -206,7 +228,13 @@ export function Avatar({
     if (visitor && moved) stage.current.enter(room, arriveRef.current);
     else stage.current.setRoom(room, moved);
     shownPlace.current = place;
+    if (moved) greetIn(stage.current, place);
   }, [room]);
+  // Asked to stand by someone in the place you are in already: at once.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new ask says when; the rest is read through refs.
+  useEffect(() => {
+    if (stage.current && greet) greetIn(stage.current, shownPlace.current);
+  }, [greet?.n]);
   const animationsRef = useRef(animations);
   animationsRef.current = animations;
   const animationsKey = animations.join("\n");
@@ -250,6 +278,10 @@ export function Avatar({
           ...(picking
             ? {
                 onPick: (who: string, at: { x: number; y: number }) => {
+                  if (bodyRef.current?.(who)) {
+                    setPicked(null);
+                    return;
+                  }
                   const box = host.current?.getBoundingClientRect();
                   const w = box?.width ?? 0;
                   const h = box?.height ?? 0;
@@ -288,6 +320,7 @@ export function Avatar({
         if (activitiesRef.current) s.setActivities(activitiesRef.current);
         if (speechRef.current) s.setSpeech(speechRef.current);
         if (tasksRef.current) s.setTasks(tasksRef.current);
+        greetIn(s, placeRef.current);
       })
       .catch((err: unknown) => {
         if (gone) return;

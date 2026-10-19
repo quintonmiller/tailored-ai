@@ -1,0 +1,6 @@
+---
+'@tailored-ai/core': patch
+'@tailored-ai/ui': patch
+---
+
+Answer what agents are waiting on you for without leaving the 3D world. While any agent waits, a **Needs you · N** button joins the stage's tools: it lists every request (approvals first, then the longest wait) with who, what and how long, and a row takes you into the agent's place, standing in front of it, with a card for the request open. Clicking a body with a `!` opens the same card, and the map's Busy now goes there too. The card shows a tool call as the chat's approval panel does, every argument and the raw call, with Approve or Deny and an optional note; a purchase or other trusted action is never approvable there, only shown with a link to the Approvals page, and Approve is offered only for a request whose details the server sent. A question on a task is answered as the Tasks page answers it, back to the backlog with your answer as a comment; any other question opens a chat with it quoted. What you did stays on the card, the `!` goes as the agent's activity changes, and a request answered somewhere else leaves the world without a reload. The activity plugin's record now says what an agent waits on (`request`, `task`, and the whole `question`), stops waiting once that task leaves blocked, and stops only for the approval it was waiting on.

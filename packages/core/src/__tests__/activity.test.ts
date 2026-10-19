@@ -205,14 +205,69 @@ describe("activity", () => {
     const approval = { sessionId: "s-planner", agent: "planner", projectId: null, tool: "exec", toolUseId: "x" };
     events.emit("approval.requested", { ...approval, requestId: "r", description: "rm" });
     expect(await doing("planner")).toBe("waiting | waiting for your OK");
-    events.emit("approval.settled", { ...approval, outcome: "approved", timedOut: false } as never);
+    events.emit("approval.settled", { ...approval, requestId: "r", outcome: "approved", timedOut: false } as never);
     expect(await doing("planner")).toBe("thinking | thinking");
   });
 
-  it("needs you when a task does", async () => {
+  it("says which approval it waits on, and stops only when that one is answered", async () => {
+    make();
+    started("planner");
+    const approval = { sessionId: "s-planner", agent: "planner", projectId: null, tool: "exec", toolUseId: "x" };
+    events.emit("approval.requested", { ...approval, requestId: "r1", description: "rm" });
+    expect(await activity("planner")).toMatchObject({ doing: "waiting", tool: "exec", request: "r1" });
+    // A call on a path with nobody to ask, or another request's answer, isn't this one's.
+    events.emit("approval.settled", { ...approval, outcome: "unattended", timedOut: false } as never);
+    events.emit("approval.settled", { ...approval, requestId: "r0", outcome: "approved", timedOut: false } as never);
+    expect(await activity("planner")).toMatchObject({ doing: "waiting", request: "r1" });
+    events.emit("approval.settled", { ...approval, requestId: "r1", outcome: "rejected", timedOut: false } as never);
+    const after = await activity("planner");
+    expect(after.doing).toBe("thinking");
+    expect(after.request).toBeUndefined();
+  });
+
+  it("needs you when a task does, and says which task", async () => {
     make();
     events.emit("task.needs_human", { taskId: "t", agentName: "writer", reason: "question", message: "Which tone?" });
     expect(await doing("writer")).toBe("waiting | needs you | Which tone?");
+    expect((await activity("writer")).task).toBe("t");
+  });
+
+  it("keeps a long question whole for a page to answer from, and its status line short", async () => {
+    make();
+    const question = `Which of these hotels?\n${"The one by the river, or the one up the hill. ".repeat(4)}`;
+    started("planner");
+    await tool("planner", "ask_user", { question });
+    ended("planner", { stop: { kind: "complete" } });
+    const a = await activity("planner");
+    expect(a.question).toBe(question.trim());
+    expect(a.detail?.length).toBeLessThan(question.length);
+  });
+
+  it("ties a question asked from a task run to the task", async () => {
+    make();
+    started("planner");
+    await tool("planner", "ask_user", { question: "Window or aisle?" }, false);
+    events.emit("question.asked", { question: "Window or aisle?", sessionId: "s-planner", taskId: "ptask_1" });
+    ended("planner", { stop: { kind: "complete" } });
+    expect(await activity("planner")).toMatchObject({
+      doing: "waiting",
+      what: "has a question for you",
+      detail: "Window or aisle?",
+      task: "ptask_1",
+    });
+  });
+
+  it("stops waiting once the task it asked about leaves blocked, wherever it was answered", async () => {
+    make();
+    events.emit("task.needs_human", { taskId: "t1", agentName: "writer", reason: "question", message: "Which tone?" });
+    // Another task moving, or this one staying blocked, changes nothing.
+    events.emit("task.transitioned", { taskId: "t2", from: "blocked", to: "backlog" });
+    events.emit("task.transitioned", { taskId: "t1", from: "in_progress", to: "blocked" });
+    expect((await activity("writer")).doing).toBe("waiting");
+    events.emit("task.transitioned", { taskId: "t1", from: "blocked", to: "backlog" });
+    const after = await activity("writer");
+    expect(after.doing).toBe("idle");
+    expect(after.task).toBeUndefined();
   });
 
   it("is stuck after a turn that stalled or threw, until the next one", async () => {
