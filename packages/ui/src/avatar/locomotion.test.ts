@@ -3,7 +3,7 @@
  * after turning to face the way, and when to wander or come back.
  */
 import { describe, expect, it } from "vitest";
-import { ASK, Director, route, turnBetween, Walker } from "./locomotion";
+import { ASK, Director, findPath, type Obstacle, route, turnBetween, Walker } from "./locomotion";
 import { DEFAULT_ROOM, spotById } from "./scene";
 
 const at = (id: string) => spotById(DEFAULT_ROOM, id)?.at;
@@ -25,6 +25,50 @@ describe("route", () => {
   it("has nowhere to go for the spot it is at, or a spot that does not exist", () => {
     expect(route(DEFAULT_ROOM, "couch", "couch")).toEqual([]);
     expect(route(DEFAULT_ROOM, "couch", "attic")).toEqual([]);
+  });
+});
+
+describe("findPath", () => {
+  const room = { ...DEFAULT_ROOM, props: [], spots: [] };
+  /** A sofa-sized box right across the straight way. */
+  const sofa: Obstacle = { minX: -0.8, maxX: 0.8, minZ: -0.4, maxZ: 0.4 };
+  /** Whether any leg of the walk passes through the box, grown by the body's radius. */
+  const crosses = (from: [number, number], way: [number, number][], o: Obstacle, r: number) => {
+    let a = from;
+    for (const b of way) {
+      for (let k = 0.02; k < 1; k += 0.02) {
+        const x = a[0] + (b[0] - a[0]) * k;
+        const z = a[1] + (b[1] - a[1]) * k;
+        if (x > o.minX - r + 0.01 && x < o.maxX + r - 0.01 && z > o.minZ - r + 0.01 && z < o.maxZ + r - 0.01)
+          return true;
+      }
+      a = b;
+    }
+    return false;
+  };
+
+  it("walks straight there when nothing is in the way", () => {
+    expect(findPath(room, [-1.5, 1], [1.5, 1], [sofa], 0.2)).toEqual([[1.5, 1]]);
+  });
+
+  it("goes round something in the way in a few straight legs, ending where it was going", () => {
+    const from: [number, number] = [0, -1.2];
+    const to: [number, number] = [0, 1.2];
+    const way = findPath(room, from, to, [sofa], 0.2);
+    expect(way.at(-1)).toEqual(to);
+    expect(crosses(from, way, sofa, 0.2)).toBe(false);
+    expect(way.length).toBeLessThanOrEqual(4);
+  });
+
+  it("goes straight when there is no way round, rather than nowhere", () => {
+    const wall: Obstacle = { minX: -3, maxX: 3, minZ: -0.1, maxZ: 0.1 };
+    expect(findPath(room, [0, -1], [0, 1], [wall], 0.2)).toEqual([[0, 1]]);
+  });
+
+  it("can start and end close to furniture, as a spot by a desk is", () => {
+    const desk: Obstacle = { minX: 0.75, maxX: 1.95, minZ: -1.77, maxZ: -1.17 };
+    const way = findPath(DEFAULT_ROOM, [-0.85, -0.72], [1.35, -0.98], [desk, sofa], 0.2);
+    expect(way.at(-1)).toEqual([1.35, -0.98]);
   });
 });
 

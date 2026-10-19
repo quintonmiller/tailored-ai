@@ -26,6 +26,177 @@ export function route(room: Room, from: string | undefined, to: string): [number
   return [hub.at, target.at];
 }
 
+/** Somewhere the avatar can't walk: a piece of furniture's outline on the floor, as a box. */
+export interface Obstacle {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/** The floor grid the way is searched on, in metres. */
+const CELL = 0.1;
+
+/**
+ * The way from where it stands to a point, around the furniture, for a room
+ * the agent furnished itself, where the middle is no longer a hub with a
+ * clear line to every spot. The floor is searched as a grid, each obstacle
+ * grown by the body's radius, and the way found is pulled straight wherever
+ * it is clear, so the avatar walks a few legs rather than a staircase.
+ * Straight there when nothing is in the way, or when there is no way round.
+ */
+export function findPath(
+  room: Room,
+  from: [number, number],
+  to: [number, number],
+  obstacles: Obstacle[],
+  radius = 0.2,
+): [number, number][] {
+  const inside = (p: [number, number], o: Obstacle) => p[0] > o.minX && p[0] < o.maxX && p[1] > o.minZ && p[1] < o.maxZ;
+  // Each obstacle grown by the body's radius, except one it starts or ends inside: a spot can be
+  // close to its furniture, so that one keeps its true size and only its body is off limits.
+  const boxes = obstacles.map((o) => {
+    const g = { minX: o.minX - radius, maxX: o.maxX + radius, minZ: o.minZ - radius, maxZ: o.maxZ + radius };
+    return inside(from, g) || inside(to, g) ? o : g;
+  });
+  const free = (p: [number, number]) =>
+    Math.abs(p[0]) <= room.width / 2 - radius / 2 &&
+    Math.abs(p[1]) <= room.depth / 2 - radius / 2 &&
+    !boxes.some((o) => inside(p, o));
+  /** Whether a straight leg misses every box: exact, so it never clips a corner between samples. */
+  const clear = (a: [number, number], b: [number, number]) => {
+    const dx = b[0] - a[0];
+    const dz = b[1] - a[1];
+    return !boxes.some((o) => {
+      let t0 = 0;
+      let t1 = 1;
+      for (const [p, q] of [
+        [-dx, a[0] - o.minX],
+        [dx, o.maxX - a[0]],
+        [-dz, a[1] - o.minZ],
+        [dz, o.maxZ - a[1]],
+      ]) {
+        if (p === 0) {
+          if (q <= 0) return false;
+          continue;
+        }
+        const r = q / p;
+        if (p < 0) {
+          if (r > t1) return false;
+          t0 = Math.max(t0, r);
+        } else {
+          if (r < t0) return false;
+          t1 = Math.min(t1, r);
+        }
+      }
+      return t1 - t0 > 1e-9;
+    });
+  };
+  if (clear(from, to)) return [to];
+
+  const cols = Math.max(1, Math.ceil(room.width / CELL));
+  const rows = Math.max(1, Math.ceil(room.depth / CELL));
+  const centre = (i: number, j: number): [number, number] => [
+    -room.width / 2 + (i + 0.5) * CELL,
+    -room.depth / 2 + (j + 0.5) * CELL,
+  ];
+  const cellOf = ([x, z]: [number, number]): [number, number] => [
+    Math.min(cols - 1, Math.max(0, Math.floor((x + room.width / 2) / CELL))),
+    Math.min(rows - 1, Math.max(0, Math.floor((z + room.depth / 2) / CELL))),
+  ];
+  const open = new Uint8Array(cols * rows);
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) open[j * cols + i] = free(centre(i, j)) ? 1 : 0;
+  const [si, sj] = cellOf(from);
+  const [gi, gj] = cellOf(to);
+  open[sj * cols + si] = 1;
+  open[gj * cols + gi] = 1;
+
+  // A* with the octile distance; diagonals never cut a blocked corner.
+  const cost = new Float64Array(cols * rows).fill(Number.POSITIVE_INFINITY);
+  const came = new Int32Array(cols * rows).fill(-1);
+  const h = (i: number, j: number) => {
+    const dx = Math.abs(i - gi);
+    const dz = Math.abs(j - gj);
+    return Math.max(dx, dz) + (Math.SQRT2 - 1) * Math.min(dx, dz);
+  };
+  const heap: [number, number][] = [];
+  const push = (f: number, n: number) => {
+    heap.push([f, n]);
+    for (let c = heap.length - 1; c > 0; ) {
+      const parent = (c - 1) >> 1;
+      if (heap[parent][0] <= heap[c][0]) break;
+      [heap[parent], heap[c]] = [heap[c], heap[parent]];
+      c = parent;
+    }
+  };
+  const pop = () => {
+    const top = heap[0];
+    const last = heap.pop() as [number, number];
+    if (heap.length) {
+      heap[0] = last;
+      for (let c = 0; ; ) {
+        const l = 2 * c + 1;
+        const r = l + 1;
+        let m = c;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === c) break;
+        [heap[m], heap[c]] = [heap[c], heap[m]];
+        c = m;
+      }
+    }
+    return top;
+  };
+  const start = sj * cols + si;
+  const goal = gj * cols + gi;
+  cost[start] = 0;
+  push(h(si, sj), start);
+  while (heap.length) {
+    const [, n] = pop();
+    if (n === goal) break;
+    const i = n % cols;
+    const j = (n - i) / cols;
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let di = -1; di <= 1; di++) {
+        if (!di && !dj) continue;
+        const ni = i + di;
+        const nj = j + dj;
+        if (ni < 0 || nj < 0 || ni >= cols || nj >= rows || !open[nj * cols + ni]) continue;
+        if (di && dj && (!open[j * cols + ni] || !open[nj * cols + i])) continue;
+        const next = nj * cols + ni;
+        const c = cost[n] + (di && dj ? Math.SQRT2 : 1);
+        if (c < cost[next]) {
+          cost[next] = c;
+          came[next] = n;
+          push(c + h(ni, nj), next);
+        }
+      }
+    }
+  }
+  if (came[goal] === -1) return [to];
+
+  const cells: [number, number][] = [];
+  for (let n = goal; n !== -1 && n !== start; n = came[n]) cells.push(centre(n % cols, Math.floor(n / cols)));
+  cells.reverse();
+  cells[cells.length - 1] = to;
+  // Pull it straight: from each point, on to the farthest one in plain sight.
+  const way: [number, number][] = [];
+  let here = from;
+  for (let k = 0; k < cells.length; ) {
+    let far = k;
+    for (let m = cells.length - 1; m > k; m--) {
+      if (clear(here, cells[m])) {
+        far = m;
+        break;
+      }
+    }
+    way.push(cells[far]);
+    here = cells[far];
+    k = far + 1;
+  }
+  return way;
+}
+
 /** Radians per second it turns. */
 const TURN_SPEED = 4;
 /** It turns toward where it is going before it starts walking, within this much. */

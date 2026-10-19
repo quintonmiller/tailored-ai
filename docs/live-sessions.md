@@ -128,8 +128,10 @@ Click a piece of furniture to send it there yourself. The close-up follows
 it as it goes.
 
 Every piece of furniture and every spot in the room has a name, and the
-avatar walks between spots by way of the middle of the room, so it never
-cuts through furniture. When the agent moves it later, it will name a spot
+avatar walks round the furniture to get between spots. The way is found on a
+grid of the floor with each piece grown by the avatar's width, then
+straightened into as few legs as stay clear, so it works in any room the
+agent has furnished. When the agent moves the avatar, it names a spot
 ("on the couch"), never coordinates.
 
 ### Animation files
