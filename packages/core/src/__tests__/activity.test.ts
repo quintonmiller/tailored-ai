@@ -270,6 +270,45 @@ describe("activity", () => {
     expect(after.task).toBeUndefined();
   });
 
+  it("keeps waiting on a task that needs you without being blocked, whichever plugin hears its move first", async () => {
+    // As the verify gate does: a task reaching done with no verification is left done, for a person to check,
+    // and the escalation goes out from inside the move to done. Subscribed before the tracker, as it is in a
+    // deployment that had the gate before it had the tracker, the gate's escalation lands before the tracker
+    // hears the move that set it off.
+    events.on("task.transitioned", (e) => {
+      if (e.to !== "done") return;
+      events.emit("task.needs_human", {
+        taskId: e.taskId,
+        agentName: "writer",
+        reason: "verify",
+        message: `Task ${e.taskId} reached done without a recorded verification.`,
+      });
+    });
+    make();
+    events.emit("task.transitioned", { taskId: "t1", from: "in_progress", to: "done" });
+    expect(await activity("writer")).toMatchObject({ doing: "waiting", what: "needs you", task: "t1" });
+  });
+
+  it("says which conversation a question was asked in, where an answer to it goes, and none for a task's", async () => {
+    make();
+    started("planner");
+    await tool("planner", "ask_user", { question: "Window or aisle?" });
+    ended("planner", { stop: { kind: "complete" } });
+    expect(await activity("planner")).toMatchObject({ doing: "waiting", session: "s-planner" });
+    started("writer");
+    await tool("writer", "interface", { action: "send", kind: "choice", props: { question: "Which hotel?" } });
+    ended("writer", { stop: { kind: "complete" } });
+    expect(await activity("writer")).toMatchObject({ doing: "waiting", session: "s-writer" });
+    // Asked from a task run: answered on the task, not in the run's conversation.
+    started("planner");
+    await tool("planner", "ask_user", { question: "Train or plane?" }, false);
+    events.emit("question.asked", { question: "Train or plane?", sessionId: "s-planner", taskId: "ptask_2" });
+    ended("planner", { stop: { kind: "complete" } });
+    const onTask = await activity("planner");
+    expect(onTask).toMatchObject({ doing: "waiting", task: "ptask_2" });
+    expect(onTask.session).toBeUndefined();
+  });
+
   it("is stuck after a turn that stalled or threw, until the next one", async () => {
     make();
     started("planner");

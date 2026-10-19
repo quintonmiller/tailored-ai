@@ -590,6 +590,12 @@ export async function createStage(
   let placedAt = performance.now();
   let placeGen = 0;
   let wanted: Companion[] = [];
+  /**
+   * An agent you came to see whose body is still on its way: you stand in
+   * front of it once it is here. Only one this place is expecting, only while
+   * it still is (`meet`), and only until you set off on your own.
+   */
+  let greeting: string | undefined;
 
   /** Spots someone stands at or is walking to, except `who`. */
   const taken = (who?: Figure): Set<string> => {
@@ -1025,7 +1031,10 @@ export async function createStage(
     if (it?.spot) go(it.spot);
     else if (opts.visitor && travel === "walk") {
       const to = floorAt(e);
-      if (to) me.goTo(room, to, obstacles);
+      if (to) {
+        greeting = undefined;
+        me.goTo(room, to, obstacles);
+      }
     }
   };
   // Where the mouse is over the stage, so what is under it is looked at again as the view moves under a still pointer.
@@ -1114,6 +1123,7 @@ export async function createStage(
     // Shift alone does nothing in the page to keep from it, so it is only listened to.
     if (!run) e.preventDefault();
     if (!waiting.has(e.code)) held.add(e.code);
+    if (!run) greeting = undefined;
   };
   const onKeyUp = (e: KeyboardEvent) => {
     held.delete(e.code);
@@ -1333,6 +1343,8 @@ export async function createStage(
   const meet = (company: Companion[]) => {
     wanted = company;
     const ids = new Set(company.map((c) => c.agent));
+    // The agent you came to see has gone before its body got here: you aren't sent to it if it comes back later.
+    if (greeting && !ids.has(greeting)) greeting = undefined;
     const way = opts.still ? undefined : doorway();
     for (const [agent, fig] of companions) {
       if (ids.has(agent)) continue;
@@ -1485,14 +1497,13 @@ export async function createStage(
   /** Where your body stood last frame, so the camera moves exactly as far as you did. */
   let lastAt: [number, number] = [me.walker.place.x, me.walker.place.z];
 
-  /** An agent you came to see whose body is still on its way: you stand in front of it once it is here. */
-  let greeting: string | undefined;
   /** Face to face with an agent, at once, clear of the furniture: see `Stage.standBefore`. */
   function standBefore(agent: string) {
     if (!opts.visitor) return;
     const f = companions.get(agent);
     if (!f) {
-      greeting = agent;
+      // Not here and not coming (it left before you got here, or the map was behind): nobody to wait for.
+      greeting = wanted.some((c) => c.agent === agent) ? agent : undefined;
       return;
     }
     greeting = undefined;

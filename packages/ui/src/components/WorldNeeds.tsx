@@ -80,13 +80,14 @@ export function NeedsList({
  * the approver is told, every argument, the raw call), and Approve or Deny
  * with a note; a question on a task, answered as the Tasks page answers it,
  * back to the backlog with your answer as a comment; any other question,
- * answered in a chat. What you did stays on the card after the agent stops
- * waiting, and a request answered somewhere else says so.
+ * answered in the chat it was asked in. What you did stays on the card after
+ * the agent stops waiting, and a request answered somewhere else says so.
  *
  * Approve is never the first thing focused, nothing approves on a key of its
- * own, and it is offered only for a request whose details the server sent
- * (`answerable`): a purchase, or anything else with a stricter flow of its
- * own, shows its details and where to approve it instead.
+ * own or on the second click of a double click, and it is offered only for a
+ * request whose details the server sent (`answerable`): a purchase, or
+ * anything else with a stricter flow of its own, shows its details, where to
+ * approve it, and Deny.
  */
 export function NeedCard({
   agent,
@@ -95,7 +96,9 @@ export function NeedCard({
   failed,
   onOpenTask,
   onAnswered,
-  onDraft,
+  onReply,
+  inChat,
+  onShowChat,
   onAbout,
   onBack,
   onClose,
@@ -110,8 +113,12 @@ export function NeedCard({
   onOpenTask: (id: string) => void;
   /** A task was answered: the boards and the `!` take it at once. */
   onAnswered: (task: ProjectTask) => void;
-  /** Answer in a chat with the agent, a message already started. */
-  onDraft?: (text: string) => void;
+  /** Answer a question in a chat with the agent, a message already started: in the conversation it asked in, when known. */
+  onReply?: (text: string, session?: string) => void;
+  /** Whether the chat on this page is the one holding an approval request, its approval panel showing it. */
+  inChat?: (request: string) => boolean;
+  /** Put the chat on screen, in place of the card. */
+  onShowChat?: () => void;
   onAbout: () => void;
   /** Back to the list it was opened from. */
   onBack?: () => void;
@@ -158,12 +165,21 @@ export function NeedCard({
         const outcome = said[need.key] ?? (live.has(need.key) ? undefined : ELSEWHERE);
         const props = { need, name, outcome, onDone: (words: string) => done(need.key, words) };
         if (need.kind === "approval")
-          return <ApprovalNeed key={need.key} {...props} loading={loading} failed={failed} />;
+          return (
+            <ApprovalNeed
+              key={need.key}
+              {...props}
+              loading={loading}
+              failed={failed}
+              here={!!need.request && !!inChat?.(need.request)}
+              {...(onShowChat ? { onShowChat } : {})}
+            />
+          );
         if (need.task)
           return (
             <TaskQuestion key={need.key} {...props} task={need.task} onOpenTask={onOpenTask} onAnswered={onAnswered} />
           );
-        return <ChatQuestion key={need.key} {...props} {...(onDraft ? { onDraft } : {})} />;
+        return <ChatQuestion key={need.key} {...props} {...(onReply ? { onReply } : {})} />;
       })}
     </WorldPanel>
   );
@@ -199,7 +215,11 @@ function Outcome({ words }: { words: string }) {
   );
 }
 
-/** Your OK on a tool call: the call in full, and Approve or Deny with an optional note. */
+/**
+ * Your OK on a tool call: the call in full, and Approve or Deny with an
+ * optional note. One with a stricter flow of its own is approved in the chat
+ * that asked for it; denying it is safe anywhere, so that stays.
+ */
 function ApprovalNeed({
   need,
   name,
@@ -207,7 +227,15 @@ function ApprovalNeed({
   onDone,
   loading,
   failed,
-}: ItemProps & { loading: boolean; failed: boolean }) {
+  here,
+  onShowChat,
+}: ItemProps & {
+  loading: boolean;
+  failed: boolean;
+  /** The chat on this page holds the request: its approval panel shows it. */
+  here: boolean;
+  onShowChat?: () => void;
+}) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -257,29 +285,44 @@ function ApprovalNeed({
       )}
       {outcome ? (
         <Outcome words={outcome} />
-      ) : strict ? (
-        <p className="world-need-strict">
-          This is a purchase, or another action with a stricter approval of its own, so it can't be approved from the
-          world. <a href="#/approvals">Open Approvals</a>
-        </p>
-      ) : answerable(need) ? (
+      ) : request ? (
         <>
+          {strict && (
+            <p className="world-need-strict">
+              Anything that may spend money, or has an approval of its own, is approved in the chat that asked for it,
+              not from the world.{" "}
+              {here ? "That's the chat on this page." : "That chat is open in another tab or on another device."} You
+              can still deny it here.
+            </p>
+          )}
           <label className="world-need-note">
             Note for {name} (optional)
             <textarea value={note} rows={2} onChange={(e) => setNote(e.target.value)} />
           </label>
           <div className="world-panel-row">
-            <button
-              type="button"
-              className="talk-tool world-need-approve"
-              disabled={busy}
-              onClick={() => void decide(true)}
-            >
-              Approve
-            </button>
+            {!strict && answerable(need) && (
+              <button
+                type="button"
+                className="talk-tool world-need-approve"
+                disabled={busy}
+                onClick={(e) => {
+                  // The second click of a double click is one aimed at whatever was here before: the row of the list
+                  // this card took the place of, say. Approving takes a click of its own.
+                  if (e.detail > 1) return;
+                  void decide(true);
+                }}
+              >
+                Approve
+              </button>
+            )}
             <button type="button" className="talk-tool" disabled={busy} onClick={() => void decide(false)}>
               Deny
             </button>
+            {strict && here && onShowChat && (
+              <button type="button" className="talk-tool" onClick={onShowChat}>
+                Show the chat
+              </button>
+            )}
           </div>
         </>
       ) : null}
@@ -376,8 +419,17 @@ function TaskQuestion({
   );
 }
 
-/** A question asked anywhere else: answered in a chat with the agent, the question quoted to start it. */
-function ChatQuestion({ need, name, outcome, onDraft }: ItemProps & { onDraft?: (text: string) => void }) {
+/**
+ * A question asked anywhere else: answered in a chat with the agent, the
+ * question quoted to start it. The conversation it asked in when that is one
+ * of yours with it, which has everything the question was about.
+ */
+function ChatQuestion({
+  need,
+  name,
+  outcome,
+  onReply,
+}: ItemProps & { onReply?: (text: string, session?: string) => void }) {
   const question = need.question ?? need.detail;
   return (
     <section className="world-need-item" aria-label={needWords(need)}>
@@ -386,16 +438,16 @@ function ChatQuestion({ need, name, outcome, onDraft }: ItemProps & { onDraft?: 
       {outcome ? (
         <Outcome words={outcome} />
       ) : (
-        onDraft && (
+        onReply && (
           <div className="world-panel-row">
             <button
               type="button"
               className="talk-tool"
-              onClick={() => onDraft(question ? `About your question, “${question}”: ` : "")}
+              onClick={() => onReply(question ? `About your question, “${question}”: ` : "", need.session)}
             >
-              Answer in a chat
+              Answer in the chat
             </button>
-            <span className="world-panel-quiet">A new chat with {name}, your answer still to write.</span>
+            <span className="world-panel-quiet">Opens your chat with {name}, your answer still to write.</span>
           </div>
         )
       )}

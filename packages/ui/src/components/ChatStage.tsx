@@ -560,6 +560,16 @@ export interface ChatStageOptions {
   onChatWith?: (agent: string) => void;
   /** Start a new chat with an agent, a message already written for the person to send. */
   onDraft?: (agent: string, text: string) => void;
+  /**
+   * Answer a question an agent asked, a message already started: in the
+   * conversation it asked in (`session`) when that is one of yours with it,
+   * otherwise your chat with it.
+   */
+  onReply?: (agent: string, session: string | undefined, text: string) => void;
+  /** The approval requests the chat on this page holds, its approval panel showing them. */
+  chatApprovals?: string[];
+  /** Put the chat on screen. */
+  onShowChat?: () => void;
 }
 
 export function useChatStage({
@@ -572,6 +582,9 @@ export function useChatStage({
   setSpeaking,
   onChatWith,
   onDraft,
+  onReply,
+  chatApprovals,
+  onShowChat,
 }: ChatStageOptions) {
   // Visiting a place in your own body, walking or flying; null is the agent's own view.
   const [visiting, setVisitingTo] = useState<string | null>(null);
@@ -949,8 +962,14 @@ export function useChatStage({
     setVisiting(id === own.id ? null : id);
     setPanel(null);
   };
-  // An agent to stand in front of once in its place, asked for by number so asking again is a new ask.
+  // An agent to stand in front of once in its place, asked for by number so asking again is a new ask. Done with
+  // once carried out, or once you go anywhere else first: coming back to that place later isn't another ask.
   const [greet, setGreet] = useState<{ agent: string; place: string; n: number } | null>(null);
+  const greets = useRef(0);
+  const greeted = useCallback((n: number) => setGreet((g) => (g?.n === n ? null : g)), []);
+  useEffect(() => {
+    setGreet((g) => (g && g.place !== visiting ? null : g));
+  }, [visiting]);
   /**
    * Straight to an agent waiting on you, with what it waits on open: into the
    * place its body is in, standing in front of it. In the agent's own view, or
@@ -966,7 +985,7 @@ export function useChatStage({
       return;
     }
     if (spot.id !== placeId) setVisiting(spot.id);
-    setGreet((g) => ({ agent: who, place: spot.id, n: (g?.n ?? 0) + 1 }));
+    setGreet({ agent: who, place: spot.id, n: ++greets.current });
   };
   const tools = (
     <>
@@ -1098,11 +1117,20 @@ export function useChatStage({
           board.put(task);
           board.reload();
         }}
-        {...(onDraft
+        {...(onReply
           ? {
-              onDraft: (text: string) => {
+              onReply: (text: string, session?: string) => {
                 setPanel(null);
-                onDraft(who, text);
+                onReply(who, session, text);
+              },
+            }
+          : {})}
+        inChat={(request) => !!chatApprovals?.includes(request)}
+        {...(onShowChat
+          ? {
+              onShowChat: () => {
+                setPanel(null);
+                onShowChat();
               },
             }
           : {})}
@@ -1228,6 +1256,7 @@ export function useChatStage({
         onLine={hearLine}
         overlay={overlay}
         greet={greet}
+        onGreeted={greeted}
         onBody={onBody}
         {...(info.enabled && !showing.visiting ? { chooseIdle } : {})}
       />

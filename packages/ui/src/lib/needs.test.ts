@@ -107,11 +107,46 @@ describe("needsFrom", () => {
 });
 
 describe("withQuestions", () => {
-  it("stops an agent waiting on a task once the task has moved on", () => {
-    const shown = withQuestions({ writer: waiting("writer", { task: "t1", since: "x" }) }, [
-      task("t1", { status: "in_progress", blocked_reason: null }),
+  it("stops an agent waiting on a task once the task has moved on since", () => {
+    const since = "2026-10-19T09:00:10.250Z";
+    const shown = withQuestions({ writer: waiting("writer", { task: "t1", since }) }, [
+      task("t1", { status: "backlog", blocked_reason: null, updated_at: "2026-10-19 09:04:00" }),
     ]);
-    expect(shown.writer).toEqual({ agent: "writer", doing: "idle", what: "idle", since: "x" });
+    expect(shown.writer).toEqual({ agent: "writer", doing: "idle", what: "idle", since });
+  });
+
+  it("keeps it waiting when the boards' copy of the task is from before the wait began", () => {
+    // The boards were read before the agent asked, while its task was still in progress, and won't be again
+    // for a while: the wait is the newer news.
+    const now = {
+      writer: waiting("writer", { task: "t1", since: "2026-10-19T09:00:10.250Z" }),
+      // Within the same second as the task's last change, which the server keeps to the second.
+      planner: waiting("planner", { task: "t2", since: "2026-10-19T09:00:00.400Z" }),
+    };
+    const shown = withQuestions(now, [
+      task("t1", { status: "in_progress", blocked_reason: null, updated_at: "2026-10-19 09:00:00" }),
+      task("t2", {
+        status: "in_progress",
+        blocked_reason: null,
+        assignee: "planner",
+        updated_at: "2026-10-19 09:00:00",
+      }),
+    ]);
+    expect(shown).toBe(now);
+    expect(needsFrom(shown, [], []).map((n) => n.agent)).toEqual(["planner", "writer"]);
+  });
+
+  it("keeps it waiting on a task left done for a person to check, until the task changes", () => {
+    // The verify gate's escalation: the task stays done, never blocked.
+    const now = { writer: waiting("writer", { what: "needs you", task: "t1", since: "2026-10-19T09:00:00.500Z" }) };
+    const done = task("t1", { status: "done", blocked_reason: null, updated_at: "2026-10-19 09:00:00" });
+    expect(withQuestions(now, [done])).toBe(now);
+    expect(needsFrom(withQuestions(now, [done]), [], [done])).toEqual([
+      expect.objectContaining({ key: "task:t1", agent: "writer", kind: "question", task: "t1" }),
+    ]);
+    // Reopened by someone: it has moved on.
+    const reopened = { ...done, status: "backlog", updated_at: "2026-10-19 09:10:00" };
+    expect(withQuestions(now, [reopened]).writer?.doing).toBe("idle");
   });
 
   it("keeps it waiting while the task is still blocked, or isn't on the boards to say", () => {
@@ -166,12 +201,32 @@ describe("byWait", () => {
 
 describe("ownFlow", () => {
   it("knows the trusted-actions tools and anything named for spending money", () => {
-    for (const tool of ["purchase_item", "request_action", "request_read", "buy_tickets", "pay-invoice", "Checkout"])
+    for (const tool of [
+      "purchase_item",
+      "request_action",
+      "request_read",
+      "buy_tickets",
+      "pay-invoice",
+      "Checkout",
+      "placeOrder",
+      "buyTickets",
+      "createPayment",
+      "requestAction",
+    ])
       expect(ownFlow(tool)).toBe(true);
   });
 
   it("leaves ordinary tools to the world", () => {
-    for (const tool of ["exec", "write_file", "web_search", "payload_check", "reorder", undefined])
+    for (const tool of [
+      "exec",
+      "write_file",
+      "web_search",
+      "payload_check",
+      "reorder",
+      "readFile",
+      "payloadCheck",
+      undefined,
+    ])
       expect(ownFlow(tool)).toBe(false);
   });
 });

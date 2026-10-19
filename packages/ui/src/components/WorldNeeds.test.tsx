@@ -69,7 +69,9 @@ function card(needs: Need[], over: Partial<Parameters<typeof NeedCard>[0]> = {})
     failed: false,
     onOpenTask: vi.fn(),
     onAnswered: vi.fn(),
-    onDraft: vi.fn(),
+    onReply: vi.fn(),
+    inChat: () => false,
+    onShowChat: vi.fn(),
     onAbout: vi.fn(),
     onClose: vi.fn(),
     ...over,
@@ -108,6 +110,21 @@ describe("an approval, in the world", () => {
     expect(buttons()).not.toContain("Approve");
   });
 
+  it("approves nothing on the second click of a double click: one aimed at the list row this card replaced", async () => {
+    card([approval()]);
+    const approve = button("Approve");
+    await act(async () => {
+      approve.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+      approve.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 3 }));
+    });
+    await settle();
+    expect(fetched.filter((f) => f.method === "POST")).toEqual([]);
+    // A click of its own approves.
+    await act(async () => approve.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    await settle();
+    expect(fetched.filter((f) => f.method === "POST").map((f) => f.body)).toEqual([{ approved: true }]);
+  });
+
   it("denies, and says so", async () => {
     card([approval()]);
     await act(async () => button("Deny").click());
@@ -124,11 +141,27 @@ describe("an approval, in the world", () => {
     expect(container.textContent).toContain("Already answered somewhere else.");
   });
 
-  it("offers no Approve for a purchase: its details, and where it is approved", () => {
+  it("offers no Approve for a purchase: its details, where it is approved, and Deny", async () => {
     card([approval({ tool: "purchase_item", approval: call("purchase_item") })]);
     expect(container.textContent).toContain("purchase_item(target=staging");
     expect(buttons()).not.toContain("Approve");
-    expect(container.querySelector('a[href="#/approvals"]')).not.toBeNull();
+    expect(container.textContent).toContain("approved in the chat that asked for it");
+    expect(container.textContent).toContain("open in another tab or on another device");
+    // Nothing on this page holds it to show.
+    expect(buttons()).not.toContain("Show the chat");
+    await act(async () => button("Deny").click());
+    await settle();
+    expect(fetched.at(-1)).toEqual({ url: "/api/approvals/r1", method: "POST", body: { approved: false } });
+  });
+
+  it("shows the chat holding a purchase's request, when it is the one on this page", () => {
+    const props = card([approval({ tool: "buyTickets", approval: call("buyTickets") })], {
+      inChat: (r: string) => r === "r1",
+    });
+    expect(buttons()).not.toContain("Approve");
+    expect(container.textContent).toContain("the chat on this page");
+    act(() => button("Show the chat").click());
+    expect(props.onShowChat).toHaveBeenCalled();
   });
 
   it("offers no Approve without the details: still coming, or asked where the world can't answer", () => {
@@ -199,7 +232,7 @@ describe("a question on a task, in the world", () => {
 });
 
 describe("a question asked in a chat", () => {
-  it("is answered in a chat with the agent, the question quoted", () => {
+  it("is answered in the conversation it was asked in, the question quoted", () => {
     const props = card(
       [
         {
@@ -209,12 +242,13 @@ describe("a question asked in a chat", () => {
           what: "has a question for you",
           detail: "Saturday…",
           question: "Saturday or Monday?",
+          session: "s-asked",
         },
       ],
       { agent: "assistant" },
     );
-    act(() => button("Answer in a chat").click());
-    expect(props.onDraft).toHaveBeenCalledWith("About your question, “Saturday or Monday?”: ");
+    act(() => button("Answer in the chat").click());
+    expect(props.onReply).toHaveBeenCalledWith("About your question, “Saturday or Monday?”: ", "s-asked");
   });
 });
 

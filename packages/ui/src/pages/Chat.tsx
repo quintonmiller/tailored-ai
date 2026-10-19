@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
+import { fetchMessages, fetchSessions, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
 import { ApprovalArgs } from "../components/ApprovalArgs";
 import { useChatStore } from "../components/ChatContext";
@@ -11,7 +11,7 @@ import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
 import { useActiveProject } from "../hooks/useActiveProject";
 import type { MediaRef } from "../lib/content.js";
-import { agentOfKey, rowFor } from "../lib/conversations";
+import { agentOfKey, askedIn, rowFor } from "../lib/conversations";
 
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const store = useChatStore();
@@ -110,6 +110,29 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       setReading(false);
       store.setSelectedAgent(name === "default" ? "" : name, { fresh: true });
       setInput(text);
+      setPanelOpen(true);
+    },
+    onReply: (name, session, text) => {
+      // An answer goes where the question is: the conversation it asked in, which has everything it was about.
+      setReading(false);
+      setInput(text);
+      setPanelOpen(true);
+      const who = name === "default" ? "" : name;
+      if (session && session === store.sessionId) return;
+      // Otherwise your chat with it as it stands, and while a reply is on its way, after it (the switch waits).
+      const asItStands = () => store.setSelectedAgent(who);
+      if (!session || store.sending) return asItStands();
+      fetchSessions({ limit: 500 })
+        .then((rows) => {
+          const row = askedIn(rows, session, who);
+          if (row) store.loadSession(row);
+          else asItStands();
+        })
+        .catch(asItStands);
+    },
+    chatApprovals: store.approvals.map((a) => a.requestId),
+    onShowChat: () => {
+      setReading(false);
       setPanelOpen(true);
     },
     onSpoken: (conversation, key) => {

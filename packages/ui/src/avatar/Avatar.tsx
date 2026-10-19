@@ -69,6 +69,7 @@ export function Avatar({
   arriveFrom,
   onDoor,
   greet,
+  onGreeted,
   onBody,
 }: {
   url: string;
@@ -134,6 +135,8 @@ export function Avatar({
    * from a list. A new `n` is a new ask, for the same agent too.
    */
   greet?: { agent: string; place: string; n: number } | null;
+  /** The ask numbered `n` was carried out: the page is done with it, so a stage made later doesn't do it again. */
+  onGreeted?: (n: number) => void;
   /** A click on a body that the page deals with itself, instead of opening the menu: true when it did. */
   onBody?: (agent: string) => boolean;
 }) {
@@ -206,7 +209,9 @@ export function Avatar({
   bodyRef.current = onBody;
   const greetRef = useRef(greet);
   greetRef.current = greet;
-  // The last ask to stand by someone that was carried out: coming back to that place later isn't another.
+  const greetedRef = useRef(onGreeted);
+  greetedRef.current = onGreeted;
+  // The last ask to stand by someone that was carried out, until the page hears it was: once is enough.
   const greeted = useRef<number | undefined>(undefined);
   /** Stand in front of the agent asked for, when the stage is in its place and hasn't done so for this ask. */
   const greetIn = (s: Stage, at: string | undefined) => {
@@ -214,6 +219,7 @@ export function Avatar({
     if (!g || g.place !== at || greeted.current === g.n) return;
     greeted.current = g.n;
     s.standBefore(g.agent);
+    greetedRef.current?.(g.n);
   };
   // The place the stage shows. A different one arriving is a place come into: on a visit, through a door or by the
   // map; otherwise, the agent gone somewhere else. For the first room to arrive, and any change to the same place,

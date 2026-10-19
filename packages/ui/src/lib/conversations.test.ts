@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SessionRow } from "../api";
-import { agentOfKey, latestWith, nameOf, newChatKey } from "./conversations";
+import { agentOfKey, askedIn, latestWith, nameOf, newChatKey } from "./conversations";
 
 const row = (key: string | null, updated: string, pinned = 0): SessionRow => ({
   id: `s-${key}`,
@@ -60,6 +60,28 @@ describe("latestWith", () => {
 
   it("finds nothing with an agent you haven't talked to", () => {
     expect(latestWith(sessions, "trip-planner")).toBeUndefined();
+  });
+});
+
+describe("askedIn", () => {
+  const sessions = [
+    row("web:assistant:1700", "2026-10-19 09:00:00"),
+    row("web:default:1800", "2026-10-19 09:00:00"),
+    row("web:1900", "2026-10-19 09:00:00"),
+    row("discord:123:assistant", "2026-10-19 09:00:00"),
+  ];
+
+  it("is the conversation the question was asked in, when it is yours with that agent", () => {
+    expect(askedIn(sessions, "s-web:assistant:1700", "assistant")?.key).toBe("web:assistant:1700");
+    expect(askedIn(sessions, "s-web:default:1800", "")?.key).toBe("web:default:1800");
+  });
+
+  it("is none for another agent's, an older key, another channel's, one not listed, or none asked", () => {
+    expect(askedIn(sessions, "s-web:assistant:1700", "planner")).toBeUndefined();
+    expect(askedIn(sessions, "s-web:1900", "assistant")).toBeUndefined();
+    expect(askedIn(sessions, "s-discord:123:assistant", "assistant")).toBeUndefined();
+    expect(askedIn(sessions, "s-gone", "assistant")).toBeUndefined();
+    expect(askedIn(sessions, undefined, "assistant")).toBeUndefined();
   });
 });
 

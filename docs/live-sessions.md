@@ -862,14 +862,19 @@ The card shows each request the agent is waiting on:
   shows it: the tool, the line the approver is told, and every argument, with
   long ones cut short and the whole call as raw JSON a click away. **Approve**
   or **Deny**, with an optional note that goes to the agent with your answer.
-  Nothing is focused for you when the card opens, and no key approves on its
-  own. The card offers Approve only when the server has sent it the request's
-  details. A request asked on Discord, or anywhere else the world can't
-  answer for, says to answer it there.
-- **A purchase, or another action with a stricter approval of its own**
-  (the trusted-actions tools, and any tool named for spending money: `buy`,
-  `purchase`, `pay`, `checkout`, `order`). The card shows the details and a
-  link to the Approvals page. It never offers Approve.
+  Nothing is focused for you when the card opens, no key approves on its
+  own, and a double click that started on a row of the list doesn't land on
+  Approve: it takes a click of its own. The card offers Approve only when
+  the server has sent it the request's details. A request asked on Discord,
+  or anywhere else the world can't answer for, says to answer it there.
+- **Anything that may spend money, or has an approval of its own** (the
+  trusted-actions tools, and any tool named for spending money: `buy`,
+  `purchase`, `pay`, `checkout`, `order`, in any case, so `placeOrder` too).
+  The card shows the details and **Deny**, but never Approve: you approve it
+  in the chat that asked for it, where the chat's approval panel shows it.
+  When that chat is the one on this page, **Show the chat** puts it on
+  screen; otherwise the card says it is open in another tab or on another
+  device.
 - **A question on a task**: one an agent asked with `ask_user` during an
   autopilot run, or any task blocked on a question for you. You see the
   question as it was asked and the task (a click opens its card). **Send
@@ -878,9 +883,11 @@ The card shows each request the agent is waiting on:
   to pick up. A task waiting on you for something else, because it errored or
   needs checking, opens its card instead.
 - **Any other question**: `ask_user` in a chat, or a choice, form or
-  confirmation the agent sent. You see the question in full. **Answer in a
-  chat** opens a new chat with the agent, the question already quoted at the
-  start of your message.
+  confirmation the agent sent. You see the question in full. **Answer in the
+  chat** opens the conversation it asked in, when that was one of your web
+  chats with the agent, so the answer goes where the question is; otherwise
+  your chat with the agent as it stands. The question is already quoted at
+  the start of your message.
 
 What you did stays on the card after the agent stops waiting ("Approved.
 planner carries on."), and the `!` goes as soon as its activity changes.
@@ -889,6 +896,11 @@ answered somewhere else (the chat's approval panel, Discord, the Tasks page)
 leaves the list, the `!` and the map without a reload. A card still open on
 it says it was answered somewhere else. Tasks are asked for again every half
 minute, so a question answered on the Tasks page can take that long to go.
+A wait on a task ends in the world only once the task has changed since the
+wait began and isn't blocked: a task the boards last saw before the agent
+asked doesn't hide the question, and a task left done for you to check
+keeps its agent waiting until someone changes it or the agent takes another
+turn.
 
 Approvals come from `GET /api/approvals`, asked again whenever the requests
 agents wait on change, and are answered with `POST /api/approvals/:id`
@@ -906,16 +918,17 @@ stuck, idle or asleep. It holds a few words for a status line ("searching
 the web", "talking to planner"), a `look` the page can draw it holding (a
 camera for a photo, a laptop for code, a book for reading), who else is
 involved, and when it started. Waiting on you, it also says on what:
-`request`, the id of the approval request; `task`, the id of the task; and
-`question`, the question in full, which the status line cuts short. Open the
-State page to watch them change.
+`request`, the id of the approval request; `task`, the id of the task;
+`question`, the question in full, which the status line cuts short; and
+`session`, the conversation a question was asked in. Open the State page to
+watch them change.
 
 | doing | when |
 |---|---|
 | `thinking` | a turn is running and no tool is: any surface, from the web chat to a room wake |
 | `working` | a tool call is running; `what`, `look` and sometimes `detail` (the search, the page's host) say which |
 | `talking` | it sent a direct message or handed off work, or it is answering one (`with` names the other agent) |
-| `waiting` | it asked you something (`ask_user`, or a choice, form or confirmation) and its next turn hasn't come; a task needs you, until the task leaves `blocked`; or a call is waiting for your approval |
+| `waiting` | it asked you something (`ask_user`, or a choice, form or confirmation) and its next turn hasn't come; a task needs you, until the task moves out of `blocked` or the agent's next turn; or a call is waiting for your approval |
 | `stuck` | its last turn ran out of steps, went round in circles, or failed |
 | `asleep` | it has nothing to do and agents are paused, or it's an online agent switched off or paused on the Agents page |
 | `idle` | none of the above |

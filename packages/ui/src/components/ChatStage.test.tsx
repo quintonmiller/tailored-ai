@@ -22,6 +22,8 @@ const stage = vi.hoisted(() => ({
   }[],
   /** Whether each stage made was a visitor's. */
   visitors: [] as boolean[],
+  /** Each agent a stage was asked to stand you in front of. */
+  greeted: [] as string[],
   /** The last visitor stage's way to say a line started near you. */
   onLine: undefined as ((agent: string, text: string, nearness: number) => void) | undefined,
   /** The last stage's way to say a kiosk or a board was clicked. */
@@ -104,6 +106,7 @@ vi.mock("../avatar/stage", () => ({
         stage.entered.push(from);
       },
       setCompany: (company: { agent: string }[]) => stage.company.push(company.map((c) => c.agent)),
+      standBefore: (agent: string) => stage.greeted.push(agent),
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
       setTasks: (t: { id: string }[]) => stage.tasks.push(t),
@@ -144,8 +147,11 @@ let speechRecords: { id: string; data: { agent: string; text: string; at: string
 const chattedWith: string[] = [];
 /** New chats the page was asked to start, with what to say. */
 const drafts: [string, string][] = [];
+/** Answers the page was asked to start, to whom, in which conversation, with what to say. */
+const replies: [string, string | undefined, string][] = [];
 /** What every agent is doing, as the server's activity records say. */
-let activityRecords: { id: string; data: { agent: string; doing: string; what: string } }[] = [];
+let activityRecords: { id: string; data: { agent: string; doing: string; what: string; [more: string]: unknown } }[] =
+  [];
 /** The tasks the server keeps; a PATCH changes them, as the server would. */
 let taskRows: Record<string, unknown>[] = [];
 /** Every change sent to a task, in order. */
@@ -254,8 +260,10 @@ beforeEach(() => {
   stage.activities.length = 0;
   stage.speech.length = 0;
   stage.visitors.length = 0;
+  stage.greeted.length = 0;
   stage.tasks.length = 0;
   drafts.length = 0;
+  replies.length = 0;
   chattedWith.length = 0;
   agentsInfo = {};
   speechRecords = [];
@@ -482,6 +490,7 @@ function Harness({ following, ...props }: Partial<ChatStageOptions> & { followin
       if (following) setAgent(name);
     },
     onDraft: (name, text) => drafts.push([name, text]),
+    onReply: (name, session, text) => replies.push([name, session, text]),
     ...props,
   });
   return (
@@ -828,6 +837,65 @@ describe("the chat page's scene", () => {
     await go("talker");
     expect(chattedWith).toEqual(["planner", "talker", "planner", "talker"]);
     expect(stage.visitors.at(-1)).toBe(false);
+  });
+
+  it("goes straight to an agent waiting on you, in front of it once, and not again on a later visit", async () => {
+    activityRecords = [
+      {
+        id: "planner",
+        data: {
+          agent: "planner",
+          doing: "waiting",
+          what: "has a question for you",
+          question: "Window or aisle?",
+          session: "s-asked",
+        },
+      },
+    ];
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Needs you · 1").click());
+    await settle();
+    const row = container.querySelector(".world-needs-row") as HTMLButtonElement;
+    await act(async () => row.click());
+    await settle(60);
+    // Into planner's home in your own body, standing in front of it, with its question open.
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.company.at(-1)).toEqual(["planner"]);
+    expect(stage.greeted).toEqual(["planner"]);
+    expect(container.querySelector(".world-need")?.textContent).toContain("Window or aisle?");
+    // The 3D view off and on again: a new stage, in the same place, and you aren't sent to planner again.
+    const toggle = () => container.querySelector(".toggle-3d") as HTMLButtonElement;
+    await act(async () => toggle().click());
+    await settle();
+    const made = stage.calls.length;
+    await act(async () => toggle().click());
+    await settle(60);
+    expect(stage.calls.length).toBe(made + 1);
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.greeted).toEqual(["planner"]);
+    // The answer goes to the conversation it asked in.
+    await act(async () => tool("Needs you · 1").click());
+    await settle();
+    await act(async () => (container.querySelector(".world-needs-row") as HTMLButtonElement).click());
+    await settle(60);
+    expect(stage.greeted).toEqual(["planner", "planner"]);
+    await act(async () => tool("Answer in the chat").click());
+    expect(replies).toEqual([["planner", "s-asked", "About your question, “Window or aisle?”: "]]);
+    // Back, and to planner's home again by the map: a visit like any other, from its start.
+    await act(async () => tool("Back to talker").click());
+    await settle(60);
+    expect(stage.visitors.at(-1)).toBe(false);
+    await act(async () => tool("Map").click());
+    await settle();
+    const planner = [...container.querySelectorAll(".world-map-who-name")]
+      .find((n) => n.textContent === "planner")
+      ?.closest("button") as HTMLButtonElement;
+    await act(async () => planner.click());
+    await settle(60);
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.greeted).toEqual(["planner", "planner"]);
   });
 
   it("says who you came back to even when the switch away never happened, so a waiting one is called off", async () => {

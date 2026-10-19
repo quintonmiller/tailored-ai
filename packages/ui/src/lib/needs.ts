@@ -42,6 +42,8 @@ export interface Need {
   approval?: PendingApprovalRequest;
   /** The task it is about. */
   task?: string;
+  /** The conversation a question was asked in, where an answer to it goes. */
+  session?: string;
 }
 
 /** A question a task is blocked on for you. */
@@ -54,6 +56,12 @@ const QUESTION = "question";
  * on a question for you is waiting on you, though the turn that asked has
  * long ended or the server has restarted since. The same object when nothing
  * changes.
+ *
+ * A task has moved on only when it changed after the wait began and isn't
+ * blocked. The boards are read every half minute, so a task they show
+ * unblocked from before the wait is old news, not an answer; and a task can
+ * need you without being blocked at all (the verify gate leaves one done for
+ * a person to check).
  */
 export function withQuestions(
   activities: Record<string, AgentActivity>,
@@ -67,7 +75,7 @@ export function withQuestions(
   };
   for (const [agent, a] of Object.entries(activities)) {
     const task = a.doing === "waiting" && a.task ? byId.get(a.task) : undefined;
-    if (task && task.status !== "blocked")
+    if (task && movedOn(task, a.since))
       put(agent, { agent, doing: "idle", what: "idle", ...(a.since ? { since: a.since } : {}) });
   }
   // The server sends the most recently changed first: an agent with several questions shows the latest.
@@ -85,6 +93,14 @@ export function withQuestions(
     });
   }
   return out ?? activities;
+}
+
+/** Whether a task waited on since `since` has moved on since: changed after, and not blocked. */
+function movedOn(task: NeedTask, since: string | undefined): boolean {
+  if (task.status === "blocked") return false;
+  const began = whenMs(since);
+  // A wait with no start known can't be older than anything: the task's word stands.
+  return !Number.isFinite(began) || whenMs(task.updated_at) > began;
 }
 
 /**
@@ -124,6 +140,7 @@ export function needsFrom(
       ...(a.question ? { question: a.question } : {}),
       ...(a.since ? { since: a.since } : {}),
       ...(a.tool ? { tool: a.tool } : {}),
+      ...(a.session ? { session: a.session } : {}),
     };
     let need: Need;
     if (a.request) {
@@ -165,10 +182,14 @@ export function needsFrom(
 const OWN_FLOW = new Set(["request_action", "purchase_item", "request_read"]);
 const MONEY = new Set(["purchase", "purchases", "buy", "pay", "payment", "payments", "checkout", "order", "orders"]);
 
-/** Whether a tool's approval belongs to a stricter flow than a click in the world. */
+/**
+ * Whether a tool's approval belongs to a stricter flow than a click in the
+ * world. Its name is read word by word, in any case: `buy_tickets`,
+ * `pay-invoice`, `placeOrder`.
+ */
 export function ownFlow(tool: string | undefined): boolean {
   if (!tool) return false;
-  const name = tool.toLowerCase();
+  const name = tool.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
   return OWN_FLOW.has(name) || name.split(/[^a-z0-9]+/).some((word) => MONEY.has(word));
 }
 
