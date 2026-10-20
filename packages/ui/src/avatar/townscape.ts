@@ -164,7 +164,7 @@ function windowAt(body: Parts, glass: Parts, at: V3, turn: number, w = 0.9, h = 
 /** A house: its walls in its owner's colour, its roof, its windows, a front garden with a path, and what its owner does. */
 function house(body: Parts, glass: Parts, lights: Parts, b: TownBuilding) {
   const [w, d, wall] = b.size;
-  const look = houseLook(b.owner, b.style);
+  const look = houseLook(b.owner, b.style, b.color);
   const tall = wall * look.storeys - (look.storeys > 1 ? 0.4 : 0);
   body.box(w + 0.18, 0.3, d + 0.18, STONE, [0, 0.15, 0]);
   body.box(w, tall, d, look.walls, [0, tall / 2, 0]);

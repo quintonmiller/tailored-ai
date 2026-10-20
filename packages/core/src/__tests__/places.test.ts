@@ -46,6 +46,7 @@ import {
   talkedAt,
   talkNow,
   talkOf,
+  townBuildings,
   transcript,
   VISIT_SCHEMA,
   VISIT_TYPE,
@@ -2587,6 +2588,25 @@ describe("what a body wears, and the home that suits what an agent is for", () =
       },
       { id: homeId("bookkeeper"), kind: "home", owner: "bookkeeper", role: "bookkeeper", wear: ["bow tie", "glasses"] },
       { id: "shared:den", kind: "shared" },
+    ]);
+  });
+
+  it("gives each house in the town its owner's role and the colour its body chose, and leaves the rest be", () => {
+    const chosen: Chosen = { bodies: new Map([["coder", { color: "#2a8a8a" }]]), wear: new Map() };
+    expect(
+      townBuildings(
+        [
+          { id: homeId("coder"), owner: "coder" },
+          { id: homeId("bookkeeper"), owner: "bookkeeper" },
+          { id: "shared:den" },
+        ],
+        roles,
+        chosen,
+      ),
+    ).toEqual([
+      { id: homeId("coder"), owner: "coder", role: "coder", color: "#2a8a8a" },
+      { id: homeId("bookkeeper"), owner: "bookkeeper", role: "bookkeeper" },
+      { id: "shared:den" },
     ]);
   });
 

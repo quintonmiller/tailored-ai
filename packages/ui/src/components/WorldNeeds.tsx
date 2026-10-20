@@ -44,6 +44,7 @@ export function NeedsList({
   onOpen: (need: Need) => void;
   onClose: () => void;
 }) {
+  const colorOf = useAgentColor();
   return (
     <WorldPanel kicker="Needs you" title="Waiting on you" className="world-needs" onClose={onClose}>
       {needs.length === 0 ? (
@@ -58,7 +59,13 @@ export function NeedsList({
                 <span className="world-map-dot" aria-hidden="true">
                   !
                 </span>
-                <span className="world-needs-who">{nameOf(need.agent)}</span>
+                {/* The default agent's body keeps the model's own colours, so it has no dot, as in the chat. */}
+                <span
+                  className="world-needs-who"
+                  style={need.agent === "default" ? undefined : { ["--who" as string]: colorOf(need.agent) }}
+                >
+                  {nameOf(need.agent)}
+                </span>
                 <span className="world-needs-when">{waited(need) ?? ""}</span>
                 <span className="world-needs-what">
                   {needWords(need)}

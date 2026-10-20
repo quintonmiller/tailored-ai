@@ -1,6 +1,7 @@
 import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardWidgetSpec } from "../api";
 import { BarSwitch } from "../components/WorldBar";
+import { useAgentColor } from "../lib/body-colors";
 import type { Need } from "../lib/needs";
 import { type Anchor, SHEET_BELOW } from "./anchors";
 import type { BoardTask } from "./boards";
@@ -113,6 +114,7 @@ export function Avatar({
   speech,
   menuFor,
   visitor = false,
+  partner,
   onNear,
   onPresent,
   tools,
@@ -189,6 +191,8 @@ export function Avatar({
   menuFor?: (agent: string) => AgentAction[];
   /** The body is the visitor's own: walked with the keys, or put away to fly. */
   visitor?: boolean;
+  /** The agent the chat is with, when it isn't the body shown: out in the town, its tag is kept however far off. */
+  partner?: string;
   /** The agent a visitor is standing next to, as it changes. */
   onNear?: (agent: string | undefined) => void;
   /** The agents whose bodies are in the place, those still walking out of it included, as that changes. */
@@ -464,6 +468,8 @@ export function Avatar({
   const [travel, setTravel] = useState<Travel>("walk");
   const agentRef = useRef(agent);
   agentRef.current = agent;
+  const partnerRef = useRef(partner);
+  partnerRef.current = partner;
   const roomRef = useRef(room);
   roomRef.current = room;
   const doorRef = useRef(onDoor);
@@ -552,6 +558,7 @@ export function Avatar({
           onUse: (action: string, on?: UseSpot, thing?: string) => onUseRef.current?.(action, on, thing),
           onPresent: (who: string[]) => presentRef.current?.(who),
           exitFor: (who: string) => exitRef.current?.(who),
+          partner: () => partnerRef.current,
           onFocus: setReading,
           // A surface under the pointer says what clicking it does, as a door says where it goes; so does the plaque.
           onSurfaceHover: (label: string | undefined, at?: { x: number; y: number }) =>
@@ -881,6 +888,9 @@ function AgentMenu({
       window.removeEventListener("pointerdown", away);
     };
   }, [onClose]);
+  // Its name by a dot in its body's colour, as everywhere else it is listed; the default agent's body keeps the model's
+  // own colours, so it has none, as in the chat.
+  const color = useAgentColor()(agent);
   // Out on its day, it says where, though it has nothing to do.
   const status = activity && (activity.doing !== "idle" || activity.routine) ? activity.what : "idle";
   const when = activity?.doing !== "idle" ? since(activity?.since) : undefined;
@@ -893,7 +903,10 @@ function AgentMenu({
       style={{ left: at.x, top: at.y }}
     >
       <div className="agent-menu-head">
-        <strong>{agent === "default" ? "Default agent" : agent}</strong>
+        <strong className="agent-menu-name">
+          {agent !== "default" && <span className="agent-menu-dot" style={{ background: color }} aria-hidden="true" />}
+          {agent === "default" ? "Default agent" : agent}
+        </strong>
         <span className={`agent-menu-status agent-menu-${activity?.doing ?? "idle"}`}>
           {status}
           {activity?.detail ? ` · ${activity.detail}` : ""}

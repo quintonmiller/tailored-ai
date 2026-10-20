@@ -25,6 +25,7 @@ import {
   errandsFrom,
   looksOf,
   spotIn,
+  spotsToGo,
   spotWords,
   stayWords,
   WEAR_TYPE,
@@ -36,6 +37,26 @@ import { type StateCaller, StateService } from "../state/service.js";
 import type { ToolContext } from "../tools/interface.js";
 
 const home = (): Place => firstHome("planner's room");
+/** A home with a bookcase its agent made with the `build` tool put in it, and a clock it made on the desk. */
+const madeHome = (): Place => {
+  const place = home();
+  return {
+    ...place,
+    props: [
+      ...place.props,
+      {
+        id: "model",
+        name: "the bookcase",
+        kind: "model",
+        at: [-1.2, -1],
+        facing: 0,
+        model: "planner:bookcase",
+        size: [0.9, 1.6, 0.35],
+      },
+      { id: "small_model", name: "the clock", kind: "small_model", at: [0, 0], facing: 0, on: "desk" },
+    ],
+  };
+};
 
 describe("reading a change to a body", () => {
   const models = ["robot.vrm", "fox.vrm"];
@@ -169,6 +190,16 @@ describe("where in a place words mean", () => {
     expect(spotIn(place, "by the floor lamp")).toEqual({ item: "lamp", name: "by the floor lamp" });
     expect(spotIn(place, "the hot tub")).toBeUndefined();
     expect(spotIn(place, "")).toBeUndefined();
+  });
+
+  it("stands by a thing an agent made and put there, which brings no spot of its own", () => {
+    const place = madeHome();
+    expect(spotIn(place, "by the bookcase")).toEqual({ item: "model", name: "by the bookcase" });
+    expect(spotIn(place, "go and stand next to the bookcase")).toEqual({ item: "model", name: "by the bookcase" });
+    expect(spotIn(place, "the clock")).toEqual({ item: "small_model", name: "by the clock" });
+    // Listed with the spots, each once, after them.
+    expect(spotsToGo(place)).toEqual([...spotsToGo(home()), "the bookcase", "the clock"]);
+    expect(spotsToGo(home())).not.toContain("the bookcase");
   });
 
   it("says where it stays the way a sentence needs it", () => {
@@ -353,6 +384,20 @@ describe("the body tool", () => {
     expect(nowhere.error).toMatch(
       /There's no spot or place called "the moon"\. Spots here: the middle of the room, the couch/,
     );
+  });
+
+  it("lists what agents made among the spots, and goes to stand by one", async () => {
+    tool = new BodyTool(
+      () => state,
+      world({ here: async (_s, _c, agent) => ({ id: homeId(agent), place: madeHome(), words: "You are at home." }) }),
+    );
+    const look = String((await tool.execute({ action: "look" }, as("planner"))).output);
+    expect(look).toMatch(/Spots here to go to: the middle of the room, .*the bookshelf, the bookcase, the clock\./);
+    const went = await tool.execute({ action: "go", to: "by the bookcase" }, as("planner"));
+    expect(went.output).toBe(
+      "You go and stay by the bookcase until you choose otherwise. Work and conversations still come first; you come back after.",
+    );
+    expect((await body("planner")).spot).toEqual({ place: homeId("planner"), item: "model", name: "by the bookcase" });
   });
 
   it("is for agents with a body", async () => {

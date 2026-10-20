@@ -3,12 +3,13 @@ import { type ExploratoryAgent, type ExploratoryRun, fetchExploratoryAgents, fet
 import type { BodyChange, BodyLooks } from "../avatar/body";
 import type { AgentActivity } from "../avatar/doing";
 import { toggleWear, WEAR, wearWords } from "../avatar/wear";
+import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
 import { asleepWords, clockTime as clock, lastDid, wakeWords } from "../lib/did";
 import { ago, lasting } from "../lib/tasks";
 import { nextTurn } from "../lib/wakes";
 import { BodyControls, bodyWords } from "./BodyControls";
-import { agentColor, roleWord } from "./WorldMap";
+import { roleWord } from "./WorldMap";
 import { WorldPanel } from "./WorldPanel";
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -131,6 +132,8 @@ export function WorldAgent({
   }, [(wear ?? []).join(",")]);
   const worn = dressed ?? wear ?? [];
   const [bodyOpen, setBodyOpen] = useState(false);
+  // The colour its body is, as every dot by its name is: the one it chose, or the one its name gives it.
+  const colorOf = useAgentColor();
   const load = useCallback(async () => {
     if (!online) return;
     const [state, runs] = await Promise.all([
@@ -199,11 +202,7 @@ export function WorldAgent({
       label={`About ${name}`}
       title={
         <span className="world-agent-name">
-          <span
-            className="world-agent-dot"
-            style={{ background: agentColor(agent, looks?.color) }}
-            aria-hidden="true"
-          />
+          <span className="world-agent-dot" style={{ background: colorOf(agent) }} aria-hidden="true" />
           {name}
           {roleWord(agent, role) && <span className="world-agent-role">{role}</span>}
         </span>

@@ -9,6 +9,8 @@
  * Units are metres, +X east and +Z south (toward the viewer), as in a room;
  * a `facing` of 0° looks south.
  */
+
+import { hexToHsl } from "./body";
 import type { AgentActivity } from "./doing";
 import { hueFor } from "./doing";
 import type { Obstacle } from "./locomotion";
@@ -41,6 +43,8 @@ export interface TownBuilding {
   owner?: string;
   /** What its owner does, by role id (`places-roles.ts` in core): what stands by the house says so. */
   role?: string;
+  /** "#rrggbb": the colour its owner chose for its body, which its house is washed in instead of its name's. */
+  color?: string;
   style: number;
   street: string;
   /** The pilasters along its front, as x from its middle, and how wide each is: the town hall's. */
@@ -120,19 +124,23 @@ export type Roof = "gable" | "front-gable" | "hip";
 
 /**
  * A house's colours and shape, from its owner and its own style: walls a pale
- * wash of the owner's colour (the colour the map and its body show), the
- * door, shutters and trim in the colour itself, a roof from a few that suit,
- * one roof shape of three, and one storey or two.
+ * wash of the owner's colour (the colour the map and its body show: the one
+ * it chose, `color`, or the one its name gives it), the door, shutters and
+ * trim in the colour itself, a roof from a few that suit, one roof shape of
+ * three, and one storey or two. A grey body's house is grey.
  */
-export function houseLook(owner: string | undefined, style: number) {
-  // The map's swatch for an agent: hsl(145 + hue, 52%, 52%).
-  const hue = (145 + (hueFor(owner ?? "") ?? 0)) % 360;
+export function houseLook(owner: string | undefined, style: number, color?: string) {
+  // The map's swatch for an agent: the colour it chose, or hsl(145 + hue, 52%, 52%).
+  const chosen = color ? hexToHsl(color) : undefined;
+  const hue = chosen ? chosen[0] : (145 + (hueFor(owner ?? "") ?? 0)) % 360;
+  // As saturated as the colour it chose, up to the swatch's own.
+  const k = chosen ? Math.min(1, chosen[1] / 0.52) : 1;
   const roofs = [0x8a4b3a, 0x5d6470, 0x7a5c48, 0x4d5a4a, 0x9a6040];
   const roof: Roof = style < 0.4 ? "gable" : style < 0.75 ? "front-gable" : "hip";
   return {
-    walls: hsl(hue, 0.42, 0.84),
-    trim: hsl(hue, 0.52, 0.42),
-    accent: hsl(hue, 0.52, 0.52),
+    walls: hsl(hue, 0.42 * k, 0.84),
+    trim: hsl(hue, 0.52 * k, 0.42),
+    accent: hsl(hue, 0.52 * k, 0.52),
     roofColor: roofs[Math.floor(style * 997) % roofs.length],
     roof,
     storeys: style > 0.82 ? 2 : 1,
