@@ -5,10 +5,12 @@
  * how a change reads in the room's recent changes, and the undo and redo of
  * your own changes. Whether a thing fits where you put it is the server's to
  * say, by the same checks the agents' `place` tool uses (`places-edit.ts` in
- * core), so a person can't make a room the tool would refuse. The stage drags
- * and draws by what this says; the page saves.
+ * core), so a person can't make a room the tool would refuse. A person can
+ * put in a door to any other place, and take out a door anyone put in. The
+ * stage drags and draws by what this says; the page saves.
  */
-import type { Prop, Room, RoomChange } from "./scene";
+import { type MapPlace, placeTitle } from "../lib/wayfinding";
+import type { Prop, Room, RoomChange, RoomDoor } from "./scene";
 
 /** How far apart the points a dragged thing snaps to are, in metres. Shift drags it freely. */
 export const GRID = 0.1;
@@ -442,7 +444,9 @@ export type Edit =
   | { op: "remove"; item: string }
   | { op: "color"; item: string; color: string }
   /** What a widget shows (`Prop.shows`); null, what its kind shows by itself. */
-  | { op: "shows"; item: string; shows: string | null };
+  | { op: "shows"; item: string; shows: string | null }
+  /** A door to another place, by its id, with its way back on the other side. */
+  | { op: "door"; to: string };
 
 /**
  * How a change reads after your name in the room's recent changes, the way
@@ -450,9 +454,18 @@ export type Edit =
  * "made the couch sage". `before` is the room it was made to, and `after`
  * the room it made.
  */
-export function changeWords(edit: Edit, before: Pick<Room, "props">, after: Pick<Room, "props">): string {
+export function changeWords(
+  edit: Edit,
+  before: Pick<Room, "props">,
+  after: Pick<Room, "props">,
+  /** What the place a door leads to is called: "the lounge", "planner's home". */
+  named: (to: string) => string | undefined = () => undefined,
+): string {
   const was = (id: string) => before.props.find((p) => p.id === id);
   const now = (id: string) => after.props.find((p) => p.id === id);
+  if (edit.op === "door") return `put in a door to ${named(edit.to) ?? "another place"}`;
+  const door = "item" in edit ? doorItemTo(edit.item) : undefined;
+  if (door) return `took out the door to ${named(door) ?? "another place"}`;
   if (edit.op === "add") {
     const like = edit.like ? was(edit.like) : undefined;
     if (like) return `copied ${like.name}`;
@@ -549,4 +562,54 @@ export function redoing<P>(steps: Steps<P>): { step: Step<P>; steps: Steps<P> } 
   const step = steps.undone.at(-1);
   if (!step) return undefined;
   return { step, steps: { done: [...steps.done, step], undone: steps.undone.slice(0, -1) } };
+}
+
+// --------------------------------------------------------------------------
+// Doors put in
+// --------------------------------------------------------------------------
+
+/** The id a door put in is picked by, as a thing is picked by its id. */
+export const doorItem = (to: string) => `door:${to}`;
+/** The place a door put in leads to, from the id it is picked by; undefined for a thing's id. */
+export const doorItemTo = (id: string | undefined) => (id?.startsWith("door:") ? id.slice("door:".length) : undefined);
+
+/** The doors put in a room, which a person may take out: those that say who put them in. */
+export function madeDoors(room: Pick<Room, "doors">): RoomDoor[] {
+  return (room.doors ?? []).filter((d) => !!d.by);
+}
+
+/** A place a door can lead to, for the catalogue: its id, what it is called, and what kind of place it is in a word. */
+export interface Linkable {
+  id: string;
+  label: string;
+  kind: string;
+}
+
+const KIND_WORDS: Record<string, string> = {
+  home: "Home",
+  shared: "Shared place",
+  room: "Meeting room",
+  lobby: "The town hall",
+};
+
+/**
+ * The places a person can put a door in to from `here`: every home, shared
+ * place and meeting room, and the town hall, but this place and those it has
+ * a door to already; homes first, then by name. Filtered by `query` when
+ * there is one, by what each is called.
+ */
+export function linkable(places: MapPlace[], here: string, room: Pick<Room, "doors">, query = ""): Linkable[] {
+  const linked = new Set((room.doors ?? []).map((d) => d.to));
+  const q = query.trim().toLowerCase().replace(/^#/, "");
+  const order = ["home", "shared", "room", "lobby"];
+  return places
+    .filter((p) => KIND_WORDS[p.kind] && p.id !== here && !linked.has(p.id))
+    .map((p) => ({ id: p.id, label: placeTitle(p), kind: KIND_WORDS[p.kind] }))
+    .filter((p) => !q || p.label.toLowerCase().replace(/^#/, "").includes(q))
+    .sort(
+      (a, b) =>
+        order.indexOf(places.find((p) => p.id === a.id)?.kind ?? "") -
+          order.indexOf(places.find((p) => p.id === b.id)?.kind ?? "") ||
+        a.label.localeCompare(b.label, "en", { sensitivity: "base" }),
+    );
 }

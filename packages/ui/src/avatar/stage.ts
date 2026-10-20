@@ -81,7 +81,19 @@ import {
   stationSpot,
 } from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
-import { footprint, heightOf, type Kinds, type Move, moveKey, onFloor, onTop, onWall, ridersOf } from "./editing";
+import {
+  doorItem,
+  doorItemTo,
+  footprint,
+  heightOf,
+  type Kinds,
+  type Move,
+  moveKey,
+  onFloor,
+  onTop,
+  onWall,
+  ridersOf,
+} from "./editing";
 import { type Fadeable, paintFaded } from "./fade";
 import { Figure, loadModel } from "./figure";
 import { faceToFace, sideFor } from "./greet";
@@ -778,6 +790,8 @@ export async function createStage(
   // How to light each door up while the pointer is over it, and the door it is over.
   let doorHighlights = new Map<RoomDoor, (on: boolean) => void>();
   let overDoor: RoomDoor | undefined;
+  // The door put in that is picked while rearranging, lit up as one under the pointer is.
+  let pickedDoor: RoomDoor | undefined;
   /** The pointer is over a door now (`at` on the stage), or none: it lights up, and the last one goes back. */
   const hoverDoor = (door: RoomDoor | undefined, at?: { x: number; y: number }) => {
     if (door !== overDoor) {
@@ -973,8 +987,9 @@ export async function createStage(
     doorLights = [];
     doorNotes = [];
     doorHighlights = new Map();
-    // The door the pointer was over is gone with the room it was in.
+    // The door the pointer was over is gone with the room it was in, and so is one picked while rearranging.
     if (overDoor) hoverDoor(undefined);
+    pickedDoor = undefined;
     for (const door of room.doors ?? []) {
       // Outdoors, a door is in the front of a building, framed in its trim, as tall as a ground floor.
       const outside = !!door.at;
@@ -982,6 +997,7 @@ export async function createStage(
         freestanding: !outside && (door.wall === "front" || door.wall === "right"),
         trim: outside ? "#f2efe8" : room.walls,
         height: outside ? 3.2 : room.height,
+        signpost: !outside && door.wall === "right",
       });
       const { at, facing } = doorFrame(room, door);
       built.group.position.set(at[0], 0, at[1]);
@@ -2046,12 +2062,20 @@ export async function createStage(
       camera,
     );
   };
-  /** The thing under the pointer, by id: what a click picks up while rearranging. */
+  /**
+   * The thing under the pointer, by id: what a click picks up while
+   * rearranging. A door someone put in can be picked too, to take out, by
+   * the id the page knows it by (`doorItem`).
+   */
   const thingAt = (e: At): string | undefined => {
     aim(e);
-    for (const hit of ray.intersectObjects([...things.values()], true))
-      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent)
+    const made = clickable.filter((o) => !!(o.userData.door as RoomDoor | undefined)?.by);
+    for (const hit of ray.intersectObjects([...things.values(), ...made], true))
+      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
         if (typeof o.userData.prop === "string") return o.userData.prop as string;
+        const door = o.userData.door as RoomDoor | undefined;
+        if (door?.by) return doorItem(door.to);
+      }
     return undefined;
   };
   /** Where the pointer's line of sight crosses a height, on the floor plan. */
@@ -2160,9 +2184,17 @@ export async function createStage(
    */
   const markEdit = () => {
     putBack();
+    // A door put in, picked: lit up until something else is.
+    const to = doorItemTo(editing?.selected);
+    const door = to ? room.doors?.find((d) => d.to === to && d.by) : undefined;
+    if (door !== pickedDoor) {
+      if (pickedDoor && pickedDoor !== overDoor) doorHighlights.get(pickedDoor)?.(false);
+      if (door) doorHighlights.get(door)?.(true);
+      pickedDoor = door;
+    }
     const prop = editing?.selected ? room.props.find((p) => p.id === editing?.selected) : undefined;
     // For anyone inspecting the page, like `data-motion`: what is picked, and whether it fits where it is going.
-    host.dataset.picked = prop?.id ?? "";
+    host.dataset.picked = prop?.id ?? (door ? doorItem(door.to) : "");
     if (!editing || !prop) {
       host.dataset.fit = "";
       handles.show(undefined, undefined, "picked");

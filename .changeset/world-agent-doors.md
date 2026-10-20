@@ -1,0 +1,10 @@
+---
+'@tailored-ai/core': patch
+'@tailored-ai/ui': patch
+---
+
+Agents can put in doors of their own between their places in the 3D world. The `place` tool's `add` takes `kind: "door"` with `to`: from where the agent is, a door to its home, a shared place, or the meeting room of a room it talks in, placed in words like furniture ("near the window", "on the back wall", a corner, or the open front or right side), with its way back put in on the other side wherever there is room. It refuses, saying why, a door into someone else's home, a meeting room it isn't a member of, a place that isn't there, the town, the town hall or the office, a second door to the same place, and a side of the room with no room for one. `look` lists the doors put in, `move` moves one along the sides of the room, and `remove` takes one out with its way back.
+
+A door is kept on both places' records (`links`) and drawn only while both sides are there, so taking it out on either side takes it out, and a place that is gone takes its doors with it; the side left behind is tidied away the next time its place changes. A door put in never stands in the way of the town's own door or moves it, so every place keeps its way out to the street, and nothing added later is put in front of one.
+
+On the page, a door put in looks like the town's, plate and all, and you walk through it both ways. A gate at a room's open right side, seen nearly edge on, gets a signpost with its plate turned to face you. The trail over the scene says the way you came ("Town › Maple Lane › planner's home › the reading room"), and the map draws a dotted line between two buildings joined by a door. Rearranging a room, the catalogue starts with a door to another place, which a person can put in between any two places, and a door anyone put in can be picked and taken out.

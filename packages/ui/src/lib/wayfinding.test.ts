@@ -6,11 +6,14 @@
 import { describe, expect, it } from "vitest";
 import {
   areaTitle,
+  HOPS_KEPT,
+  hopsAfter,
   type MapArea,
   type MapPlace,
   mapIndex,
   placeTitle,
   plaqueWords,
+  trailThrough,
   trailTo,
   wayInto,
 } from "./wayfinding";
@@ -246,5 +249,37 @@ describe("mapIndex", () => {
   it("puts rooms where something is happening first, and keeps the rest in the order they came", () => {
     const index = mapIndex(places, areas, {}, "", (p) => (p.id === "room:local:trip" ? 0 : 10));
     expect(index.rooms.map((p) => p.id)).toEqual(["room:local:trip", "room:local:budget", "room:local:zines"]);
+  });
+});
+
+describe("the trail through doors put in", () => {
+  it("grows by the place you left, going on; shortens to before where you go back to", () => {
+    expect(hopsAfter([], "home:analyst", "shared:lounge")).toEqual(["home:analyst"]);
+    expect(hopsAfter(["home:analyst"], "shared:lounge", "room:local:trip")).toEqual(["home:analyst", "shared:lounge"]);
+    // Back through the door you came in by.
+    expect(hopsAfter(["home:analyst", "shared:lounge"], "room:local:trip", "shared:lounge")).toEqual(["home:analyst"]);
+    expect(hopsAfter(["home:analyst"], "shared:lounge", "home:analyst")).toEqual([]);
+    // Only the last few: where you came from, not the whole walk.
+    const long = hopsAfter(["a", "b", "c"], "d", "e");
+    expect(long).toHaveLength(HOPS_KEPT);
+    expect(long.at(-1)).toBe("d");
+  });
+
+  it("says where you are the way you came: the street of the first place, each place since, and here", () => {
+    expect(trailThrough("shared:lounge", ["home:analyst"], places, areas)).toEqual([
+      { id: "town", label: "Town" },
+      { id: "town", label: "Maple Lane", from: "home:analyst" },
+      // A door away: back through it.
+      { id: "home:analyst", label: "analyst's home", from: "shared:lounge" },
+      { id: "shared:lounge", label: "the lounge" },
+    ]);
+    expect(
+      trailThrough("room:local:trip", ["home:analyst", "shared:lounge"], places, areas).map((c) => c.label),
+    ).toEqual(["Town", "Maple Lane", "analyst's home", "the lounge", "#trip"]);
+    // Came no such way, or by a place that is off the map now: the plain trail.
+    expect(trailThrough("shared:lounge", [], places, areas)).toEqual(trailTo("shared:lounge", places, areas));
+    expect(trailThrough("shared:lounge", ["home:gone"], places, areas)).toEqual(
+      trailTo("shared:lounge", places, areas),
+    );
   });
 });

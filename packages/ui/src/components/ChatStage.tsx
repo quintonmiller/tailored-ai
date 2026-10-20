@@ -56,7 +56,7 @@ import { ANSWERED_ELSEWHERE, answerable, type Need, needsFrom, requestsOf, withQ
 import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
-import { isCommon, trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
+import { hopsAfter, isCommon, trailThrough, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
@@ -77,6 +77,9 @@ import { facesIn, useWidgetFeeds, whoseIn } from "./WorldWidgets";
  */
 
 const STAGE_KEY = "tai.chat.stage";
+/** No places come through by doors put in: the same empty list each time, so nothing worked out from it is again. */
+const NO_HOPS: string[] = [];
+const NO_THROUGH = { at: "", hops: NO_HOPS };
 const VOICES_KEY = "tai.world.voices";
 /** Lines waiting to be spoken at most: past this, the oldest are let go rather than heard late. */
 const VOICE_QUEUE = 2;
@@ -160,6 +163,8 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
       // here, or changing a record a face here shows, so its picture from across the room says what is true now.
       if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
       else if (drawsModel(shown, change) || facesShow(shown, change.type)) void load();
+      // A door put in or taken out somewhere else may be the way back to here, which shows once both sides are in.
+      if (change.type === "place" && id && change.id !== id && relinked(change)) void load(true);
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -273,6 +278,11 @@ export function steady(was: SceneInfo | null, next: SceneInfo): SceneInfo {
 /** Whether two lists of doors are the same doors in the same places. */
 export function sameDoors(a: RoomDoor[] | undefined, b: RoomDoor[] | undefined): boolean {
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+/** A change to the doors put in a place: a door elsewhere shows only once both its sides are in. */
+function relinked(change: { before?: Record<string, unknown>; after?: Record<string, unknown> }): boolean {
+  return JSON.stringify(change.before?.links ?? []) !== JSON.stringify(change.after?.links ?? []);
 }
 
 /** A change that can move a place's doors (made anew, a new size, another area): worth asking for them again. */
@@ -991,6 +1001,8 @@ export function useScene(id: string | null): SceneInfo | null {
         (change.op !== "update" || change.before?.area !== change.after?.area)
       )
         void load();
+      // A door put in or taken out elsewhere may be the way back to here, which shows once both sides are in.
+      else if (change.type === "place" && change.id !== id && relinked(change)) void load(true);
       if (change.type !== "place" || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -1205,6 +1217,9 @@ export function useChatStage({
   const [visiting, setVisitingTo] = useState<string | null>(null);
   // The place you came from, when you came through a door: you stand just inside the door back to it.
   const [cameFrom, setCameFrom] = useState<string | undefined>(undefined);
+  // The places you came through by doors agents and people put in, for the trail: kept for the place you came to
+  // (`at`), so going anywhere any other way leaves them behind.
+  const [through, setThrough] = useState<{ at: string; hops: string[] }>({ at: "", hops: [] });
   /** Go somewhere: by the map (to its start), or through a door from `from`. */
   const setVisiting = useCallback((id: string | null, from?: string) => {
     setCameFrom(from);
@@ -1278,9 +1293,16 @@ export function useChatStage({
         : undefined,
     [sceneNow.id, sceneNow.editable, sceneNow.version, sceneNow.scope, sceneNow.lent, sceneNow.room, loading],
   );
+  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
+  // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
+  // Rearranging a room, it says where a door can lead.
+  const map = useWorldMap(
+    showStage,
+    mapOpen || panel?.kind === "agent" || panel?.kind === "needs" || panel?.kind === "calendar",
+  );
   // What the editor offers a widget to show: the rooms on the map and the Board's widgets, known further down.
   const editorHas = useRef<{ rooms?: string[]; widgets?: { id: string; title?: string }[] }>({});
-  const editor = useRoomEditor(editable, () => editorHas.current);
+  const editor = useRoomEditor(editable, () => editorHas.current, map.places);
   const room = editor.room ?? sceneNow.room;
   // How tall the bar over the stage's foot is while rearranging, for framing the room above it.
   const dock = useRef<HTMLDivElement>(null);
@@ -1326,13 +1348,11 @@ export function useChatStage({
   }, []);
   // On a phone the catalogue is a sheet over the foot of the scene, where the bar would be: one at a time.
   const sheet = editor.adding && sheets;
-  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
-  // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
-  const map = useWorldMap(
-    showStage,
-    mapOpen || panel?.kind === "agent" || panel?.kind === "needs" || panel?.kind === "calendar",
+  const hops = through.at && through.at === placeId ? through.hops : NO_HOPS;
+  const trail = useMemo(
+    () => trailThrough(placeId, hops, map.places, map.areas),
+    [placeId, hops, map.places, map.areas],
   );
-  const trail = useMemo(() => trailTo(placeId, map.places, map.areas), [placeId, map.places, map.areas]);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
   const board = useBoardTasks(showStage);
@@ -1902,6 +1922,10 @@ export function useChatStage({
   const onDoor = useCallback(
     (door: RoomDoor) => {
       if (!placeId) return;
+      // Through a door someone put in, the trail says the way you came; through the town's own, it starts again.
+      setThrough((t) =>
+        door.by ? { at: door.to, hops: hopsAfter(t.at === placeId ? t.hops : [], placeId, door.to) } : NO_THROUGH,
+      );
       setVisiting(door.to, placeId);
       // What was open beside something in the place you leave stays there, as walking away from it puts it away:
       // only the list of what waits on you, held in front of you, comes along.
@@ -1915,6 +1939,9 @@ export function useChatStage({
   // Going somewhere: to the agent you came from is back with it. Out on to the street by a building's door (`from`),
   // you stand outside it.
   const go = (id: string, from?: string) => {
+    // Back along the way you came by doors put in, the trail keeps the way to there.
+    const back = hops.indexOf(id);
+    setThrough(back >= 0 ? { at: id, hops: hops.slice(0, back) } : NO_THROUGH);
     setVisiting(id === own.id ? null : id, from);
     setPanel(null);
   };
@@ -2064,6 +2091,7 @@ export function useChatStage({
         places={map.places}
         areas={map.areas}
         {...(map.town ? { town: map.town } : {})}
+        links={map.links}
         problem={map.problem}
         here={placeId}
         {...(placeId === "town" && controls.current ? { you: controls.current.where() } : {})}

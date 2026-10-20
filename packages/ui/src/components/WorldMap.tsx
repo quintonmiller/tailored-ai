@@ -131,10 +131,11 @@ export const comeOrGone = (type: string) => type === "whereabouts" || type === "
 export function useWorldMap(
   open: boolean,
   fresh = false,
-): { places: MapPlace[]; areas: MapArea[]; town?: Plan; problem: string | null } {
+): { places: MapPlace[]; areas: MapArea[]; town?: Plan; links: [string, string][]; problem: string | null } {
   const [places, setPlaces] = useState<MapPlace[]>([]);
   const [areas, setAreas] = useState<MapArea[]>([]);
   const [town, setTown] = useState<Plan | undefined>(undefined);
+  const [links, setLinks] = useState<[string, string][]>([]);
   const [problem, setProblem] = useState<string | null>(null);
   const reload = useRef<() => void>(() => {});
   useEffect(() => {
@@ -147,13 +148,19 @@ export function useWorldMap(
       fetch("/api/ext/builtin:places/map")
         .then(async (res) => {
           if (!res.ok) throw new Error(`The map couldn't be loaded (${res.status}).`);
-          return (await res.json()) as { places?: MapPlace[]; areas?: MapArea[]; town?: Plan };
+          return (await res.json()) as {
+            places?: MapPlace[];
+            areas?: MapArea[];
+            town?: Plan;
+            links?: [string, string][];
+          };
         })
         .then((body) => {
           if (gone || n !== asked) return;
           setPlaces(body.places ?? []);
           setAreas(body.areas ?? []);
           setTown(body.town);
+          setLinks(body.links ?? []);
           setProblem(null);
         })
         .catch((err: unknown) => {
@@ -168,8 +175,18 @@ export function useWorldMap(
       const place = change.type === "place";
       const moved = place && change.before?.area !== change.after?.area;
       const repurposed = place && change.before?.purpose !== change.after?.purpose;
+      // A door put in or taken out, which the plan draws between the two places.
+      const relinked =
+        place && JSON.stringify(change.before?.links ?? []) !== JSON.stringify(change.after?.links ?? []);
       const dressed = change.type === WEAR_TYPE || change.type === BODY_TYPE;
-      if (comeOrGone(change.type) || moved || repurposed || dressed || (place && change.id.startsWith("shared:")))
+      if (
+        comeOrGone(change.type) ||
+        moved ||
+        repurposed ||
+        relinked ||
+        dressed ||
+        (place && change.id.startsWith("shared:"))
+      )
         load();
     });
     return () => {
@@ -182,7 +199,7 @@ export function useWorldMap(
   useEffect(() => {
     if (asking) reload.current();
   }, [asking]);
-  return { places, areas, ...(town ? { town } : {}), problem };
+  return { places, areas, ...(town ? { town } : {}), links, problem };
 }
 
 /** A doing in a word or two, for an agent's line on the map. */
@@ -210,6 +227,7 @@ export function WorldMap({
   places,
   areas = [],
   town,
+  links = [],
   problem,
   here,
   you,
@@ -223,6 +241,8 @@ export function WorldMap({
   areas?: MapArea[];
   /** The town's plan, drawn from above; without it, the list alone. */
   town?: Plan;
+  /** The places joined by doors put in, each pair once: the plan draws a line between them. */
+  links?: [string, string][];
   problem: string | null;
   /** The place on screen now. */
   here: string | undefined;
@@ -360,6 +380,7 @@ export function WorldMap({
           <TownPlan
             plan={town}
             places={places}
+            links={links}
             here={here}
             {...(you ? { you } : {})}
             activities={activities}

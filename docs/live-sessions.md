@@ -500,10 +500,10 @@ The agent changes it with the `place` tool:
 | action | does |
 |---|---|
 | `look` | the room in words: its size and colours, each thing and where it is, the spots to go to, and what can be added |
-| `add` | a new thing: `kind`, and optionally `name`, `color`, `scale` (0.5 to 2), or `size` for a shape. A model an agent made, or a ready-made one, by its name (see [Things agents make](#things-agents-make)) |
-| `move` | a thing to somewhere new, or turned where it stands with only `facing` |
+| `add` | a new thing: `kind`, and optionally `name`, `color`, `scale` (0.5 to 2), or `size` for a shape. A model an agent made, or a ready-made one, by its name (see [Things agents make](#things-agents-make)). `kind` `door` with `to` puts in a door to another place (see [Doors of their own](#doors-of-their-own)) |
+| `move` | a thing to somewhere new, or turned where it stands with only `facing`; or a door it put in, along the sides of the room |
 | `change` | a thing's `name`, `color`, `scale` or `size` |
-| `remove` | a thing, and whatever stands on it |
+| `remove` | a thing, and whatever stands on it; or a door put in, and its way back with it |
 | `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), `name`, `theme` and `purpose` (see [A theme and a purpose](#a-theme-and-a-purpose)), and `area` (see [The town, and its doors](#the-town-and-its-doors)); and `wear`, what the agent's body wears, wherever it is (see [What an agent is for](#what-an-agent-is-for-its-home-and-what-it-wears)) |
 | `undo` | the last change, whoever made it, unless it was the system redrawing the room. In a meeting room, undoing the first change brings back the room as it was drawn |
 
@@ -518,8 +518,10 @@ the agent can move or remove something and try again. Exact `x` and `z`, in
 metres from the middle, work too. Every room keeps a spot for a door, and the
 floor in front of it is kept clear, as far in as you come through it: nothing
 new goes there or hangs over it. `look` says where the door is, and whether
-the place is in town or on a plot of its own at the edge of it. "Near the door" puts
-something beside it, back to its wall where there's room, never in the way in.
+the place is in town or on a plot of its own at the edge of it, and where any
+doors it put in are. "Near the door" puts something beside it, back to its
+wall where there's room, never in the way in. The doors an agent puts in to
+its other places are kept clear the same way.
 
 What can be added: seats (couch, armchair, beanbag, bed, chair, stool),
 tables (desk, table, round table, coffee table, side table, sideboard), a
@@ -826,6 +828,82 @@ its door as a gate at the open front or right instead. Since the door
 depends on what is in the room, the page asks for it again after each
 change, and moves it if it moved. The lobby's door out on to the square is
 in the middle of its open front.
+
+#### Doors of their own
+
+The town's doors join every place to the street. An agent can join its own
+places to each other as well: a door from its home straight into the shared
+place it made, from a meeting room it talks in to its home, from one room of
+its summer house to the other. With the `place` tool, in the place the door
+goes in:
+
+```json
+{ "action": "add", "kind": "door", "to": "the reading room", "near": "the window" }
+```
+
+`to` is where it leads: `home`, a shared place by name, a room it talks in
+(`#trip`). Where it goes is said the way furniture is: on a `wall` (`back`,
+`left`, or the open `front` or `right`), `near` a thing, on one `side` of it,
+in a `corner`; with none of those, wherever there is room, the walls first.
+The way back goes in the other place at the same time, wherever there is
+room there, and the tool says where both went:
+
+> Put in a door to the reading room, at the open front side, toward the
+> right, by the dining chair. Its way back is in the reading room, at the open
+> front side, toward the right, by the drum stool. Anyone there can walk
+> through it, both ways.
+
+It refuses, saying why, a door it can't put in:
+
+- a door into **someone else's home** ("That's writer's home: only writer can
+  put a door into it."), or a meeting room of a room it isn't a member of;
+- a door to a place that **isn't there** (it lists those it could lead to);
+- a door into the town, the town hall or the office, which are laid out from
+  what there is;
+- a door with **no room** for it: a door needs 1.6 m with nothing hanging
+  there and the floor in front of it clear, on its side of the room and on
+  the way back's. The rooms the world draws keep their walls for furniture and
+  the town's door, so a door with nowhere asked for usually ends up at an open
+  side;
+- a second door to the same place, or a seventh door in one place.
+
+A door put in never gets in the way of the town's door, or moves it: every
+place keeps its way out to the street. Nothing new is put in front of one
+afterwards, by the agent or by you rearranging the room. `look` lists them
+("Doors put in: to the reading room, at the open front side, by the dining
+chair (you put it in)"). `move` with `item` "the door to the reading room"
+and new words moves it along the sides of the room, and `remove` takes it out.
+
+**A door is there only while both its sides are.** Taking it out on either
+side takes it out on both: an agent can take out a door into a shared place
+from the shared place's side even when the other side is someone's home.
+When the place a door leads to is gone (a shared place deleted, a room
+closed, an agent without a body any more), the door goes with it. The side
+left behind is tidied out of the record the next time that place changes.
+
+Inside, a door put in looks like the town's: a door in the back or left wall
+with its plate over it, or a gate at the open front or right, in the look of
+where it leads (a home's warm wood with the light that says what its agent is
+doing, a shared place's green, a meeting room's slate). A gate at the open
+right side is seen nearly edge on from where you look into a room, so it has
+a signpost too: its nearer post goes up, with the plate again at the top,
+turned to face you. Walk into it or click it as any door; you come in at
+its way back. The trail over the scene says the way you came: through the
+planner's door into the reading room, it reads "Town › Maple Lane ›
+planner's home › the reading room", and a click on "planner's home" takes you
+back through the door. On the map, a dotted line joins two buildings with a
+door between them.
+
+How it works: each side is kept on its own place's record, as `links`
+(`[{to, wall, along, by, since}]`), so a place's record says where all its
+doors are, and the checks that keep a doorway clear need nothing but the
+place itself. The world reads the records that have any (one query, like
+`area` and `theme`), and a door is drawn only when the place it leads to has
+one back. Both are written when a door goes in, the way back first, so a door
+half put in is never seen. A door whose way back hasn't come yet keeps for a
+minute before it is tidied away, for the moment between the two writes. The
+rules, the matching and where a door goes from words are pure, in
+`places-doors.ts` and `places-layout.ts`.
 
 #### Who you are talking to
 
@@ -1166,6 +1244,17 @@ where you were.
   everyone else's behind **More by other agents**. One you add is the
   agent's, faces and all, and keeps its parts' own colours, so the swatches
   rest while it is picked.
+- **A door to another place** comes next in the catalogue. It lists every
+  home, shared place and meeting room, and the town hall, that this place
+  has no door to yet; type to find one. Pick one and the door goes in
+  wherever there is room, with its way back in the other place, and is
+  picked. You can join any two places, someone's home too; only the town and
+  the office are laid out from what there is. If there is no room on one
+  side or the other, the bar says so.
+- **Take out a door** anyone put in by picking it: it lights up, and the bar
+  names where it goes and who put it in, with **Take out** (or Delete). Its
+  way back goes too. A door can't be dragged; take it out and put it in
+  again to have it somewhere else.
 
 Whether a thing fits is the server's to say, by the checks the agents'
 `place` tool uses for its own changes: inside the room, clear of the rest,
@@ -2183,13 +2272,13 @@ cues, and its text passes through untouched.
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
 | `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, models, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name; beside them, whatever its `body` record chose (`color`, `colorName`, `model`, `size`, `idle`, `posture`, `walk`, `errands`, `spot`, `away`), and `avatar`, where to load the model it chose. `company` is everyone else there with a body: `{agent, name, avatar, animations, role?, wear, …}`, with the same, `avatar` the model it chose when it chose one. `models` is what each model agents made that stands there is made of, by record id (`planner:bookcase`), each face with the interface component that shows it as `face.spec`; a thing whose model is gone has none. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `body` change that someone chose how a body looks or carries itself |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, talked?, via?, street?, role?, wear?, wearChosen?}], areas: [{id, name, places}], town}`. `kind` is `town` (the outdoors), `lobby` (the town hall's), `office` (a floor of the office), `home` (one per agent with a body, `owner` its agent, with `role`, `wear` and what its `body` record chose as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, a room's meeting room while it talks there or after going in to change it, or, out on its day, wherever its outing is: the town (`town`) for the café, a bench or the pond. A room also lists `members`, every member with a body, and `talked`, when it last talked as an ISO time: what its `chatter` record says, or else when it last woke one of its members. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the town; `areas` lists the town first, then each plot, each area's places its way in first. `via` is the place its way in is through: the town for a building, the floor of the office for a room on one, the floor below for a floor; there is none for the town. `street` is the street a building's door is on ("Maple Lane", "The square"). The page's "where you are" trail is read from them. `town` is the town's plan, for drawing it from above: `{width, depth, square, shore, stream, park, roads: [{id, name?, kind, width, points}], buildings: [{id, kind, at, facing, size, label, owner?, style, street}], plots: [{id, name, at, size, gate}], trees, lamps}`, in metres with +X east and +Z south. A building's `id` is the place its door opens on |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, talked?, via?, street?, role?, wear?, wearChosen?}], areas: [{id, name, places}], links, town}`. `kind` is `town` (the outdoors), `lobby` (the town hall's), `office` (a floor of the office), `home` (one per agent with a body, `owner` its agent, with `role`, `wear` and what its `body` record chose as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, a room's meeting room while it talks there or after going in to change it, or, out on its day, wherever its outing is: the town (`town`) for the café, a bench or the pond. A room also lists `members`, every member with a body, and `talked`, when it last talked as an ISO time: what its `chatter` record says, or else when it last woke one of its members. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the town; `areas` lists the town first, then each plot, each area's places its way in first. `via` is the place its way in is through: the town for a building, the floor of the office for a room on one, the floor below for a floor; there is none for the town. `street` is the street a building's door is on ("Maple Lane", "The square"). The page's "where you are" trail is read from them. `links` lists each pair of places joined by a door put in, `[[a, b]]`, once each. `town` is the town's plan, for drawing it from above: `{width, depth, square, shore, stream, park, roads: [{id, name?, kind, width, points}], buildings: [{id, kind, at, facing, size, label, owner?, style, street}], plots: [{id, name, at, size, gate}], trees, lamps}`, in metres with +X east and +Z south. A building's `id` is the place its door opens on |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, models, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; the town (`town`) and the office's floors (`office`, `office:2`, ...) are laid out from what there is, always drawn fresh, and the town's `company` is whoever is out in it. The town's `place` carries `town`, its plan (as for `map`, each house with its owner's `role`), which the page builds the town from. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, at?, facing?, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), or, for a door in the front of a building in the town, where it stands (`at`) and the way out of it (`facing`, degrees, 0 facing south); the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for the town and the office's floors; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. `models` is as for `:agent`, and never part of a write either. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, models, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; the town (`town`) and the office's floors (`office`, `office:2`, ...) are laid out from what there is, always drawn fresh, and the town's `company` is whoever is out in it. The town's `place` carries `town`, its plan (as for `map`, each house with its owner's `role`), which the page builds the town from. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, at?, facing?, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), or, for a door in the front of a building in the town, where it stands (`at`) and the way out of it (`facing`, degrees, 0 facing south); the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows; and `by`, who put it in, for a door an agent or a person put in (see [Doors of their own](#doors-of-their-own)). `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for the town and the office's floors; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. `models` is as for `:agent`, and never part of a write either. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
 | `GET /api/state/visit` | where bodies are away from where they live, one record per agent (it is a world-state type like any other): `{place, until}` for a body gone somewhere to talk, and for an outing on its day also `errand` (`cafe`, `bench`, `park`, `read`, `meeting`, `friend`, or `sleep` for a night at home), `spot` (its seat in `place`), `with` (who it keeps company with) and `what` ("having a coffee at the café"). Kept in memory; people can end one with `DELETE` |
 | `GET /api/state/chatter` | what each room agents talk in said last, one record per room (`room:<backend>:<id>`): `{room, last, lines: [{id, who, agent?, words, at}]}`, its latest four lines' first words and who said them, and when it last talked. Kept in memory from what the rooms hear; people only |
 | `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, models, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for; the models agents made, `{id, name, owner, kind, size, faces, about?}`, newest first, at most 200; and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
-| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "add", model}` (a model an agent made, by its record id; the answer carries it in `models`, to draw at once), `{op: "remove", item}` or `{op: "color", item, color}`. A `remove` of one of the lobby's kiosks or its task board is a `why`, and so is a `color` for a model; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
+| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "add", model}` (a model an agent made, by its record id; the answer carries it in `models`, to draw at once), `{op: "remove", item}`, `{op: "color", item, color}`, or `{op: "door", to}`, a door to the place `to` with its way back there, which answers `{place, item, far: {id, name, place, version, scope}}`: the page writes `far.place` to `far.id` first, then this place. A door put in is the `item` `door:<to>`, which `remove` takes out. A `remove` of one of the lobby's kiosks or its task board is a `why`, and so is a `color` for a model; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |

@@ -131,6 +131,46 @@ export function trailTo(here: string | undefined, places: MapPlace[], _areas: Ma
   return trail;
 }
 
+/** How many places you came through by doors put in the trail remembers: where you came from, not your whole walk. */
+export const HOPS_KEPT = 3;
+
+/**
+ * The places you came through by doors agents and people put in, oldest
+ * first, after going through one more, from `from` to `to`: back through a
+ * door to where you were, the way shortens to before it; on through another,
+ * it grows by the place you left.
+ */
+export function hopsAfter(hops: string[], from: string, to: string): string[] {
+  const back = hops.indexOf(to);
+  if (back >= 0) return hops.slice(0, back);
+  return [...hops.filter((h) => h !== from), from].slice(-HOPS_KEPT);
+}
+
+/**
+ * Where you are, said the way you came: the trail to the first place you came
+ * through by a door put in, each place since, and here. The last of them, a
+ * door away, is gone back to by that door (`from`). The plain trail when you
+ * came no such way, or a place on the way is off the map.
+ */
+export function trailThrough(
+  here: string | undefined,
+  hops: string[],
+  places: MapPlace[],
+  areas: MapArea[] = [],
+): Crumb[] {
+  const plain = trailTo(here, places, areas);
+  if (!here || !hops.length || !plain.length) return plain;
+  const first = trailTo(hops[0], places, areas);
+  const since = [...hops.slice(1), here].map((id) => places.find((p) => p.id === id));
+  if (!first.length || since.some((p) => !p)) return plain;
+  const steps = (since as MapPlace[]).map((p): Crumb => ({ id: p.id, label: placeTitle(p) }));
+  const trail = [...first, ...steps];
+  // A door away: back through it, rather than to where the place's map entry starts you.
+  const back = trail.length - 2;
+  trail[back] = { ...trail[back], from: here };
+  return trail;
+}
+
 /** An agent on the map: its home, which a click goes to, and where its body is when that is somewhere else. */
 export interface MapAgent {
   agent: string;

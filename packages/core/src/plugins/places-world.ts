@@ -17,9 +17,12 @@
  * walk away rather than a map away.
  *
  * Every door has its match on the other side, and every place can be walked
- * to from the square. Pure: the same places always give the same town.
+ * to from the square. Agents and people can put in doors of their own between
+ * places (`places-doors.ts`): those whose way back is there too are in each
+ * place beside the town's. Pure: the same places always give the same town.
  */
-import { type DoorSlot, doorOf, type Place } from "./places-layout.js";
+import { matchLinks } from "./places-doors.js";
+import { type DoorSlot, doorOf, type Place, type PlaceLink } from "./places-layout.js";
 import { LOBBY, LOBBY_DOORS, officeFloor } from "./places-rooms.js";
 import { type BuildingKind, layTown, letterOf, packLanes, TOWN, type Town, townDoors } from "./places-town.js";
 
@@ -84,10 +87,17 @@ export interface World {
   doors: Map<string, Link>;
   /** Which area each place is in, by place id. */
   areaOf: Map<string, string>;
+  /** What a door into each place says: where it goes, and its plate. Every place a door can be put in to lead to. */
+  into: Map<string, Link>;
+  /** The doors agents and people put in, by the place each is in: only those whose way back is there too. */
+  made: Map<string, PlaceLink[]>;
 }
 
 /** A door in a room: where it is, and where it goes. */
-export interface PlaceDoor extends DoorSlot, Link {}
+export interface PlaceDoor extends DoorSlot, Link {
+  /** Who put it in, for a door someone put in rather than one the town has. */
+  by?: string;
+}
 
 const slug = (words: string) =>
   words
@@ -145,15 +155,23 @@ function floorName(level: number): string {
 /** Towns laid out lately, by what was in them: every map and every scene asks, and laying one out takes a while. */
 const laid = new Map<string, World>();
 
-/** The whole town, from the places there are. The same places give the same town, which is kept and handed out again. */
-export function layWorld(places: WorldPlace[]): World {
+/**
+ * The whole town, from the places there are, and the doors agents and people
+ * put in (`links`, by the place each is in). The same places give the same
+ * town, which is kept and handed out again; the doors put in are matched
+ * afresh, so one put in or taken out never lays the town out again.
+ */
+export function layWorld(places: WorldPlace[], links?: Map<string, PlaceLink[]>): World {
   const key = JSON.stringify([...places].sort((a, b) => a.id.localeCompare(b.id)));
-  const kept = laid.get(key);
-  if (kept) return kept;
-  if (laid.size >= 8) laid.clear();
-  const world = lay(places);
-  laid.set(key, world);
-  return world;
+  let world = laid.get(key);
+  if (!world) {
+    if (laid.size >= 8) laid.clear();
+    world = lay(places);
+    laid.set(key, world);
+  }
+  if (!links?.size) return world;
+  const into = world.into;
+  return { ...world, made: matchLinks(links, (id) => into.has(id)) };
 }
 
 function lay(places: WorldPlace[]): World {
@@ -246,7 +264,11 @@ function lay(places: WorldPlace[]): World {
     },
     ...plots.map((p) => ({ id: p.id, name: p.name, places: p.places.map((q) => q.id) })),
   ];
-  return { areas, town, floors, doors, areaOf };
+  // Where a door put in can lead: the town hall, and every home, shared place and meeting room.
+  const hall = town.buildings.find((b) => b.id === LOBBY);
+  const into = new Map<string, Link>([[LOBBY, { to: LOBBY, label: hall?.label ?? "Town hall", kind: "lobby" }]]);
+  for (const p of places) into.set(p.id, linkTo(p));
+  return { areas, town, floors, doors, areaOf, into, made: new Map() };
 }
 
 /** What a building's door is to someone outside it: where it goes, and what its plate says. */
@@ -311,10 +333,28 @@ const round = (n: number) => Math.round(n * 100) / 100;
  * The doors in a place, where they are and where each goes: the town's on
  * the front of each building, the lobby's at its open front, a floor of the
  * office's round its walls, and any other place's one door wherever its room
- * keeps a doorway clear (`doorOf`). Empty for a place the town has no door
- * for, or a room so full there is nowhere for one.
+ * keeps a doorway clear (`doorOf`); then the doors agents and people put in,
+ * where they put them, while their way back is there. Empty for a place the
+ * town has no door for, or a room so full there is nowhere for one.
  */
 export function doorsIn(id: string, place: Place, world: World): PlaceDoor[] {
+  return [...townsDoorsIn(id, place, world), ...madeDoorsIn(id, place, world)];
+}
+
+/**
+ * The doors put in a place that are there: where its record says each is
+ * (it may have moved one since the world was read), for those the world
+ * found their way back for.
+ */
+function madeDoorsIn(id: string, place: Place, world: World): PlaceDoor[] {
+  const there = new Set((world.made.get(id) ?? []).map((l) => l.to));
+  return (place.links ?? []).flatMap((l) => {
+    const link = there.has(l.to) ? world.into.get(l.to) : undefined;
+    return link ? [{ wall: l.wall, along: l.along, ...link, ...(l.by ? { by: l.by } : {}) }] : [];
+  });
+}
+
+function townsDoorsIn(id: string, place: Place, world: World): PlaceDoor[] {
   if (id === TOWN) return townDoors(world.town).map(({ building, ...slot }) => ({ ...slot, ...linkInto(building) }));
   if (id === LOBBY) {
     const out = world.doors.get(LOBBY) ?? { to: TOWN, label: "The square", kind: "town" as const };

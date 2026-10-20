@@ -263,6 +263,8 @@ export interface RoomDoor {
   kind: "town" | "lobby" | "office" | "home" | "shared" | "room";
   /** The agent whose home it opens on: its light says what that agent is doing. */
   occupant?: string;
+  /** Who put it in, for a door an agent or a person put in rather than one the town has: it can be taken out. */
+  by?: string;
 }
 
 export const DEFAULT_ROOM: Room = {

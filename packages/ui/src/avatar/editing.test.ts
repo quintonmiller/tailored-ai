@@ -3,10 +3,14 @@ import {
   COLOURS,
   catalogue,
   changeWords,
+  doorItem,
+  doorItemTo,
   footprint,
   GROUPS,
   type Kinds,
+  linkable,
   madeByAgents,
+  madeDoors,
   madeHere,
   noSteps,
   onFloor,
@@ -374,5 +378,48 @@ describe("what a person can set a widget to show", () => {
     const room = { props: [{ id: "c", name: "the chart" } as Prop] };
     expect(changeWords({ op: "shows", item: "c", shows: "tokens" }, room, room)).toBe("set the chart to show tokens");
     expect(changeWords({ op: "shows", item: "c", shows: null }, room, room)).toBe("set the chart back to its own");
+  });
+});
+
+describe("doors put in", () => {
+  const places = [
+    { id: "town", name: "the town", kind: "town", agents: [] },
+    { id: "lobby", name: "the town hall", kind: "lobby", agents: [] },
+    { id: "office", name: "the office", kind: "office", agents: [] },
+    { id: "home:writer", name: "writer's room", kind: "home", owner: "writer", agents: [] },
+    { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: [] },
+    { id: "shared:lounge", name: "the lounge", kind: "shared", agents: [] },
+    { id: "shared:attic", name: "the attic", kind: "shared", agents: [] },
+    { id: "room:local:trip", name: "trip", kind: "room", agents: [] },
+  ] as Parameters<typeof linkable>[0];
+  const room: Pick<Room, "doors"> = {
+    doors: [
+      { wall: "back", along: 1, to: "town", label: "Maple Lane", kind: "town" },
+      { wall: "right", along: 0, to: "shared:attic", label: "Attic", kind: "shared", by: "planner" },
+    ],
+  };
+
+  it("offers every home, shared place, meeting room and the town hall a door can lead to, but here and those it has", () => {
+    expect(linkable(places, "home:planner", room).map((p) => [p.label, p.kind])).toEqual([
+      ["writer's home", "Home"],
+      ["the lounge", "Shared place"],
+      ["#trip", "Meeting room"],
+      ["the town hall", "The town hall"],
+    ]);
+    expect(linkable(places, "home:planner", room, "#tr").map((p) => p.id)).toEqual(["room:local:trip"]);
+  });
+
+  it("knows the doors put in by who put them in, picks one by an id of its own, and says what a change to one did", () => {
+    expect(madeDoors(room).map((d) => d.to)).toEqual(["shared:attic"]);
+    expect(doorItem("shared:attic")).toBe("door:shared:attic");
+    expect(doorItemTo("door:shared:attic")).toBe("shared:attic");
+    expect(doorItemTo("couch")).toBeUndefined();
+    const named = (to: string) => ({ "shared:attic": "the attic", "shared:lounge": "the lounge" })[to];
+    expect(changeWords({ op: "door", to: "shared:lounge" }, DEFAULT_ROOM, DEFAULT_ROOM, named)).toBe(
+      "put in a door to the lounge",
+    );
+    expect(changeWords({ op: "remove", item: "door:shared:attic" }, DEFAULT_ROOM, DEFAULT_ROOM, named)).toBe(
+      "took out the door to the attic",
+    );
   });
 });

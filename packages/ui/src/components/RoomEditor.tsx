@@ -2,11 +2,14 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   catalogue,
   changeWords,
+  doorItemTo,
   type Edit,
   type Kinds,
+  linkable,
   type MadeModel,
   type Move,
   madeByAgents,
+  madeDoors,
   madeHere,
   moveKey,
   noSteps,
@@ -23,6 +26,7 @@ import {
 import type { ModelDef } from "../avatar/models";
 import type { Room } from "../avatar/scene";
 import type { StageEdit } from "../avatar/stage";
+import { type MapPlace, placeTitle } from "../lib/wayfinding";
 import { WorldPanel } from "./WorldPanel";
 
 /**
@@ -36,6 +40,9 @@ import { WorldPanel } from "./WorldPanel";
  * time it looks. If an agent changed the room meanwhile, nothing is written
  * over it: the room comes back as it is now, and you are told. Undo and redo
  * take back and make again your own changes, while you stay in the place.
+ * A door to another place goes in from the catalogue: its way back is saved
+ * to the other place first, then the door here, and a door is only there
+ * once both are. Picking a door anyone put in, you can take it out.
  */
 
 /** A place as the page has it, with what a write to it needs. */
@@ -69,6 +76,8 @@ interface Checked {
   models?: Record<string, ModelDef>;
   /** Why it can't be made, in the server's words. */
   why?: string;
+  /** For a door put in, the place it leads to with its way back, and what a write to it needs. */
+  far?: { id: string; name: string; place: Room; version: number; scope: string };
 }
 
 /** Ask the server what a change makes of the room. Nothing is written. */
@@ -102,6 +111,20 @@ async function write(place: EditablePlace, data: Room, version: number): Promise
   if (res.status === 409) throw new Changed(body.error);
   if (!res.ok) throw new Error(body.error ?? `Couldn't save the room (${res.status}).`);
   return body.version ?? version + 1;
+}
+
+/** Save the way back of a door you put in, to the place it leads to, as long as nobody changed that place first. */
+async function writeFar(far: NonNullable<Checked["far"]>, data: Room): Promise<void> {
+  const res = await fetch(`/api/state/place/${encodeURIComponent(far.id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data, expectedVersion: far.version, scope: far.scope }),
+  });
+  if (res.status === 409) throw new Changed();
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? `Couldn't save the way back (${res.status}).`);
+  }
 }
 
 /** Take a place back to being drawn fresh, if it is still at `version`: undoing the change that first kept it. */
@@ -201,13 +224,21 @@ export interface RoomEditor {
   shelf: ReactNode;
 }
 
-/** Rearranging the place on screen: `place` is it as the page last heard, undefined when it can't be rearranged. */
+/**
+ * Rearranging the place on screen: `place` is it as the page last heard,
+ * undefined when it can't be rearranged; `places`, every place there is, as
+ * the map has them, for where a door can lead.
+ */
 export function useRoomEditor(
   place: EditablePlace | undefined,
   /** What a widget can be set to show beyond its own choices, as of now: the rooms there are, the Board's widgets. */
   have: () => { rooms?: string[]; widgets?: { id: string; title?: string }[] } = () => ({}),
+  places: MapPlace[] = [],
 ): RoomEditor {
   const [editing, setEditing] = useState(false);
+  // The catalogue's list of places to put a door in to, while it is open, and what is typed to find one.
+  const [doorsOpen, setDoorsOpen] = useState(false);
+  const [doorQuery, setDoorQuery] = useState("");
   const [kinds, setKinds] = useState<Offer | null>(null);
   const [local, setLocal] = useState<Saved | null>(null);
   const [selected, setSelected] = useState<string | undefined>(undefined);
@@ -248,11 +279,20 @@ export function useRoomEditor(
     wrote.current = null;
     setNotice(undefined);
     setAdding(false);
+    setDoorsOpen(false);
   }, [id]);
 
   // The latest of what the page has, for the handlers the stage and the keys call.
-  const now = useRef({ place, selected, pending, kinds, steps });
-  now.current = { place, selected, pending, kinds, steps };
+  const now = useRef({ place, selected, pending, kinds, steps, places });
+  now.current = { place, selected, pending, kinds, steps, places };
+
+  /** What a place is called in a sentence, for a door to it: "the lounge", "planner's home", "#trip". */
+  const named = (to: string): string | undefined => {
+    const known = now.current.places.find((p) => p.id === to);
+    if (known) return placeTitle(known);
+    const door = now.current.place?.room.doors?.find((d) => d.to === to);
+    return door?.label;
+  };
 
   /** The place as your next change is made to it: its record as the server takes it, and the version it is at. */
   const current = (): Base | undefined => {
@@ -343,7 +383,7 @@ export function useRoomEditor(
   const save = async (c: Base, edit: Edit, after: Room, picked?: string, added?: Record<string, ModelDef>) => {
     const k = now.current.kinds;
     if (!k) return;
-    const what = changeWords(edit, c.record, after);
+    const what = changeWords(edit, c.record, after, named);
     const data = withYourChange(recordOf(after, c.place.lent), { who: k.person, what, at: new Date().toISOString() });
     try {
       const version = await write(c.place, data, c.version);
@@ -375,6 +415,30 @@ export function useRoomEditor(
       if (!made.place) {
         setNotice(made.why);
         return;
+      }
+      if (made.far) {
+        // The way back first: until the door here is saved too, neither side shows it.
+        const k = now.current.kinds;
+        const here = named(c.place.id) ?? "here";
+        const data = withYourChange(made.far.place, {
+          who: k?.person ?? "owner",
+          what: `put in a door to ${here}`,
+          at: new Date().toISOString(),
+        });
+        try {
+          await writeFar(made.far, data);
+        } catch (err) {
+          setNotice(
+            err instanceof Changed
+              ? `Someone changed ${made.far.name} just now, so the door wasn't put in. Try again.`
+              : err instanceof Error
+                ? err.message
+                : String(err),
+          );
+          return;
+        }
+        setDoorsOpen(false);
+        setAdding(false);
       }
       await save(c, edit, made.place, pick ? (pick(made) ?? "") : undefined, made.models);
     });
@@ -480,9 +544,14 @@ export function useRoomEditor(
     });
   };
   const remove = () => {
-    const prop = thing(now.current.selected);
-    if (prop) void change({ op: "remove", item: prop.id }, () => undefined);
+    const picked = now.current.selected;
+    const prop = thing(picked);
+    // A door put in goes the same way a thing does, and its way back with it.
+    if (prop || doorItemTo(picked))
+      void change({ op: "remove", item: (prop?.id ?? picked) as string }, () => undefined);
   };
+  /** Put in a door from here to another place, with its way back there; the door is picked once it is in. */
+  const putDoor = (to: string) => void change({ op: "door", to }, (made) => made.item);
   const copy = () => {
     const prop = thing(now.current.selected);
     if (prop) void change({ op: "add", kind: prop.kind, like: prop.id }, (made) => made.item);
@@ -602,7 +671,16 @@ export function useRoomEditor(
   );
 
   const picked = thing(selected);
+  // A door put in, picked: it can be taken out, and nothing else.
+  const doorTo = doorItemTo(selected);
+  const pickedDoor = doorTo ? madeDoors(shown ?? { doors: [] }).find((d) => d.to === doorTo) : undefined;
+  const pickedName =
+    picked?.name ?? (pickedDoor ? `the door to ${named(pickedDoor.to) ?? pickedDoor.label}` : undefined);
   const swatches = useMemo(() => (shown ? palette(shown) : []), [shown]);
+  const doorPlaces = useMemo(
+    () => (id && shown && doorsOpen ? linkable(places, id, shown, doorQuery) : []),
+    [id, shown, places, doorsOpen, doorQuery],
+  );
   const groups = useMemo(() => (kinds ? catalogue(kinds.kinds) : []), [kinds]);
   const here = useMemo(() => (id && shown ? madeHere(id, shown) : []), [id, shown]);
   const made = useMemo(
@@ -659,26 +737,44 @@ export function useRoomEditor(
   const bar = editing ? (
     <div className="room-edit-bar" role="toolbar" aria-label="Rearranging the room">
       <div className="room-edit-row">
-        <strong className={`room-edit-name${picked ? "" : " room-edit-none"}`}>
-          {picked?.name ?? "Nothing picked"}
+        <strong
+          className={`room-edit-name${pickedName ? "" : " room-edit-none"}${pickedDoor ? " room-edit-door" : ""}`}
+        >
+          {pickedName ?? "Nothing picked"}
         </strong>
-        <button type="button" disabled={off || hangs} onClick={() => turn(TURNS.big)} title="A quarter turn (Shift+R)">
-          ↺ 90°
-        </button>
-        <button type="button" disabled={off || hangs} onClick={() => turn(TURNS.small)} title="A little">
-          ↺ 15°
-        </button>
-        <button type="button" disabled={off || hangs} onClick={() => turn(-TURNS.small)} title="A little">
-          15° ↻
-        </button>
-        <button type="button" disabled={off || hangs} onClick={() => turn(-TURNS.big)} title="A quarter turn (R)">
-          90° ↻
-        </button>
-        <button type="button" disabled={off} onClick={copy} title="Another one, beside it">
-          Copy
-        </button>
-        <button type="button" className="room-edit-remove" disabled={off} onClick={remove} title="Remove (Delete)">
-          Remove
+        {/* A door has no turning or copying: its name, which says where it goes, has the room instead. */}
+        {!pickedDoor && (
+          <>
+            <button
+              type="button"
+              disabled={off || hangs}
+              onClick={() => turn(TURNS.big)}
+              title="A quarter turn (Shift+R)"
+            >
+              ↺ 90°
+            </button>
+            <button type="button" disabled={off || hangs} onClick={() => turn(TURNS.small)} title="A little">
+              ↺ 15°
+            </button>
+            <button type="button" disabled={off || hangs} onClick={() => turn(-TURNS.small)} title="A little">
+              15° ↻
+            </button>
+            <button type="button" disabled={off || hangs} onClick={() => turn(-TURNS.big)} title="A quarter turn (R)">
+              90° ↻
+            </button>
+            <button type="button" disabled={off} onClick={copy} title="Another one, beside it">
+              Copy
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          className="room-edit-remove"
+          disabled={(!picked && !pickedDoor) || busy}
+          onClick={remove}
+          title={pickedDoor ? "Take the door out, and its way back with it (Delete)" : "Remove (Delete)"}
+        >
+          {pickedDoor ? "Take out" : "Remove"}
         </button>
       </div>
       <fieldset className="room-edit-swatches" aria-label="Colours" disabled={off || fixedColours}>
@@ -715,11 +811,13 @@ export function useRoomEditor(
         <output className="room-edit-said">{said}</output>
       ) : (
         <p className="room-edit-keys">
-          {hangs
-            ? "Drag it along its wall, or onto the other wall · Delete removes it · Ctrl+Z undoes"
-            : picked
-              ? "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
-              : "Pick something to move it, or add things · drag the floor to look round, the wheel to zoom · Esc when done"}
+          {pickedDoor
+            ? `Put in by ${pickedDoor.by === kinds?.person ? "you" : pickedDoor.by} · Take out removes it here and in ${named(pickedDoor.to) ?? pickedDoor.label} · Ctrl+Z undoes`
+            : hangs
+              ? "Drag it along its wall, or onto the other wall · Delete removes it · Ctrl+Z undoes"
+              : picked
+                ? "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
+                : "Pick something to move it, or add things · drag the floor to look round, the wheel to zoom · Esc when done"}
         </p>
       )}
     </div>
@@ -766,6 +864,50 @@ export function useRoomEditor(
             )}
           </section>
         )}
+        {/* Then a door to another place, before the kinds of thing. */}
+        <section className="room-edit-group" aria-label="Doors">
+          <h3>Doors</h3>
+          <div className="room-edit-kinds">
+            <button
+              type="button"
+              disabled={busy}
+              aria-expanded={doorsOpen}
+              title="A door from here to another place, with its way back there"
+              onClick={() => setDoorsOpen(!doorsOpen)}
+            >
+              A door to another place
+              <span className="room-edit-goes">its way back goes in there</span>
+            </button>
+          </div>
+          {doorsOpen && (
+            <div className="room-edit-doors">
+              <input
+                type="search"
+                className="room-edit-door-find"
+                placeholder="Find a place"
+                aria-label="Find a place for the door to lead to"
+                value={doorQuery}
+                onChange={(e) => setDoorQuery(e.target.value)}
+              />
+              {doorPlaces.length ? (
+                <ul>
+                  {doorPlaces.map((p) => (
+                    <li key={p.id}>
+                      <button type="button" disabled={busy} onClick={() => putDoor(p.id)}>
+                        {p.label}
+                        <span className="room-edit-goes">{p.kind}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="world-panel-quiet">
+                  {doorQuery ? "No place is called that." : "Every place has a door from here already."}
+                </p>
+              )}
+            </div>
+          )}
+        </section>
         {groups.map((g) => (
           <section key={g.id} className="room-edit-group" aria-label={g.label}>
             <h3>{g.label}</h3>
