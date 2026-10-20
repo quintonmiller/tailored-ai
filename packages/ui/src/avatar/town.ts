@@ -11,6 +11,7 @@
  */
 import type { AgentActivity } from "./doing";
 import { hueFor } from "./doing";
+import type { Obstacle } from "./locomotion";
 
 type P = [number, number];
 
@@ -197,8 +198,10 @@ export const isEvening = (hour: number) => hour < 7 || hour >= 17;
  * How a building's windows look at an hour, by what is going on inside. A
  * home is lit after dark while its owner is awake, and dark once it sleeps;
  * by day it shows a light only while its owner is at work, so a busy street
- * reads at a glance. The town hall, the office and the places on main street
- * are lit every evening; a meeting room's building, while anyone is talking.
+ * reads at a glance. Any other building (the town hall, the office, those on
+ * main street, a hut) is lit every evening, and by day shows a light only for
+ * a busy `doing`; the stage follows only a home's owner, so by day they show
+ * the sky.
  */
 export function windowLook(kind: BuildingKind, hour: number, doing?: AgentActivity["doing"]): WindowLook {
   const busy = doing === "working" || doing === "thinking" || doing === "talking";
@@ -281,6 +284,55 @@ export function ribbon(points: P[], width: number): [P, P][] {
       [p[0] - lx * half, p[1] - lz * half],
     ];
   });
+}
+
+// --------------------------------------------------------------------------
+// Water
+// --------------------------------------------------------------------------
+
+/**
+ * What can't be walked into for water: the pond, the stream bar at its
+ * bridges (a box for each stretch between them), and the sea from the shore
+ * on. The ground can run on south past the shore when the town reaches
+ * further north than the sea is south, so the sea is shut off here rather
+ * than left to the ground's edge.
+ */
+export function waterObstacles(plan: TownPlan): Obstacle[] {
+  const pond = plan.park.pond;
+  const boxes: Obstacle[] = [
+    {
+      minX: pond.at[0] - pond.size[0] / 2,
+      maxX: pond.at[0] + pond.size[0] / 2,
+      minZ: pond.at[1] - pond.size[1] / 2,
+      maxZ: pond.at[1] + pond.size[1] / 2,
+    },
+  ];
+  const bridgesZ = plan.stream.bridges.map((b) => b.at[1]);
+  const half = plan.stream.width / 2;
+  for (let i = 1; i < plan.stream.points.length; i++) {
+    const [a, b] = [plan.stream.points[i - 1], plan.stream.points[i]];
+    const mid = (a[1] + b[1]) / 2;
+    if (bridgesZ.some((z) => Math.abs(mid - z) < 1.8)) continue;
+    boxes.push({
+      minX: Math.min(a[0], b[0]) - half,
+      maxX: Math.max(a[0], b[0]) + half,
+      minZ: Math.min(a[1], b[1]),
+      maxZ: Math.max(a[1], b[1]),
+    });
+  }
+  const { sea } = plan.shore;
+  boxes.push({
+    minX: -plan.width / 2 - 1,
+    maxX: plan.width / 2 + 1,
+    minZ: sea,
+    maxZ: Math.max(sea, plan.depth / 2) + 1,
+  });
+  return boxes;
+}
+
+/** A point clicked to walk to, kept on dry land: one out in the sea is the water's edge in front of it. */
+export function ashore(plan: TownPlan, [x, z]: P, radius: number): P {
+  return [x, Math.min(z, plan.shore.sea - radius - 0.05)];
 }
 
 // --------------------------------------------------------------------------

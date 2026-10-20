@@ -19,6 +19,17 @@ describe("picking", () => {
     expect(nearestUse([])).toBeUndefined();
   });
 
+  it("passes over a thing that isn't drawn, or is part of something that isn't, to what is behind it", () => {
+    // A door in the town too far off to show, on the front of its building: a click on it is a click on the building.
+    const far = thing({ door });
+    far.group.visible = false;
+    const building = thing({ approach: [4, 2] });
+    expect(nearestUse([{ object: far.mesh }, { object: building.mesh }])?.use).toEqual({ approach: [4, 2] });
+    expect(nearestUse([{ object: far.mesh }])).toBeUndefined();
+    far.group.visible = true;
+    expect(nearestUse([{ object: far.mesh }, { object: building.mesh }])?.use).toEqual({ door });
+  });
+
   it("reads what the thing is for from it or anything it is part of", () => {
     const kiosk = thing({ action: "new-task", spot: "kiosk" });
     const deep: Pickable = { userData: {}, parent: kiosk.mesh };

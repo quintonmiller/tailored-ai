@@ -1,7 +1,7 @@
 /**
  * What a click in the room lands on: the nearest clickable thing under the
- * pointer, and what it leads to. Only the nearest counts, so a door standing
- * behind a chair never takes a click meant for the chair. Pure over anything
+ * pointer that is drawn, and what it leads to. Only the nearest counts, so a
+ * door standing behind a chair never takes a click meant for the chair. Pure over anything
  * shaped like a three.js object, so it is tested without a GPU.
  */
 import type { RoomDoor } from "./scene";
@@ -10,6 +10,14 @@ import type { RoomDoor } from "./scene";
 export interface Pickable {
   userData: Record<string, unknown>;
   parent: Pickable | null;
+  /** False while it isn't drawn: a door in the town too far off to show, say. */
+  visible?: boolean;
+}
+
+/** Whether a thing is drawn: it and everything it is part of. A raycaster hits what is hidden all the same. */
+export function shown(o: Pickable | null): boolean {
+  for (; o; o = o.parent) if (o.visible === false) return false;
+  return true;
 }
 
 /**
@@ -24,9 +32,12 @@ export interface Use {
   approach?: [number, number];
 }
 
-/** The nearest of the hits (nearest first, as a raycaster gives them), and what it or anything it is part of is for. */
+/**
+ * The nearest of the hits that is drawn (nearest first, as a raycaster gives them), and what it or anything it is
+ * part of is for. Something hidden takes no click, so one on a hidden door goes to the building behind it.
+ */
 export function nearestUse<H extends { object: Pickable }>(hits: H[]): { hit: H; use: Use } | undefined {
-  const hit = hits[0];
+  const hit = hits.find((h) => shown(h.object));
   if (!hit) return undefined;
   const use: Use = {};
   for (let o: Pickable | null = hit.object; o; o = o.parent) {

@@ -18,10 +18,12 @@
  * fenced, at the end of the avenue.
  *
  * Homes go into lanes in name order, cut where the first letter changes (see
- * `packLanes`), so a new agent changes only the lane it joins. Lanes, landmarks and plots each have a place of their own: nothing
- * moves because something was added somewhere else, apart from what is
- * further along main street than a new shared place, and plots further out
- * than a new lane.
+ * `packLanes`), so a new agent changes only the lane it joins. Lanes,
+ * landmarks and plots each have a place of their own, and each plot its own
+ * end of the avenue: nothing moves because something was added somewhere
+ * else, apart from what is further along main street than a new shared
+ * place, and plots further out than a new lane, or than a new plot at their
+ * end of the avenue.
  *
  * Units are metres, +X east and +Z south, toward the viewer, as in a room. A
  * `facing` of 0° looks south (+Z), 90° east. Pure: the same places always
@@ -218,6 +220,24 @@ export function avenueZ(x: number): number {
 /** The stream's centre line at `z`. */
 export function streamX(z: number): number {
   return round(STREAM_X + STREAM_WANDER * Math.sin(z / 7));
+}
+
+/**
+ * Where `n` huts stand along the sand at `z`, across the town: out from the
+ * middle, east then west, 8 m apart, leaving out any spot the stream runs
+ * through on its way into the sea, banks and all. The spots are the same
+ * however many huts there are, so one more takes the next and moves none.
+ */
+function hutSpots(n: number, z: number): number[] {
+  const clear = HUT[0] / 2 + STREAM_WIDTH / 2 + 1.5;
+  const stream = [z - HUT[1] / 2, z, z + HUT[1] / 2].map(streamX);
+  const spots: number[] = [];
+  for (let k = 0; spots.length < n; k++)
+    for (const side of [1, -1]) {
+      const x = side * (7 + k * 8);
+      if (spots.length < n && stream.every((s) => Math.abs(x - s) >= clear)) spots.push(x);
+    }
+  return spots;
 }
 
 /** The facing that looks along a direction on the floor. */
@@ -491,13 +511,12 @@ export function layTown(input: TownInput, ids: { hall: string; office: string })
   // The shore: a promenade along the top of the beach, the sand, and the huts on it facing the sea.
   const sand = shoreZ + 3;
   const sea = sand + 15;
+  const hutXs = hutSpots(input.huts.length, sand + 5);
   for (const [j, hut] of input.huts.entries()) {
-    const k = Math.floor(j / 2);
-    const x = (j % 2 ? -1 : 1) * (7 + k * 8);
     buildings.push({
       id: hut.id,
       kind: "hut",
-      at: pt(x, sand + 5),
+      at: pt(hutXs[j], sand + 5),
       facing: 0,
       size: HUT,
       label: hut.label,
@@ -513,12 +532,15 @@ export function layTown(input: TownInput, ids: { hall: string; office: string })
   let eastEnd = Math.max(east, input.office ? OFFICE_AT[0] + OFFICE_SIZE[0] / 2 + 6 : SQUARE + 16) + 6;
   const avenueWest = westEnd;
   const avenueEast = eastEnd;
-  for (const [j, area] of input.plots.entries()) {
+  for (const area of input.plots) {
     const n = area.places.length;
-    const row = Math.min(n, 5);
+    // One row along the back of the plot facing the path through it, up to five; past that, a row along the front
+    // facing back as well, the two as long as each other, the plot growing wider to hold them.
+    const row = n <= 5 ? n : Math.ceil(n / 2);
     const width = Math.max(16, row * 7.6 + 4);
     const depth = n > 5 ? 26 : 16;
-    const toWest = j % 2 === 0;
+    // Each plot's end of the avenue is its own, from its id, so one added never sends another to the other end.
+    const toWest = hashed(`plot\n${area.id}`) < 0.5;
     const cx = toWest ? westEnd - 4 - width / 2 : eastEnd + 4 + width / 2;
     if (toWest) westEnd = cx - width / 2;
     else eastEnd = cx + width / 2;
@@ -531,10 +553,9 @@ export function layTown(input: TownInput, ids: { hall: string; office: string })
       gate: pt(toWest ? cx + width / 2 : cx - width / 2, 0),
     });
     for (const [k, place] of area.places.entries()) {
-      // Along the back of the plot facing the path through it, and past five, along the front facing back.
-      const front = k < 5;
-      const i = front ? k : k - 5;
-      const across = Math.min(row, front ? 5 : n - 5);
+      const front = k < row;
+      const i = front ? k : k - row;
+      const across = front ? row : n - row;
       const x = cx - ((across - 1) * 7.6) / 2 + i * 7.6;
       plotBuildings.push({
         id: place.id,
@@ -576,7 +597,7 @@ export function layTown(input: TownInput, ids: { hall: string; office: string })
   }
   const promenade: P[] = [];
   // Along the whole shore, from the furthest lane on one side to the furthest on the other.
-  const shoreHalf = Math.max(30, -west, east, ...input.huts.map((_, j) => 7 + Math.floor(j / 2) * 8 + 8));
+  const shoreHalf = Math.max(30, -west, east, ...hutXs.map((x) => Math.abs(x) + 8));
   for (let x = -shoreHalf; x <= shoreHalf; x += 2) promenade.push(pt(x, shoreZ + 1.2));
   roads.push({ id: "promenade", name: "The Promenade", kind: "promenade", width: 4, points: promenade });
 

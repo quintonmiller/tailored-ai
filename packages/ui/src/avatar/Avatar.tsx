@@ -32,6 +32,8 @@ export interface AvatarControls {
   cue(cue: Cue): void;
   /** An agent's body going by in the town, from one door to another (see `Stage.walkBy`). */
   walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
+  /** Where you are on the floor (see `Stage.where`). */
+  where(): [number, number];
 }
 
 function savedView(): StageView {
@@ -414,7 +416,8 @@ export function Avatar({
         }
         stage.current = s;
         unsurface = s.onSurfaces(setSurfaces);
-        if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c), walkBy: (w) => s.walkBy(w) };
+        if (controlsRef.current)
+          controlsRef.current.current = { cue: (c) => s.cue(c), walkBy: (w) => s.walkBy(w), where: () => s.where() };
         s.setInsets(insetRef.current);
         // The room, or who is in it, may have arrived or changed while the stage was loading.
         s.setLights(lightsFor(placeRef.current));

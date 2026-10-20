@@ -176,55 +176,58 @@ describe("WorldMap", () => {
       style: 0.3,
       street: "Maple Lane",
     });
-    const { onGo } = render({
-      here: "home:planner",
-      places: [{ ...places[0], street: "Maple Lane" }, ...places.slice(1)],
-      activities: { planner: { agent: "planner", doing: "working", what: "searching the web" } },
-      town: {
-        width: 120,
-        depth: 100,
-        square: { at: [0, 0], radius: 11 },
-        shore: { sand: 40, sea: 50 },
-        stream: {
-          points: [
-            [-18, -50],
-            [-18, 50],
-          ],
-          width: 2.6,
-          bridges: [],
-        },
-        park: { at: [20, -20], size: [20, 14], pond: { at: [20, -20], size: [8, 5] } },
-        roads: [
-          {
-            id: "lane-1",
-            name: "Maple Lane",
-            kind: "lane",
-            width: 5,
-            points: [
-              [-30, -4],
-              [-30, -40],
-            ],
-          },
+    const town: Parameters<typeof WorldMap>[0]["town"] = {
+      width: 120,
+      depth: 100,
+      square: { at: [0, 0], radius: 11 },
+      shore: { sand: 40, sea: 50 },
+      stream: {
+        points: [
+          [-18, -50],
+          [-18, 50],
         ],
-        buildings: [
-          house("home:planner", "planner", [-36, -10]),
-          house("home:writer", "writer", [-24, -10]),
-          {
-            id: "lobby",
-            kind: "hall",
-            at: [0, -20],
-            facing: 0,
-            size: [18, 9, 6.5],
-            label: "Town hall",
-            style: 0.5,
-            street: "The square",
-          },
-        ],
-        plots: [],
-        trees: [],
-        lamps: [],
+        width: 2.6,
+        bridges: [],
       },
-    });
+      park: { at: [20, -20], size: [20, 14], pond: { at: [20, -20], size: [8, 5] } },
+      roads: [
+        {
+          id: "lane-1",
+          name: "Maple Lane",
+          kind: "lane",
+          width: 5,
+          points: [
+            [-30, -4],
+            [-30, -40],
+          ],
+        },
+      ],
+      buildings: [
+        house("home:planner", "planner", [-36, -10]),
+        house("home:writer", "writer", [-24, -10]),
+        {
+          id: "lobby",
+          kind: "hall",
+          at: [0, -20],
+          facing: 0,
+          size: [18, 9, 6.5],
+          label: "Town hall",
+          style: 0.5,
+          street: "The square",
+        },
+      ],
+      plots: [],
+      trees: [],
+      lamps: [],
+    };
+    const shown = {
+      places: [{ ...places[0], street: "Maple Lane" }, ...places.slice(1)],
+      activities: { planner: { agent: "planner", doing: "working", what: "searching the web" } } as const,
+      town,
+    };
+    const { onGo } = render({ ...shown, here: "home:planner", you: [0, 7] });
+    // Inside a house, the house is where you are: no dot out in the street.
+    expect(container.querySelector(".world-plan-you")).toBeNull();
     const buildings = [...container.querySelectorAll<HTMLButtonElement>(".world-plan-building")];
     expect(buildings).toHaveLength(3);
     const planner = buildings.find((b) => b.getAttribute("aria-current") === "location") as HTMLButtonElement;
@@ -236,6 +239,15 @@ describe("WorldMap", () => {
     expect(hall.textContent).toBe("Town hall");
     act(() => hall.click());
     expect(onGo).toHaveBeenLastCalledWith("lobby");
+
+    // Out in the town, a dot where you stand: here, on the square, in front of the town hall.
+    render({ ...shown, here: "town", you: [0, 7] });
+    const you = container.querySelector<HTMLElement>(".world-plan-you");
+    expect(you?.getAttribute("aria-label")).toBe("You are here");
+    expect([you?.style.left, you?.style.top]).toEqual(["87.5%", "41.25%"]);
+    // Off in the woods past what the plan shows, at its edge.
+    render({ ...shown, here: "town", you: [-100, 7] });
+    expect(container.querySelector<HTMLElement>(".world-plan-you")?.style.left).toBe("0%");
   });
 
   it("goes where you click", () => {

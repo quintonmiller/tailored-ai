@@ -587,8 +587,8 @@ glance. The light by its front door shows what the agent is doing, as every
 home's door does.
 
 East of the square, on the avenue, is **the office**, where the rooms agents
-talk in are. Inside is an atrium: a directory by the way in, and the meeting
-rooms' doors round its walls and standing along its open right side, up to
+talk in are. Inside is an atrium: a directory by the way in, which opens
+the map with every room listed, and the meeting rooms' doors round its walls and standing along its open right side, up to
 14 to a floor. More rooms take more floors, with stairs between them, cut by
 first letter as lanes are. A meeting room dressed as a tavern, a studio, a
 workshop or a library has **a building of its own on Main Street**, which
@@ -606,9 +606,11 @@ puts you on that street outside the door, facing away from it.
 
 **Outdoors** you walk faster and see further (see [Getting
 around](#getting-around-the-map-walking-and-flying)). The town has a sky:
-the sun by day, low and orange in the evening, and at night the moon, the
-stars and the street lamps, the four nearest you lighting the street and the
-rest glowing. The sun's shadows are drawn round you as you go. A building
+the sun by day, high in the south behind you as you face the town hall, low
+and orange in the evening, and at night the moon, the stars and the street
+lamps, the four nearest you lighting the street and the rest glowing. Shadows
+fall away from the sun and are drawn round you as you go. The sea and the
+stream stop you at the water's edge; you cross the stream at its bridges. A building
 between the camera and you fades to a ghost so you can see past it, as a
 tall thing in a room does.
 
@@ -655,7 +657,10 @@ visit: you come out of that door on the other side, in your own body.
 **Areas.** A home or a shared place can be somewhere else: the `place` tool's
 `room` action takes `area` ("the summer house"), and so does `new`. The
 places of an area are on **a plot of their own at the edge of town**, fenced,
-its name at the gate, at the end of the avenue where a path goes on to it.
+its name at the gate, at one end of the avenue or the other where a path goes
+on to it. Each plot keeps its end of the avenue when another is added, and
+holds its places in two rows facing the path through it, growing wider as
+they come.
 They are a walk away like everywhere else, each with its door out on to the
 plot. An agent can build itself a summer house with two rooms this way, or
 move its home out to a cabin with the places it made there. `area` "main"
@@ -670,8 +675,9 @@ conversation that several agents share, not anyone's own place to move, so
 streets and their names, the stream, the park and the shore, and every
 building, each a button that takes you into it. A house is in its owner's
 colour, with a dot when its owner is at work or waiting on you; a building
-anyone else is in has a dot for them; the one you're in is ringed. The list
-puts each plot under **Plots**, with what is on it.
+anyone else is in has a dot for them; the one you're in is ringed, and out
+in the town a dot marks where you stand. The list puts each plot under
+**Plots**, with what is on it.
 
 How it works: the town is worked out on every read from the places there
 are, by `places-town.ts` and `places-world.ts` in the places plugin. It is

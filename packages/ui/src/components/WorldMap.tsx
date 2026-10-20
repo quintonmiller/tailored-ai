@@ -210,6 +210,7 @@ export function WorldMap({
   town,
   problem,
   here,
+  you,
   activities,
   onGo,
   onNeed,
@@ -223,6 +224,8 @@ export function WorldMap({
   problem: string | null;
   /** The place on screen now. */
   here: string | undefined;
+  /** Where you stand in the town, while you are out in it: marked on the plan. */
+  you?: [number, number];
   activities: Record<string, AgentActivity>;
   onGo: (id: string) => void;
   /** Go to an agent waiting on you, with what it waits on open: from "Busy now", as from the "Needs you" list. */
@@ -346,7 +349,15 @@ export function WorldMap({
       {problem && <p className="world-map-problem">{problem}</p>}
       <div className="world-map-split">
         {town && (
-          <TownPlan plan={town} places={places} here={here} activities={activities} color={agentColor} onGo={onGo} />
+          <TownPlan
+            plan={town}
+            places={places}
+            here={here}
+            {...(you ? { you } : {})}
+            activities={activities}
+            color={agentColor}
+            onGo={onGo}
+          />
         )}
         <div className="world-map-body">
           {!searching && places.length > 0 && (

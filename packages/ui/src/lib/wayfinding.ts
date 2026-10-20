@@ -90,7 +90,13 @@ export function trailTo(here: string | undefined, places: MapPlace[], _areas: Ma
   if (place.id === TOWN) return trail;
   const via = place.via ? places.find((p) => p.id === place.via) : undefined;
   if (via?.kind === "office") {
-    if (via.street) trail.push({ id: TOWN, label: via.street, from: via.id });
+    // A floor upstairs is reached from the one below; the street is the office's, whose door is on the ground floor.
+    let ground: MapPlace | undefined = via;
+    for (let up = 0; ground && !ground.street && up < 50; up++) {
+      const below: MapPlace | undefined = places.find((p) => p.id === ground?.via);
+      ground = below?.kind === "office" ? below : undefined;
+    }
+    if (ground?.street) trail.push({ id: TOWN, label: ground.street, from: ground.id });
     trail.push({ id: via.id, label: areaTitle(via.name) });
   } else if (place.street) trail.push({ id: TOWN, label: place.street, from: place.id });
   trail.push({ id: place.id, label: placeTitle(place) });

@@ -851,15 +851,16 @@ export async function scene(
   return { ...found, doors: world ? doorsIn(id, found.place, world) : [] };
 }
 
-/** The town as a place, made once for each town there has been lately: it is the same while nothing in it changes. */
-const towns = new Map<string, Place>();
+/**
+ * The town as a place, made once for each town laid out. {@link layWorld} hands out the same town while nothing in it
+ * changes, so the town itself is the key: any change to it, down to a building's kind or a plot's name, is a new one.
+ */
+const towns = new WeakMap<Town, Place>();
 function townOf(town: Town): Place {
-  const key = JSON.stringify([town.width, town.depth, town.buildings.map((b) => [b.id, b.label, b.at])]);
-  let place = towns.get(key);
+  let place = towns.get(town);
   if (!place) {
-    if (towns.size >= 8) towns.clear();
     place = townPlace(town);
-    towns.set(key, place);
+    towns.set(town, place);
   }
   return place;
 }

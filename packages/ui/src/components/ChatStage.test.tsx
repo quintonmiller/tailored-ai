@@ -151,6 +151,7 @@ vi.mock("../avatar/stage", () => ({
       focusSurface: () => {},
       surfacePoint: () => undefined,
       addSurface: () => () => {},
+      where: () => [-4, 9] as [number, number],
       walkBy: (w: { agent: string; from: [number, number]; to: [number, number] }) =>
         stage.walks.push({ agent: w.agent, from: w.from, to: w.to }),
     };
@@ -270,6 +271,8 @@ const townPlan = {
 };
 /** Things on the agent's own walls besides the usual: a screen, a calendar. */
 let homeExtra: Record<string, unknown>[] = [];
+/** Things out on the square: the town hall's board and calendar. */
+let townExtra: Record<string, unknown>[] = [];
 /** The wakes agents booked, as `GET /api/schedules` lists them. */
 let bookedRows: Record<string, unknown>[] = [];
 /** The dashboard's widgets, as `GET /api/dashboard` resolves them. */
@@ -381,6 +384,7 @@ beforeEach(() => {
   stage.screens.length = 0;
   stage.calendars.length = 0;
   homeExtra = [];
+  townExtra = [];
   bookedRows = [];
   dashboardWidgets = [];
   dashboardDown = false;
@@ -522,7 +526,7 @@ beforeEach(() => {
         return new Response(
           JSON.stringify({
             id: "town",
-            place: { ...home, name: "the town", props: [], town: townPlan },
+            place: { ...home, name: "the town", props: townExtra, town: townPlan },
             company: [],
             doors: [
               { wall: "front", along: 0, at: [0, -15.5], facing: 0, to: "lobby", label: "Town hall", kind: "lobby" },
@@ -2119,6 +2123,38 @@ describe("the chat page's scene", () => {
     expect(container.querySelector(".world-dashboard-panel")?.textContent).toMatch(/Couldn't load the dashboard: 500/);
   });
 
+  it("shows everyone's open tasks and wakes on the square, where nobody stays", async () => {
+    townExtra = [wall("board"), wall("calendar")];
+    bookedRows = [booking("b1", "planner", 2, "plan the route"), booking("b2", "writer", 3, "send the draft")];
+    await render({ following: true });
+    await act(async () => stage.onDoor?.({ to: "town" }));
+    await settle(60);
+    expect(stage.rooms.at(-1)?.name).toBe("the town");
+    // No agent is ever on the square, so what it shows is everyone's, as the lobby's does.
+    expect(stage.tasks.at(-1)?.map((t) => t.id)).toEqual(["t1", "t2"]);
+    const shown = stage.calendars.at(-1);
+    expect(shown?.title).toBe("Everyone's next wakes");
+    expect(shown?.wakes.map((w) => w.key)).toEqual(["booked:b1", "booked:b2"]);
+    await act(async () => stage.onUse?.("calendar"));
+    await settle();
+    const panel = container.querySelector(".world-calendar-panel") as HTMLElement;
+    expect(panel.querySelector(".world-panel-title")?.textContent).toBe("Everyone's next wakes");
+    expect(panel.textContent).toMatch(/plan the route/);
+    expect(panel.textContent).toMatch(/send the draft/);
+    // The office's directory opens the map, as the Map button does.
+    await act(async () => stage.onUse?.("map"));
+    await settle();
+    expect(container.querySelector(".world-map")).not.toBeNull();
+    await act(async () => stage.onUse?.("calendar"));
+    await settle();
+    // And the map, opened out here, marks where you stand on the town's plan.
+    await act(async () =>
+      ([...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === "Map") as HTMLElement).click(),
+    );
+    await settle();
+    expect(container.querySelector(".world-plan-you")?.getAttribute("aria-label")).toBe("You are here");
+  });
+
   it("shows the wakes of whoever is in a shared place on its calendar, and opens the list on them", async () => {
     placeId = "shared:lounge";
     homeExtra = [wall("calendar")];
@@ -2278,8 +2314,9 @@ describe("talking on the chat page", () => {
 describe("wakesFor", () => {
   const wake = (key: string, agent: string) => ({ key, agent, at: 0, kind: "booked" as const, what: key });
   const wakes = [wake("a", "planner"), wake("b", "writer"), wake("c", "default")];
-  it("shows everyone's in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
+  it("shows everyone's on the square and in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
     expect(wakesFor("lobby", [], wakes).map((w) => w.key)).toEqual(["a", "b", "c"]);
+    expect(wakesFor("town", [], wakes).map((w) => w.key)).toEqual(["a", "b", "c"]);
     expect(wakesFor("home:writer", ["planner"], wakes).map((w) => w.key)).toEqual(["b"]);
     expect(wakesFor("shared:lounge", ["planner", "default"], wakes).map((w) => w.key)).toEqual(["a", "c"]);
     expect(wakesFor(undefined, ["planner"], wakes)).toEqual([]);
@@ -2292,8 +2329,9 @@ describe("tasksFor", () => {
     { id: "b", title: "b", status: "backlog", assignee: "writer" },
     { id: "c", title: "c", status: "backlog", assignee: null },
   ];
-  it("shows everyone's in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
+  it("shows everyone's on the square and in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
     expect(tasksFor("lobby", [], tasks).map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(tasksFor("town", [], tasks).map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(tasksFor("home:writer", ["planner"], tasks).map((t) => t.id)).toEqual(["b"]);
     expect(tasksFor("room:local:trip", ["planner", "writer"], tasks).map((t) => t.id)).toEqual(["a", "b"]);
     expect(tasksFor(undefined, ["planner"], tasks)).toEqual([]);

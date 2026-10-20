@@ -2,12 +2,16 @@
  * The town outdoors: a house in its owner's colour, with what its owner does
  * standing by it; windows lit while someone is up, dark once they sleep; the
  * sky by the hour; the lamps that light round you; the roads' strips; the
- * doors in town a place is gone into by, and the walks between them.
+ * water you can't walk into; the doors in town a place is gone into by, and
+ * the walks between them.
  */
 import { describe, expect, it } from "vitest";
 import { agentColor } from "../components/WorldMap";
 import { hueFor } from "./doing";
+import { findPath, slide } from "./locomotion";
+import { DEFAULT_ROOM } from "./scene";
 import {
+  ashore,
   doorInTown,
   doorOfBuilding,
   featuresFor,
@@ -23,6 +27,7 @@ import {
   type TownBuilding,
   type TownPlan,
   tripsBetween,
+  waterObstacles,
   windowLook,
 } from "./town";
 
@@ -169,6 +174,53 @@ describe("roads", () => {
     // Square to the line at its ends.
     expect(pairs[0][0][0]).toBeCloseTo(0);
     expect(ribbon([[0, 0]], 4)).toEqual([]);
+  });
+});
+
+describe("water", () => {
+  // A town that reaches further north than the sea is south of the square, so its ground runs on past the shore; a
+  // stream down it, points every 2 m as the server lays them, crossed by one bridge.
+  const points: [number, number][] = [];
+  for (let z = -70; z <= 50; z += 2) points.push([-20, z]);
+  const deep: TownPlan = {
+    ...plan([]),
+    depth: 140,
+    stream: { points, width: 2.6, bridges: [{ at: [-20, 0], facing: 90, length: 5 }] },
+  };
+  const water = waterObstacles(deep);
+
+  it("shuts off the sea, however far the ground runs on past the shore", () => {
+    expect(deep.depth / 2).toBeGreaterThan(deep.shore.sea);
+    // Walking south off the sand, step after step, gets you to the water's edge and no further.
+    let at: [number, number] = [5, 44];
+    for (let k = 0; k < 200; k++) at = slide(deep, at, [0.05, 0.3], water, 0.3);
+    expect(at[1]).toBeLessThan(deep.shore.sea);
+    expect(at[1]).toBeGreaterThan(deep.shore.sea - 1);
+    // A click out at sea walks you to the water's edge in front of it; one on land is left as it is.
+    const edge = ashore(deep, [5, 62], 0.3);
+    expect(edge[0]).toBe(5);
+    expect(edge[1]).toBeCloseTo(deep.shore.sea - 0.35);
+    // Clear of the water by more than a body, so you aren't stood in it, which would let you walk anywhere.
+    expect(edge[1]).toBeLessThan(deep.shore.sea - 0.3);
+    expect(ashore(deep, [5, 30], 0.3)).toEqual([5, 30]);
+  });
+
+  it("lets you over the stream at its bridge and nowhere else, and round the pond", () => {
+    let at: [number, number] = [-26, 30];
+    for (let k = 0; k < 100; k++) at = slide(deep, at, [0.3, 0], water, 0.3);
+    expect(at[0]).toBeLessThan(-20);
+    const way = findPath({ ...DEFAULT_ROOM, width: deep.width, depth: deep.depth }, [-30, 30], [-10, 30], water, 0.3);
+    expect(way.at(-1)).toEqual([-10, 30]);
+    let from: [number, number] = [-30, 30];
+    const crossed = way.filter((to) => {
+      const over = from[0] < -20 !== to[0] < -20;
+      const z = (from[1] + to[1]) / 2;
+      from = to;
+      return over && Math.abs(z) < 2.5;
+    });
+    expect(crossed.length).toBeGreaterThan(0);
+    const pond = deep.park.pond;
+    expect(slide(deep, [pond.at[0], pond.at[1] - 4], [0, 2], water, 0.3)).toEqual([pond.at[0], pond.at[1] - 4]);
   });
 });
 

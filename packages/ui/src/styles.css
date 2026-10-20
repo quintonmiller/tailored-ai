@@ -8764,6 +8764,8 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-plan-building.here { z-index: 1; outline: 2px solid #fff; box-shadow: 0 0 0 4px var(--accent); }
 .world-plan-label { font-size: 10px; font-weight: 600; color: #1d232c; white-space: nowrap; pointer-events: none; }
 .world-plan-mark { position: absolute; top: 50%; left: 50%; width: 7px; height: 7px; border: 1px solid #14161c; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+/* You, out in the town: a dot in the accent colour, ringed so it stands out on grass and on the streets. */
+.world-plan-you { position: absolute; z-index: 3; width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.35); transform: translate(-50%, -50%); pointer-events: none; }
 .world-plan-street { position: absolute; font-size: 9px; font-weight: 600; letter-spacing: 0.02em; color: #f6f2e8; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7); white-space: nowrap; pointer-events: none; }
 /* Who is busy, at the top: one line each, straight to where they are. */
 .world-map-busy-list ul { grid-template-columns: 1fr; gap: 4px; }

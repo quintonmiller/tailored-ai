@@ -22,12 +22,14 @@ import {
   featuresFor,
   footprintBox,
   houseLook,
+  lightFrom,
   outsideDoor,
   ribbon,
   skyFor,
   type TownBuilding,
   type TownPlan,
   type WindowLook,
+  waterObstacles,
   windowLook,
 } from "./town";
 
@@ -681,26 +683,8 @@ export function buildTown(plan: TownPlan): BuiltTown {
     1,
     pond.size[1],
   ]);
-  obstacles.push({
-    minX: pond.at[0] - pond.size[0] / 2,
-    maxX: pond.at[0] + pond.size[0] / 2,
-    minZ: pond.at[1] - pond.size[1] / 2,
-    maxZ: pond.at[1] + pond.size[1] / 2,
-  });
-  // The stream can't be walked through, bar at its bridges: a box for each stretch between them.
-  const bridgesZ = plan.stream.bridges.map((b) => b.at[1]).sort((a, b) => a - b);
-  for (let i = 1; i < plan.stream.points.length; i++) {
-    const [a, b] = [plan.stream.points[i - 1], plan.stream.points[i]];
-    const mid = (a[1] + b[1]) / 2;
-    if (bridgesZ.some((z) => Math.abs(mid - z) < 1.8)) continue;
-    const half = plan.stream.width / 2;
-    obstacles.push({
-      minX: Math.min(a[0], b[0]) - half,
-      maxX: Math.max(a[0], b[0]) + half,
-      minZ: Math.min(a[1], b[1]),
-      maxZ: Math.max(a[1], b[1]),
-    });
-  }
+  // The pond, the stream bar at its bridges, and the sea can't be walked into.
+  obstacles.push(...waterObstacles(plan));
   const fixtures = new Parts();
   for (const br of plan.stream.bridges) {
     // A wooden deck across, a little arched, with a rail each side.
@@ -961,12 +945,8 @@ export function buildTown(plan: TownPlan): BuiltTown {
     const day = hour >= 6 && hour < 20;
     sun.visible = day;
     moon.visible = !day;
-    // High in the south by day, and the moon by night, low enough to be seen past the camera's usual angle.
-    const t = day ? (hour - 6) / 14 : ((hour + 4) % 24) / 10;
-    const a = Math.PI * Math.min(1, Math.max(0, t));
-    const where = new THREE.Vector3(Math.cos(a) * 0.8, Math.max(0.12, Math.sin(a) * 0.55), -0.6)
-      .normalize()
-      .multiplyScalar(340);
+    // Where the light comes from: the sun high in the south by day, the moon by night, so shadows fall away from it.
+    const where = new THREE.Vector3(...lightFrom(hour)).multiplyScalar(340);
     for (const body of [sun, moon]) {
       body.position.copy(where);
       body.lookAt(0, 0, 0);

@@ -74,11 +74,12 @@ import {
   meetingRoom,
   NO_THEME,
   retheme,
-  sharedPlace,
   THEMES,
   themeFor,
   themeNamed,
 } from "../plugins/places-rooms.js";
+import type { Town } from "../plugins/places-town.js";
+import { layWorld, type WorldPlace } from "../plugins/places-world.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { RoomStore } from "../rooms/store.js";
@@ -1170,6 +1171,20 @@ describe("the map, and any place on it", () => {
     expect(town?.place).toMatchObject({ name: "the town" });
     // A floor of the office is only there while the office has it.
     expect(await scene(state, owner, "office:9", talk, hasBody, world)).toBeNull();
+  });
+
+  it("draws the town as it is now, after a meeting room changes to a look of the same size", async () => {
+    // A tavern, a workshop and a library are each a building as deep as the others: only its kind says which.
+    const kindOf = async (theme: string) => {
+      const places: WorldPlace[] = [{ id: roomPlaceId("local:trip"), name: "trip", kind: "room", theme }];
+      const town = await scene(state, owner, "town", rooms, hasBody, layWorld(places));
+      return (town?.place as Place & { town: Town }).town.buildings.find((b) => b.id === roomPlaceId("local:trip"))
+        ?.kind;
+    };
+    expect(await kindOf("tavern")).toBe("tavern");
+    expect(await kindOf("workshop")).toBe("workshop");
+    expect(await kindOf("library")).toBe("library");
+    expect(await kindOf("tavern")).toBe("tavern");
   });
 
   it("shows a room of conversation as a meeting room, a seat for each member with a body", async () => {

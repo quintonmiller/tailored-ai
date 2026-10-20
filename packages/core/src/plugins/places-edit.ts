@@ -62,6 +62,7 @@ const DOES: Record<PlaceAction, string> = {
   "new-task": "make a task",
   "new-room": "make a room",
   tasks: "see the open tasks",
+  map: "find a place on the map",
 };
 
 /**

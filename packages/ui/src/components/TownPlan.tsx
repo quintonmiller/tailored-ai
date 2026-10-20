@@ -28,13 +28,14 @@ const MARKED = new Set<AgentActivity["doing"]>(["waiting", "stuck", "working", "
  * square, the streets and their names, the stream, the park and the shore,
  * and every building, each a button that takes you into it. A house is its
  * owner's colour, with a dot when its owner is at work or waiting on you, and
- * any building someone is in has a dot for them. The place you are in is
- * ringed.
+ * any building someone is in has a dot for them. The building you are in is
+ * ringed; out in the town, a dot is where you stand.
  */
 export function TownPlan({
   plan,
   places,
   here,
+  you,
   activities,
   color,
   onGo,
@@ -43,6 +44,8 @@ export function TownPlan({
   places: MapPlace[];
   /** The place on screen now. */
   here: string | undefined;
+  /** Where you stand in the town, while you are out in it. */
+  you?: [number, number];
   activities: Record<string, AgentActivity>;
   /** An agent's colour. */
   color: (agent: string) => string;
@@ -67,6 +70,8 @@ export function TownPlan({
     return office && (where?.kind === "office" || where?.via?.startsWith("office")) ? office.id : undefined;
   }, [here, plan, byId]);
   const pct = (v: number, from: number, span: number) => `${((v - from) / span) * 100}%`;
+  // Out in the woods past what the plan shows, you are at its edge.
+  const edge = (v: number, from: number, span: number) => pct(Math.min(from + span, Math.max(from, v)), from, span);
   const line = (points: [number, number][]) => points.map(([x, z]) => `${x},${z}`).join(" ");
   const mark = (b: TownBuilding): AgentActivity["doing"] | undefined => {
     const own = b.owner ? activities[b.owner]?.doing : undefined;
@@ -141,6 +146,15 @@ export function TownPlan({
           </span>
         );
       })}
+      {here === "town" && you && (
+        <span
+          className="world-plan-you"
+          role="img"
+          aria-label="You are here"
+          title="You are here"
+          style={{ left: edge(you[0], box.x, box.w), top: edge(you[1], box.z, box.d) }}
+        />
+      )}
       {plan.buildings.map((b) => {
         const doing = mark(b);
         const big = b.kind === "hall" || b.kind === "office";

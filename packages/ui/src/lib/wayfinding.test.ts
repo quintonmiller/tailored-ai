@@ -118,11 +118,12 @@ describe("trailTo", () => {
       { id: "office", label: "Office" },
       { id: "room:local:budget", label: "#budget" },
     ]);
-    // On the floor upstairs: the floor, which is reached from the one below.
-    expect(trailTo("room:local:zines", places, areas).map((c) => c.label)).toEqual([
-      "Town",
-      "Office, 2nd floor",
-      "#zines",
+    // On the floor upstairs: the floor, reached from the one below, and still the office's street, out of its door.
+    expect(trailTo("room:local:zines", places, areas)).toEqual([
+      { id: "town", label: "Town" },
+      { id: "town", label: "The Avenue", from: "office" },
+      { id: "office:2", label: "Office, 2nd floor" },
+      { id: "room:local:zines", label: "#zines" },
     ]);
     expect(trailTo("room:local:trip", places, areas).map((c) => c.label)).toEqual(["Town", "The beach", "#trip"]);
   });

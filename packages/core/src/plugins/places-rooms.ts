@@ -1532,7 +1532,7 @@ export function officeFloor(name: string, width: number, depth: number, doors: D
   const inner = { left: round(-width / 2 + 2.4), right: round(width / 2 - 2.6), back: round(-depth / 2 + 2.3) };
   const front = round(depth / 2 - 2.4);
   const centre: Placed[] = [
-    // By the way in, a directory where the doors are listed.
+    // By the way in, a directory: it opens the map, where every room on every floor is listed.
     {
       id: "directory",
       name: "the directory",
@@ -1540,6 +1540,7 @@ export function officeFloor(name: string, width: number, depth: number, doors: D
       at: [round(-width / 2 + 2.5), round(front - 0.2)],
       facing: 45,
       label: "Directory",
+      action: "map",
     },
     ...island("chat", [round(inner.left + 1.6), round(inner.back + 1.2)], look, "lounge"),
     ...island("worktable", [round((inner.left + inner.right) / 2 + 1), round((inner.back + front) / 2)], look, "work"),

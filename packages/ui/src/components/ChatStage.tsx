@@ -599,18 +599,26 @@ export function whereWords(agent: string, places: MapPlace[], here: string | und
   return spot.kind === "home" && spot.owner === agent ? "at home" : `in ${spot.name}`;
 }
 
-/** Which tasks a place's boards show: everyone's in the lobby, otherwise those of whoever is there. */
+/**
+ * Whether a place is everyone's: the town square and the lobby inside its town hall. Their boards and calendars show
+ * every agent's, since nobody lives there and agents only pass through.
+ */
+export function isCommon(place: string | undefined): boolean {
+  return place === "lobby" || place === "town";
+}
+
+/** Which tasks a place's boards show: everyone's on the square and in the lobby, otherwise those of whoever is there. */
 export function tasksFor(place: string | undefined, agents: string[], tasks: BoardTask[]): BoardTask[] {
   if (!place) return [];
-  if (place === "lobby") return tasks;
+  if (isCommon(place)) return tasks;
   const who = place.startsWith("home:") ? [place.slice("home:".length)] : agents;
   return tasks.filter((t) => !!t.assignee && who.includes(t.assignee));
 }
 
-/** Whose wakes a place's calendars show, as its boards show tasks: everyone's in the lobby, otherwise whoever is there. */
+/** Whose wakes a place's calendars show, as its boards show tasks: everyone's in common places, otherwise whoever is there. */
 export function wakesFor(place: string | undefined, agents: string[], wakes: Wake[]): Wake[] {
   if (!place) return [];
-  if (place === "lobby") return wakes;
+  if (isCommon(place)) return wakes;
   const who = place.startsWith("home:") ? [place.slice("home:".length)] : agents;
   return wakes.filter((w) => who.includes(w.agent));
 }
@@ -1553,12 +1561,13 @@ export function useChatStage({
       });
     return dashboardCards(dashboard, minute);
   }, [hasScreen, owner, shownActivities, allTasks, wakes, minute, dashboard]);
-  // Whose wakes a calendar shows outside a home and the lobby: whoever is there. Its full list opens on them too.
-  const among = useMemo(() => (owner || placeId === "lobby" ? undefined : here), [owner, placeId, here]);
-  // A calendar in a home is its owner's day; in the lobby, everyone's next wakes; elsewhere, those of whoever is there.
+  // Whose wakes a calendar shows outside a home and the common places: whoever is there. Its full list opens on them too.
+  const among = useMemo(() => (owner || isCommon(placeId) ? undefined : here), [owner, placeId, here]);
+  // A calendar in a home is its owner's day; on the square and in the lobby, everyone's next wakes; elsewhere, those of
+  // whoever is there.
   const calendarView = useMemo((): CalendarView | undefined => {
     if (!hasCalendar) return undefined;
-    const lobby = placeId === "lobby";
+    const lobby = isCommon(placeId);
     const whose = owner ? [owner] : here;
     return {
       title: owner ? `${nameOf(owner)}'s day` : lobby ? "Everyone's next wakes" : "Next wakes for who's here",
@@ -1569,9 +1578,10 @@ export function useChatStage({
       ...(paused ? { note: PAUSED_NOTE } : {}),
     };
   }, [hasCalendar, placeId, owner, here, minute, wakes, done, paused]);
-  // What the lobby's kiosks, the boards, the screens and the calendars do when clicked. A note on a board opens its
-  // task; anywhere else on a board opens the list, at that column when it was one, and at the owner's tasks in a
-  // home. A screen opens what its page is about; a calendar, its full list.
+  // What the kiosks (the lobby's, and the office's directory, which opens the map), the boards, the screens and the
+  // calendars do when clicked. A note on a board opens its task; anywhere else on a board opens the list, at that
+  // column when it was one, and at the owner's tasks in a home. A screen opens what its page is about; a calendar, its
+  // full list.
   const onUse = useCallback(
     (action: string, on?: UseSpot) => {
       if (action === "screen") {
@@ -1587,7 +1597,7 @@ export function useChatStage({
       if (action === "calendar") {
         // A line about an agent opens that agent's list; anywhere else on it, the list the calendar shows.
         const who = on && "agent" in on ? on.agent : owner;
-        setPanel({ kind: "calendar", ...(who ? { who } : placeId !== "lobby" ? { here: true } : {}) });
+        setPanel({ kind: "calendar", ...(who ? { who } : !isCommon(placeId) ? { here: true } : {}) });
         return;
       }
       if (action === "tasks") {
@@ -1607,6 +1617,7 @@ export function useChatStage({
           "I'd like a new agent. Ask me what it should do and how it should come across, then set it up.",
         );
       else if (action === "new-room") setPanel({ kind: "new-room" });
+      else if (action === "map") setPanel({ kind: "map" });
     },
     [onDraft, placeId, owner],
   );
@@ -1776,6 +1787,7 @@ export function useChatStage({
         {...(map.town ? { town: map.town } : {})}
         problem={map.problem}
         here={placeId}
+        {...(placeId === "town" && controls.current ? { you: controls.current.where() } : {})}
         activities={shownActivities}
         onGo={go}
         onNeed={(who) => seeTo(who)}

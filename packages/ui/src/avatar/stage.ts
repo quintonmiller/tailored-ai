@@ -45,7 +45,7 @@ import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, seeded } fro
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
-import { nearestUse, type Use } from "./pick";
+import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
 import {
   changesShown,
@@ -79,7 +79,7 @@ import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wa
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { blocksView, facingSurface, focusDistance, focusFraming, overWalls } from "./surfaces";
 import { byPhone, GET_UP_AT, heardThrough, standBy, TALK_APART, talkingHere } from "./talk";
-import { DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
+import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
 import {
   clampReach,
@@ -238,6 +238,8 @@ export interface Stage {
    * outdoors, and only for a body not already here.
    */
   walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
+  /** Where you are on the floor: your body, walking; what the camera turns about, flying. */
+  where(): [number, number];
   dispose(): void;
 }
 
@@ -902,9 +904,12 @@ export async function createStage(
   // Lines about to be said, for a visitor to hear when they start; `via`, the one here whose phone a far line comes out of.
   let voices: { agent: string; text: string; at: number; via?: string }[] = [];
   const arriving = new Set<string>();
-  // Bodies on their way out through the door, until they get there.
-  // Bodies walking out, each gone once it gets where it is going, or by `until` (seconds on the stage's clock).
-  const departing: { fig: Figure; from: number; until?: number }[] = [];
+  // Bodies about to go by in the town, still loading: apart from those arriving, so a walk cut short by going
+  // somewhere else never keeps an agent from turning up there.
+  const passing = new Set<string>();
+  // Bodies walking out, each gone once it gets where it is going, or by `until` (seconds on the stage's clock); one
+  // going by in the town says whose it is (`agent`), so its next walk takes its place.
+  const departing: { fig: Figure; from: number; until?: number; agent?: string }[] = [];
   // When the stage came to the place it shows, and which place that is, counted: see `meet`.
   let placedAt = performance.now();
   let placeGen = 0;
@@ -1129,7 +1134,8 @@ export async function createStage(
         const dir = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 0.08, a);
         sight.set(target, dir);
         sight.far = d + 0.1;
-        if (!sight.intersectObjects(scenery, true).length) return { azimuth: a, distance: d };
+        // A door in the town too far off to be drawn is no more in the way than it is clickable.
+        if (!sight.intersectObjects(scenery, true).some((h) => shown(h.object))) return { azimuth: a, distance: d };
       }
     }
     return { azimuth: preferred, distance };
@@ -1514,7 +1520,7 @@ export async function createStage(
       const to = floorAt(e);
       if (to) {
         greeting = undefined;
-        me.goTo(room, to, obstacles);
+        me.goTo(room, isOutdoors(room) ? ashore(room.town, to, me.radius) : to, obstacles);
       }
     }
   };
@@ -3134,16 +3140,20 @@ export async function createStage(
       return layer.pointOn(id, ray.ray);
     },
     walkBy(walker) {
-      if (!isOutdoors(room) || opts.still || companions.has(walker.agent) || arriving.has(walker.agent)) return;
+      const { agent } = walker;
+      if (!isOutdoors(room) || opts.still || companions.has(agent) || arriving.has(agent) || passing.has(agent)) return;
       const gen = placeGen;
-      arriving.add(walker.agent);
+      passing.add(agent);
       loadModel(walker.url)
         .then((model) => {
-          arriving.delete(walker.agent);
+          passing.delete(agent);
           if (disposed || gen !== placeGen) {
             VRMUtils.deepDispose(model.scene);
             return;
           }
+          // Still on its last walk: that body goes, and this one sets out from the door it left by.
+          for (let i = departing.length - 1; i >= 0; i--)
+            if (departing[i].agent === agent) departing.splice(i, 1)[0].fig.dispose();
           const [dx, dz] = [walker.to[0] - walker.from[0], walker.to[1] - walker.from[1]];
           const start = { id: "", name: "", place: "", at: walker.from, facing: (Math.atan2(dx, dz) * 180) / Math.PI };
           const fig = new Figure(model, room, start, {
@@ -3157,11 +3167,15 @@ export async function createStage(
           fig.label(walker.name, undefined);
           fig.goTo(room, walker.to, ways());
           // However far the streets take it, with time to spare, and then gone even if something held it up.
-          departing.push({ fig, from: clock, until: clock + (Math.hypot(dx, dz) * 1.6) / PASSING_PACE + 8 });
+          departing.push({ fig, from: clock, until: clock + (Math.hypot(dx, dz) * 1.6) / PASSING_PACE + 8, agent });
         })
         .catch(() => {
-          arriving.delete(walker.agent);
+          passing.delete(agent);
         });
+    },
+    where() {
+      const p = me.walker.place;
+      return travel === "walk" ? [p.x, p.z] : [controls.target.x, controls.target.z];
     },
     setWear(wear) {
       me.dress(wear);
@@ -3173,6 +3187,9 @@ export async function createStage(
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
       lightDoors();
+      // Outdoors, each house's windows follow its owner: lit while it works, dark once it sleeps. Only those whose
+      // look changed are repainted.
+      town?.setWindows(activities, hour);
       // A call heard of after what was said on it: the far side's words, waiting for a phone here to come out of.
       for (const [agent, line] of inOrder(speech)) hear(agent, line);
     },

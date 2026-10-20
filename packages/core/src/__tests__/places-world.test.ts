@@ -369,6 +369,37 @@ describe("the town", () => {
     expect(huge.buildings.filter((_, i) => !reached[i]).map((b) => b.id)).toEqual([]);
   });
 
+  it("keeps huts on the sand clear of each other, of the stream and of the beach's things, however many there are", () => {
+    for (const homes of [3, 13, 44])
+      for (const n of [4, 6, 8]) {
+        const beach = Array.from({ length: n }, (_, i) => room(`beach-${i}`, "beach"));
+        const t = layWorld([...NAMES.slice(0, homes).map((x) => home(x)), ...beach]).town;
+        const label = `${homes} homes, ${n} huts`;
+        const huts = t.buildings.filter((b) => b.kind === "hut");
+        expect(huts, label).toHaveLength(n);
+        for (const b of huts) {
+          for (const p of t.stream.points)
+            expect(inBuilding(b, p, t.stream.width / 2 + 0.5), `${label}: ${b.id} in the stream`).toBe(false);
+          for (const o of t.buildings)
+            if (o !== b) expect(overlaps(b, o, 1), `${label}: ${b.id} / ${o.id}`).toBe(false);
+          expect(b.at[1] + b.size[1] / 2, `${label}: ${b.id} in the sea`).toBeLessThan(t.shore.sea);
+        }
+        // The promenade runs past the last of them, and you can walk to every one.
+        const promenade = t.roads.find((r) => r.id === "promenade")?.points ?? [];
+        const furthest = Math.max(...huts.map((b) => Math.abs(b.at[0]) + b.size[0] / 2));
+        expect(Math.max(...promenade.map((q) => Math.abs(q[0]))), label).toBeGreaterThan(furthest);
+        expect(walkable(t, huts.map(outside)).every(Boolean), label).toBe(true);
+        const doors = huts.map(outside);
+        for (const p of townPlace(t).props.filter((x) => x.kind === "palm" || x.kind === "umbrella")) {
+          expect(
+            huts.some((b) => inBuilding(b, p.at, 0.2)),
+            `${label}: ${p.id}`,
+          ).toBe(false);
+          for (const d of doors) expect(Math.hypot(d[0] - p.at[0], d[1] - p.at[1]), p.id).toBeGreaterThan(1.2);
+        }
+      }
+  });
+
   it("is the same town from the same places, whatever order they come in", () => {
     const again = layWorld([...big()].reverse());
     expect(JSON.stringify(again.town)).toBe(JSON.stringify(town));
@@ -441,7 +472,8 @@ describe("going in and out", () => {
       const doors = doorsIn(f.id, place, world);
       expect(doors.length).toBe(f.rooms.length + 1 + (f.up ? 1 : 0));
       expect(doorProblems(place, doors), f.id).toEqual([]);
-      expect(place.props.some((p) => p.label === "Directory")).toBe(true);
+      // By the way in, a directory that opens the map, where every room is listed.
+      expect(place.props.find((p) => p.label === "Directory")?.action, f.id).toBe("map");
     }
     // Round the walls first, then along the open right side.
     const full = floorLayout(FLOOR_DOORS);
@@ -475,6 +507,43 @@ describe("areas of their own", () => {
     const reached = walkable(world.town, [outside(guest), outside(shed)]);
     expect(reached).toEqual([true, true]);
     expect(world.areaOf.get("home:guest")).toBe("summer-house");
+  });
+
+  it("keeps every place on a plot inside its fence and clear of the others, however many there are", () => {
+    for (const n of [1, 5, 6, 11, 12, 17]) {
+      const sheds = Array.from({ length: n }, (_, i) => shared(`shed-${String(i).padStart(2, "0")}`, "the allotment"));
+      const t = layWorld([...big(), ...sheds]).town;
+      const plot = t.plots.find((p) => p.name === "the allotment");
+      const on = t.buildings.filter((b) => b.street === "Allotment");
+      expect(on, `${n}`).toHaveLength(n);
+      for (const b of on) {
+        expect(Math.abs(b.at[0] - (plot?.at[0] ?? 0)) + b.size[0] / 2, `${n}: ${b.id}`).toBeLessThan(
+          (plot?.size[0] ?? 0) / 2,
+        );
+        expect(Math.abs(b.at[1] - (plot?.at[1] ?? 0)) + b.size[1] / 2, `${n}: ${b.id}`).toBeLessThan(
+          (plot?.size[1] ?? 0) / 2,
+        );
+        for (const o of t.buildings) if (o !== b) expect(overlaps(b, o, 1), `${n}: ${b.id} / ${o.id}`).toBe(false);
+      }
+      expect(walkable(t, on.map(outside)).every(Boolean), `${n}`).toBe(true);
+    }
+  });
+
+  it("keeps each plot at its own end of the avenue when another is added, whatever it is called", () => {
+    const names = ["the allotment", "the boathouse", "the cabin", "the dacha", "the estate", "the folly"];
+    const ends = (areas: string[]) =>
+      new Map(
+        layWorld([...big(), ...areas.map((a) => shared(`in-${a.replace(/\s+/g, "-")}`, a))]).town.plots.map((p) => [
+          p.name,
+          Math.sign(p.at[0]),
+        ]),
+      );
+    const before = ends(names.slice(1));
+    // One that comes first by name.
+    const after = ends(names);
+    for (const [name, end] of before) expect(after.get(name), name).toBe(end);
+    // Plots go to both ends, not all to one.
+    expect(new Set(after.values()).size).toBe(2);
   });
 
   it("keeps rooms agents talk in in town, whatever they say", () => {

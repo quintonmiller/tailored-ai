@@ -45,8 +45,8 @@ export interface PlaceItem {
 }
 
 /** What a thing in a place does when someone clicks it on the page. */
-export type PlaceAction = "new-agent" | "new-task" | "new-room" | "tasks";
-export const PLACE_ACTIONS: PlaceAction[] = ["new-agent", "new-task", "new-room", "tasks"];
+export type PlaceAction = "new-agent" | "new-task" | "new-room" | "tasks" | "map";
+export const PLACE_ACTIONS: PlaceAction[] = ["new-agent", "new-task", "new-room", "tasks", "map"];
 
 export interface PlaceSpot {
   id: string;
