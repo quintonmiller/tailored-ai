@@ -7,7 +7,9 @@ import {
   SPACING,
   STAND_OFF,
   standBy,
+  TALK_APART,
   talkingHere,
+  talkMove,
   talkNow,
   talkWords,
   withTalks,
@@ -200,6 +202,57 @@ describe("who faces whom", () => {
     };
     const kept = talkingHere(activities, new Set(["host", "guest"]));
     expect([kept.get("host")?.goes, kept.get("guest")?.goes]).toEqual([false, true]);
+  });
+});
+
+describe("keeping company", () => {
+  /** The one who spoke first, standing still across the room from the other, who stands still too. */
+  const goer = {
+    goes: true,
+    apart: TALK_APART + 1.5,
+    joining: false,
+    walking: false,
+    seated: false,
+    partnerWalking: false,
+    partnerCame: false,
+    meeting: false,
+  };
+
+  it("walks over when they are too far apart to talk, and turns to the other once near enough", () => {
+    expect(talkMove(goer)).toBe("join");
+    expect(talkMove({ ...goer, apart: 1.2 })).toBe("face");
+  });
+
+  it("turns round at once on its way to its desk, rather than going there first", () => {
+    expect(talkMove({ ...goer, walking: true })).toBe("join");
+    // Even passing near: it stays to talk rather than walking on.
+    expect(talkMove({ ...goer, walking: true, apart: 1.2 })).toBe("join");
+  });
+
+  it("gets up from its desk to go over, but talks from its seat when near enough", () => {
+    expect(talkMove({ ...goer, seated: true })).toBe("join");
+    expect(talkMove({ ...goer, seated: true, apart: 1.2 })).toBe("face");
+  });
+
+  it("waits while it walks over already, or while the other walks somewhere, and not for the other turning", () => {
+    expect(talkMove({ ...goer, walking: true, joining: true })).toBe("wait");
+    expect(talkMove({ ...goer, partnerWalking: true })).toBe("wait");
+    // The other turning to it where it stands is not walking: it goes all the same.
+    expect(talkMove({ ...goer, partnerWalking: false })).toBe("join");
+  });
+
+  it("keeps everyone in their seats at a meeting table", () => {
+    expect(talkMove({ ...goer, meeting: true, seated: true })).toBe("face");
+    expect(talkMove({ ...goer, meeting: true, walking: true })).toBe("wait");
+  });
+
+  it("has the other turn to the one who goes, and get up for one that came over, near enough", () => {
+    const other = { ...goer, goes: false };
+    expect(talkMove(other)).toBe("face");
+    expect(talkMove({ ...other, walking: true })).toBe("wait");
+    expect(talkMove({ ...other, seated: true, partnerCame: true, apart: 1 })).toBe("rise");
+    expect(talkMove({ ...other, seated: true, partnerCame: true, apart: 1, meeting: true })).toBe("face");
+    expect(talkMove({ ...other, seated: true, partnerCame: false, apart: 1 })).toBe("face");
   });
 });
 

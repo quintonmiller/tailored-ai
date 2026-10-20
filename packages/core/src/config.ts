@@ -2554,7 +2554,60 @@ export function findInertConfig(config: AgentConfig): string[] {
 /** @deprecated Renamed to {@link findInertConfig}, which now also reports type mismatches. */
 export const findUnknownKeys = findInertConfig;
 
-export function validateConfig(config: AgentConfig): string[] {
+/** What a caller of {@link validateConfig} knows beyond the config itself. */
+export interface ValidateConfigOptions {
+  /**
+   * Every tool there is, by name: what the runtime built from this config,
+   * the tools plugins register among them. References to tools (agents'
+   * `tools:`, hooks, `permissions.tools`) are checked against it. Without it
+   * they are checked against a guess from config alone, which can't see a
+   * plugin's tools, since those only exist once plugins have registered, and
+   * calls each of them "not enabled". `false` leaves references unchecked, for
+   * a caller that checks them with {@link toolReferenceWarnings} once they can be.
+   */
+  tools?: Iterable<string> | false;
+}
+
+/**
+ * Agents, hooks and permissions that name a tool there isn't, among `tools`:
+ * every tool there is, by name, as the runtime built them once every plugin
+ * registered its own.
+ */
+export function toolReferenceWarnings(config: AgentConfig, tools: Iterable<string>): string[] {
+  const known = new Set(tools);
+  return toolReferenceProblems(config, (name) => known.has(name));
+}
+
+function toolReferenceProblems(config: AgentConfig, has: (tool: string) => boolean): string[] {
+  const warnings: string[] = [];
+  for (const [agentName, agent] of Object.entries(config.agents ?? {})) {
+    // MCP tools are checked by whether any server could provide one (see `validateConfig`).
+    for (const toolName of agent.tools ?? []) {
+      if (!toolName.startsWith("mcp_") && !has(toolName))
+        warnings.push(`Agent "${agentName}" references tool "${toolName}" which is not enabled`);
+    }
+    for (const hookDef of [agent.hooks?.beforeRun, agent.hooks?.afterRun]) {
+      for (const hook of hookDef ? (Array.isArray(hookDef) ? hookDef : [hookDef]) : []) {
+        if (hook.tool && !has(hook.tool))
+          warnings.push(`Agent "${agentName}" hook references tool "${hook.tool}" which is not enabled`);
+      }
+    }
+  }
+  for (const job of config.cron?.jobs ?? []) {
+    for (const hookDef of [job.hooks?.beforeRun, job.hooks?.afterRun]) {
+      for (const hook of hookDef ? (Array.isArray(hookDef) ? hookDef : [hookDef]) : []) {
+        if (hook.tool && !has(hook.tool))
+          warnings.push(`Cron job "${job.name}" hook references tool "${hook.tool}" which is not enabled`);
+      }
+    }
+  }
+  for (const toolName of Object.keys(config.permissions?.tools ?? {})) {
+    if (!has(toolName)) warnings.push(`permissions.tools references tool "${toolName}" which is not enabled`);
+  }
+  return warnings;
+}
+
+export function validateConfig(config: AgentConfig, opts?: ValidateConfigOptions): string[] {
   const warnings: string[] = [];
 
   warnings.push(...unknownTopLevelKeys(config));
@@ -2643,7 +2696,7 @@ export function validateConfig(config: AgentConfig): string[] {
     }
   }
 
-  // Validate agent tool references
+  // Validate agents (the tools they name are checked with the rest, below)
   for (const [agentName, agent] of Object.entries(config.agents)) {
     warnings.push(...unknownAgentKeysFor(agentName, agent));
 
@@ -2652,14 +2705,8 @@ export function validateConfig(config: AgentConfig): string[] {
         // MCP tool names (mcp_<server>_<tool>) only exist after async
         // discovery, so static validation can't confirm them — only flag
         // the case where no server could ever provide one.
-        if (toolName.startsWith("mcp_")) {
-          if (!hasMcpServers) {
-            warnings.push(`Agent "${agentName}" references MCP tool "${toolName}" but no mcp.servers are configured`);
-          }
-          continue;
-        }
-        if (!enabledToolNames.has(toolName)) {
-          warnings.push(`Agent "${agentName}" references tool "${toolName}" which is not enabled`);
+        if (toolName.startsWith("mcp_") && !hasMcpServers) {
+          warnings.push(`Agent "${agentName}" references MCP tool "${toolName}" but no mcp.servers are configured`);
         }
       }
     }
@@ -2669,17 +2716,6 @@ export function validateConfig(config: AgentConfig): string[] {
       const providerCfg = config.providers[agent.provider as keyof typeof config.providers];
       if (!providerCfg) {
         warnings.push(`Agent "${agentName}" references provider "${agent.provider}" which is not configured`);
-      }
-    }
-
-    // Validate hook tool references
-    const hookSections = [agent.hooks?.beforeRun, agent.hooks?.afterRun].filter(Boolean);
-    for (const hookDef of hookSections) {
-      const hooks = Array.isArray(hookDef) ? hookDef : [hookDef!];
-      for (const hook of hooks) {
-        if (hook.tool && !enabledToolNames.has(hook.tool)) {
-          warnings.push(`Agent "${agentName}" hook references tool "${hook.tool}" which is not enabled`);
-        }
       }
     }
 
@@ -2727,16 +2763,13 @@ export function validateConfig(config: AgentConfig): string[] {
     if (jobAgent && !config.agents[jobAgent]) {
       warnings.push(`Cron job "${job.name}" references agent "${jobAgent}" which does not exist`);
     }
+  }
 
-    const hookSections = [job.hooks?.beforeRun, job.hooks?.afterRun].filter(Boolean);
-    for (const hookDef of hookSections) {
-      const hooks = Array.isArray(hookDef) ? hookDef : [hookDef!];
-      for (const hook of hooks) {
-        if (hook.tool && !enabledToolNames.has(hook.tool)) {
-          warnings.push(`Cron job "${job.name}" hook references tool "${hook.tool}" which is not enabled`);
-        }
-      }
-    }
+  // Tools named by agents, hooks and permissions: checked against the tools there are when the caller knows them,
+  // the guess from config otherwise, or later (`tools: false`).
+  if (opts?.tools !== false) {
+    const known = opts?.tools ? new Set(opts.tools) : enabledToolNames;
+    warnings.push(...toolReferenceProblems(config, (name) => known.has(name)));
   }
 
   // Validate default provider
@@ -2844,13 +2877,6 @@ export function validateConfig(config: AgentConfig): string[] {
       warnings.push(
         `permissions.timeoutAction "${config.permissions.timeoutAction}" is not valid (use "reject" or "auto_approve")`,
       );
-    }
-    if (config.permissions.tools) {
-      for (const toolName of Object.keys(config.permissions.tools)) {
-        if (!enabledToolNames.has(toolName)) {
-          warnings.push(`permissions.tools references tool "${toolName}" which is not enabled`);
-        }
-      }
     }
   }
 

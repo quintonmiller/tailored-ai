@@ -675,8 +675,11 @@ export class ActivityTracker {
     const next = { ...now, ...(last ? { last } : {}) };
     const was = this.written.get(agent);
     if (was && same(was, next)) return;
-    // Only a change in what it is doing is a new start: a new `next` or `last` keeps its `since`.
-    const since = was && sameDoing(was, next) ? was.since : this.now().toISOString();
+    // Only a change in what it is doing is a new start: a new `next` keeps its `since`. Idle with something new done
+    // last is a new start too: a turn too short to be written between two idle records still ended its idle time,
+    // so it is idle from now, not since before it did it.
+    const didMore = next.doing === "idle" && !!next.last && next.last.at !== was?.last?.at;
+    const since = was && sameDoing(was, next) && !didMore ? was.since : this.now().toISOString();
     // A stretch at something has ended: counted toward time by activity.
     const ended = was && since !== was.since ? timeKey(was) : undefined;
     if (was && ended) this.opts.tally?.add(agent, ended, Date.parse(was.since), Date.parse(since));

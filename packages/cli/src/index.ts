@@ -44,6 +44,7 @@ import {
   SubscriptionDispatcher,
   TaskWatcher,
   TypedEventBus,
+  toolReferenceWarnings,
   validateConfig,
 } from "@tailored-ai/core";
 import { checkPortAvailable, createServer, portInUseMessage } from "@tailored-ai/server";
@@ -126,6 +127,18 @@ let _taskWatcherRef:
   | { notifyById: (action: "created" | "updated" | "commented", id: string, projectId?: string) => void }
   | undefined;
 
+/**
+ * The tools agents, hooks and permissions name, checked against the tools there are once every plugin has
+ * registered its own. Checked with the rest of the config at startup, before any plugin loads, a tool a plugin
+ * provides was called "not enabled" on every start though agents used it.
+ */
+function warnToolReferences(runtime: AgentRuntime): void {
+  const tools = runtime.getResolvableTools().map((t) => t.name);
+  for (const warning of toolReferenceWarnings(runtime.getConfig(), tools)) {
+    console.warn(`[config] Warning: ${warning}`);
+  }
+}
+
 async function runServer(
   runtime: AgentRuntime,
   loadRuntimePlugins: () => Promise<import("@tailored-ai/core").LoadedPlugin[]>,
@@ -159,6 +172,7 @@ async function runServer(
   }
 
   let runtimePlugins = await loadRuntimePlugins();
+  warnToolReferences(runtime);
   const disposeRuntimePlugins = async () => {
     for (const p of runtimePlugins) {
       if (!p.stop) continue;
@@ -932,8 +946,9 @@ async function main() {
     registerScriptHookHandler();
   }
 
-  // Validate config and print warnings
-  const configWarnings = validateConfig(config);
+  // Validate config and print warnings. Not yet the tools agents name: plugins register theirs later, and checked now
+  // every one of them would be "not enabled" (see `warnToolReferences`).
+  const configWarnings = validateConfig(config, { tools: false });
   for (const warning of configWarnings) {
     console.warn(`[config] Warning: ${warning}`);
   }
@@ -1125,6 +1140,7 @@ async function main() {
 
   // --- Single message mode ---
   if (values.message) {
+    warnToolReferences(runtime);
     try {
       await runSingleMessage(runtime, values.message, {
         agent: values.agent ?? values.profile,

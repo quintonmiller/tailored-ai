@@ -304,6 +304,11 @@ export class Figure {
     return this.walker.busy || !!this.pending || !!this.headed;
   }
 
+  /** On its way somewhere, or getting up to go: turning where it stands is not walking. */
+  get walking(): boolean {
+    return this.walker.way.length > 0 || !!this.pending || !!this.headed;
+  }
+
   /** Walk to a spot, round the furniture; seated, it stands first. False when there is no such spot. */
   go(room: Room, id: string, obstacles: Obstacle[]): boolean {
     const to = spotById(room, id);

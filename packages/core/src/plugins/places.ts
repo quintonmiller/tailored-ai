@@ -840,7 +840,10 @@ export interface TalkRoom {
   ref: string;
   name: string;
   purpose?: string;
+  /** The agents in it: those it wakes, who can go into its meeting room and change it. */
   members: string[];
+  /** How many are in it, people and agents, as the room lists them; none when its backend keeps no list. */
+  everyone?: number;
 }
 
 /** One place on the map: the town, the town hall's lobby, a floor of the office, a home, a shared place, or a room of conversation, and who is in it. */
@@ -860,6 +863,8 @@ export interface MapPlace {
   members?: string[];
   /** When a room of conversation last talked (see {@link talkedAt}), for the plate on its door. */
   talked?: string;
+  /** How many are in a room of conversation, people and agents, as the room lists them, when it keeps a list. */
+  everyone?: number;
   /** The place its way in is through: the town for a building, the floor of the office for a room in it. None for the town. */
   via?: string;
   /** A home's owner, in a word, when what it is for can be read (see `places-roles.ts`). */
@@ -1193,6 +1198,7 @@ export async function worldMap(
       kind: "room" as const,
       ...inIt(roomPlaceId(r.ref)),
       members: r.members.filter((m) => hasBody(m)).sort(),
+      ...(r.everyone ? { everyone: r.everyone } : {}),
       area: MAIN,
       ...(talked?.(r) ? { talked: talked(r) } : {}),
       // The purpose its members gave its meeting room, over the room's own.
@@ -2246,6 +2252,16 @@ const scaledSize = (size: [number, number, number], scale = 1) =>
   size.map((s) => Math.round(s * scale * 100) / 100) as [number, number, number];
 
 /** One tool call against a room, without the store: what it becomes, and what to tell the agent. */
+/**
+ * A thing added, as its change reads to a person: "another plant" for a copy
+ * the room numbered to tell it from the one it has ("the plant 2"), whose
+ * number is for the tools; its name otherwise.
+ */
+function addedWords(before: Place, name: string): string {
+  const copy = /^the (.+)\s+\d+$/.exec(name);
+  return copy && before.props.some((p) => p.name === `the ${copy[1]}`) ? `another ${copy[1]}` : name;
+}
+
 export function applyAction(place: Place, args: Record<string, unknown>, opts: ApplyOptions = {}): Outcome {
   const action = text(args.action)?.toLowerCase() as Action | undefined;
   if (!action || !ACTIONS.includes(action)) return no(`\`action\` is one of: ${ACTIONS.join(", ")}.`);
@@ -2431,7 +2447,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       ok: true,
       text: `Added ${say(added, next)}.${own ? ` You can go to it: "${added.name}".` : ""}`,
       place: next,
-      did: `added ${added.name}${whereSaid(where)}`,
+      did: `added ${addedWords(place, added.name)}${whereSaid(where)}`,
     };
   }
 
@@ -3414,11 +3430,14 @@ const plugin: Plugin = (ctx) => {
     const store = runtime.getRoomStore();
     return store.listRooms().map((r) => {
       const ref = formatRoomRef(r.ref);
+      // Everyone the room lists, people too, which is what the map counts; the agents it wakes are its members here.
+      const everyone = store.listMembers(ref).length;
       return {
         ref,
         name: r.name,
         ...(r.purpose ? { purpose: r.purpose } : {}),
         members: [...new Set(store.listSubscriptionsForRoom(ref).map((s) => s.agent))],
+        ...(everyone ? { everyone } : {}),
       };
     });
   };

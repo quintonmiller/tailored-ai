@@ -774,14 +774,20 @@ function useTrouble(place: Place, placing: Placing, rect: Rect, ignore: Set<stri
   const m = 0.15;
   if (Math.abs(sx) > place.width / 2 - m || Math.abs(sz) > place.depth / 2 - m)
     return "There'd be nowhere in the room to stand to use it.";
-  for (const other of place.props) {
-    if (ignore.has(other.id) || !blocks(other)) continue;
-    if (contains(rectOf(other), [sx, sz], 0.15))
-      return isHold(other)
-        ? "You'd have to stand in the doorway to use it."
-        : `${capital(other.name)} is where you'd stand to use it.`;
-  }
+  const [other] = standingIn(place, placing, rect, ignore);
+  if (other)
+    return isHold(other)
+      ? "You'd have to stand in the doorway to use it."
+      : `${capital(other.name)} is where you'd stand to use it.`;
   return undefined;
+}
+
+/** What stands where you'd stand to use a thing put here. */
+function standingIn(place: Place, placing: Placing, rect: Rect, ignore: Set<string>): PlaceItem[] {
+  const use = KINDS[placing.kind]?.use;
+  if (!use) return [];
+  const stand = offset(rect.at, rect.facing, 0, use.offset * (placing.scale ?? 1));
+  return place.props.filter((other) => !ignore.has(other.id) && blocks(other) && contains(rectOf(other), stand, 0.15));
 }
 
 /** Whether a floor thing fits at exactly this point, turned this way: what a room drawn from a seed checks each piece with. */
@@ -862,7 +868,29 @@ function wallTrouble(place: Place, placing: Placing, wall: Wall, along: number, 
   if (Math.abs(along) > span / 2 - w / 2 - 0.05) return "It would run off the end of the wall.";
   if (elevation < 0.05 || elevation + h > place.height - 0.05)
     return "It wouldn't fit between the floor and the ceiling.";
+  const [clash] = wallClashes(place, placing, wall, along, elevation);
+  if (clash) return clash.why;
   const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
+  const at = wallPoint(place, wall, along);
+  return useTrouble(place, placing, { at, hw: w / 2, hd: 0.04, facing: WALL_FACING[wall] }, ignore);
+}
+
+/**
+ * What is in the way of a wall thing on this wall, this far along it and
+ * this high up, and why: what hangs where it would, and what stands against
+ * the wall tall enough to hide it.
+ */
+function wallClashes(
+  place: Place,
+  placing: Placing,
+  wall: Wall,
+  along: number,
+  elevation: number,
+): { item: PlaceItem; why: string }[] {
+  const [w] = footprintOf(placing);
+  const h = heightOf(placing);
+  const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
+  const out: { item: PlaceItem; why: string }[] = [];
   for (const other of place.props) {
     if (ignore.has(other.id)) continue;
     const kind = KINDS[other.kind];
@@ -872,7 +900,8 @@ function wallTrouble(place: Place, placing: Placing, wall: Wall, along: number, 
       const otherAlong = wall === "back" ? other.at[0] : other.at[1];
       const oe = other.elevation ?? 0;
       const vertical = elevation < oe + heightOf(other) + 0.05 && oe < elevation + h + 0.05;
-      if (vertical && Math.abs(otherAlong - along) < (w + ow) / 2 + 0.05) return `It would overlap ${other.name}.`;
+      if (vertical && Math.abs(otherAlong - along) < (w + ow) / 2 + 0.05)
+        out.push({ item: other, why: `It would overlap ${other.name}.` });
     } else if (blocks(other) && heightOf(other) > elevation) {
       // A tall bookcase against the wall would hide it.
       const r = rectOf(other);
@@ -881,11 +910,13 @@ function wallTrouble(place: Place, placing: Placing, wall: Wall, along: number, 
           ? { at: [along, -place.depth / 2 + 0.2], hw: w / 2, hd: 0.2, facing: 0 }
           : { at: [-place.width / 2 + 0.2, along], hw: 0.2, hd: w / 2, facing: 0 };
       if (overlaps(probe, r))
-        return isHold(other) ? "It would hang over the door." : `${capital(other.name)} would hide it.`;
+        out.push({
+          item: other,
+          why: isHold(other) ? "It would hang over the door." : `${capital(other.name)} would hide it.`,
+        });
     }
   }
-  const at = wallPoint(place, wall, along);
-  return useTrouble(place, placing, { at, hw: w / 2, hd: 0.04, facing: WALL_FACING[wall] }, ignore);
+  return out;
 }
 
 /** Where on the floor plan a wall thing hangs: this far along the back or left wall. */
@@ -900,20 +931,27 @@ function wallOf(place: Place, item: PlaceItem): Wall {
   return Math.abs(item.at[1] + place.depth / 2) < Math.abs(item.at[0] + place.width / 2) ? "back" : "left";
 }
 
-function placeOnWall(place: Place, placing: Placing, where: Where): Placement | string {
+/** How high a wall thing hangs: its middle where its kind hangs, whatever its size. */
+function wallElevation(placing: Placing): number {
   const kind = KINDS[placing.kind];
-  if (where.wall === "front" || where.wall === "right")
-    return `The ${where.wall} side of the room is open, so there is no wall there to hang it on. Use the back or left wall.`;
+  return round((kind?.elevation ?? 1.2) - (heightOf(placing) - (kind?.height ?? 0)) / 2);
+}
+
+/** The walls a wall thing is tried on, in order: the one asked for, else the one nearer what it should be near. */
+function wallsFor(place: Place, where: Where): Wall[] | string {
   const near = where.near ? (findItem(place, where.near) ?? findSpot(place, where.near)) : undefined;
   if (where.near && !near) return `There's nothing called "${where.near}" in the room.`;
-  const walls: Wall[] = where.wall
-    ? [where.wall]
-    : near
-      ? Math.abs(near.at[1] + place.depth / 2) < Math.abs(near.at[0] + place.width / 2)
-        ? ["back", "left"]
-        : ["left", "back"]
-      : ["back", "left"];
-  const elevation = round((kind?.elevation ?? 1.2) - (heightOf(placing) - (kind?.height ?? 0)) / 2);
+  if (where.wall) return [where.wall];
+  if (!near) return ["back", "left"];
+  return Math.abs(near.at[1] + place.depth / 2) < Math.abs(near.at[0] + place.width / 2)
+    ? ["back", "left"]
+    : ["left", "back"];
+}
+
+/** The nearest free stretch for a wall thing on these walls, to what it should be near or the middle; none when there is none. */
+function findOnWall(place: Place, placing: Placing, where: Where, walls: Wall[]): Placement | undefined {
+  const near = where.near ? (findItem(place, where.near) ?? findSpot(place, where.near)) : undefined;
+  const elevation = wallElevation(placing);
   for (const wall of walls) {
     const span = wall === "back" ? place.width : place.depth;
     const target = near ? (wall === "back" ? near.at[0] : near.at[1]) : 0;
@@ -924,7 +962,118 @@ function placeOnWall(place: Place, placing: Placing, where: Where): Placement | 
       }
     }
   }
-  return `There's no free stretch of ${where.wall ? `the ${where.wall} wall` : "wall"} wide enough for it.`;
+  return undefined;
+}
+
+function placeOnWall(place: Place, placing: Placing, where: Where): Placement | string {
+  if (where.wall === "front" || where.wall === "right")
+    return `The ${where.wall} side of the room is open, so there is no wall there to hang it on. Use the back or left wall.`;
+  const walls = wallsFor(place, where);
+  if (typeof walls === "string") return walls;
+  return findOnWall(place, placing, where, walls) ?? noRoomOnWall(place, placing, where, walls);
+}
+
+/** It, a tenth of its size smaller at a time, down to the smallest `scale` there is: biggest first. */
+function* smallerOf(placing: Placing): Generator<Placing & { scale: number }> {
+  const base = placing.scale ?? 1;
+  for (let s = Math.round(base * 10 - 1) / 10; s >= LIMITS.scale[0] - 1e-9; s = Math.round(s * 10 - 1) / 10) {
+    const k = s / base;
+    yield {
+      ...placing,
+      scale: s,
+      ...(placing.size ? { size: placing.size.map((v) => round(v * k)) as [number, number, number] } : {}),
+    };
+  }
+}
+
+/** How far out from a wall something standing on the floor can be in the way of what hangs on it, in metres. */
+const IN_THE_WAY = 1.5;
+
+/** Names in a sentence: "the bookshelf", "the bookshelf and the picture", "a, b and c". */
+function listed(names: string[]): string {
+  return names.length < 2 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/**
+ * Why a wall thing found no room, and ways out an agent can take at once:
+ * what is in the way where there is most room for it, the `scale` it would
+ * fit at, the one piece whose going would make room, and another wall that
+ * has room, or nearly, when one was asked for.
+ */
+function noRoomOnWall(place: Place, placing: Placing, where: Where, walls: Wall[]): string {
+  const [w] = footprintOf(placing);
+  const head = `There's no free stretch of ${where.wall ? `the ${where.wall} wall` : "wall"} wide enough for it: it is ${round(w)} m wide.`;
+  const wallOfSpot = (at: Placement): Wall => (at.facing === WALL_FACING.left ? "left" : "back");
+  // The biggest it fits at, on any of these walls, and where.
+  let smaller: { scale: number; at: Placement } | undefined;
+  for (const less of smallerOf(placing)) {
+    const at = findOnWall(place, less, where, walls);
+    if (at) {
+      smaller = { scale: less.scale, at };
+      break;
+    }
+  }
+  // What is in the way there, at its own size: where there is most room, or the middle of the first wall.
+  const wall = smaller ? wallOfSpot(smaller.at) : walls[0];
+  const span = wall === "back" ? place.width : place.depth;
+  const end = Math.max(0, span / 2 - w / 2 - 0.05);
+  const middle = smaller ? (wall === "back" ? smaller.at.at[0] : smaller.at.at[1]) : 0;
+  const along = round(Math.max(-end, Math.min(end, middle)));
+  const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
+  const inWay = [
+    ...wallClashes(place, placing, wall, along, wallElevation(placing)).map((c) => c.item),
+    ...standingIn(
+      place,
+      placing,
+      { at: wallPoint(place, wall, along), hw: w / 2, hd: 0.04, facing: WALL_FACING[wall] },
+      ignore,
+    ),
+  ];
+  const names = [...new Set(inWay.map((item) => (isHold(item) ? "the doorway" : item.name)))];
+  const lines = [head];
+  if (names.length) lines.push(`On the ${wall} wall, ${listed(names)} ${names.length > 1 ? "are" : "is"} in the way.`);
+  // The one piece whose going would make room for it at this size, the smallest first: one hung on these walls, or
+  // standing near enough to one to hide it or be where you'd stand to use it.
+  const nearWalls = (p: PlaceItem) =>
+    walls.some((wl) =>
+      KINDS[p.kind]?.mount === "wall"
+        ? wallOf(place, p) === wl
+        : blocks(p) && (wl === "back" ? p.at[1] + place.depth / 2 : p.at[0] + place.width / 2) < IN_THE_WAY,
+    );
+  let clears: { item: PlaceItem; at: Placement } | undefined;
+  for (const p of place.props
+    .filter((p) => !isHold(p) && !ignore.has(p.id) && nearWalls(p))
+    .sort((a, b) => footprintOf(a)[0] * footprintOf(a)[1] - footprintOf(b)[0] * footprintOf(b)[1])) {
+    const at = findOnWall(removeItem(place, p.id).place, placing, where, walls);
+    if (at) {
+      clears = { item: p, at };
+      break;
+    }
+  }
+  const ways: string[] = [];
+  if (smaller) ways.push(`at \`scale\` ${smaller.scale} it fits on the ${wallOfSpot(smaller.at)} wall`);
+  if (clears)
+    ways.push(`removing ${clears.item.name} makes room for it on the ${wallOfSpot(clears.at)} wall at this size`);
+  // Asked for one wall: the other one, when it has room, or nearly.
+  const other: Wall | undefined = where.wall === "back" ? "left" : where.wall === "left" ? "back" : undefined;
+  if (other) {
+    const whole = findOnWall(place, placing, { ...where, wall: other }, [other]);
+    const nearly = whole
+      ? undefined
+      : [...smallerOf(placing)].find(
+          (less) =>
+            (less.scale ?? 1) >= (placing.scale ?? 1) * 0.8 - 1e-9 &&
+            findOnWall(place, less, { ...where, wall: other }, [other]),
+        );
+    if (whole) ways.push(`the ${other} wall has room for it at this size`);
+    else if (nearly) ways.push(`the ${other} wall is nearly wide enough: at \`scale\` ${nearly.scale} it fits there`);
+  }
+  if (ways.length) lines.push(`What would work: ${ways.join("; ")}.`);
+  else
+    lines.push(
+      `Even at the smallest \`scale\`, ${LIMITS.scale[0]}, it doesn't fit, and no one thing is in the way: take a few things down, or make the room bigger.`,
+    );
+  return lines.join(" ");
 }
 
 function placeOn(place: Place, placing: Placing, baseWords: string | undefined, where: Where): Placement | string {

@@ -398,13 +398,19 @@ describe("WorldMap", () => {
     expect(rooms[2].querySelector(".world-map-mark")).toBeNull();
   });
 
-  it("says when nobody is busy, and that a quiet room has members", () => {
+  it("says when nobody is busy, and how many are in a quiet room, people too, as the room lists them", () => {
     render({
       activities: {},
-      places: [{ id: "room:local:trip", name: "trip", kind: "room", agents: [], members: ["planner", "writer"] }],
+      places: [
+        { id: "room:local:trip", name: "trip", kind: "room", agents: [], members: ["planner", "writer"], everyone: 5 },
+        { id: "room:local:ideas", name: "ideas", kind: "room", agents: [], members: ["planner", "writer"] },
+      ],
     });
     expect(container.querySelector(".world-map-quiet")?.textContent).toMatch(/Nobody is busy/);
-    expect(tiles()[0].textContent).toMatch(/quiet · 2 members/);
+    // Five in the room, though only two of them are agents it wakes: the count the Rooms page shows.
+    expect(tiles()[0].textContent).toMatch(/quiet · 5 members/);
+    // A room that keeps no list of who is in it says what the number is.
+    expect(tiles()[1].textContent).toMatch(/quiet · 2 subscribed/);
   });
 
   it("closes on Escape, and says when the map can't be had", () => {

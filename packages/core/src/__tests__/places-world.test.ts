@@ -178,6 +178,11 @@ function outside(b: Building): [number, number] {
  * The ground of the town you can walk on, as a grid of half-metre cells, from
  * the square: everything but the buildings, the water (bar the bridges), the
  * pond and the fountain. Which of `points` it reaches.
+ *
+ * Each building marks the cells it stands on once, rather than every cell
+ * asking every building whether it is in it, and the walk stops as soon as it
+ * has reached every point: a town of a hundred buildings is flooded in a few
+ * milliseconds, not a few hundred.
  */
 function walkable(town: Town, points: [number, number][]): boolean[] {
   const cell = 0.5;
@@ -187,26 +192,42 @@ function walkable(town: Town, points: [number, number][]): boolean[] {
     -town.width / 2 + (i + 0.5) * cell,
     -town.depth / 2 + (j + 0.5) * cell,
   ];
+  const cellOf = ([x, z]: [number, number]) => [
+    Math.floor((x + town.width / 2) / cell),
+    Math.floor((z + town.depth / 2) / cell),
+  ];
+  const built = new Uint8Array(cols * rows);
+  for (const b of town.buildings) {
+    const reach = Math.hypot(b.size[0], b.size[1]) / 2 + 0.25 + cell;
+    const [i0, j0] = cellOf([b.at[0] - reach, b.at[1] - reach]);
+    const [i1, j1] = cellOf([b.at[0] + reach, b.at[1] + reach]);
+    for (let i = Math.max(0, i0); i <= Math.min(cols - 1, i1); i++)
+      for (let j = Math.max(0, j0); j <= Math.min(rows - 1, j1); j++)
+        if (inBuilding(b, centre(i, j), 0.25)) built[i + j * cols] = 1;
+  }
   const onBridge = ([x, z]: [number, number]) =>
     town.stream.bridges.some((b) => Math.abs(x - b.at[0]) <= b.length / 2 && Math.abs(z - b.at[1]) <= 1.6);
-  const free = ([x, z]: [number, number]) =>
+  const free = (k: number, [x, z]: [number, number]) =>
+    !built[k] &&
     z < town.shore.sea - 0.3 &&
     Math.hypot(x, z) > 2 &&
-    !town.buildings.some((b) => inBuilding(b, [x, z], 0.25)) &&
     (Math.abs(x - streamX(z)) > town.stream.width / 2 + 0.25 || onBridge([x, z])) &&
     !(
       Math.abs(x - town.park.pond.at[0]) < town.park.pond.size[0] / 2 &&
       Math.abs(z - town.park.pond.at[1]) < town.park.pond.size[1] / 2
     );
+  const wanted = new Set(
+    points.map((p) => {
+      const [i, j] = cellOf(p);
+      return i + j * cols;
+    }),
+  );
   const seen = new Uint8Array(cols * rows);
-  const cellOf = ([x, z]: [number, number]) => [
-    Math.floor((x + town.width / 2) / cell),
-    Math.floor((z + town.depth / 2) / cell),
-  ];
   const [si, sj] = cellOf([0, 7]);
   const queue = [si + sj * cols];
   seen[queue[0]] = 1;
-  while (queue.length) {
+  let left = wanted.size - (wanted.has(queue[0]) ? 1 : 0);
+  while (queue.length && left > 0) {
     const k = queue.pop() as number;
     const i = k % cols;
     const j = Math.floor(k / cols);
@@ -220,8 +241,9 @@ function walkable(town: Town, points: [number, number][]): boolean[] {
       const nj = j + dj;
       if (ni < 0 || nj < 0 || ni >= cols || nj >= rows) continue;
       const nk = ni + nj * cols;
-      if (seen[nk] || !free(centre(ni, nj))) continue;
+      if (seen[nk] || !free(nk, centre(ni, nj))) continue;
       seen[nk] = 1;
+      if (wanted.has(nk)) left--;
       queue.push(nk);
     }
   }
@@ -526,6 +548,8 @@ describe("areas of their own", () => {
         for (const o of t.buildings) if (o !== b) expect(overlaps(b, o, 1), `${n}: ${b.id} / ${o.id}`).toBe(false);
       }
       expect(walkable(t, on.map(outside)).every(Boolean), `${n}`).toBe(true);
+      // And not into one: the walk goes round the buildings, not through them.
+      expect(walkable(t, [on[0].at]), `${n}`).toEqual([false]);
     }
   });
 

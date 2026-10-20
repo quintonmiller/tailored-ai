@@ -449,6 +449,19 @@ export type Edit =
   | { op: "door"; to: string };
 
 /**
+ * What a person sees a thing called: its name, but without the number the
+ * room adds to tell copies apart ("the vase of flowers 2") when what is left
+ * is its kind's own name, maybe with a colour: that number is for the tools,
+ * and reads to a person as something left unfinished. A name someone chose
+ * keeps its number ("the room 101 sign" stays as it is).
+ */
+export function shownName(item: { name: string }, noun: string | undefined): string {
+  const copy = /^(.*\S)\s+\d+$/.exec(item.name);
+  if (!copy || !noun) return item.name;
+  return copy[1].toLowerCase().endsWith(noun.toLowerCase()) ? copy[1] : item.name;
+}
+
+/**
  * How a change reads after your name in the room's recent changes, the way
  * an agent's does: "moved the couch", "turned the desk", "added the lamp",
  * "made the couch sage". `before` is the room it was made to, and `after`
@@ -470,6 +483,9 @@ export function changeWords(
     const like = edit.like ? was(edit.like) : undefined;
     if (like) return `copied ${like.name}`;
     const fresh = after.props.find((p) => !was(p.id));
+    // A copy's number says there is one already: "added another plant", not "added the plant 2".
+    const copy = fresh ? /^the (.+)\s+\d+$/.exec(fresh.name) : null;
+    if (copy && before.props.some((p) => p.name === `the ${copy[1]}`)) return `added another ${copy[1]}`;
     return `added ${fresh?.name ?? `a ${edit.kind.replace(/_/g, " ")}`}`;
   }
   const thing = was(edit.item);

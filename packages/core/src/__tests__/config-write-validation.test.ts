@@ -32,6 +32,35 @@ function makeHost(initialYaml: string): ConfigWriteHost & { reloads: number; rea
 
 const VALID = ["agents:", "  writer:", "    temperature: 0.3"].join("\n");
 
+describe("the tools a written config names", () => {
+  const LISTS_PLACE = ["agents:", "  keeper:", "    tools: [place]"].join("\n");
+
+  it("are checked against the tools the reload built, a plugin's among them", async () => {
+    const host = makeHost(VALID);
+    let built = ["exec"];
+    const withTools = Object.assign(host, {
+      reload() {
+        host.reloads++;
+        // Built by the reload, from the config just written: the plugin's tool is there now.
+        built = ["exec", "place"];
+      },
+      getResolvableTools: () => built.map((name) => ({ name })),
+    });
+    const result = await writeRawConfigText(withTools, LISTS_PLACE);
+    expect(result.warnings.filter((w) => w.includes("not enabled"))).toEqual([]);
+    const missing = await writeRawConfigText(
+      withTools,
+      ["agents:", "  keeper:", "    tools: [phantom_tool]"].join("\n"),
+    );
+    expect(missing.warnings).toContain('Agent "keeper" references tool "phantom_tool" which is not enabled');
+  });
+
+  it("are checked against the guess from config when the host can't say which tools there are", async () => {
+    const result = await writeRawConfigText(makeHost(VALID), LISTS_PLACE);
+    expect(result.warnings).toContain('Agent "keeper" references tool "place" which is not enabled');
+  });
+});
+
 describe("updateRawConfig", () => {
   let host: ReturnType<typeof makeHost>;
 

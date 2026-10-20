@@ -47,6 +47,23 @@ export function withChangeLines(
 const list = (names: string[]) =>
   names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? "");
 
+/**
+ * Who changed a place, in words, from what it keeps of its changes: each
+ * once, whoever changed it last first, you among them. Nobody, when nothing
+ * has been changed yet.
+ */
+export function changedByWords(changes: RoomChange[] | undefined): string {
+  const who: string[] = [];
+  for (const c of changes ?? []) {
+    const name = c.person ? "you" : nameOf(c.who);
+    if (!who.includes(name)) who.push(name);
+  }
+  if (!who.length) return "Nobody yet";
+  // An agent goes by its name as it is; only "you" starts the sentence with a capital.
+  const words = list(who);
+  return who[0] === "you" ? `Y${words.slice(1)}` : words;
+}
+
 /** Who can change a place, in words: a home's owner, a meeting room's members, anyone in a shared place, and you. */
 export function keepersWords(id: string, members: string[], canPlace: (agent: string) => boolean): string {
   // The lobby is the building's: no agent's tool changes it, only you.
@@ -131,7 +148,10 @@ export function WorldPlace({
             <dd>{themeWords(room.theme)}</dd>
           </>
         )}
+        {/* Who did change it, from its changes, apart from who may: you can, but that is no sign you have. */}
         <dt>Changed by</dt>
+        <dd>{changedByWords(changes)}</dd>
+        <dt>Can change it</dt>
         <dd>{keepersWords(id, members, canPlace)}</dd>
       </dl>
       <section className="world-changes" aria-label="Recent changes">

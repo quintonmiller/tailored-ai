@@ -25,6 +25,7 @@ import {
   ridersOf,
   SAME_CHANGE_MS,
   STEPS_KEPT,
+  shownName,
   showsChoices,
   snap,
   stepped,
@@ -267,6 +268,20 @@ describe("what a change says", () => {
     expect(changeWords({ op: "move", item: "laptop", at: [0, 0], facing: 0, on: "side" }, onTable, onTable)).toBe(
       "moved the laptop onto the side table",
     );
+  });
+
+  it("says another was added, not the number the room told the copy apart by", () => {
+    const plant = room.props.find((p) => p.kind === "plant") as Prop;
+    const added: Room = { ...room, props: [...room.props, { ...plant, id: "plant-2", name: `${plant.name} 2` }] };
+    expect(changeWords({ op: "add", kind: "plant" }, room, added)).toBe("added another plant");
+  });
+
+  it("shows a person a copy by its kind's name, and a name someone chose as it is", () => {
+    expect(shownName({ name: "the vase of flowers 2" }, "vase of flowers")).toBe("the vase of flowers");
+    expect(shownName({ name: "the green armchair 3" }, "armchair")).toBe("the green armchair");
+    expect(shownName({ name: "the room 101 sign" }, "sign")).toBe("the room 101 sign");
+    expect(shownName({ name: "the seat 3" }, "chair")).toBe("the seat 3");
+    expect(shownName({ name: "the vase of flowers" }, "vase of flowers")).toBe("the vase of flowers");
   });
 
   it("names what was added, copied or taken away, and what went with it", () => {

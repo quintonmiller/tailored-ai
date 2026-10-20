@@ -17,7 +17,7 @@ import {
   updateSession,
 } from "../api";
 import type { ComponentSpec, MediaRef } from "../lib/content.js";
-import { agentOfKey, latestWith, newChatKey, rowFor } from "../lib/conversations";
+import { agentOfKey, draftKey, latestWith, newChatKey, rowFor } from "../lib/conversations";
 import { describeError, useToast } from "./Toast";
 
 export interface PendingApproval {
@@ -63,13 +63,21 @@ export interface ChatStore {
    * your latest with it, or a new one starts (always new with `fresh`). Never
    * the last agent's conversation. While a reply is on its way, typed or
    * spoken, the switch waits for it; asking for the agent you are already
-   * talking to calls a waiting switch off.
+   * talking to calls a waiting switch off. `draft` is words written for the
+   * conversation you go to, ready to send there once it is on screen: never
+   * in the one you are leaving, nor under its name while the switch waits.
    */
-  setSelectedAgent: (name: string, opts?: { fresh?: boolean }) => void;
+  setSelectedAgent: (name: string, opts?: { fresh?: boolean; draft?: string }) => void;
   /** The agent a switch is waiting to go to, until the reply on its way is done; null when none is. */
   nextAgent: string | null;
   /** A spoken turn is on its way, or not: a switch waits for it as for a typed reply. */
   setSpeaking: (speaking: boolean) => void;
+  /**
+   * What you have typed in the conversation on screen and not sent. Each conversation keeps its own, so moving to
+   * another agent, by any way the chat moves, never takes it along, and coming back finds it where you left it.
+   */
+  draft: string;
+  setDraft: (text: string | ((was: string) => string)) => void;
   // Session list (sidebar)
   sessions: SessionRow[];
   refreshSessions: () => void;
@@ -77,7 +85,8 @@ export interface ChatStore {
   send: (text: string, media?: MediaRef[]) => void;
   interrupt: () => void;
   newChat: () => void;
-  loadSession: (s: SessionRow) => void;
+  /** Open a conversation; `draft` is words written for it, ready to send there. */
+  loadSession: (s: SessionRow, opts?: { draft?: string }) => void;
   renameSession: (s: SessionRow, title: string | null) => void;
   togglePin: (s: SessionRow) => void;
   removeSession: (s: SessionRow) => void;
@@ -133,8 +142,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const turns = useRef(0);
   // Moved on by every conversation opened or let go of: messages that turn up after either are another one's.
   const opened = useRef(0);
-  /** A switch asked for while a reply was on its way. */
-  const queued = useRef<{ name: string; fresh: boolean } | null>(null);
+  /** A switch asked for while a reply was on its way, with any words written for where it goes. */
+  const queued = useRef<{ name: string; fresh: boolean; draft?: string } | null>(null);
   // A reply on its way, typed or spoken: a switch waits for it.
   const busy = sending || speaking;
   const busyNow = useRef(busy);
@@ -145,6 +154,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   shownNow.current = sessionId ? { id: sessionId, key: sessionKey ?? null } : null;
   /** Where you left each agent: the conversation you were in with it, or a new one you hadn't written in yet. */
   const left = useRef(new Map<string, { id: string; key: string | null } | "fresh">());
+  /** What is typed in each conversation and not sent, by `draftKey`. */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftsNow = useRef(drafts);
+  draftsNow.current = drafts;
+  const here = draftKey(selectedAgent, sessionId);
+  const draft = drafts[here] ?? "";
+  const putDraft = useCallback((key: string, text: string | ((was: string) => string)) => {
+    setDrafts((all) => {
+      const was = all[key] ?? "";
+      const next = typeof text === "function" ? text(was) : text;
+      if (next === was) return all;
+      const { [key]: _, ...rest } = all;
+      return next ? { ...rest, [key]: next } : rest;
+    });
+  }, []);
+  /** A conversation turned out to be another: a new one got its id, or a turn moved it. What was typed goes along. */
+  const moveDraft = useCallback((from: string, to: string) => {
+    if (from === to) return;
+    setDrafts((all) => {
+      if (!all[from]) return all;
+      const { [from]: text, ...rest } = all;
+      return { ...rest, [to]: text };
+    });
+  }, []);
+  const setDraft = useCallback((text: string | ((was: string) => string)) => putDraft(here, text), [putDraft, here]);
 
   const requestDock = useCallback((text?: string) => {
     dockNonce.current += 1;
@@ -315,6 +349,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               setTurnStart(null);
               setApprovals([]);
               abortRef.current = null;
+              // The conversation this turn was sent in, now named: anything written for it meanwhile stays with it.
+              moveDraft(draftKey(selectedAgent, sessionId), draftKey(selectedAgent, event.data.sessionId as string));
               setSessionKey(event.data.sessionKey as string);
               setSessionId(event.data.sessionId as string);
               setStoredChatSessionId(event.data.sessionId as string, (event.data.sessionKey as string) ?? null);
@@ -375,7 +411,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         sessionKey ? undefined : sessionId,
       );
     },
-    [sending, sessionKey, sessionId, selectedAgent, toast],
+    [sending, sessionKey, sessionId, selectedAgent, toast, moveDraft],
   );
 
   const interrupt = useCallback(() => {
@@ -414,14 +450,19 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const loadSession = useCallback(
-    (s: SessionRow) => {
+    (s: SessionRow, opts?: { draft?: string }) => {
+      if (opts?.draft !== undefined) putDraft(draftKey("", s.id), opts.draft);
       turns.current++;
       const mine = ++opened.current;
       setSessionId(s.id);
       setSessionKey(s.key ?? undefined);
       setStoredChatSessionId(s.id, s.key ?? null);
-      // A conversation whose key says who it is with goes on with them.
+      // A conversation whose key says who it is with goes on with them. Opening one with another agent is leaving
+      // the one on screen, as switching is: going back to that agent finds it, and what was typed in it.
       const who = agentOfKey(s.key);
+      const leaving = who !== undefined && who !== agentNow.current;
+      if (leaving && (shownNow.current || draftsNow.current[draftKey(agentNow.current, undefined)]))
+        left.current.set(agentNow.current, shownNow.current ?? "fresh");
       if (who !== undefined) setAgent(who);
       setMessages([]);
       fetchMessages(s.id)
@@ -431,19 +472,23 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         })
         .catch((err) => toast.error(`Failed to load session: ${describeError(err)}`));
     },
-    [toast],
+    [toast, putDraft],
   );
 
   const switchTo = useCallback(
-    (name: string, fresh: boolean) => {
-      if (name === agentNow.current && !fresh) return;
+    (name: string, fresh: boolean, draft?: string) => {
+      if (name === agentNow.current && !fresh) {
+        if (draft !== undefined) putDraft(draftKey(name, shownNow.current?.id), draft);
+        return;
+      }
       // Where you leave this agent is where you find it again when you come back.
       left.current.set(agentNow.current, shownNow.current ?? "fresh");
       // Off the last agent's conversation at once: what is typed now starts one with this agent.
       newChat();
       setAgent(name);
-      if (fresh) return;
-      const was = left.current.get(name);
+      const was = fresh ? "fresh" : left.current.get(name);
+      // Words written for this agent wait in the conversation that opens with it.
+      if (draft !== undefined) putDraft(draftKey(name, was && was !== "fresh" ? was.id : undefined), draft);
       if (was === "fresh") return;
       if (was) {
         loadSession(rowFor(was.id, was.key));
@@ -454,39 +499,51 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         .then((rows) => {
           if (turns.current !== turn) return;
           const latest = latestWith(rows, name);
-          if (latest) loadSession(latest);
+          if (!latest) return;
+          // Written for your chat with it as it stands, the words go on into the conversation that turns out to be.
+          if (draft !== undefined) moveDraft(draftKey(name, undefined), draftKey(name, latest.id));
+          loadSession(latest);
         })
         .catch(() => {
           // Nothing to pick up: the new conversation stands.
         });
     },
-    [newChat, loadSession],
+    [newChat, loadSession, putDraft, moveDraft],
   );
 
   const setSelectedAgent = useCallback(
-    (name: string, opts?: { fresh?: boolean }) => {
+    (name: string, opts?: { fresh?: boolean; draft?: string }) => {
       const fresh = !!opts?.fresh;
+      const draft = opts?.draft;
       // A reply on its way is never cut off: the switch waits for it. Asking for the agent the reply is from
-      // calls the wait off, as coming back to it before the reply is done does.
+      // calls the wait off, as coming back to it before the reply is done does. Words written for where the switch
+      // goes wait with it, out of sight, rather than showing in the conversation the reply is coming into.
       if (busyNow.current) {
         const staying = name === agentNow.current && !fresh;
-        queued.current = staying ? null : { name, fresh };
+        // A waiting switch this one replaces keeps what was written for it in the conversation it was going to.
+        const before = queued.current;
+        if (before?.draft !== undefined && draft === undefined) {
+          const was = before.fresh ? "fresh" : left.current.get(before.name);
+          putDraft(draftKey(before.name, was && was !== "fresh" ? was.id : undefined), before.draft);
+        }
+        queued.current = staying ? null : { name, fresh, ...(draft !== undefined ? { draft } : {}) };
         setNextAgent(staying ? null : name);
+        if (staying && draft !== undefined) putDraft(draftKey(name, shownNow.current?.id), draft);
         return;
       }
       queued.current = null;
       setNextAgent(null);
-      switchTo(name, fresh);
+      switchTo(name, fresh, draft);
     },
-    [switchTo],
+    [switchTo, putDraft],
   );
 
   useEffect(() => {
     if (busy || !queued.current) return;
-    const { name, fresh } = queued.current;
+    const { name, fresh, draft } = queued.current;
     queued.current = null;
     setNextAgent(null);
-    switchTo(name, fresh);
+    switchTo(name, fresh, draft);
   }, [busy, switchTo]);
 
   const renameSession = useCallback(
@@ -577,6 +634,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setSelectedAgent,
       nextAgent,
       setSpeaking,
+      draft,
+      setDraft,
       sessions,
       refreshSessions,
       send,
@@ -611,6 +670,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       selectedAgent,
       setSelectedAgent,
       nextAgent,
+      draft,
+      setDraft,
       sessions,
       refreshSessions,
       send,

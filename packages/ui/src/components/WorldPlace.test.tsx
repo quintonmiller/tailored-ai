@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ROOM, type Room } from "../avatar/scene";
 import { placeless } from "./ChatStage";
-import { changeLine, keepersWords, ROOM_ASK, WorldPlace, withChangeLines } from "./WorldPlace";
+import { changedByWords, changeLine, keepersWords, ROOM_ASK, WorldPlace, withChangeLines } from "./WorldPlace";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -62,6 +62,25 @@ describe("who can change a place", () => {
   });
 });
 
+describe("who changed a place", () => {
+  const at = new Date().toISOString();
+  it("is who made its changes, each once, whoever changed it last first", () => {
+    expect(
+      changedByWords([
+        { who: "artist", what: "added the easel", at },
+        { who: "sam", what: "moved the couch", at, person: true },
+        { who: "artist", what: "painted the walls", at },
+      ]),
+    ).toBe("artist and you");
+    expect(changedByWords([{ who: "sam", what: "moved the couch", at, person: true }])).toBe("You");
+  });
+
+  it("is nobody yet when nothing has been changed, however many could change it", () => {
+    expect(changedByWords([])).toBe("Nobody yet");
+    expect(changedByWords(undefined)).toBe("Nobody yet");
+  });
+});
+
 describe("a place's card", () => {
   let root: Root;
   let container: HTMLDivElement;
@@ -107,6 +126,15 @@ describe("a place's card", () => {
     expect(text).toMatch(/reading up on Lisbon/);
     expect(text).toMatch(/Library/);
     expect(text).toMatch(/planner, with its place tool/);
+    // Who changed it, apart from who can: you can change any room, but here you did.
+    const facts = Object.fromEntries(
+      [...container.querySelectorAll(".world-facts dt")].map((dt) => [
+        dt.textContent,
+        dt.nextElementSibling?.textContent,
+      ]),
+    );
+    expect(facts["Changed by"]).toBe("You and planner");
+    expect(facts["Can change it"]).toBe("planner, with its place tool; and you, with Edit room");
     const rows = [...container.querySelectorAll(".world-changes li")].map((li) => li.textContent);
     expect(rows).toEqual([
       "You moved the couch1 min ago",
@@ -134,6 +162,9 @@ describe("a place's card", () => {
     );
     expect(container.textContent).toMatch(/Nothing yet/);
     expect(container.textContent).toMatch(/Nobody has said yet/);
+    // Never "and you" for a room you haven't touched: nobody has changed it.
+    const changedBy = [...container.querySelectorAll(".world-facts dt")].find((dt) => dt.textContent === "Changed by");
+    expect(changedBy?.nextElementSibling?.textContent).toBe("Nobody yet");
     // Where to give it the tool instead.
     expect(container.querySelector('a[href="#/agents/writer"]')?.textContent).toBe(
       "Give writer the place tool on its page",

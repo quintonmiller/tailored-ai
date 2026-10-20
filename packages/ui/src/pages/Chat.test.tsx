@@ -11,6 +11,7 @@ import { act, useContext } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatProvider } from "../components/ChatContext";
+import { ChatDock } from "../components/ChatDock";
 import { type ChatStageOptions, TalkSlot } from "../components/ChatStage";
 import { ToastProvider } from "../components/Toast";
 import { ROOM_ASK } from "../components/WorldPlace";
@@ -147,6 +148,8 @@ beforeEach(() => {
       if (url.startsWith("/api/ext/builtin:places/transcript/"))
         return new Response(JSON.stringify({ name: "trip", members: ["planner", "writer"], lines: [] }));
       if (url.startsWith("/api/sessions")) return new Response(JSON.stringify(sessionRows));
+      if (url === "/api/media")
+        return new Response(JSON.stringify({ id: "m-1", mimeType: "image/png", bytes: 10, name: "plan.png" }));
       if (url.startsWith("/api/agents")) return new Response(JSON.stringify(agentList));
       if (url.startsWith("/api/live")) return new Response(JSON.stringify({ enabled: false }));
       return new Response("{}");
@@ -473,6 +476,174 @@ describe("talking to another agent", () => {
     expect((container.querySelector(".chat-agent-select") as HTMLSelectElement).value).toBe("planner");
     await send("Hey!");
     expect(chatPosts.at(-1)).toMatchObject({ sessionKey: "web:planner:100", agent: "planner" });
+  });
+});
+
+describe("what you type stays with its conversation", () => {
+  const plannerRow = {
+    id: "sess-p",
+    key: "web:planner:100",
+    model: "m",
+    provider: "p",
+    project_id: null,
+    title: null,
+    pinned: 0,
+    created_at: "2026-10-01 09:00:00",
+    updated_at: "2026-10-01 09:00:00",
+  };
+
+  beforeEach(() => {
+    agentList = { planner: {}, writer: {} };
+    sessionRows = [plannerRow];
+    localStorage.setItem("tai.chat.activeSessionId", "sess-1");
+    localStorage.setItem("tai.chat.activeSessionKey", "web:kitchen");
+  });
+
+  const box = () => container.querySelector(".chat-input-bar input[type=text]") as HTMLInputElement;
+
+  async function type(text: string, into = box) {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(into(), text);
+      into().dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  async function choose(agent: string, picker = ".chat-agent-select") {
+    const select = container.querySelector(picker) as HTMLSelectElement;
+    await act(async () => {
+      select.value = agent;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+  }
+
+  it("leaves what you typed behind when you talk to someone else, and finds it there when you come back", async () => {
+    await render();
+    await type("Half a thought");
+    await choose("planner");
+    // Never under the next agent's name, where Enter would send it to them.
+    expect(box().value).toBe("");
+    await type("For the planner");
+    await choose("");
+    expect(box().value).toBe("Half a thought");
+    await choose("planner");
+    expect(box().value).toBe("For the planner");
+    await act(async () => {
+      box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+    expect(chatPosts).toHaveLength(1);
+    expect(chatPosts[0]).toMatchObject({ sessionKey: "web:planner:100", agent: "planner" });
+  });
+
+  it("keeps a kiosk's message in the conversation it was written for, wherever the world takes you next", async () => {
+    let draft: ((name: string, text: string) => void) | undefined;
+    let chatWith: ((name: string) => void) | undefined;
+    fakeScene = (opts) => {
+      draft = opts.onDraft;
+      chatWith = opts.onChatWith;
+      return sceneAt(null);
+    };
+    await render();
+    await act(async () => draft?.("default", "I'd like a new agent."));
+    await settle();
+    expect(box().value).toBe("I'd like a new agent.");
+    // Through a door into the planner's home: the world moves the chat on by itself.
+    await act(async () => chatWith?.("planner"));
+    await settle();
+    expect(box().placeholder).toBe("Message planner…");
+    expect(box().value).toBe("");
+    await act(async () => chatWith?.("default"));
+    await settle();
+    expect(box().value).toBe("I'd like a new agent.");
+    await act(async () => {
+      box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+    // To the default agent, in a new conversation, as the kiosk meant.
+    expect(chatPosts.at(-1)?.agent).toBeUndefined();
+    expect(chatPosts.at(-1)?.sessionKey).toMatch(/^web:default:\d+$/);
+  });
+
+  it("holds a message written for someone while a reply finishes, out of the conversation the reply is coming into", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    let draft: ((name: string, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      draft = opts.onDraft;
+      return sceneAt(null);
+    };
+    await render();
+    await send("Hey!");
+    await act(async () => draft?.("planner", ROOM_ASK));
+    await settle();
+    expect(box().placeholder).toBe("Message…");
+    expect(box().value).toBe("");
+    await act(async () => release());
+    await settle();
+    expect(box().placeholder).toBe("Message planner…");
+    expect(box().value).toBe(ROOM_ASK);
+  });
+
+  it("puts an answer written on a card in the conversation the question was asked in, and nowhere else", async () => {
+    let reply: ((name: string, session: string | undefined, text: string) => void) | undefined;
+    let chatWith: ((name: string) => void) | undefined;
+    fakeScene = (opts) => {
+      reply = opts.onReply;
+      chatWith = opts.onChatWith;
+      return sceneAt(null);
+    };
+    await render();
+    await type("Something for the default agent");
+    await act(async () => reply?.("planner", "sess-p", "Yes, book the one near the river."));
+    await settle();
+    expect(box().placeholder).toBe("Message planner…");
+    expect(box().value).toBe("Yes, book the one near the river.");
+    expect(shown()).toContain("Alfama, near the river.");
+    await act(async () => chatWith?.("default"));
+    await settle();
+    expect(box().value).toBe("Something for the default agent");
+  });
+
+  it("keeps files attached with the conversation they were added to", async () => {
+    await render();
+    const picker = container.querySelector(".chat-input-bar input[type=file]") as HTMLInputElement;
+    Object.defineProperty(picker, "files", {
+      value: [new File(["x"], "plan.png", { type: "image/png" })],
+      configurable: true,
+    });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    await settle();
+    const chips = () => [...container.querySelectorAll(".attachment-tray .attachment-name")].map((c) => c.textContent);
+    expect(chips()).toEqual(["plan.png"]);
+    await choose("planner");
+    expect(chips()).toEqual([]);
+    await choose("");
+    expect(chips()).toEqual(["plan.png"]);
+  });
+
+  it("does the same in the floating chat on other pages", async () => {
+    window.location.hash = "/dashboard";
+    await act(async () => {
+      root.render(
+        <ToastProvider>
+          <ChatProvider>
+            <ChatDock />
+          </ChatProvider>
+        </ToastProvider>,
+      );
+    });
+    await settle();
+    await act(async () => (container.querySelector(".chat-dock-fab") as HTMLButtonElement).click());
+    await settle();
+    const dockBox = () => container.querySelector(".chat-dock-composer input") as HTMLInputElement;
+    await type("Half a thought", dockBox);
+    await choose("planner", ".chat-dock-agent-select");
+    expect(dockBox().value).toBe("");
+    await choose("", ".chat-dock-agent-select");
+    expect(dockBox().value).toBe("Half a thought");
   });
 });
 

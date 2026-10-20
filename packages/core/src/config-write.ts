@@ -1,6 +1,13 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as YAML from "yaml";
-import { type AgentConfig, findInertConfig, normalizeRawConfig, validateConfig } from "./config.js";
+import {
+  type AgentConfig,
+  findInertConfig,
+  normalizeRawConfig,
+  toolReferenceWarnings,
+  type ValidateConfigOptions,
+  validateConfig,
+} from "./config.js";
 
 /**
  * The one door every runtime write to `config.yaml` goes through.
@@ -27,6 +34,11 @@ export interface ConfigWriteHost {
   readonly configPath: string;
   withConfigLock<T>(fn: () => T | Promise<T>): Promise<T>;
   reload(): void;
+  /**
+   * Every tool there is once `reload` has built them, plugins' among them. With it, the tools a written config
+   * names are checked against what is really there; without, against a guess from config that sees no plugin's.
+   */
+  getResolvableTools?(): { name: string }[];
 }
 
 /**
@@ -92,9 +104,25 @@ function serialize(raw: Record<string, unknown>): string {
  *
  * Warnings are advisory. A failure to compute them is itself a warning.
  */
-function advisoryWarnings(config: AgentConfig): string[] {
+function advisoryWarnings(config: AgentConfig, opts?: ValidateConfigOptions): string[] {
   try {
-    return validateConfig(config);
+    return validateConfig(config, opts);
+  } catch (err) {
+    return [`config validation could not complete: ${(err as Error).message}`];
+  }
+}
+
+/**
+ * The tools a written config names that aren't there, once the reload has built them: before it, the tools the new
+ * config enables, plugins' among them, don't exist yet to check against. Advisory like the rest: the write is done.
+ */
+function toolWarningsAfterReload(host: ConfigWriteHost, config: AgentConfig): string[] {
+  if (!host.getResolvableTools) return [];
+  try {
+    return toolReferenceWarnings(
+      config,
+      host.getResolvableTools().map((t) => t.name),
+    );
   } catch (err) {
     return [`config validation could not complete: ${(err as Error).message}`];
   }
@@ -139,11 +167,12 @@ export async function updateRawConfig(
     if (introduced.length > 0) throw new ConfigWriteRejected(introduced);
 
     // Computed before the write so nothing between here and the return can
-    // report a completed write as a failed one.
-    const warnings = advisoryWarnings(after);
+    // report a completed write as a failed one; the tools it names, after the
+    // reload when the host can say which there are (`toolWarningsAfterReload`).
+    const warnings = advisoryWarnings(after, host.getResolvableTools ? { tools: false } : undefined);
     writeFileSync(host.configPath, text, "utf-8");
     host.reload();
-    return { warnings };
+    return { warnings: [...warnings, ...toolWarningsAfterReload(host, after)] };
   });
 }
 
@@ -177,10 +206,11 @@ export async function writeRawConfigText(host: ConfigWriteHost, text: string): P
     if (introduced.length > 0) throw new ConfigWriteRejected(introduced);
 
     // Computed before the write so nothing between here and the return can
-    // report a completed write as a failed one.
-    const warnings = advisoryWarnings(after);
+    // report a completed write as a failed one; the tools it names, after the
+    // reload when the host can say which there are (`toolWarningsAfterReload`).
+    const warnings = advisoryWarnings(after, host.getResolvableTools ? { tools: false } : undefined);
     writeFileSync(host.configPath, text, "utf-8");
     host.reload();
-    return { warnings };
+    return { warnings: [...warnings, ...toolWarningsAfterReload(host, after)] };
   });
 }

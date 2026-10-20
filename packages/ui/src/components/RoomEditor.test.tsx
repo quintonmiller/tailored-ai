@@ -424,8 +424,10 @@ describe("rearranging a room", () => {
     await act(async () => button("Plant").click());
     await settle();
     expect(server.edits[0].edit).toEqual({ op: "add", kind: "plant" });
-    expect(server.writes[0].data.changes?.[0].what).toBe("added the plant 2");
+    // There is a plant already: the room's number for the copy is for the tools, not for you.
+    expect(server.writes[0].data.changes?.[0].what).toBe("added another plant");
     expect(editor.stage?.selected).toBe("plant-2");
+    expect(document.querySelector(".room-edit-name")?.textContent).toBe("the plant");
   });
 
   it("offers what agents made first, adds one by its record, and draws it at once without writing its parts", async () => {

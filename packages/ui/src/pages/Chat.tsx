@@ -13,11 +13,13 @@ import { lastLines, TALK_BRIEF, TALK_LINES, WorldTalk } from "../components/Worl
 import { useActiveProject } from "../hooks/useActiveProject";
 import { useCovered } from "../hooks/useCovered";
 import type { MediaRef } from "../lib/content.js";
-import { agentOfKey, askedIn, rowFor } from "../lib/conversations";
+import { agentOfKey, askedIn, draftKey, rowFor } from "../lib/conversations";
 
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const store = useChatStore();
-  const [input, setInput] = useState("");
+  // What is typed is the conversation's, kept by the store for each one: it stays behind when the chat moves on.
+  const input = store.draft;
+  const setInput = store.setDraft;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarSearch, setSidebarSearch] = useState("");
   const _activeProject = useActiveProject();
@@ -130,24 +132,23 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     // A message written for someone shows in your conversation with them in the world, ready to send, as it does in
     // the chat beside it when that is open: the box to type in is the same one.
     onDraft: (name, text) => {
-      // A message written for someone is a chat with them, out of a meeting room's own conversation too.
+      // A message written for someone is a chat with them, out of a meeting room's own conversation too. The words
+      // are that new conversation's: they wait for it while a reply finishes, and stay in it if you go elsewhere.
       setReading(false);
-      store.setSelectedAgent(name === "default" ? "" : name, { fresh: true });
-      setInput(text);
+      store.setSelectedAgent(name === "default" ? "" : name, { fresh: true, draft: text });
     },
     onReply: (name, session, text) => {
       // An answer goes where the question is: the conversation it asked in, which has everything it was about.
       setReading(false);
-      setInput(text);
       const who = name === "default" ? "" : name;
-      if (session && session === store.sessionId) return;
+      if (session && session === store.sessionId) return setInput(text);
       // Otherwise your chat with it as it stands, and while a reply is on its way, after it (the switch waits).
-      const asItStands = () => store.setSelectedAgent(who);
+      const asItStands = () => store.setSelectedAgent(who, { draft: text });
       if (!session || store.sending) return asItStands();
       fetchSessions({ limit: 500 })
         .then((rows) => {
           const row = askedIn(rows, session, who);
-          if (row) store.loadSession(row);
+          if (row) store.loadSession(row, { draft: text });
           else asItStands();
         })
         .catch(asItStands);
@@ -194,7 +195,10 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     }
   }, [showRoom]);
 
-  const { attachments, add, remove, clear, readyIds, busy } = useAttachments();
+  // Files attached are the conversation's too, as what is typed is.
+  const { attachments, add, remove, clear, readyIds, busy } = useAttachments(
+    draftKey(store.selectedAgent, store.sessionId),
+  );
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 

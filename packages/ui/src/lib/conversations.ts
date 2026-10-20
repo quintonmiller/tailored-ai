@@ -47,6 +47,15 @@ export function askedIn(sessions: SessionRow[], session: string | undefined, age
   return row && agentOfKey(row.key) === agent ? row : undefined;
 }
 
+/**
+ * The conversation something typed belongs to: one that has started is its own, by id; a new one you haven't
+ * written in yet is the agent's. What you type, and what is written for you to send, stays with it, so it never goes
+ * to whoever the chat moves on to.
+ */
+export function draftKey(agent: string, sessionId: string | undefined): string {
+  return sessionId ? `session:${sessionId}` : `new:${agent || DEFAULT}`;
+}
+
 /** A session row with only what opening a conversation needs: its id and key. */
 export function rowFor(id: string, key: string | null): SessionRow {
   return {

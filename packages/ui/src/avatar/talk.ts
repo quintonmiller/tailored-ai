@@ -130,6 +130,47 @@ export function talkingHere(
   return out;
 }
 
+/**
+ * What one of two talking face to face does next (see `keepCompany` on the
+ * stage). The one who goes walks over when they are too far apart to talk,
+ * getting up first if it sat down, and at once when it is on its way
+ * somewhere else: a talk comes before a desk, so one that set off for its
+ * desk as its turn began turns round as soon as it is talking. It waits only
+ * while it is walking over already, or while the other is walking somewhere,
+ * and goes once they stop; the other turning where it stands is no reason to
+ * wait. Near enough, sat or not, or at a meeting table, where everyone keeps
+ * their seat, it turns to the other. The other finishes any walk it is on,
+ * then turns to the one who goes, and gets up to stand with one that came
+ * over to it (`rise`), near enough.
+ */
+export type TalkMove = "join" | "rise" | "face" | "wait";
+
+export function talkMove(at: {
+  goes: boolean;
+  /** How far apart they are, in metres. */
+  apart: number;
+  /** On its way to stand with the other. */
+  joining: boolean;
+  /** On its way somewhere, or getting up to go: turning where it stands is not walking. */
+  walking: boolean;
+  seated: boolean;
+  /** The other is on its way somewhere. */
+  partnerWalking: boolean;
+  /** The other walked over to stand with it. */
+  partnerCame: boolean;
+  meeting: boolean;
+}): TalkMove {
+  if (at.goes) {
+    if (at.joining) return "wait";
+    if (at.meeting) return at.walking ? "wait" : "face";
+    if (at.partnerWalking) return "wait";
+    return at.walking || at.apart > TALK_APART ? "join" : "face";
+  }
+  if (at.walking) return "wait";
+  if (at.seated && at.partnerCame && !at.partnerWalking && at.apart <= GET_UP_AT && !at.meeting) return "rise";
+  return "face";
+}
+
 /** Whether a line was said down the phone: not in a room, by one on the phone with whoever it was said to. */
 export function byPhone(line: { to?: string[]; room?: string }, talk: AgentActivity["talk"]): boolean {
   if (line.room || !talk?.phone) return false;
