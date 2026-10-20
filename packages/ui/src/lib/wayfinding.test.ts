@@ -4,7 +4,16 @@
  * type.
  */
 import { describe, expect, it } from "vitest";
-import { areaTitle, type MapArea, type MapPlace, mapIndex, placeTitle, trailTo, wayInto } from "./wayfinding";
+import {
+  areaTitle,
+  type MapArea,
+  type MapPlace,
+  mapIndex,
+  placeTitle,
+  plaqueWords,
+  trailTo,
+  wayInto,
+} from "./wayfinding";
 
 const places: MapPlace[] = [
   { id: "town", name: "the town", kind: "town", agents: [], area: "main" },
@@ -156,6 +165,18 @@ describe("trailTo", () => {
     expect(wayInto(areas[0])).toBe("town");
     expect(wayInto(areas[1])).toBe("home:meeting-summarizer");
     expect(wayInto({ id: "empty", name: "empty", places: [] })).toBeUndefined();
+  });
+});
+
+describe("plaqueWords", () => {
+  it("says what the trail calls a place, and keeps a name a home's agent gave it", () => {
+    expect(plaqueWords("home:default", "your room")).toBe("the default agent's home");
+    expect(plaqueWords("home:default", "the default agent's room")).toBe("the default agent's home");
+    expect(plaqueWords("home:planner", "planner's room")).toBe("planner's home");
+    expect(plaqueWords("home:planner", "The Map Room")).toBe("The Map Room");
+    expect(plaqueWords("room:local:budget", "budget")).toBe("#budget");
+    expect(plaqueWords("lobby", "the lobby")).toBe("the lobby");
+    expect(plaqueWords("shared:lounge", "the lounge")).toBe("the lounge");
   });
 });
 

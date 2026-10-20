@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   type DashboardWidgetSpec,
   fetchDashboard,
@@ -10,7 +10,8 @@ import {
   type ProjectTask,
   updateProjectTask,
 } from "../api";
-import { type AgentAction, Avatar, type AvatarControls } from "../avatar/Avatar";
+import { type AgentAction, Avatar, type AvatarControls, type WorldPanelSpec } from "../avatar/Avatar";
+import { type Anchor, anchorFor, PANEL_ROOM, plaqueSpot, talkAnchor, type Where } from "../avatar/anchors";
 import type { BoardTask } from "../avatar/boards";
 import { BODY_TYPE, type BodyChange, type BodyLooks, EMOTE_TYPE, type EmoteRecord } from "../avatar/body";
 import {
@@ -34,6 +35,7 @@ import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
 import { isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { changeBody, makeGesture } from "../lib/body";
+import { useAgentColor } from "../lib/body-colors";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
@@ -41,7 +43,7 @@ import { type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
 import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
-import { trailTo } from "../lib/wayfinding";
+import { trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
@@ -1082,20 +1084,49 @@ export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
   });
 }
 
-/** What can be open over the stage. A task opened from the list goes back to it. */
+/**
+ * What can be open in the world, one at a time, each beside what it is about
+ * (`anchors.ts`). A task opened from the list goes back to it. `at` is the
+ * thing in the room it was opened from, a board, a kiosk, a screen or a
+ * calendar, which it is kept beside, as is whatever it opens in turn.
+ */
 type Panel =
   | { kind: "map" }
-  | { kind: "tasks" }
-  | { kind: "task"; id: string; fromList?: boolean }
+  | { kind: "tasks"; at?: string }
+  | { kind: "task"; id: string; fromList?: boolean; at?: string }
   | { kind: "agent"; agent: string }
   | { kind: "place" }
-  | { kind: "new-task" }
-  | { kind: "new-room" }
+  | { kind: "new-task"; at?: string }
+  | { kind: "new-room"; at?: string }
   | { kind: "needs" }
   | { kind: "need"; agent: string; fromList?: boolean }
-  | { kind: "dashboard"; focus?: string }
+  | { kind: "dashboard"; focus?: string; at?: string }
   /** A calendar's full list: one agent's, those of whoever is in the place it hangs in, or everyone's. */
-  | { kind: "calendar"; who?: string; here?: true };
+  | { kind: "calendar"; who?: string; here?: true; at?: string };
+
+/** The thing in the room a panel was opened from, as a field to pass on to what it opens next. */
+const atOf = (panel: Panel | null): { at?: string } => (panel && "at" in panel && panel.at ? { at: panel.at } : {});
+
+/** How a panel looks for what it is beside: a card by a body, pinned beside a thing, on the plaque, held, docked. */
+function lookOf(anchor: Anchor): string {
+  if ("agent" in anchor) return "card";
+  if ("thing" in anchor) return "pinned";
+  if ("plaque" in anchor) return "plaque";
+  if ("you" in anchor) return "card";
+  return anchor.held === "dock" ? "dock" : "held";
+}
+
+/**
+ * Your conversation in the world, as the chat page draws it, for the panel
+ * the scene keeps beside whoever you talk to. The page draws it after the
+ * scene is worked out, as it needs what the scene says (on the phone or not,
+ * a spoken turn in progress), and hands it in round the stage.
+ */
+export const TalkSlot = createContext<ReactNode>(null);
+
+function TalkInSlot() {
+  return <>{useContext(TalkSlot)}</>;
+}
 
 interface LiveInfo {
   enabled?: boolean;
@@ -1140,6 +1171,10 @@ export interface ChatStageOptions {
   onShowChat?: () => void;
   /** What you last said in the conversation on the page, and its answer once there is one (`lastExchange`). */
   exchange?: { said?: string; reply?: string };
+  /** The page draws your conversation in the world (`TalkSlot`): the scene keeps it beside whoever you talk to. */
+  dialogue?: boolean;
+  /** In a meeting room, the room's own conversation is being read, rather than yours with one of its members. */
+  readingRoom?: boolean;
 }
 
 export function useChatStage({
@@ -1157,6 +1192,8 @@ export function useChatStage({
   chatApprovals,
   onShowChat,
   exchange,
+  dialogue = false,
+  readingRoom = false,
 }: ChatStageOptions) {
   // Visiting a place in your own body, walking or flying; null is the agent's own view.
   const [visiting, setVisitingTo] = useState<string | null>(null);
@@ -1252,11 +1289,35 @@ export function useChatStage({
     watch.observe(el);
     return () => watch.disconnect();
   }, [editor.editing]);
-  // Everything but the map sits in the chat's column while it is open, so the scene stays in view beside it; while
-  // you rearrange the room, the catalogue does too.
-  const side = (!!panel && panel.kind !== "map") || editor.adding;
+  // The colour each agent's body is drawn in, as its dot is: the one it chose, or the one its name gives it. Its card
+  // and your conversation with it are edged in it.
+  const colorOf = useAgentColor();
+  // Whether the stage is too narrow for panels beside anything, as the stage itself measures it: they are sheets
+  // along its foot. A guess from the screen until it is on screen to say.
+  const [sheets, setSheets] = useState(!wide);
+  // The stage is on screen, and has been since this view of it came: your conversation is in it then. One that
+  // couldn't be shown leaves the chat beside it as the only place to talk.
+  const [stageUp, setStageUp] = useState(false);
+  const [stageFailed, setStageFailed] = useState(false);
+  useEffect(() => {
+    if (showStage) return;
+    setStageUp(false);
+    setStageFailed(false);
+  }, [showStage]);
+  const onShown = useCallback((up: boolean) => {
+    // Taken down only to be built again (another agent, a visit): it is as good as up meanwhile, so the box to type
+    // in doesn't hop between the world and the chat's column while the next one loads.
+    if (up) {
+      setStageUp(true);
+      setStageFailed(false);
+    }
+  }, []);
+  const onProblem = useCallback(() => {
+    setStageUp(false);
+    setStageFailed(true);
+  }, []);
   // On a phone the catalogue is a sheet over the foot of the scene, where the bar would be: one at a time.
-  const sheet = editor.adding && !wide;
+  const sheet = editor.adding && sheets;
   // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
   // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
   const map = useWorldMap(
@@ -1313,7 +1374,7 @@ export function useChatStage({
   // agent you came from is one with it again. Anywhere else, the conversation you had goes on. Through a door or
   // by the map, arriving is the same.
   const host = visiting ? (visiting.startsWith("home:") ? visiting.slice("home:".length) : undefined) : shown;
-  // Talking to someone is the chat: a panel in its column steps aside, or the click would seem to do nothing.
+  // Talking to someone is your conversation with them: a card steps aside for it, beside them or on the phone.
   // Arriving at an agent's home to see to what it waits on keeps that card open: it is what you came for.
   const chatWith = useCallback(
     (who: string, arriving = false) => {
@@ -1514,8 +1575,9 @@ export function useChatStage({
     return () => window.removeEventListener("keydown", toggle);
   }, [showStage, editor.editing]);
 
-  // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel or on a
-  // surface in the room.
+  // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel or on a surface
+  // in the room. A button in your conversation in the world isn't one of those: Space there talks, as it did on the
+  // chat's own buttons.
   const { hold, release } = voice;
   // Whether Space started talking. Letting it go ends that wherever the key comes up: clicking a body while
   // holding it puts the focus in that body's menu, which would otherwise keep the microphone open, and the key
@@ -1650,43 +1712,46 @@ export function useChatStage({
   // What the kiosks (the lobby's, and the office's directory, which opens the map), the boards, the screens and the
   // calendars do when clicked. A note on a board opens its task; anywhere else on a board opens the list, at that
   // column when it was one, and at the owner's tasks in a home. A screen opens what its page is about; a calendar, its
-  // full list.
+  // full list; the plaque by the door, the room's card. Each opens beside the thing clicked (`thing`), but an agent's
+  // card, which goes by the agent.
   const onUse = useCallback(
-    (action: string, on?: UseSpot) => {
+    (action: string, on?: UseSpot, thing?: string) => {
+      const at = thing ? { at: thing } : {};
       if (action === "screen") {
         const card = on && "card" in on ? on.card : undefined;
-        if (!owner) setPanel({ kind: "dashboard", ...(card ? { focus: card } : {}) });
+        if (!owner) setPanel({ kind: "dashboard", ...(card ? { focus: card } : {}), ...at });
         else if (card === "tasks") {
           setListView({ filter: "open", who: owner });
-          setPanel({ kind: "tasks" });
-        } else if (card === "next") setPanel({ kind: "calendar", who: owner });
+          setPanel({ kind: "tasks", ...at });
+        } else if (card === "next") setPanel({ kind: "calendar", who: owner, ...at });
         else setPanel({ kind: "agent", agent: owner });
         return;
       }
       if (action === "calendar") {
         // A line about an agent opens that agent's list; anywhere else on it, the list the calendar shows.
         const who = on && "agent" in on ? on.agent : owner;
-        setPanel({ kind: "calendar", ...(who ? { who } : !isCommon(placeId) ? { here: true } : {}) });
+        setPanel({ kind: "calendar", ...(who ? { who } : !isCommon(placeId) ? { here: true } : {}), ...at });
         return;
       }
       if (action === "tasks") {
         if (on && "task" in on) {
-          setPanel({ kind: "task", id: on.task });
+          setPanel({ kind: "task", id: on.task, ...at });
           return;
         }
         setListView({
           filter: on && "column" in on ? on.column : "open",
           who: placeId?.startsWith("home:") ? placeId.slice("home:".length) : undefined,
         });
-        setPanel({ kind: "tasks" });
-      } else if (action === "new-task") setPanel({ kind: "new-task" });
+        setPanel({ kind: "tasks", ...at });
+      } else if (action === "new-task") setPanel({ kind: "new-task", ...at });
       else if (action === "new-agent")
         onDraft?.(
           "default",
           "I'd like a new agent. Ask me what it should do and how it should come across, then set it up.",
         );
-      else if (action === "new-room") setPanel({ kind: "new-room" });
+      else if (action === "new-room") setPanel({ kind: "new-room", ...at });
       else if (action === "map") setPanel({ kind: "map" });
+      else if (action === "place") setPanel({ kind: "place" });
     },
     [onDraft, placeId, owner],
   );
@@ -1695,8 +1760,9 @@ export function useChatStage({
     (door: RoomDoor) => {
       if (!placeId) return;
       setVisiting(door.to, placeId);
-      // The map covers the stage, so it closes; a panel in the chat's column stays open beside the new place.
-      setPanel((open) => (open?.kind === "map" ? null : open));
+      // What was open beside something in the place you leave stays there, as walking away from it puts it away:
+      // only the list of what waits on you, held in front of you, comes along.
+      setPanel((open) => (open?.kind === "needs" ? open : null));
     },
     [placeId, setVisiting],
   );
@@ -1915,10 +1981,10 @@ export function useChatStage({
         loaded={dashboard.loaded}
         {...(dashboard.error ? { error: dashboard.error } : {})}
         {...(panel.focus ? { focus: panel.focus } : {})}
-        onTask={(id) => setPanel({ kind: "task", id })}
+        onTask={(id) => setPanel({ kind: "task", id, ...atOf(panel) })}
         onTasks={() => {
           setListView({ filter: "open", who: undefined });
-          setPanel({ kind: "tasks" });
+          setPanel({ kind: "tasks", ...atOf(panel) });
         }}
         onClose={closePanel}
       />
@@ -1934,13 +2000,15 @@ export function useChatStage({
         {...(paused ? { note: PAUSED_NOTE } : {})}
         loading={wakes === null}
         roomName={(ref) => map.places.find((p) => p.id === `room:${ref}`)?.name}
-        onWho={(who) => setPanel({ kind: "calendar", ...(Array.isArray(who) ? { here: true } : who ? { who } : {}) })}
+        onWho={(who) =>
+          setPanel({ kind: "calendar", ...(Array.isArray(who) ? { here: true } : who ? { who } : {}), ...atOf(panel) })
+        }
         onGo={(who) => {
           // Off to it, where its body is: or its card, when it has no body anywhere to go to.
           if (goSee(who)) setPanel(null);
           else setPanel({ kind: "agent", agent: who });
         }}
-        onTask={(id) => setPanel({ kind: "task", id })}
+        onTask={(id) => setPanel({ kind: "task", id, ...atOf(panel) })}
         onClose={closePanel}
       />
     );
@@ -1964,8 +2032,8 @@ export function useChatStage({
         agents={agentNames}
         view={listView}
         onView={setListView}
-        onOpen={(id) => setPanel({ kind: "task", id, fromList: true })}
-        onNew={() => setPanel({ kind: "new-task" })}
+        onOpen={(id) => setPanel({ kind: "task", id, fromList: true, ...atOf(panel) })}
+        onNew={() => setPanel({ kind: "new-task", ...atOf(panel) })}
         onClose={closePanel}
       />
     );
@@ -1980,7 +2048,7 @@ export function useChatStage({
           board.put(task);
           board.reload();
         }}
-        {...(panel.fromList ? { onBack: () => setPanel({ kind: "tasks" }) } : {})}
+        {...(panel.fromList ? { onBack: () => setPanel({ kind: "tasks", ...atOf(panel) }) } : {})}
         onClose={closePanel}
       />
     );
@@ -2043,6 +2111,69 @@ export function useChatStage({
       />
     );
   }
+  // Where each panel goes, in the place on screen: who has a body here, what is in it, and whether its plaque hangs.
+  const plaqueWords = changeable && placeId && room.name ? wordsOnPlaque(placeId, room.name) : undefined;
+  const where = useMemo(
+    (): Where => ({
+      here: new Set(here),
+      things: room.props.map((p) => ({ id: p.id, kind: p.kind, ...(p.action ? { action: p.action } : {}) })),
+      plaque: !!plaqueWords && !!plaqueSpot(room),
+    }),
+    [here, room, plaqueWords],
+  );
+  // Your conversation, beside whoever you talk to, unless something else has its place: the whole chat open beside
+  // the world, the room being rearranged, the map, that agent's own card, or a meeting room's own conversation.
+  const roomTalk = !!showing.visiting?.startsWith("room:") && readingRoom;
+  const theirCard = (panel?.kind === "agent" || panel?.kind === "need") && panel.agent === talking;
+  const talkShown =
+    dialogue && showStage && stageUp && !panelOpen && !editor.editing && !mapOpen && !theirCard && !roomTalk;
+  // Face to face when its body is here; on a visit anywhere else, a call.
+  const onPhone = !!showing.visiting && !where.here.has(talking);
+  const talkColor = colorOf(talking);
+  const panels: WorldPanelSpec[] = [];
+  if (panel && overlay) {
+    const anchor = anchorFor(
+      { kind: panel.kind, ...("agent" in panel ? { agent: panel.agent } : {}), ...atOf(panel) },
+      where,
+    );
+    const color = "agent" in panel ? colorOf(panel.agent) : undefined;
+    panels.push({
+      id: "card",
+      kind: panel.kind,
+      anchor,
+      node: overlay,
+      look: lookOf(anchor),
+      rank: 2,
+      onAway: closePanel,
+      ...(color !== undefined ? { color } : {}),
+    });
+  }
+  if (editor.editing && editor.shelf)
+    panels.push({
+      id: "catalogue",
+      kind: "catalogue",
+      anchor: { held: "dock" },
+      node: editor.shelf,
+      look: "dock",
+      rank: 2,
+    });
+  if (talkShown)
+    panels.push({
+      id: "talk",
+      kind: "talk",
+      anchor: talkAnchor(talking, where, !!showing.visiting),
+      node: <TalkInSlot />,
+      look: onPhone ? "phone" : "talk",
+      rank: 1,
+      optional: true,
+      fallback: "dock",
+      color: talkColor,
+    });
+  // A card beside something, or docked at the side, has a strip on the right kept for it, which the stage takes from
+  // the scene only when the card needs it (`stripTaken`): a board read up close, the catalogue, a narrow stage. One
+  // held in front of you (the map) is read over the scene, and your conversation goes wherever there is room.
+  const panelRoom =
+    !sheets && panels.some((p) => !p.optional && !("held" in p.anchor && p.anchor.held === "front")) ? PANEL_ROOM : 0;
   const stage: ReactNode =
     showStage && info.avatar ? (
       <Avatar
@@ -2056,7 +2187,13 @@ export function useChatStage({
         loudness={showing.visiting ? () => 0 : voice.loudness}
         engaged={showing.visiting ? false : busy || conversing}
         controls={controls}
-        insetRight={(panelOpen || side) && wide ? PANEL_WIDTH : 0}
+        insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
+        panelRoom={panelRoom}
+        panels={panels}
+        onShown={onShown}
+        onSheets={setSheets}
+        onProblem={onProblem}
+        {...(plaqueWords ? { plaque: plaqueWords } : {})}
         insetTop={covered?.top ?? 0}
         // Rearranging, the room is framed above the bar over the stage's foot, so what you drag is never under it; on a
         // phone with the catalogue open, the bar is hidden under the sheet, which `covered` already counts.
@@ -2087,24 +2224,19 @@ export function useChatStage({
         onLine={hearLine}
         overlay={
           editor.editing ? (
-            <>
-              <div
-                hidden={sheet}
-                ref={dock}
-                className="room-edit-dock"
-                style={{
-                  // Clear of the chat's column, where the bar to type or talk stays even with the chat hidden.
-                  right: (wide ? PANEL_WIDTH : 0) + 16,
-                  bottom: (covered?.bottom ?? 0) + 16,
-                }}
-              >
-                {editor.bar}
-              </div>
-              {editor.shelf}
-            </>
-          ) : (
-            overlay
-          )
+            <div
+              hidden={sheet}
+              ref={dock}
+              className="room-edit-dock"
+              style={{
+                // Clear of the chat's column when it is open, and of the catalogue docked at the side.
+                right: (panelOpen && wide ? PANEL_WIDTH : 0) + (editor.adding && !sheets ? PANEL_ROOM : 0) + 16,
+                bottom: (covered?.bottom ?? 0) + 16,
+              }}
+            >
+              {editor.bar}
+            </div>
+          ) : undefined
         }
         greet={greet}
         onGreeted={greeted}
@@ -2137,10 +2269,22 @@ export function useChatStage({
     placeName: room.name,
     /** Something is open over the stage, or the room is being rearranged: on a phone it needs the chat's screen. */
     worldPanel: !!panel || editor.editing,
-    /** What is open sits in the chat's column: the chat steps aside until it closes. */
-    sidePanel: side,
-    /** The chat is out of sight for what is open: a panel in its column, or on a phone anything at all. */
-    chatCovered: showStage && (side || (!wide && (!!panel || editor.editing))),
+    /** The chat is out of sight for what is open: on a phone, anything open is a sheet where the chat would be. */
+    chatCovered: showStage && !wide && (!!panel || editor.editing),
+    /**
+     * Your conversation is shown in the world, beside whoever you talk to, and
+     * how: the page draws it into `TalkSlot`. On the phone when they are
+     * somewhere else; what to call them; and `brief`, only the last few
+     * words, while a card has most of the room.
+     */
+    talk: talkShown ? { phone: onPhone, name: nameOf(talking), brief: !!panel } : null,
+    /**
+     * The stage is on screen, so your conversation is in the world (`talk`
+     * says whether it is showing just now); or it couldn't be shown, so the
+     * chat beside it is the only place to talk.
+     */
+    stageUp,
+    stageFailed,
     /** Close what is open over the stage, and stop rearranging the room. */
     closePanel: () => {
       closePanel();

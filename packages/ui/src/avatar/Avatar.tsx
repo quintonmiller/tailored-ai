@@ -1,5 +1,6 @@
 import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardWidgetSpec } from "../api";
+import { type Anchor, SHEET_BELOW } from "./anchors";
 import type { BoardTask } from "./boards";
 import type { BodyLooks, EmoteRecord } from "./body";
 import type { CalendarView } from "./calendar";
@@ -10,7 +11,7 @@ import { type FaceData, SurfacePortals, type SurfaceStage, type TaskMove } from 
 import type { BodyState } from "./motion";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
 import type { ScreenCard } from "./screens";
-import type { Companion, Line, Stage, StageEdit, StageView, SurfaceView, Travel, UseSpot } from "./stage";
+import type { Companion, Line, PanelOptions, Stage, StageEdit, StageView, SurfaceView, Travel, UseSpot } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
 /** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
@@ -21,6 +22,8 @@ const DOOR_TIP_ROOM = 240;
  * in, whose box runs on past them as wide as all of them end to end.
  */
 export const OVERLAYS = ":scope > .talk-view, :scope > .talk-back, :scope > .talk-tools > :not(.talk-tools-break)";
+/** What else is laid over the stage that panels in the world keep clear of, though the camera frames past it. */
+export const HINTS = ":scope > .talk-keys";
 
 /** One thing the menu on an agent's body offers. */
 export interface AgentAction {
@@ -35,6 +38,20 @@ export interface AvatarControls {
   walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
   /** Where you are on the floor (see `Stage.where`). */
   where(): [number, number];
+}
+
+/** A panel the page keeps in the world, beside what it is about (see `anchors.ts`). */
+export interface WorldPanelSpec extends PanelOptions {
+  /** The same while it is the same panel: what is in it can change, and it stays where it is. */
+  id: string;
+  /** What it is: an agent's card, the map, your conversation; for its size and anyone inspecting the page. */
+  kind: string;
+  anchor: Anchor;
+  node: ReactNode;
+  /** How it looks: a card by a body, pinned beside a thing, on the plaque, held, docked, a conversation, a phone. */
+  look: string;
+  /** The colour it is edged in, as CSS: an agent's card and your talk with it wear the colour of the agent's body. */
+  color?: string;
 }
 
 function savedView(): StageView {
@@ -96,6 +113,11 @@ export function Avatar({
   looks,
   emotes,
   edit,
+  panels,
+  panelRoom = 0,
+  plaque,
+  onShown,
+  onSheets,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -155,7 +177,7 @@ export function Avatar({
    * A kiosk, a board, a screen or a calendar was clicked: what it does, and
    * on a board the note or column clicked, on a screen the page that was up.
    */
-  onUse?: (action: string, on?: UseSpot) => void;
+  onUse?: (action: string, on?: UseSpot, thing?: string) => void;
   /** A note was dragged to another column on a task board: save the change. */
   onTaskMove?: (id: string, change: TaskMove) => Promise<unknown>;
   /** A visitor is near an agent as it starts saying something, nearness 0–1; `phone`, heard down the line. */
@@ -190,6 +212,16 @@ export function Avatar({
   emotes?: Record<string, EmoteRecord>;
   /** Rearranging the room: what is picked, where it is going, and what the page hears; none while you aren't. */
   edit?: StageEdit;
+  /** Panels kept in the world beside what they are about: cards, the map, your conversation. */
+  panels?: WorldPanelSpec[];
+  /** Pixels kept on the right for those panels, on top of `insetRight`: the scene is framed in what is left. */
+  panelRoom?: number;
+  /** The words on the room's plaque by its door, whose click opens the room's card; none, no plaque. */
+  plaque?: string;
+  /** The stage is on screen, with whatever is kept beside things in it; or it was taken down to be built again. */
+  onShown?: (shown: boolean) => void;
+  /** Whether the stage is too narrow for panels beside anything (`SHEET_BELOW`): they are sheets along its foot. */
+  onSheets?: (sheets: boolean) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -204,11 +236,41 @@ export function Avatar({
   const chooseRef = useRef(chooseIdle);
   chooseRef.current = chooseIdle;
   const choosing = !!chooseIdle;
-  const insetRef = useRef({ right: insetRight, top: insetTop, bottom: insetBottom });
-  insetRef.current = { right: insetRight, top: insetTop, bottom: insetBottom };
+  // The panels' strip beside the chat's column, which the stage takes from the scene when a panel needs it.
+  const insets = { right: insetRight, top: insetTop, bottom: insetBottom, panels: panelRoom };
+  const insetRef = useRef(insets);
+  insetRef.current = insets;
   useEffect(() => {
-    stage.current?.setInsets({ right: insetRight, top: insetTop, bottom: insetBottom });
-  }, [insetRight, insetTop, insetBottom]);
+    stage.current?.setInsets({ right: insetRight, top: insetTop, bottom: insetBottom, panels: panelRoom });
+  }, [insetRight, insetTop, insetBottom, panelRoom]);
+  // Whether panels are sheets, by the same measure the stage lays them out by: the stage's own width.
+  const sheetsRef = useRef(onSheets);
+  sheetsRef.current = onSheets;
+  const shownRef = useRef(onShown);
+  shownRef.current = onShown;
+  useEffect(() => {
+    const el = host.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let was: boolean | undefined;
+    const check = () => {
+      const now = el.clientWidth > 0 && el.clientWidth < SHEET_BELOW;
+      if (now !== was) sheetsRef.current?.(now);
+      was = now;
+    };
+    const watch = new ResizeObserver(check);
+    watch.observe(el);
+    check();
+    return () => watch.disconnect();
+  }, []);
+  // The stage once it is on screen, for the panels kept beside things in it, which need it to be placed.
+  const [shown, setShown] = useState<Stage | null>(null);
+  // Told only once there is a plaque, or was: a photo's stage, which never has one, is left alone.
+  const plaqued = useRef(false);
+  useEffect(() => {
+    if (!shown || (!plaque && !plaqued.current)) return;
+    plaqued.current = !!plaque;
+    shown.setPlaque(plaque);
+  }, [shown, plaque]);
   const stillRef = useRef({ still, onReady, onProblem });
   stillRef.current = { still, onReady, onProblem };
   const companyRef = useRef(company);
@@ -289,7 +351,7 @@ export function Avatar({
       ...(screen ? { cards: screen } : {}),
       ...(widgets ? { widgets } : {}),
       ...(calendar ? { calendar } : {}),
-      onUse: (action, on) => onUseRef.current?.(action, on),
+      onUse: (action, on, thing) => onUseRef.current?.(action, on, thing),
       ...(onTaskMove
         ? { onTaskMove: (id: string, change: TaskMove) => moveRef.current?.(id, change) ?? Promise.resolve() }
         : {}),
@@ -387,11 +449,13 @@ export function Avatar({
                   lineRef.current?.(who, text, nearness, phone),
               }
             : {}),
-          onUse: (action: string, on?: UseSpot) => onUseRef.current?.(action, on),
+          onUse: (action: string, on?: UseSpot, thing?: string) => onUseRef.current?.(action, on, thing),
           onFocus: setReading,
-          // A surface under the pointer says what clicking it does, as a door says where it goes.
+          // A surface under the pointer says what clicking it does, as a door says where it goes; so does the plaque.
           onSurfaceHover: (label: string | undefined, at?: { x: number; y: number }) =>
             setDoorTip(label && at ? { words: `Use ${label} · click or F`, x: at.x, y: at.y } : null),
+          onPlaqueHover: (at: { x: number; y: number } | undefined) =>
+            setDoorTip(at ? { words: "About this room · click", x: at.x, y: at.y } : null),
           ...(doors
             ? {
                 onDoor: (door: RoomDoor) => doorRef.current?.(door),
@@ -403,6 +467,7 @@ export function Avatar({
           // The view toggle and the tools over the top of the stage: what is said stays out from under them, and
           // where they reach far down a short stage the agent is framed clear of them.
           overlays: () => [...(host.current?.parentElement?.querySelectorAll(OVERLAYS) ?? [])],
+          hints: () => [...(host.current?.parentElement?.querySelectorAll(HINTS) ?? [])],
           ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {
@@ -439,6 +504,8 @@ export function Avatar({
           return;
         }
         stage.current = s;
+        setShown(s);
+        shownRef.current?.(true);
         unsurface = s.onSurfaces(setSurfaces);
         if (controlsRef.current)
           controlsRef.current.current = { cue: (c) => s.cue(c), walkBy: (w) => s.walkBy(w), where: () => s.where() };
@@ -470,6 +537,8 @@ export function Avatar({
       unsurface?.();
       stage.current?.dispose();
       stage.current = null;
+      setShown(null);
+      shownRef.current?.(false);
       setSurfaces([]);
       setReading(undefined);
       setDoorTip(null);
@@ -523,6 +592,7 @@ export function Avatar({
           {doorTip.words}
         </div>
       )}
+      {shown && panels?.map((p) => <Anchored key={p.id} panel={p} stage={shown} />)}
       {tools && <div className="talk-tools">{tools}</div>}
       {reading && (
         <button type="button" className="talk-back" onClick={() => stage.current?.focusSurface(null)}>
@@ -565,6 +635,42 @@ export function Avatar({
           ))}
         </fieldset>
       )}
+    </div>
+  );
+}
+
+/**
+ * A panel kept in the world beside what it is about: the stage places it
+ * every frame (`Stage.anchorPanel`) and says which side it went, which its
+ * tail and its look follow. Real HTML, so keys, focus and screen readers work
+ * in it as anywhere on the page.
+ */
+function Anchored({ panel, stage }: { panel: WorldPanelSpec; stage: Stage }) {
+  const el = useRef<HTMLDivElement>(null);
+  const awayRef = useRef(panel.onAway);
+  awayRef.current = panel.onAway;
+  const { anchor, rank, optional, fallback, look, color } = panel;
+  const key = JSON.stringify(anchor);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when the anchor changed; the anchor is read with it.
+  useEffect(() => {
+    if (!el.current) return;
+    return stage.anchorPanel(el.current, anchor, {
+      ...(rank !== undefined ? { rank } : {}),
+      ...(optional ? { optional } : {}),
+      ...(fallback ? { fallback } : {}),
+      onAway: () => awayRef.current?.(),
+    });
+  }, [stage, key, rank, optional, fallback]);
+  return (
+    <div
+      ref={el}
+      className={`world-anchor world-anchor-${look}`}
+      data-panel={panel.kind}
+      style={color === undefined ? undefined : ({ ["--who-color" as string]: color } as CSSProperties)}
+    >
+      {/* A pin through it, or a clip at its top, as its look says. */}
+      <span className="world-anchor-mark" aria-hidden="true" />
+      {panel.node}
     </div>
   );
 }

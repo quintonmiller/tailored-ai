@@ -125,7 +125,8 @@ describe("SurfacePortals", () => {
     const button = kiosk.el.querySelector("button");
     expect(button?.textContent).toContain("New task");
     press(button as Element, "click");
-    expect(onUse).toHaveBeenCalledWith("new-task");
+    // Which kiosk it was too, so what it opens is kept beside it.
+    expect(onUse).toHaveBeenCalledWith("new-task", undefined, "kiosk");
   });
 });
 
@@ -140,7 +141,7 @@ describe("the board", () => {
     expect(column("todo")).toEqual(["Book the table"]);
     expect(column("doing")).toEqual(["Find the hotel"]);
     press(board.el.querySelector("[data-column='todo'] .sf-note") as Element, "click");
-    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-1" });
+    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-1" }, "board");
   });
 
   it("moves a note with Shift and an arrow: there at once, and saved as a card saves it", async () => {
@@ -316,9 +317,9 @@ describe("the calendar", () => {
     draw([cal], { tasks: [], calendar, onUse });
     const lines = cal.el.querySelectorAll(".sf-cal-wake");
     press(lines[1], "click");
-    expect(onUse).toHaveBeenCalledWith("calendar", { agent: "reviewer" });
+    expect(onUse).toHaveBeenCalledWith("calendar", { agent: "reviewer" }, "calendar");
     press(lines[2], "click");
-    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-4" });
+    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-4" }, "calendar");
   });
 });
 
@@ -330,9 +331,9 @@ describe("the screen", () => {
     const title = screen.el.querySelector(".sf-screen-title") as HTMLElement;
     expect(title.textContent).toBe("Needs you");
     press(title, "click");
-    expect(onUse).toHaveBeenCalledWith("screen", { card: "needs" });
+    expect(onUse).toHaveBeenCalledWith("screen", { card: "needs" }, "screen");
     press(screen.el.querySelector("a.widget-task-title") as Element, "click");
-    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-9" });
+    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-9" }, "screen");
   });
 
   it("turns its page with the clock, and holds the page it is on while it is read", () => {

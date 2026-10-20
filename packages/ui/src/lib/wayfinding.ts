@@ -62,6 +62,23 @@ export function placeTitle(p: Pick<MapPlace, "kind" | "name" | "owner" | "id">):
   return p.name;
 }
 
+/**
+ * The words on a place's plaque by its door: what the breadcrumb calls it,
+ * "planner's home" or "#budget", so the wall and the trail agree. A home
+ * keeps a name its agent gave it with the place tool; the name it was built
+ * with ("your room", "planner's room") would read, on a wall, as yours.
+ */
+export function plaqueWords(id: string, name: string): string {
+  if (id.startsWith("home:")) {
+    const owner = id.slice("home:".length);
+    // As the places plugin names a home it builds, in the home itself and on the map.
+    const built = owner === "default" ? ["your room", "the default agent's room"] : [`${owner}'s room`];
+    return name && !built.includes(name) ? name : placeTitle({ kind: "home", name, owner, id });
+  }
+  if (id.startsWith("room:")) return placeTitle({ kind: "room", name, id });
+  return name;
+}
+
 /** Where an area is come into: the town at its square, a plot by the first of its places. */
 export function wayInto(area: MapArea): string | undefined {
   return area.id === MAIN ? TOWN : area.places[0];

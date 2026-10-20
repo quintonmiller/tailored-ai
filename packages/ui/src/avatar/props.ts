@@ -1144,6 +1144,56 @@ export function buildDoor(
 }
 
 /**
+ * The plaque by a room's door, `width` by `height` metres, standing at its
+ * own origin with its back to the wall and its face toward +Z: the room's
+ * name on a dark plate in a brass rim, and under it a line saying what a
+ * click on it opens. It lights up while the pointer is on it, as a door does.
+ * `dispose` frees what is its own, for taking it down while the rest of the
+ * room stays: its rim is painted in a colour other furniture shares.
+ */
+export function buildPlaque(
+  name: string,
+  width: number,
+  height: number,
+): { group: THREE.Group; highlight: (on: boolean) => void; dispose: () => void } {
+  const g = new THREE.Group();
+  const rim = box(g, width + 0.04, height + 0.04, 0.025, 0xb8935a, 0, 0, 0.0125);
+  rim.castShadow = false;
+  const face = canvasFace(width, height, 900);
+  const ctx = face.canvas.getContext("2d");
+  if (ctx) {
+    const { width: w, height: h } = face.canvas;
+    ctx.fillStyle = "#232833";
+    ctx.fillRect(0, 0, w, h);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#f3e9d2";
+    ctx.font = "600 100px system-ui, sans-serif";
+    const { lines, size } = fitPlate(name, (t) => ctx.measureText(t).width / 100, w, h * 0.68);
+    ctx.font = `600 ${Math.floor(size)}px system-ui, sans-serif`;
+    const step = size * 1.08;
+    const top = h * 0.4 - ((lines.length - 1) * step) / 2;
+    for (const [i, line] of lines.entries()) ctx.fillText(line, w / 2, top + i * step, w * 0.92);
+    ctx.fillStyle = "#c9b48a";
+    ctx.font = `500 ${Math.round(h * 0.13)}px system-ui, sans-serif`;
+    ctx.fillText("About this room", w / 2, h * 0.84);
+  }
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(width, height), face.material);
+  plate.position.z = 0.027;
+  g.add(plate);
+  const highlight = (on: boolean) => {
+    face.material.emissiveIntensity = on ? FACE_LIT : FACE_GLOW;
+  };
+  const dispose = () => {
+    rim.geometry.dispose();
+    plate.geometry.dispose();
+    face.material.map?.dispose();
+    face.material.dispose();
+  };
+  return { group: g, highlight, dispose };
+}
+
+/**
  * Something small to hold, sized for a grown-up hand, built flat with its
  * face up (+Y) and its length along Z: the figure turns it to how it is held.
  * A camera is the exception, built as it is held, lens forward (+Z). Each has

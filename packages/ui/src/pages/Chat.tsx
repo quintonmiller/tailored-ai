@@ -3,12 +3,13 @@ import { fetchMessages, fetchSessions, type SessionRow, setStoredChatSessionId }
 import { groupTurns } from "../chat-grouping";
 import { ApprovalArgs } from "../components/ApprovalArgs";
 import { useChatStore } from "../components/ChatContext";
-import { lastExchange, TalkButton, useChatStage } from "../components/ChatStage";
+import { lastExchange, TalkButton, TalkSlot, useChatStage } from "../components/ChatStage";
 import { ChatWith, RoomLines, RoomWith, useRoomTalk } from "../components/ChatWith";
 import { AttachmentTray, filesFromDrop, filesFromPaste, useAttachments } from "../components/Composer.js";
 import { MessageBubble, ThinkingDisclosure, ToolLogPanel } from "../components/MessageBubble";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
+import { lastLines, TALK_BRIEF, TALK_LINES, WorldTalk } from "../components/WorldTalk";
 import { useActiveProject } from "../hooks/useActiveProject";
 import { useCovered } from "../hooks/useCovered";
 import type { MediaRef } from "../lib/content.js";
@@ -66,7 +67,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   }, [sidebarOpen, store]);
 
   // Escape interrupts an in-flight turn (page-only — dock has its own Esc behavior). Not while something is open
-  // over the scene: there Escape closes it, and a panel in the chat's column hides the turn it would cut off. Which
+  // in the world: there Escape closes it, and it may be what hides the turn it would cut off. Which
   // window listener hears the key first depends on which was added first, so all three are asked: a panel or menu
   // that closed on it says so, one still open is in `overStage`, and focus in a menu is inside its dialog.
   const overStage = useRef(false);
@@ -92,17 +93,26 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const exchange = useMemo(() => lastExchange(displayMessages), [displayMessages]);
 
   // The agent's body behind the conversation, when it has one, and talking
-  // out loud into the same conversation.
-  const [panelOpen, setPanelOpen] = useState(true);
+  // out loud into the same conversation. In the world your conversation shows
+  // beside whoever you talk to, so the whole chat in a column beside the world
+  // starts hidden, a click on Chat away.
+  const [panelOpen, setPanelOpen] = useState(false);
+  // Opened only to read a meeting room's own conversation, so put away again once you aren't (see below).
+  const openedToRead = useRef(false);
+  /** Open or close the whole chat yourself: it stays as you left it. */
+  const choosePanel = (open: boolean) => {
+    openedToRead.current = false;
+    setPanelOpen(open);
+  };
   // In a meeting room: the room's own conversation is on screen, rather than yours with one of its members.
   const [reading, setReading] = useState(true);
   // What covers the scene: the toolbar along the top, and on a phone the chat along the bottom, or whatever
   // opened in its place. The camera frames the agent in what is left.
   const chatBox = useRef<HTMLDivElement>(null);
+  // What opens in the world as a sheet over the foot of a phone's stage, the stage frames round by itself.
   const covered = useCovered(chatBox, {
     top: ":scope > .chat-toolbar",
-    bottom:
-      ":scope > .chat-with, :scope > .chat-room-note, :scope > .chat-messages, :scope > .chat-input-bar, .world-panel, .new-task",
+    bottom: ":scope > .chat-with, :scope > .chat-room-note, :scope > .chat-messages, :scope > .chat-input-bar",
   });
   const scene = useChatStage({
     agent: store.selectedAgent,
@@ -117,18 +127,18 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       setReading(false);
       store.setSelectedAgent(name === "default" ? "" : name);
     },
+    // A message written for someone shows in your conversation with them in the world, ready to send, as it does in
+    // the chat beside it when that is open: the box to type in is the same one.
     onDraft: (name, text) => {
       // A message written for someone is a chat with them, out of a meeting room's own conversation too.
       setReading(false);
       store.setSelectedAgent(name === "default" ? "" : name, { fresh: true });
       setInput(text);
-      setPanelOpen(true);
     },
     onReply: (name, session, text) => {
       // An answer goes where the question is: the conversation it asked in, which has everything it was about.
       setReading(false);
       setInput(text);
-      setPanelOpen(true);
       const who = name === "default" ? "" : name;
       if (session && session === store.sessionId) return;
       // Otherwise your chat with it as it stands, and while a reply is on its way, after it (the switch waits).
@@ -145,9 +155,11 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     chatApprovals: store.approvals.map((a) => a.requestId),
     onShowChat: () => {
       setReading(false);
-      setPanelOpen(true);
+      choosePanel(true);
     },
     exchange,
+    dialogue: true,
+    readingRoom: reading,
     onSpoken: (conversation, key) => {
       if (!conversation) return;
       // Loading the conversation shows the spoken turn with the rest, and
@@ -166,6 +178,21 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const showRoom = !!meeting && reading;
   // Read again every little while only while it is on screen.
   const talk = useRoomTalk(meeting, showRoom && panelOpen);
+  // A meeting room's own conversation is read in the chat beside the world, which shows it only in bubbles over
+  // heads: arriving to read one opens the chat. Talking to someone there, or leaving, puts it away again, unless you
+  // opened it yourself.
+  const panelOpenNow = useRef(panelOpen);
+  panelOpenNow.current = panelOpen;
+  useEffect(() => {
+    if (showRoom) {
+      if (panelOpenNow.current) return;
+      openedToRead.current = true;
+      setPanelOpen(true);
+    } else if (openedToRead.current) {
+      openedToRead.current = false;
+      setPanelOpen(false);
+    }
+  }, [showRoom]);
 
   const { attachments, add, remove, clear, readyIds, busy } = useAttachments();
   const [dragging, setDragging] = useState(false);
@@ -207,6 +234,140 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     if (!window.confirm(`Delete session "${s.title ?? s.key ?? s.id.slice(0, 8)}"?`)) return;
     store.removeSession(s);
   }
+
+  // The box to type in, as the chat beside the world has it and as your conversation in the world has it: the same
+  // words in both, sent the same way.
+  const typing = {
+    value: input,
+    onChange: (e: { target: { value: string } }) => setInput(e.target.value),
+    onPaste: (e: React.ClipboardEvent<HTMLInputElement>) => {
+      // The one that matters: pasting a screenshot is how anyone
+      // actually sends one.
+      const files = filesFromPaste(e);
+      if (files.length === 0) return;
+      e.preventDefault();
+      void add(files);
+    },
+    onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    disabled: store.sending,
+  };
+  // Files dropped on the box to type in are attached, in the chat's bar and your conversation in the world alike.
+  const dropping = {
+    onDragOver: (e: React.DragEvent) => {
+      // Only claim the drop when files are actually being dragged;
+      // otherwise text selections inside the page start looking droppable.
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();
+      setDragging(true);
+    },
+    onDragLeave: () => setDragging(false),
+    onDrop: (e: React.DragEvent) => {
+      const files = filesFromDrop(e);
+      if (files.length === 0) return;
+      e.preventDefault();
+      setDragging(false);
+      void add(files);
+    },
+  };
+  const talkButton = scene.voiceEnabled ? (
+    <TalkButton voice={scene.voice} />
+  ) : (
+    <VoiceInputButton
+      disabled={store.sending}
+      onTranscript={(text) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
+    />
+  );
+  // Keyed apart, so Send becoming Stop is a new button: the focus a click on Send left doesn't land on Stop, where
+  // Space, pressed to talk, would stop the reply just sent.
+  const sendButton = store.sending ? (
+    <button key="stop" type="button" onClick={store.interrupt} className="chat-stop-btn" title="Stop generating">
+      Stop
+    </button>
+  ) : (
+    <button key="send" type="button" onClick={handleSend} disabled={(!input.trim() && !readyIds.length) || busy}>
+      Send
+    </button>
+  );
+  // A glance at the conversation; only its last exchange while a card has most of the room.
+  const brief = !!scene.talk?.brief;
+  const talkLines = useMemo(
+    () => lastLines(displayMessages, brief ? TALK_BRIEF : TALK_LINES),
+    [displayMessages, brief],
+  );
+  // What the agent is doing about your turn, in the words its body's sign says it in, until its reply is coming in.
+  const working = store.sending && !store.streamText;
+  const doing = working
+    ? store.activeTool
+      ? `Calling ${store.activeTool}…`
+      : (store.activityDesc ?? "Thinking…")
+    : scene.voice.phase === "listening"
+      ? "Listening…"
+      : scene.voice.phase === "thinking"
+        ? "Thinking…"
+        : undefined;
+  const approvalPanel =
+    store.approvals.length > 0 ? (
+      <ApprovalPanel
+        approvals={store.approvals}
+        onApprove={store.approve}
+        onReject={store.reject}
+        onApproveAll={store.approveAll}
+        onRejectAll={store.rejectAll}
+      />
+    ) : null;
+  // The whole chat steps aside in the world, a click on Chat away, unless the world couldn't be shown: then it is the
+  // only place to talk. The box to type in moves into your conversation in the world once the world is on screen;
+  // until then, or while a meeting room's own conversation is read, the chat's bar stays at the foot.
+  const columnHidden = scene.showStage && !panelOpen && !scene.stageFailed;
+  const boxInWorld = columnHidden && !!scene.stageUp && !showRoom;
+  // Your conversation in the world, beside whoever you talk to: what was said, the reply coming in, and the box.
+  const talkPanel = scene.talk ? (
+    <WorldTalk
+      name={scene.talk.name}
+      phone={scene.talk.phone}
+      lines={talkLines}
+      {...(scene.spoken
+        ? { heard: scene.spoken.heard, replying: scene.spoken.replying }
+        : store.sending
+          ? { replying: store.streamText }
+          : {})}
+      {...(doing ? { status: doing } : {})}
+      {...(working && store.elapsed > 0 ? { elapsed: store.elapsed } : {})}
+      voice={scene.voiceEnabled}
+      approvals={approvalPanel}
+      {...(scene.voice.error ? { problem: scene.voice.error } : {})}
+      onFull={() => choosePanel(true)}
+    >
+      <AttachmentTray attachments={attachments} onRemove={remove} />
+      <div className={`world-talk-bar${dragging ? " dragging" : ""}`} {...dropping}>
+        <button
+          type="button"
+          className="chat-attach-btn"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={store.sending}
+          title="Attach a file"
+          aria-label="Attach a file"
+        >
+          +
+        </button>
+        <input
+          type="text"
+          className="world-talk-input"
+          // Its header says who it is with: here a name would only be cut off.
+          placeholder="Message…"
+          aria-label={`Message ${scene.talk.name}`}
+          {...typing}
+        />
+        {talkButton}
+        {sendButton}
+      </div>
+    </WorldTalk>
+  ) : null;
 
   // Reflect store session changes in the URL hash so reload preserves the
   // location and so route prop drives the canonical state.
@@ -297,9 +458,13 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
 
       <div
         ref={chatBox}
-        className={`chat${scene.showStage ? " chat-with-stage" : ""}${scene.showStage && !panelOpen ? " chat-panel-hidden" : ""}${scene.showStage && scene.worldPanel ? " chat-world-open" : ""}${scene.showStage && scene.sidePanel ? " chat-side-open" : ""}`}
+        className={`chat${scene.showStage ? " chat-with-stage" : ""}${columnHidden ? " chat-panel-hidden" : ""}${boxInWorld ? " chat-box-in-world" : ""}${scene.showStage && scene.worldPanel ? " chat-world-open" : ""}`}
       >
-        {scene.stage && <div className="chat-stage">{scene.stage}</div>}
+        {scene.stage && (
+          <TalkSlot.Provider value={talkPanel}>
+            <div className="chat-stage">{scene.stage}</div>
+          </TalkSlot.Provider>
+        )}
         <div className="chat-toolbar">
           <button
             type="button"
@@ -344,13 +509,13 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
             <button
               type="button"
               className="chat-toolbar-btn"
-              aria-pressed={panelOpen && !scene.chatCovered}
+              aria-pressed={!columnHidden && !scene.chatCovered}
               onClick={() => {
                 // Asked for while a panel has its place, the chat comes back: the panel closes.
                 if (scene.chatCovered) {
                   scene.closePanel();
-                  setPanelOpen(true);
-                } else setPanelOpen(!panelOpen);
+                  choosePanel(true);
+                } else choosePanel(!panelOpen);
               }}
               title="Show or hide the conversation over the scene"
             >
@@ -426,15 +591,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
               )}
             </>
           )}
-          {store.approvals.length > 0 && (
-            <ApprovalPanel
-              approvals={store.approvals}
-              onApprove={store.approve}
-              onReject={store.reject}
-              onApproveAll={store.approveAll}
-              onRejectAll={store.rejectAll}
-            />
-          )}
+          {approvalPanel}
         </div>
         {scene.voice.error && <div className="chat-voice-error">{scene.voice.error}</div>}
         {showRoom && (
@@ -450,25 +607,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           movement, and the "+" button below is exactly that — keyboard
           reachable, and the only path screen-reader users need.
         */}
-        <div
-          className={`chat-input-bar${dragging ? " dragging" : ""}`}
-          hidden={showRoom}
-          onDragOver={(e) => {
-            // Only claim the drop when files are actually being dragged;
-            // otherwise text selections inside the page start looking droppable.
-            if (!e.dataTransfer.types.includes("Files")) return;
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => {
-            const files = filesFromDrop(e);
-            if (files.length === 0) return;
-            e.preventDefault();
-            setDragging(false);
-            void add(files);
-          }}
-        >
+        <div className={`chat-input-bar${dragging ? " dragging" : ""}`} hidden={showRoom} {...dropping}>
           <input
             type="file"
             ref={fileInputRef}
@@ -501,42 +640,11 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
                   : "Message…"
                 : "Type a message..."
             }
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onPaste={(e) => {
-              // The one that matters: pasting a screenshot is how anyone
-              // actually sends one.
-              const files = filesFromPaste(e);
-              if (files.length === 0) return;
-              e.preventDefault();
-              void add(files);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            disabled={store.sending}
+            {...typing}
             aria-label="Compose message"
           />
-          {scene.voiceEnabled ? (
-            <TalkButton voice={scene.voice} />
-          ) : (
-            <VoiceInputButton
-              disabled={store.sending}
-              onTranscript={(text) => setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))}
-            />
-          )}
-          {store.sending ? (
-            <button type="button" onClick={store.interrupt} className="chat-stop-btn" title="Stop generating">
-              Stop
-            </button>
-          ) : (
-            <button type="button" onClick={handleSend} disabled={(!input.trim() && !readyIds.length) || busy}>
-              Send
-            </button>
-          )}
+          {talkButton}
+          {sendButton}
         </div>
       </div>
     </div>
