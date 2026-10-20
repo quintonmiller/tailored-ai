@@ -526,6 +526,8 @@ describe("what goes with a thing you move", () => {
     vase: { noun: "vase", mount: "on", footprint: [0.14, 0.14], height: 0.42, round: true },
     stool: { noun: "stool", mount: "floor", footprint: [0.4, 0.4], height: 0.5, round: true },
     table: { noun: "table", mount: "floor", footprint: [1.2, 0.8], height: 0.75, surface: 0.75 },
+    cafe_table: { noun: "café table", mount: "floor", footprint: [0.7, 0.7], height: 0.74, surface: 0.74, round: true },
+    cafe_chair: { noun: "café chair", mount: "floor", footprint: [0.44, 0.44], height: 0.86 },
   };
   const thing = (id: string, kind: Prop["kind"], at: [number, number], facing = 0, on?: string): Prop => ({
     id,
@@ -569,6 +571,18 @@ describe("what goes with a thing you move", () => {
     expect(groupOf(lounge, more, "couch")).toEqual([]);
     expect(groupOf(lounge, more, "picture")).toEqual([]);
     expect(groupOf(lounge, more, "vase")).toEqual([]);
+  });
+
+  it("takes a café table's chairs along with it too", () => {
+    const cafe = {
+      props: [
+        thing("cafe-table", "cafe_table", [0, 0]),
+        thing("cafe-chair", "cafe_chair", [0, 0.55], 180),
+        thing("cafe-chair-2", "cafe_chair", [0, -0.55]),
+        thing("cafe-chair-3", "cafe_chair", [3, 0]),
+      ],
+    };
+    expect(groupOf(cafe, more, "cafe-table")).toEqual(["cafe-chair", "cafe-chair-2"]);
   });
 
   it("gives a seat between two tables to the nearer one only", () => {

@@ -107,9 +107,8 @@ export function doorsFor(id: string, place: Place): DoorSlot[] {
 const isPoint = (v: unknown): v is [number, number] =>
   Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number" && Number.isFinite(n));
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
-/** A list of ids as the page sent it: the ones that are ids, at most `MOST_WITH`. */
-const ids = (v: unknown) =>
-  Array.isArray(v) ? [...new Set(v.map(text).filter((id): id is string => !!id))].slice(0, MOST_WITH) : [];
+/** A list of ids as the page sent it: the ones that are ids, each once. */
+const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(text).filter((id): id is string => !!id))] : []);
 /** A thing's name at the start of a sentence: "The picture". */
 const named = (item: PlaceItem) => item.name.charAt(0).toUpperCase() + item.name.slice(1);
 
@@ -118,17 +117,22 @@ export function editFrom(body: unknown): Edit | string {
   const e = (body ?? {}) as Record<string, unknown>;
   const item = text(e.item);
   switch (e.op) {
-    case "move":
+    case "move": {
       if (!item || !isPoint(e.at) || typeof e.facing !== "number" || !Number.isFinite(e.facing))
         return "A move needs `item`, `at` ([x, z]) and `facing`.";
+      const along = ids(e.with);
+      // Said, rather than some of them moved and the rest left behind with no word.
+      if (along.length > MOST_WITH)
+        return `That's more than ${MOST_WITH} things to move at once. Move it on its own (Alt-drag), then the rest.`;
       return {
         op: "move",
         item,
         at: e.at,
         facing: e.facing,
         ...(text(e.on) ? { on: text(e.on) } : {}),
-        ...(ids(e.with).length ? { with: ids(e.with) } : {}),
+        ...(along.length ? { with: along } : {}),
       };
+    }
     case "add": {
       const kind = text(e.kind);
       const model = text(e.model);

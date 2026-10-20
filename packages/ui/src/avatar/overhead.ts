@@ -105,7 +105,14 @@ export type Over = Pick<Column, "tag" | "sign" | "bubble" | "said">;
 export interface Tail {
   /** From the middle of the bubble's foot, in CSS pixels to the right and up: on its foot, or a side when it is beside its speaker. */
   from: [number, number];
-  /** The tail points at its speaker's tag, on its head; otherwise, with the tag put away, at the top of its head. */
+  /**
+   * What it points at, in CSS pixels to the right of and up from the top of
+   * the head: the edge of its speaker's tag, which it reaches with no gap;
+   * the top of its head, while the tag is put away; or, from beside, the
+   * side of its face.
+   */
+  to: [number, number];
+  /** It points at its speaker's tag, and moves with it. */
   toTag: boolean;
 }
 
@@ -120,7 +127,12 @@ export interface Stacked {
   across: number;
   /** Its tag is in a crowd and isn't the one to read (`Column.focus`): drawn faint. */
   faded: boolean;
-  /** Its tag is put away for now: a bubble brought back on to the screen had to come down over it. */
+  /**
+   * Its tag is put away for now: a bubble brought back on to the screen had
+   * to come down over it, or, faint in a crowd, it would have had to go up
+   * past a couple of others to make way. Never a speaker's own, while its
+   * bubble is drawn.
+   */
   hidden: boolean;
   /**
    * Its bubble gives way for now, in a crowd: it went up over newer ones and there is no room left above them on
@@ -159,6 +171,15 @@ const SHORTEST_TAIL = 6;
 const TAIL_INSET = TAIL_WIDTH_PX;
 /** Half the width of a head on the screen, for a column the stage gave no body. */
 const HEAD_HALF_PX = 12;
+/**
+ * A faint tag in a crowd (`Stacked.faded`) that would have to go up more
+ * than this many of its own heights to make way is put away instead: a
+ * column of names over a table, a body high, says nothing about whose is
+ * whose, and its line down would be lost among the others.
+ */
+const CROWD_LIFT = 2;
+/** Where a face is, as a share of half a body's width on the screen: across from the middle of it, and down from the top of the head. */
+const FACE: [number, number] = [0.4, 0.5];
 
 const box = (x: number, bottom: number, w: number, h: number): Box => ({
   left: x - w / 2,
@@ -232,6 +253,15 @@ function headOf(c: Column): Box {
   return { left: b.left, right: b.right, top: b.top, bottom: b.top + Math.min(b.bottom - b.top, across * 1.2) };
 }
 
+/** Half a body's width on the screen. */
+const halfOf = (c: Column) => (c.body ? (c.body.right - c.body.left) / 2 : HEAD_HALF_PX);
+
+/** The side of a face on the screen, to the right (`side` 1) or the left (-1): what a tail from a bubble beside it points at. */
+const faceOf = (c: Column, side: number): [number, number] => [
+  c.x + side * FACE[0] * halfOf(c),
+  c.y + FACE[1] * halfOf(c),
+];
+
 /** Whether the line from `a` to `b` passes over a box, its edges shaved by `shave` pixels: clipped to it, any of it left. */
 function crosses([ax, ay]: [number, number], [bx, by]: [number, number], k: Box, shave = 2): boolean {
   let lo = 0;
@@ -284,45 +314,58 @@ function tailFrom(b: Box, to: [number, number], others: Box[]): [number, number]
 /**
  * Lay out every body's tag, sign and bubble so none covers another. Each
  * body's go in a column over its head: the tag, then the sign or the bubble
- * above it. Where two bodies stand close, the tags meet first: the higher
- * ranked keeps its place, and the other goes just clear of it, up or across,
- * whichever is less of a move, still mostly over its own body, like the names
- * on a crowded map. One that went further than `LEADER_PX` has a line down
- * to its head, drawn by the body. Where three or more tags would meet, they
- * are a crowd: the ones that aren't to read (`Column.focus`) are drawn faint.
+ * above it. Where two bodies stand close, the tags meet first: a speaker's
+ * keeps its place over its own head, so who is talking can be told, then the
+ * higher ranked, and each other goes just clear of those put down before
+ * it, up or across, whichever is less of a move, still mostly over its own
+ * body, like the names on a crowded map. One that went further than
+ * `LEADER_PX` has a line down to its head, drawn by the body. Where three or
+ * more tags would meet, they are a crowd: the ones that aren't to read
+ * (`Column.focus`, or a speaker's) are drawn faint, and a faint one that
+ * would have to go a column high is put away instead (`CROWD_LIFT`).
+ *
  * Then the bubbles, newest first: the newest sits over its speaker's tag, and
  * each earlier one goes up above whatever it would cover, so a conversation
  * reads from the top down, like a comic. A bubble never covers a tag either.
  * Then bubbles that would run off what can be seen of the stage (`screen`),
  * or under a control laid over it, are brought back inside it: across
- * rather than under a panel at the side or off an edge, however far, up rather than under a phone's
- * chat, and down rather than off the top, the newer ones under them coming
- * down too, so the conversation still reads in order. A bubble that sat
- * above another stays above it; one lower down the screen, nearer the camera,
- * is passed only when one would now cover the other. In a crowd, one that
- * went up over newer ones and has no room left above them gives way to them
- * (`Stacked.gone`). One brought down so far that it would sit on its own
- * speaker's tag, or its head, or on another speaker's tag, goes beside its
- * speaker's head instead, on whichever side covers least of anyone else's
- * body. A tag a bubble had to
- * come down over is put away until the bubble goes. Last, each bubble's tail
- * (`tailFrom`), pointing at its speaker's tag, or its head once its tag is put
- * away, and going round anyone else's head on the way.
+ * rather than under a panel at the side or off an edge, however far, up
+ * rather than under a phone's chat, and down rather than off the top, the
+ * newer ones under them coming down too, so the conversation still reads in
+ * order. A bubble that sat above another stays above it; one lower down the
+ * screen, nearer the camera, is passed only when one would now cover the
+ * other. One brought down so far that it would sit on its own speaker's tag,
+ * or its head, or on another speaker's tag, goes beside its speaker instead
+ * (`besideHead`). In a crowd, one that went up over newer ones and has no
+ * room left above them gives way to them (`Stacked.gone`); so does an
+ * earlier one in the way of a bubble with nowhere beside its speaker to go,
+ * or, with none in its way, that bubble itself, unless it is the newest. A
+ * speaker's own tag is never covered by a bubble; any other tag a bubble had
+ * to come down over is put away until the bubble goes. Last, each bubble's
+ * tail (`tailFrom`): to the edge of its speaker's tag, the top of its head
+ * while the tag is put away, or from beside, the side of its face, whichever
+ * of those no one else's tag is over; going round anyone else's head on the
+ * way.
  */
 export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<string, Stacked> {
   const out = new Map<string, Stacked>();
   const tags: Box[] = [];
   const tagOf = new Map<string, Box>();
   const crowd = crowdsOf(columns, gap);
-  // Ties go the same way every frame, so nothing swaps places for no reason.
-  const byRank = [...columns].sort((a, b) => b.rank - a.rank || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // A speaker's tag first, then by rank. Ties go the same way every frame, so nothing swaps places for no reason.
+  const byRank = [...columns].sort(
+    (a, b) => Number(!!b.bubble) - Number(!!a.bubble) || b.rank - a.rank || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
   for (const c of byRank) {
     const [w, h] = c.tag ?? [0, 0];
     // A sign shows over a tag only while there is no bubble, and needs its room too.
     const sign = c.sign && !c.bubble ? c.sign + gap : 0;
     const base = c.y - gap;
     const way = c.tag || sign ? makeWay(c.x, base, w, h + sign, tags, gap, screen) : { up: 0, across: 0 };
-    if (c.tag || sign) {
+    const faded = !!c.tag && !c.focus && !c.bubble && crowd.has(c.id);
+    // Faint, with no sign to show, and going a column high to make way: put away, keeping no room from the others.
+    const away = faded && !sign && way.up > CROWD_LIFT * (h + gap);
+    if ((c.tag || sign) && !away) {
       const at = box(c.x + way.across, base - way.up, w, h + sign);
       tags.push(at);
       tagOf.set(c.id, at);
@@ -334,8 +377,8 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
       sign: c.tag ? tagTop + gap : gap + way.up,
       bubble: (c.tag ? tagTop + gap : gap) + TAIL_PX,
       across: 0,
-      faded: !!c.tag && !c.focus && crowd.has(c.id),
-      hidden: false,
+      faded,
+      hidden: away,
       gone: false,
     });
   }
@@ -371,6 +414,8 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
         const was = sat.get(c.id) as Box;
         return was.top < ceilingOver(screen, was.left, was.right);
       });
+    // How recently each was said: 0 the newest.
+    const order = new Map(bySaid.map((c, i) => [c.id, i]));
     const gone = new Set<string>();
     for (;;) {
       for (const c of bySaid) {
@@ -381,9 +426,18 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
       }
       const laid = onScreen(bySaid, gone, out, sat, tagOf, columns, screen, gap);
       final = laid.boxes;
-      const next = yielding.find((c) => !gone.has(c.id));
-      if (!laid.pushed || !next) break;
-      gone.add(next.id);
+      let next = laid.pushed ? yielding.find((c) => !gone.has(c.id))?.id : undefined;
+      // One with nowhere beside its speaker to go: the earliest of the bubbles before it in its way gives way, or,
+      // with none in its way, it does, unless it is the newest there is.
+      const stuck = laid.stuck[0];
+      if (next === undefined && stuck) {
+        const before = (id: string) => (order.get(id) ?? 0) > (order.get(stuck.id) ?? 0);
+        next =
+          [...bySaid].reverse().find((c) => !gone.has(c.id) && before(c.id) && stuck.blockers.includes(c.id))?.id ??
+          (bySaid.find((c) => !gone.has(c.id))?.id !== stuck.id ? stuck.id : undefined);
+      }
+      if (next === undefined) break;
+      gone.add(next);
     }
     // A tag a bubble had to come down over is put away until the bubble goes.
     for (const [id, t] of tagOf)
@@ -391,33 +445,69 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
   }
   // The tails, last, from where the bubbles ended up.
   const heads = new Map(columns.map((c) => [c.id, headOf(c)]));
+  const shownTags = (but: string) =>
+    [...tagOf].filter(([id]) => id !== but && !(out.get(id) as Stacked).hidden).map(([, t]) => t);
   for (const c of bySaid) {
     const at = out.get(c.id) as Stacked;
     const b = final.get(c.id);
     if (!b) continue;
     const own = tagOf.get(c.id);
-    // At its speaker's tag while it shows and can be seen; otherwise at the top of its head.
-    const toTag = !!c.tag && !!own && !at.hidden && !(screen?.covered ?? []).some((k) => overlapArea(own, k) > 0);
-    const to: [number, number] = toTag && own ? [c.x + at.tagAcross, own.top] : [c.x, c.y];
+    // Its tag, while it shows and can be seen.
+    const tag = own && !at.hidden && !(screen?.covered ?? []).some((k) => overlapArea(own, k) > 0) ? own : undefined;
+    const others = shownTags(c.id);
+    const theirHeads = columns.filter((o) => o.id !== c.id).map((o) => heads.get(o.id) as Box);
+    // Somewhere no one else's tag is over, nor, where it can be helped, their head.
+    const pick = (points: [number, number][]) =>
+      points.find((p) => !others.some((k) => inside(p, k)) && !theirHeads.some((k) => inside(p, k))) ??
+      points.find((p) => !others.some((k) => inside(p, k))) ??
+      points[0];
+    const mid = (b.left + b.right) / 2;
+    const side = mid > c.x ? 1 : -1;
+    const chest: [number, number] = [faceOf(c, side)[0], c.y + 3 * FACE[1] * halfOf(c)];
+    // Over its tag, the top of it: the middle, or nearer an end where someone's head is behind the middle. Just under
+    // it, the bubble is on it already, and needs no tail. Otherwise, over its head, the top of it, and from beside,
+    // the side of its face, or the next of those, or its chest.
+    let to: [number, number];
+    let toTag = false;
+    if (tag && b.bottom <= tag.top + 1) {
+      const along = (f: number): [number, number] => [
+        tag.left + TAIL_INSET + f * (tag.right - tag.left - 2 * TAIL_INSET),
+        tag.top,
+      ];
+      const ends = [along(0.25), along(0.75)].sort((p, q) => Math.abs(p[0] - mid) - Math.abs(q[0] - mid));
+      to = pick([[(tag.left + tag.right) / 2, tag.top], ...ends]);
+      toTag = true;
+    } else if (tag && b.top >= tag.bottom - 1 && b.top <= tag.bottom + gap + 1 && b.left <= c.x && c.x <= b.right) {
+      to = [Math.min(b.right, Math.max(b.left, (tag.left + tag.right) / 2)), tag.bottom];
+      toTag = true;
+    } else to = pick(b.bottom <= c.y ? [[c.x, c.y], faceOf(c, side), chest] : [faceOf(c, side), chest, [c.x, c.y]]);
     // Over someone else's head or tag, a tail would look like it pointed at them.
-    const others = columns
+    const around = columns
       .filter((o) => o.id !== c.id)
       .flatMap((o) => {
         const t = tagOf.get(o.id);
         return [heads.get(o.id) as Box, ...(t && !(out.get(o.id) as Stacked).hidden ? [t] : [])];
       });
-    const from = tailFrom(b, to, others);
-    if (from) at.tail = { from: [from[0] - (b.left + b.right) / 2, b.bottom - from[1]], toTag };
+    const from = tailFrom(b, to, around);
+    if (from)
+      at.tail = { from: [from[0] - (b.left + b.right) / 2, b.bottom - from[1]], to: [to[0] - c.x, c.y - to[1]], toTag };
   }
   return out;
 }
 
+/** Whether a point is inside a box, not just on its edge. */
+const inside = ([x, y]: [number, number], k: Box) => x > k.left && x < k.right && y > k.top && y < k.bottom;
+
+/** A box on the screen, and whose it is. */
+type Placed = Box & { id: string };
+
 /**
  * Bring the bubbles on to the screen (see `stack`), all but those that give
  * way (`gone`): oldest first, so each comes down only as far as it must, and
- * the newer ones under it make way in turn. Where each ended up, and whether
- * any had to go off its speaker for it: beside its head, or over a speaker's
- * tag.
+ * the newer ones under it make way in turn. Where each ended up; whether any
+ * had to go off its speaker for it, beside its head or over a speaker's tag;
+ * and those with nowhere beside their speaker to go either (`stuck`), oldest
+ * first, with whose bubbles and tags were in the way.
  */
 function onScreen(
   bySaid: Column[],
@@ -428,9 +518,10 @@ function onScreen(
   columns: Column[],
   screen: Screen,
   gap: number,
-): { boxes: Map<string, Box>; pushed: boolean } {
+): { boxes: Map<string, Box>; pushed: boolean; stuck: { id: string; blockers: string[] }[] } {
   const boxes = new Map<string, Box>();
-  const kept: (Box & { id: string })[] = [];
+  const kept: Placed[] = [];
+  const stuck: { id: string; blockers: string[] }[] = [];
   let pushed = false;
   for (const c of [...bySaid].reverse()) {
     if (gone.has(c.id)) continue;
@@ -462,22 +553,27 @@ function onScreen(
     }
     let b: Box = { left: l, right: r, top, bottom: top + h };
     // Down on its own speaker's tag, which is there to be read, or its head, or on another speaker's tag: beside
-    // its own speaker's head instead, if there is a side to go to. A tag under a control is no help to read, and is
-    // passed over.
+    // its own speaker instead. A tag under a control is no help to read, and is passed over.
     const own = tagOf.get(c.id);
     const readable = own && !(screen.covered ?? []).some((k) => overlapArea(own, k) > 0);
-    const speakers = bySaid.filter((o) => o.id !== c.id && !gone.has(o.id)).flatMap((o) => tagOf.get(o.id) ?? []);
-    if (b.bottom > (readable ? own.top + 1 : c.y - TAIL_PX) || speakers.some((t) => overlapArea(b, t) > 0)) {
+    const speakers = bySaid
+      .filter((o) => o.id !== c.id && !gone.has(o.id))
+      .flatMap((o): Placed[] => {
+        const t = tagOf.get(o.id);
+        return t ? [{ id: o.id, ...t }] : [];
+      });
+    if (b.bottom > (readable ? own.top : c.y - TAIL_PX) || speakers.some((t) => overlapArea(b, t) > 0)) {
       pushed = true;
       const moved = besideHead(c, w, h, screen, [...kept, ...speakers], columns, tagOf, gap);
-      if (moved) b = moved;
+      if (moved.b) b = moved.b;
+      else stuck.push({ id: c.id, blockers: moved.blockers });
     }
     at.across = (b.left + b.right) / 2 - c.x;
     at.bubble = c.y - b.bottom;
     kept.push({ id: c.id, ...b });
     boxes.set(c.id, b);
   }
-  return { boxes, pushed };
+  return { boxes, pushed, stuck };
 }
 
 /** The highest a bubble from `l` to `r` may reach on the screen: the top of the stage, or the foot of a control over it. */
@@ -488,50 +584,97 @@ function ceilingOver(screen: Screen, l: number, r: number): number {
 }
 
 /**
- * A bubble beside its speaker's head, for one that had to come down so far
- * that it would sit on its own speaker: level with the head, or as near as
- * the controls over the stage allow, on whichever side keeps on the screen,
- * clear of the other bubbles and the speakers' tags (`keepOff`), and covers
- * least of anyone else's body or tag,
- * the side toward the middle of the stage when both are as good. None when
- * neither side has room.
+ * Somewhere beside its speaker for a bubble brought down so far that it
+ * would sit on its own speaker (see `stack`): level with its face, a tail
+ * that can be seen out from it, and just under its tag; or out past its tag, level
+ * with the top of its head; or, failing both, just under its own tag, over
+ * its own body, where it plainly belongs with no tail at all. Each on the
+ * screen and under the controls over it, never over its own tag, and clear
+ * of the other bubbles and the speakers' tags (`keepOff`), going further out
+ * past what it meets, by no more than its own width, to be. Of those, the
+ * one that covers least of anyone else's head, body or tag, and is nearest
+ * its speaker; the side toward the middle of the stage when two are as
+ * good. None when nowhere is clear, with whose bubbles and tags were in the
+ * way.
  */
 function besideHead(
   c: Column,
   w: number,
   h: number,
   screen: Screen,
-  keepOff: Box[],
+  keepOff: Placed[],
   columns: Column[],
   tagOf: Map<string, Box>,
   gap: number,
-): Box | undefined {
-  // Clear of its own body, and of its own tag, which stays to be read.
+): { b?: Box; blockers: string[] } {
   const own = tagOf.get(c.id);
-  const half = Math.max(
-    c.body ? Math.max(c.x - c.body.left, c.body.right - c.x) : HEAD_HALF_PX,
-    own ? Math.max(c.x - own.left, own.right - c.x) - TAIL_PX + gap : 0,
-  );
-  const middle = (screen.left + screen.right) / 2;
   const others = columns.filter((o) => o.id !== c.id);
+  const lowest = (screen.bottom ?? Number.POSITIVE_INFINITY) - EDGE_PX - h;
+  const blockers = new Set<string>();
   let best: { b: Box; cost: number } | undefined;
-  for (const side of c.x > middle ? [-1, 1] : [1, -1]) {
-    const left = side > 0 ? c.x + half + TAIL_PX : c.x - half - TAIL_PX - w;
-    const right = left + w;
-    if (left < screen.left + EDGE_PX || right > screen.right - EDGE_PX) continue;
-    const lowest = (screen.bottom ?? Number.POSITIVE_INFINITY) - EDGE_PX - h;
-    const top = Math.min(lowest, Math.max(ceilingOver(screen, left, right), c.y - h / 2));
-    const b = { left, right, top, bottom: top + h };
-    if (keepOff.some((k) => overlaps(b, k, gap))) continue;
-    let cost = 0;
-    for (const o of others) {
-      if (o.body) cost += overlapArea(b, o.body);
-      const t = tagOf.get(o.id);
-      if (t) cost += overlapArea(b, t) / 2;
+  // With its left edge at `from`, or further out to the `side` (0 for nowhere further), and its top at `top`, or as
+  // near as the screen allows; `cost` for how far it is from its speaker already.
+  const tryAt = (from: number, top: number, side: number, cost: number) => {
+    let left = side ? from : Math.min(screen.right - EDGE_PX - w, Math.max(screen.left + EDGE_PX, from));
+    for (;;) {
+      const right = left + w;
+      if (left < screen.left + EDGE_PX - 1e-6 || right > screen.right - EDGE_PX + 1e-6) return;
+      const y = Math.min(lowest, Math.max(ceilingOver(screen, left, right), top));
+      const b = { left, right, top: y, bottom: y + h };
+      if (own && overlaps(b, own, gap - 1e-6)) return;
+      const hit = keepOff.filter((k) => overlaps(b, k, gap));
+      if (!hit.length) {
+        let covers = cost + (Math.abs(left - from) * h) / 2;
+        for (const o of others) {
+          covers += overlapArea(b, headOf(o));
+          if (o.body) covers += overlapArea(b, o.body);
+          const t = tagOf.get(o.id);
+          if (t) covers += overlapArea(b, t) / 2;
+        }
+        if (!side && c.body) covers += overlapArea(b, c.body);
+        // A tail from beside across someone else's head or tag would look like it pointed at them.
+        if (side) {
+          const face = faceOf(c, side);
+          const root: [number, number] = [
+            side > 0 ? b.left : b.right,
+            Math.min(b.bottom - TAIL_INSET, Math.max(b.top + TAIL_INSET, face[1])),
+          ];
+          const across = others.flatMap((o) => [headOf(o), ...(tagOf.has(o.id) ? [tagOf.get(o.id) as Box] : [])]);
+          if (across.some((k) => crosses(root, face, k))) covers += (w * h) / 2;
+        }
+        if (!best || covers < best.cost - 1e-6) best = { b, cost: covers };
+        return;
+      }
+      for (const k of hit) blockers.add(k.id);
+      if (!side) return;
+      // Further out, just past what it met.
+      left =
+        side > 0
+          ? Math.max(...hit.map((k) => k.right + gap + 1e-6))
+          : Math.min(...hit.map((k) => k.left - gap - 1e-6)) - w;
+      if (Math.abs(left - from) > w) return;
     }
-    if (!best || cost < best.cost - 1e-6) best = { b, cost };
+  };
+  const middle = (screen.left + screen.right) / 2;
+  for (const side of c.x > middle ? [-1, 1] : [1, -1]) {
+    // Level with its face, just under its tag, far enough out for a tail that can be seen to point at it.
+    const near = c.x + side * (FACE[0] * halfOf(c) + 2 * TAIL_PX);
+    tryAt(
+      side > 0 ? near : near - w,
+      Math.max(c.y - h / 2, own ? own.bottom + gap : Number.NEGATIVE_INFINITY),
+      side,
+      0,
+    );
+    // Out past its tag, level with the top of its head.
+    if (own) {
+      const past = side > 0 ? own.right + TAIL_PX : own.left - TAIL_PX;
+      tryAt(side > 0 ? past : past - w, c.y - h / 2, side, (Math.abs(past - near) * h) / 2);
+    }
   }
-  return best?.b;
+  // Just under its tag, over its own body.
+  if (own) tryAt((own.left + own.right) / 2 - w / 2, own.bottom + gap, 0, 0);
+  const found = best as { b: Box } | undefined;
+  return { ...(found ? { b: found.b } : {}), blockers: [...blockers] };
 }
 
 /** How a pointer is drawn: its length, the turn it is drawn at, and the point of it that stands on the top of the head. */

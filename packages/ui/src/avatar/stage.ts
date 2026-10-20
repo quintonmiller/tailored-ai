@@ -148,6 +148,7 @@ import { type BuiltTown, buildTown } from "./townscape";
 import {
   clampReach,
   ease,
+  flyPinchStep,
   flyWheelStep,
   followDistance,
   heldMove,
@@ -1738,6 +1739,14 @@ export async function createStage(
   };
   /** The chat page's view of the agent, which the wheel and a pinch bring nearer or take further back. */
   const ownView = () => !opts.visitor && !opts.still && view === "room";
+  /** Whether you fly about as you like: in your own body, with nothing brought up to read. */
+  const flyingFree = () => !!opts.visitor && travel === "fly" && !reading;
+  /** Fly this many metres along the way you look, forward, or back for less than none. */
+  const flyAlong = (metres: number) => {
+    const along = controls.target.clone().sub(camera.position).normalize().multiplyScalar(metres);
+    camera.position.add(along);
+    controls.target.add(along);
+  };
   /** A zoom while rearranging, kept between the nearest it comes and the whole room. */
   const editZoomTo = (zoom: number) => {
     editZoom = Math.min(1, Math.max(EDIT_NEAREST, zoom));
@@ -1754,15 +1763,9 @@ export async function createStage(
       return;
     }
     // Flying, the wheel flies you along the way you look, back as it rolls toward you and on as it rolls away.
-    if (opts.visitor && travel === "fly" && !reading) {
+    if (flyingFree()) {
       e.preventDefault();
-      const along = controls.target
-        .clone()
-        .sub(camera.position)
-        .normalize()
-        .multiplyScalar(flyWheelStep(wheelPixels(e)));
-      camera.position.add(along);
-      controls.target.add(along);
+      flyAlong(flyWheelStep(wheelPixels(e)));
       return;
     }
     if (!opts.visitor || travel !== "walk") return;
@@ -1779,12 +1782,13 @@ export async function createStage(
     return a && b ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0;
   };
   /**
-   * Two fingers down, walking: a pinch, which zooms and nothing else. The
-   * controls would go on turning the view with the first finger, so turning
-   * waits until a finger is lifted.
+   * Two fingers down, walking: a pinch, which zooms and nothing else; flying,
+   * it flies you on or back, as the wheel does. The controls would go on
+   * turning the view with the first finger, so turning waits until a finger
+   * is lifted.
    */
   const pinching = () => {
-    const now = touches.size === 2 && (!!editing || (!!opts.visitor && travel === "walk") || ownView());
+    const now = touches.size === 2 && (!!editing || (!!opts.visitor && travel === "walk") || flyingFree() || ownView());
     controls.enableRotate = !now;
     return now;
   };
@@ -1798,6 +1802,7 @@ export async function createStage(
     if (apart > 0 && now > 0) {
       if (editing) editZoomTo((editZoom * apart) / now);
       else if (ownView()) zoomKept = ownZoom((zoomKept * apart) / now, room, visibleAspect(), visibleTall());
+      else if (flyingFree()) flyAlong(flyPinchStep(apart, now));
       else zoomTo(pinchReach(clampReach(reachNow(), widest), apart, now, widest));
     }
     apart = now;
@@ -1825,13 +1830,26 @@ export async function createStage(
     for (let p = o; p; p = p.parent ?? undefined) if (typeof p.userData.prop === "string") return p.userData.prop;
     return undefined;
   };
+  /**
+   * Whether something is part of a gate all but gone for someone standing
+   * behind it (`GATE_FAINT`), other than the mat at its foot, which stays: a
+   * pointer on it is on what is behind it, as it looks.
+   */
+  const gateGone = (thing: THREE.Object3D) => {
+    if (thing.userData.keep) return false;
+    for (let o: THREE.Object3D | null = thing; o; o = o.parent) {
+      const f = fadeable.find((x) => x.group === o);
+      if (f) return f.faint !== undefined && f.level < 0.5;
+    }
+    return false;
+  };
   const pick = (e: At): (Use & { on?: UseSpot; object: THREE.Object3D }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
       camera,
     );
-    const found = nearestUse(ray.intersectObjects(clickable, true));
+    const found = nearestUse(ray.intersectObjects(clickable, true).filter((h) => !gateGone(h.object)));
     if (!found) return undefined;
     const { hit } = found;
     const use = { ...found.use, object: hit.object };
@@ -1865,7 +1883,9 @@ export async function createStage(
     // A visitor's own body is nobody's to open a menu on.
     const bodies = new Map<THREE.Object3D, string>(opts.visitor ? [] : [[me.body, self]]);
     for (const [agent, c] of companions) bodies.set(c.body, agent);
+    // A raycaster hits what isn't drawn all the same: a tag put away, a bubble that gave way, a tail too short to show.
     for (const hit of ray.intersectObjects([...bodies.keys()], true)) {
+      if (!shown(hit.object)) continue;
       for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
         const agent = bodies.get(o);
         if (agent) return agent;
@@ -3481,10 +3501,11 @@ export async function createStage(
       onScreen.copy(crown).project(camera);
       const perPixel = metresPerPixel(depth, camera.fov, stageH);
       const over = f.fitOver(perPixel, clock);
-      // The tag under the pointer, or of the one you stand by, keeps its place; then whoever is talking; then the nearer.
+      // Whoever is talking keeps its tag's place over its head, so its bubble's tail can reach it there; then the tag
+      // under the pointer, or of the one you stand by; then the nearer.
       const close = closeTo(id);
       const speaking = f.speaking(clock);
-      const rank = (close ? 2 : speaking ? 1 : 0) * 1000 - depth;
+      const rank = (speaking ? 2 : close ? 1 : 0) * 1000 - depth;
       const x = ((onScreen.x + 1) / 2) * stageW;
       const y = ((1 - onScreen.y) / 2) * stageH;
       // Its body down to its feet, for bubbles brought down beside a speaker to keep off, and tails to go round.

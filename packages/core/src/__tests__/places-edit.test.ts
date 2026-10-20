@@ -286,6 +286,12 @@ describe("what the page sends", () => {
       facing: 0,
       with: ["chair"],
     });
+    // More than it moves at once is refused in words, never cut short with the rest left behind.
+    const many = Array.from({ length: 30 }, (_, i) => `chair-${i}`);
+    expect(editFrom({ op: "move", item: "table", at: [0, 0], facing: 0, with: many })).toMatch(/more than 24 things/);
+    expect(editFrom({ op: "move", item: "table", at: [0, 0], facing: 0, with: many.slice(0, 24) })).toMatchObject({
+      with: many.slice(0, 24),
+    });
     expect(editFrom({ op: "add", kind: "lamp", avoid: [[1, 2], [1, "x"], "y"] })).toEqual({
       op: "add",
       kind: "lamp",

@@ -333,6 +333,20 @@ describe("WorldMap", () => {
     render({ here: "room:local:trip", back: { place: "shared:lounge", agent: "the default agent" } });
     const lounge = tiles().find((t) => t.textContent?.startsWith("the lounge")) as HTMLButtonElement;
     expect(lounge.querySelector(".world-map-back")?.textContent).toBe("back to the default agent's view");
+    // So does the link to it by the name of anyone who is in it now.
+    render({
+      here: "room:local:trip",
+      back: { place: "shared:lounge", agent: "the default agent" },
+      places: [
+        { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: [] },
+        { id: "shared:lounge", name: "the lounge", kind: "shared", agents: ["planner"] },
+        { id: "room:local:trip", name: "trip", kind: "room", agents: [] },
+      ],
+    });
+    const away = container.querySelector(".world-map-away") as HTMLButtonElement;
+    expect(away.textContent).toBe("in the loungeback to the default agent's view");
+    expect(away.querySelector(".world-map-back")?.textContent).toBe("back to the default agent's view");
+    expect(away.title).toBe("planner is in the lounge: back to the default agent's view");
     // Not visiting, there is nothing to say.
     render({ here: "room:local:trip" });
     expect(container.querySelector(".world-map-rule")).toBeNull();

@@ -51,6 +51,8 @@ const PACE_SECONDS = 0.12;
 const TAIL_ORDER = 9.75;
 /** How strongly a tag in a crowd that isn't the one to read is drawn: still there to read, but out of the way. */
 const FAINT_TAG = 0.42;
+/** The faintest a line from a tag down to its head is drawn, however faint its tag. */
+const LEADER_LEAST = 0.8;
 
 /** A VRM model, loaded and made ready to pose: facing +Z like a VRM 1.0 model, casting shadows. */
 export async function loadModel(url: string): Promise<VRM> {
@@ -662,13 +664,16 @@ export class Figure {
       // Its tail under every tag: it is led round them (`stack`), and where it can't be, it passes behind a
       // neighbour's name to its own speaker's rather than cutting through it. Under its bubble, and the newer ones.
       tail.renderOrder = TAIL_ORDER;
-      // From where it leaves the bubble to its speaker's tag, or the top of its head while the tag is put away.
-      const from: [number, number] | undefined = at.tail && [
-        lifted.across + at.tail.from[0],
-        lifted.bubble + at.tail.from[1],
-      ];
-      const to: [number, number] = at.tail?.toTag ? [lifted.tagAcross, lifted.tag + this.tagSize[1]] : [0, 0];
-      const p = from && pointer(from, to, GAP_PX, TAIL_WIDTH_PX);
+      // From where it leaves the bubble to the edge of its speaker's tag, gliding with it, with no gap for anyone
+      // else to show through; or, a little short of it, to its head or face.
+      const aim = at.tail;
+      const from: [number, number] | undefined = aim && [lifted.across + aim.from[0], lifted.bubble + aim.from[1]];
+      const to: [number, number] | undefined =
+        aim &&
+        (aim.toTag
+          ? [aim.to[0] + lifted.tagAcross - at.tagAcross, aim.to[1] + lifted.tag - at.tag]
+          : [aim.to[0], aim.to[1]]);
+      const p = from && to && pointer(from, to, aim?.toTag ? 0 : GAP_PX, TAIL_WIDTH_PX);
       if (p) {
         tail.scale.set(TAIL_WIDTH_PX * px, p.length * px, 1);
         tail.center.set(p.center[0], p.center[1]);
@@ -681,7 +686,7 @@ export class Figure {
   /**
    * Draw the line from its tag down to the top of its head while the tag has
    * gone more than `LEADER_PX` from over it to make way for another: from the
-   * nearest of the tag's foot, as faint as the tag, under every tag it passes.
+   * nearest of the tag's foot, under every tag it passes, and drawn plain even from a faint tag.
    */
   private placeLeader() {
     const at = this.lifted;
@@ -707,7 +712,8 @@ export class Figure {
     this.leader.scale.set(LEADER_WIDTH_PX * px, p.length * px, 1);
     this.leader.center.set(p.center[0], p.center[1]);
     this.leader.material.rotation = p.turn;
-    this.leader.material.opacity = this.tagStrength * 0.85;
+    // Near full strength even from a faint tag: the line is what says whose it is, and a crowd is where it's needed.
+    this.leader.material.opacity = Math.max(LEADER_LEAST, this.tagStrength) * 0.85;
   }
 
   /**

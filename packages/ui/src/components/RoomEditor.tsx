@@ -536,7 +536,8 @@ export function useRoomEditor(
     }
     const from = n.pending?.item === prop.id ? n.pending : undefined;
     const on = from?.on ?? prop.on;
-    const along = alone ? [] : (from?.with ?? groupOf(c.record, n.kinds.kinds, prop.id));
+    // A move not saved yet keeps what it was moving: one dragged alone stays alone, turned.
+    const along = alone ? [] : from ? (from.with ?? []) : groupOf(c.record, n.kinds.kinds, prop.id);
     const move: Move = {
       item: prop.id,
       at: from?.at ?? prop.at,
@@ -563,18 +564,18 @@ export function useRoomEditor(
   };
   /** Put in a door from here to another place, with its way back there; the door is picked once it is in. */
   const putDoor = (to: string) => void change({ op: "door", to }, (made) => made.item);
-  const copy = () => {
-    const prop = thing(now.current.selected);
-    if (prop) void change({ op: "add", kind: prop.kind, like: prop.id }, (made) => made.item);
-  };
-  const paint = (color: string) => {
-    const prop = thing(now.current.selected);
-    if (prop) void change({ op: "color", item: prop.id, color });
-  };
   // Never put down on anyone: where you and the agents stand goes with the ask.
   const clear = () => {
     const at = standing?.() ?? [];
     return at.length ? { avoid: at } : {};
+  };
+  const copy = () => {
+    const prop = thing(now.current.selected);
+    if (prop) void change({ op: "add", kind: prop.kind, like: prop.id, ...clear() }, (made) => made.item);
+  };
+  const paint = (color: string) => {
+    const prop = thing(now.current.selected);
+    if (prop) void change({ op: "color", item: prop.id, color });
   };
   const add = (kind: string) => void change({ op: "add", kind, ...clear() }, (made) => made.item);
   const addModel = (model: string) => void change({ op: "add", kind: "model", model, ...clear() }, (made) => made.item);
@@ -840,7 +841,7 @@ export function useRoomEditor(
               ? "Drag it along its wall, or onto the other wall · Delete removes it · Ctrl+Z undoes"
               : picked
                 ? along.length
-                  ? `Drag it to move it with ${alongWords(along.length, shown?.props.filter((p) => along.includes(p.id)) ?? [])}, Alt-drag for it alone · R turns them · Delete removes it · Ctrl+Z undoes`
+                  ? `Drag it to move it with ${alongWords(along.length, shown?.props.filter((p) => along.includes(p.id)) ?? [])}, Shift for no grid, Alt for it alone · R turns them, Alt+R it alone · Delete removes it · Ctrl+Z undoes`
                   : "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
                 : "Pick something to move it, or add things · drag the floor to look round, the wheel to zoom · Esc when done"}
         </p>

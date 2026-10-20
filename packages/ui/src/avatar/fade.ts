@@ -77,6 +77,8 @@ export function paintFaded(f: Fadeable) {
       own.delete(mesh);
       return;
     }
+    // What is there to be found by, like the mat a gate says where it goes on, stays as it is.
+    if (mesh.userData.keep) return;
     // A photo hung after it faded is put in see-through copies when it comes.
     if (!own.has(mesh)) {
       own.set(mesh, mesh.material);

@@ -611,11 +611,13 @@ Click an agent to go into its home; when its body is somewhere else, "in
 everywhere you pick you walk into as you, except one place: the home of the
 agent you are talking to, which is its own view rather than somewhere to
 walk into. The map says so in a line under its search, and marks that place
-"back to its view", by the agent's name or on the place's card. Names are
-cut short only when one alone is wider than the list: what an agent is for,
-and where its body is, wrap under its name first. What a busy agent is doing
-takes a second line before it is cut short, and is there in full while you
-point at it or focus it. Rooms and places show who is in
+"back to its view" wherever it is offered: by the agent's name, on the
+place's card, and on the "in …" link beside anyone who is in it now.
+Names are cut short only when one alone is wider than the list: what an
+agent is for, and where its body is, wrap under its name first. What a busy
+agent is doing takes a second line before it is cut short, and is there in
+full while you point at it or focus it; where it is goes on the line under
+it when the row is too narrow for both. Rooms and places show who is in
 each, with a mark for anyone waiting on you (`!`), stuck (`?`) or asleep (`z`).
 The map asks the server again each time it opens, so an agent or a room made
 since you last looked is on it.
@@ -637,8 +639,9 @@ are fold into "…" (on a phone, almost always), and open out again while the
 pointer is on it or you tab into it. It gets out of the way, too: while your
 body (in the agent's own view, the agent's), what is over its head, or the
 pointer on the picture is behind it, it fades almost away, and comes back as
-soon as you point at one of its steps. On a phone it sits in the row of
-buttons rather than a row of its own.
+soon as you point at one of its steps. On a phone it folds as short as it
+gets and follows on after the buttons, beside the last of them where there
+is room for it and under them where there isn't.
 
 **Busy now**, at the top, lists every agent that is doing something, most
 pressing first: waiting on you, then stuck, then talking, working and
@@ -679,7 +682,8 @@ picture over rather than jumping.
 anywhere, faster again (6 metres a second, twice that with Shift): WASD to
 move, `E` up, `Q` down, drag to turn, and the wheel flies you the way you
 look, on as you roll it away from you and back as you roll it toward you, a
-couple of metres a notch (`flyWheelStep`).
+couple of metres a notch (`flyWheelStep`). On a phone, a pinch does the same:
+spread your fingers to fly on, close them to fly back (`flyPinchStep`).
 Agents keep their own calmer pace in
 their rooms. Every speed is named in one place,
 `packages/ui/src/avatar/travel.ts`, with how far the camera can zoom (`REACH`).
@@ -779,9 +783,13 @@ goes on two lines, broken at a hyphen, a space or an underscore
 front and right sides, where the wall is cut away so the camera can see in,
 the door is cut away too: a low gateway, two capped posts and a rail across
 their tops with the plate hanging from it, readable from either side, open to
-see through below it. When someone stands behind it from where the camera is,
-the gate all but disappears, rather than going half see-through like a pane
-of glass in front of them; it comes back when they move. A door to a home has
+see through below it, and its name on the mat at its foot as well. When
+someone stands behind it from where the camera is, the gate all but
+disappears, rather than going half see-through like a pane of glass in front
+of them, and the pointer goes through it to whatever is behind; the mat stays,
+words and all, so the way out is still there on the floor, and pointing at the
+mat or clicking it works as the gate does. The gate comes back when they move.
+A door to a home has
 a light by its dark plate, and a lit strip along it, that says what that agent
 is doing, from its `activity` record, in the colours the map uses: green
 working, blue thinking or talking, orange waiting on you, red stuck, grey idle,
@@ -1280,22 +1288,25 @@ where you were.
   says why: "It would bump into the floor lamp.", "It would block the way
   through the door.", "It would be where someone stands to use the couch."
   Let go somewhere red and it goes back.
-- **What goes with it comes too.** Drag a table or a desk and the chairs,
-  stools and benches drawn up to it come along, each keeping its place round
+- **What goes with it comes too.** Drag a table, a café table or a desk and
+  the chairs, stools and benches drawn up to it come along, each keeping its place round
   it (a seat between two tables goes with the nearer); drag a rug and
   everything standing on it comes, with the chairs at any table on it. Their
   footprints are outlined with it while you drag, the line under the bar says
   what comes ("Drag it to move it with its 3 chairs"), and the whole group is
   checked where it lands, together, so the bar names the piece that doesn't
   fit: "The dining chair 2 would stick out of the room." Hold **Alt** while
-  you drag, or turn with Alt+R, to move or turn it alone. Things standing on
-  top of something always go with it.
+  you drag, or turn with Alt+R, to move or turn it alone; one dragged alone
+  that didn't fit stays alone when you turn it to make it fit. More than 24
+  pieces at once is more than one move takes, and the bar says so rather than
+  leave some behind. Things standing on top of something always go with it.
 - **Turn it** with R, or Shift+R the other way, a quarter turn at a time;
   the buttons turn it by a quarter or by 15°. What goes with it turns with
   it, round its middle. A turn with no room shows red,
   for you to drag it somewhere it fits.
 - **Remove** it with Delete or Backspace, or **Copy** it: the copy goes
-  beside it, in the same colour and size. The lobby's kiosks and its task
+  beside it, in the same colour and size, and never where you or an agent
+  stands. The lobby's kiosks and its task
   board stay, wherever you move them: they're where you make agents, tasks
   and rooms and see the tasks from inside the world, and nothing in the
   catalogue stands in for one.
@@ -2096,14 +2107,17 @@ Alfama") under its name; the agent you are talking to shows the status alone.
 Tags, signs and bubbles are drawn to read on your screen however far back
 the camera is: as they are in the room when that reads, and never smaller
 than a name about 14 pixels high, or larger than one about 22. Where bodies
-stand close, their tags don't pile up: the one you are pointing at or
-standing by keeps its place, then whoever is talking, and the others step
-clear of it, up or a little to the side, whichever is less of a move, each
-still mostly over its own body. A tag that had to go more than a few pixels
-from its head has a thin line down to it, so you can tell whose it is. Where
-three or more tags would meet, round a meeting table say, they are a crowd:
-everyone's but the one you are pointing at or standing by, and whoever is
-talking, is drawn faint, so the speaker's name stands out.
+stand close, their tags don't pile up: whoever is talking keeps its tag's
+place over its head, then the one you are pointing at or standing by, and
+the others step clear of them, up or a little to the side, whichever is less
+of a move, each still mostly over its own body. A tag that had to go more
+than a few pixels from its head has a thin line down to it, drawn plain even
+when the tag is faint, so you can tell whose it is. Where three or more tags
+would meet, round a meeting table say, they are a crowd: everyone's but the
+one you are pointing at or standing by, and whoever is talking, is drawn
+faint, so the speaker's name stands out; and a faint one that would have to
+go up past a couple of others is put away rather than stacked a column high
+over the table. Point at that body and its tag is back.
 Point at a body, or walk up to it on a visit, and the tag says more. An idle
 agent's says what it is up to ("watering the plant"), what it did last and
 how long ago ("last: searched the web, 40 min ago"), and when it next wakes
@@ -2154,7 +2168,8 @@ What agents say shows too. The plugin keeps a `speech` record per agent, the
 last thing it said in a room or to another agent directly, and the page puts
 it in a bubble over the speaker's head as it is said, mouth moving, for long
 enough to read. The bubble names the speaker, and sits over the speaker's
-own tag, which stays while it talks; its tail points at that tag. Where
+own tag, which stays while it talks; its tail runs right down to the edge of
+that tag, with no gap for anyone behind to show through. Where
 someone else stands in line between them, a body further back or their tag,
 the tail leaves the bubble further along and leans round them, so it never
 looks like it points at the wrong person; where there is no way round, it
@@ -2169,14 +2184,18 @@ under the buttons over it, under the chat or the line of keys along the
 foot comes back into view, all of it even when its speaker is at the edge or
 past it, its tail leaning back toward them. Brought down so far that it
 would cover its own speaker's tag or head, or another speaker's tag, it goes
-beside its speaker's head instead, on whichever side covers least of
-anyone else, with its tail pointing across or up to them: so an agent
-standing far back, under the buttons, says "Hello." beside where it is,
-never over your head. A tag a bubble still has to come down over is put away
-until the bubble goes. In a busy room the newest lines win: an earlier
-bubble with no room left above a newer one gives way to it for the rest of
-its line, rather than pushing it down on to its speaker. Everything said is
-in the room's conversation beside the stage anyway. Only people can read speech records: the type is closed to
+beside its speaker instead, level with its face and just under its tag, or
+out past the tag, on whichever side covers least of anyone else, with its
+tail pointing across at the speaker's face: so an agent standing far back,
+under the buttons, says "Hello." beside where it is, never over your head.
+With no room beside either, it sits just under its speaker's tag, on its own
+body, plainly its own. A speaker's own tag is never covered; anyone else's a
+bubble still has to come down over is put away until the bubble goes. In a
+busy room the newest lines win: an earlier bubble with no room left above a
+newer one gives way to it for the rest of its line, rather than pushing it
+down on to its speaker, and so does an earlier one standing in the way of a
+newer one with nowhere beside its speaker to go. Everything said is in the
+room's conversation beside the stage anyway. Only people can read speech records: the type is closed to
 agents, so a direct message stays as private from other agents as it was.
 `speech: false` in the plugin's config keeps none. A room post shows when its
 speaker's room name is the agent's own name.

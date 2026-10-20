@@ -724,7 +724,7 @@ export function Avatar({
               ? "Esc, F or click away to step back"
               : travel === "walk"
                 ? "WASD or arrows to walk · Shift to run · click the floor to go there · click a screen to use it · drag to look · wheel to zoom"
-                : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to zoom"}
+                : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to fly on or back"}
           </p>
         </>
       )}

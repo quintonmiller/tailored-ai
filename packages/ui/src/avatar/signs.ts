@@ -425,7 +425,6 @@ export class SignPost {
     return this.shown && this.group.visible ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
   }
 
-  /** Stand the sign `lift` screen pixels up from the top of the head. */
   /** Stand it `lift` screen pixels up from the top of the head, and `across` to the right, over its tag. */
   place(lift: number, across = 0) {
     if (this.shown) liftSprite(this.shown, lift, this.perPixel, across);

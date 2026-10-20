@@ -21,6 +21,8 @@ const kinds = {
   plant: { noun: "plant", mount: "floor", footprint: [0.34, 0.34], height: 1 },
   picture: { noun: "picture", mount: "wall", footprint: [0.9, 0.04], height: 0.6, elevation: 1.55 },
   model: { noun: "model", mount: "floor", footprint: [0.5, 0.5], height: 0.5, shaped: true },
+  table: { noun: "table", mount: "floor", footprint: [1.2, 0.8], height: 0.75, surface: 0.75 },
+  chair: { noun: "chair", mount: "floor", footprint: [0.5, 0.5], height: 1.05 },
 };
 
 /** A model an agent made, as the catalogue lists it and as a place is sent it. */
@@ -106,8 +108,10 @@ let root: Root;
 let editor: RoomEditor;
 /** Every place there is, as the map has them, for where a door can lead. */
 let mapPlaces: MapPlace[] = [];
+/** Where you and the agents stand on the floor now. */
+let standingNow: [number, number][] = [];
 function Harness({ place }: { place: EditablePlace }) {
-  editor = useRoomEditor(place, undefined, mapPlaces);
+  editor = useRoomEditor(place, undefined, mapPlaces, () => standingNow);
   return (
     <div>
       {editor.tools}
@@ -145,6 +149,7 @@ const move = (at: [number, number], facing = 0): Move => ({ item: "couch", at, f
 
 beforeEach(() => {
   mapPlaces = [];
+  standingNow = [];
   server = {
     edits: [],
     writes: [],
@@ -410,6 +415,42 @@ describe("rearranging a room", () => {
     expect(editor.editing).toBe(false);
   });
 
+  it("turns a table moved on its own on its own, its chairs left where they are", async () => {
+    // A table with a chair drawn up to it, being dragged alone (Alt) somewhere it doesn't fit, turned with R to fit.
+    const room: Room = {
+      ...DEFAULT_ROOM,
+      props: [
+        { id: "table", name: "the table", kind: "table", at: [0, 0], facing: 0 },
+        { id: "chair", name: "the chair", kind: "chair", at: [0, 0.7], facing: 180 },
+      ],
+    };
+    server.answer = (edit) => (edit.facing === 0 ? { why: "It would block the way through the door." } : {});
+    await render(home(3, room));
+    await act(async () => editor.stage?.onSelect("table"));
+    await act(async () => editor.stage?.onDrag({ item: "table", at: [1, 0], facing: 0 }));
+    await settle();
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyR", key: "r" })));
+    await settle();
+    const turned = server.edits.at(-1)?.edit;
+    expect(turned).toMatchObject({ op: "move", item: "table", at: [1, 0], facing: -90 });
+    expect(turned?.with).toBeUndefined();
+  });
+
+  it("turns a table with the chairs drawn up to it", async () => {
+    const room: Room = {
+      ...DEFAULT_ROOM,
+      props: [
+        { id: "table", name: "the table", kind: "table", at: [0, 0], facing: 0 },
+        { id: "chair", name: "the chair", kind: "chair", at: [0, 0.7], facing: 180 },
+      ],
+    };
+    await render(home(3, room));
+    await act(async () => editor.stage?.onSelect("table"));
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyR", key: "r" })));
+    await settle();
+    expect(server.edits.at(-1)?.edit).toMatchObject({ op: "move", item: "table", facing: -90, with: ["chair"] });
+  });
+
   it("adds from the catalogue, and picks what it added", async () => {
     server.answer = (_edit, place) => ({
       place: {
@@ -428,6 +469,19 @@ describe("rearranging a room", () => {
     expect(server.writes[0].data.changes?.[0].what).toBe("added another plant");
     expect(editor.stage?.selected).toBe("plant-2");
     expect(document.querySelector(".room-edit-name")?.textContent).toBe("the plant");
+  });
+
+  it("asks for a copy, as for anything added, clear of where you and the agents stand", async () => {
+    standingNow = [[0.5, 0.5]];
+    server.answer = (_edit, place) => ({
+      place: { ...place, props: [...place.props, { ...place.props[0], id: "couch-2", name: "the couch 2" }] },
+      item: "couch-2",
+    });
+    await render(home());
+    await act(async () => editor.stage?.onSelect("couch"));
+    await act(async () => button("Copy").click());
+    await settle();
+    expect(server.edits[0].edit).toEqual({ op: "add", kind: "couch", like: "couch", avoid: [[0.5, 0.5]] });
   });
 
   it("offers what agents made first, adds one by its record, and draws it at once without writing its parts", async () => {

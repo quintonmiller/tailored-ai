@@ -8,6 +8,7 @@ import {
   ease,
   FLY_NOTCH_SECONDS,
   FLY_SPEED,
+  flyPinchStep,
   flyWheelStep,
   followDistance,
   gait,
@@ -68,6 +69,15 @@ describe("flyWheelStep", () => {
     expect(Math.abs(flyWheelStep(100))).toBeGreaterThan(1);
     expect(Math.abs(flyWheelStep(100))).toBeLessThan(5);
     expect(flyWheelStep(0)).toBeCloseTo(0);
+  });
+});
+
+describe("flyPinchStep", () => {
+  it("flies you on as the fingers spread and back as they close, 100 pixels of it a notch of the wheel", () => {
+    expect(flyPinchStep(100, 200)).toBeCloseTo(flyWheelStep(-100));
+    expect(flyPinchStep(200, 100)).toBeCloseTo(flyWheelStep(100));
+    expect(flyPinchStep(100, 200)).toBeGreaterThan(0);
+    expect(flyPinchStep(150, 150)).toBeCloseTo(0);
   });
 });
 

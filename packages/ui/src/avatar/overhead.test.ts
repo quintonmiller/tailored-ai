@@ -73,6 +73,45 @@ const body = (id: string, x: number, y: number, more: Partial<Column> = {}): Col
   ...more,
 });
 
+const meets = (a: Box, b: Box) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+
+/** Where a column's tag and bubble are drawn on the screen, as `stack` laid them out, and where its tail ends. */
+function drawn(c: Column, at: Stacked): { tag?: Box; bubble?: Box; end?: [number, number] } {
+  const out: { tag?: Box; bubble?: Box; end?: [number, number] } = {};
+  if (c.tag && !at.hidden) {
+    const [w, h] = c.tag;
+    const x = c.x + at.tagAcross;
+    out.tag = { left: x - w / 2, right: x + w / 2, top: c.y - at.tag - h, bottom: c.y - at.tag };
+  }
+  if (c.bubble && !at.gone) {
+    const [w, h] = c.bubble;
+    const x = c.x + at.across;
+    out.bubble = { left: x - w / 2, right: x + w / 2, top: c.y - at.bubble - h, bottom: c.y - at.bubble };
+  }
+  if (at.tail && out.bubble) out.end = [c.x + at.tail.to[0], c.y - at.tail.to[1]];
+  return out;
+}
+
+/**
+ * Whether a column's bubble's tail, if it has one, ends on its own speaker:
+ * on the edge of its tag, or on its head; and not under anyone else's tag
+ * still shown.
+ */
+function endsOnOwn(c: Column, at: Stacked, cols: Column[], out: Map<string, Stacked>): boolean {
+  const { tag, end } = drawn(c, at);
+  if (!end) return true;
+  const near = (k: Box, by: number) =>
+    end[0] >= k.left - by && end[0] <= k.right + by && end[1] >= k.top - by && end[1] <= k.bottom + by;
+  const half = c.body ? (c.body.right - c.body.left) / 2 : 12;
+  const head = { left: c.x - half, right: c.x + half, top: c.y, bottom: c.y + 2.4 * half };
+  if (!(at.tail?.toTag ? !!tag && near(tag, 0.5) : near(head, 0.5))) return false;
+  return cols.every((o) => {
+    if (o.id === c.id) return true;
+    const t = drawn(o, out.get(o.id) as Stacked).tag;
+    return !t || !(end[0] > t.left && end[0] < t.right && end[1] > t.top && end[1] < t.bottom);
+  });
+}
+
 describe("stack", () => {
   it("puts a tag just over its head, and a bubble over its tag with room for its tail", () => {
     const out = stack([body("a", 300, 400, { bubble: [200, 60], said: 1 })]);
@@ -86,7 +125,7 @@ describe("stack", () => {
       hidden: false,
       gone: false,
       // Straight down from the middle of its foot to the top of its own tag.
-      tail: { from: [0, 0], toTag: true },
+      tail: { from: [0, 0], to: [0, GAP_PX + 20], toTag: true },
     });
   });
 
@@ -178,7 +217,7 @@ describe("stack", () => {
     // toward the middle of the stage, its tail from its near side.
     expect(50 - a.bubble - 80).toBe(10);
     expect(300 + a.across - 100).toBeGreaterThan(300);
-    expect(a.tail?.from[0]).toBe(-100);
+    expect(a.tail?.from[0]).toBeCloseTo(-100);
   });
 
   it("moves a bubble across to stay clear of a panel over the side of the stage", () => {
@@ -354,7 +393,7 @@ describe("stack", () => {
     const out = stack([body("a", 300, 400, { bubble: [200, 60], said: 1, focus: true })]);
     const a = out.get("a") as Stacked;
     expect(a.hidden).toBe(false);
-    expect(a.tail).toEqual({ from: [0, 0], toTag: true });
+    expect(a.tail).toEqual({ from: [0, 0], to: [0, GAP_PX + 20], toTag: true });
     // The bubble's foot is a tail's length over the top of the tag.
     expect(a.bubble - (a.tag + 20)).toBe(GAP_PX + TAIL_PX);
   });
@@ -452,6 +491,159 @@ describe("stack", () => {
       screen,
     );
     expect([roomy.get("first")?.gone, roomy.get("next")?.gone]).toEqual([false, false]);
+  });
+
+  it("keeps a speaker's tag over its own head, ahead of the one you stand by, so its tail reaches it there", () => {
+    // You stand by "near", whose tag would keep its place any other time; "speaker", right beside it, is talking.
+    const out = stack([
+      body("near", 300, 300, { rank: 2000, focus: true }),
+      body("speaker", 320, 302, { rank: 1000, focus: true, bubble: [200, 60], said: 1 }),
+    ]);
+    expect(out.get("speaker")).toMatchObject({ tag: GAP_PX, tagAcross: 0, hidden: false, tail: { toTag: true } });
+    const near = out.get("near") as Stacked;
+    expect(near.tag > GAP_PX || near.tagAcross !== 0).toBe(true);
+  });
+
+  it("ends a tail on its speaker's tag nearer an end when someone's head is behind the middle of it", () => {
+    // Someone further back stands just behind the speaker, their head over the middle of the top of its tag.
+    const speaker = body("speaker", 400, 400, { bubble: [200, 60], said: 1, focus: true });
+    const behind = { id: "behind", x: 400, y: 360, rank: 0, body: { left: 390, right: 410, top: 360, bottom: 420 } };
+    const s = stack([speaker, behind]).get("speaker") as Stacked;
+    const end = drawn(speaker, s).end as [number, number];
+    expect(s.tail?.toTag).toBe(true);
+    expect(end[1]).toBe(400 - GAP_PX - 20);
+    expect(end[0] < 390 || end[0] > 410).toBe(true);
+  });
+
+  it("brings a bubble with no room over its speaker's tag beside its face, its tag still shown", () => {
+    // Its head just under the buttons: no room over the tag for the bubble.
+    const screen = { left: 0, right: 800, top: 0, covered: [{ left: 0, right: 800, top: 0, bottom: 150 }] };
+    const speaker = body("speaker", 400, 200, {
+      bubble: [200, 60],
+      said: 1,
+      focus: true,
+      body: { left: 380, right: 420, top: 200, bottom: 300 },
+    });
+    const s = stack([speaker], screen).get("speaker") as Stacked;
+    const { tag, bubble, end } = drawn(speaker, s);
+    expect(s.hidden).toBe(false);
+    expect(meets(tag as Box, bubble as Box)).toBe(false);
+    // Beside it, level with its face, its tail to the side of its face.
+    expect((bubble as Box).left >= 420 || (bubble as Box).right <= 380).toBe(true);
+    expect(s.tail?.toTag).toBe(false);
+    expect(end?.[1]).toBeGreaterThan(200);
+    expect(Math.abs((end?.[0] ?? 0) - 400)).toBeLessThan(20);
+  });
+
+  it("puts a bubble beside its speaker on the side its tail can reach without crossing anyone's head", () => {
+    // A small body stands just to the speaker's right, between its face and the bubble's place on that side: there,
+    // the tail would run over that head. On the left it reaches the speaker clear of everyone.
+    const screen = { left: 0, right: 800, top: 0, covered: [{ left: 0, right: 800, top: 0, bottom: 150 }] };
+    const speaker = body("speaker", 300, 200, {
+      bubble: [200, 60],
+      said: 1,
+      focus: true,
+      body: { left: 280, right: 320, top: 200, bottom: 300 },
+    });
+    const small = { id: "small", x: 318, y: 200, rank: 0, body: { left: 312, right: 324, top: 200, bottom: 260 } };
+    const s = stack([speaker, small], screen).get("speaker") as Stacked;
+    const { bubble } = drawn(speaker, s);
+    expect((bubble as Box).right).toBeLessThanOrEqual(300);
+    expect(s.tail?.toTag).toBe(false);
+  });
+
+  it("keeps both tags of two talking side by side under the controls, each tail on its own speaker", () => {
+    // Two at the edge of a busy table, heads a little under the buttons and the trail, the newer bubble pushed down
+    // by the earlier one. Neither tag is put away, and whatever is drawn points at its own speaker.
+    const screen = {
+      left: 0,
+      right: 610,
+      top: 0,
+      covered: [
+        { left: 16, right: 554, top: 96, bottom: 122 },
+        { left: 16, right: 255, top: 134, bottom: 160 },
+      ],
+    };
+    const cols = [
+      body("two", 125, 259, {
+        tag: [102, 23],
+        bubble: [204, 68],
+        said: 1,
+        rank: 1000,
+        focus: true,
+        body: { left: 107, right: 143, top: 259, bottom: 300 },
+      }),
+      body("three", 90, 262, {
+        tag: [115, 23],
+        bubble: [192, 68],
+        said: 2,
+        rank: 1000,
+        focus: true,
+        body: { left: 72, right: 108, top: 262, bottom: 305 },
+      }),
+    ];
+    const out = stack(cols, screen);
+    expect(out.get("three")?.gone).toBe(false);
+    for (const c of cols) {
+      const at = out.get(c.id) as Stacked;
+      if (at.gone) continue;
+      expect(at.hidden).toBe(false);
+      expect(endsOnOwn(c, at, cols, out)).toBe(true);
+    }
+  });
+
+  it("puts away a faint tag in a crowd rather than stack it a column high", () => {
+    // Six heads in a huddle: the tags would stack five high over it.
+    const huddle = Array.from({ length: 6 }, (_, i) => body(`b${i}`, 300 + i * 6, 300 + i, { rank: -i }));
+    const out = stack(huddle);
+    const shown = huddle.filter((c) => !(out.get(c.id) as Stacked).hidden);
+    expect(shown.length).toBeLessThan(huddle.length);
+    for (const c of shown) expect((out.get(c.id) as Stacked).tag).toBeLessThanOrEqual(GAP_PX + 2 * (20 + GAP_PX) + 1);
+    // One you point at, or that speaks, always shows, however high it has to go.
+    const pointed = stack(huddle.map((c) => (c.id === "b5" ? { ...c, focus: true } : c)));
+    expect(pointed.get("b5")?.hidden).toBe(false);
+  });
+
+  it("never covers a speaker's tag, and ends every tail on its own speaker, in any crowd", () => {
+    let seed = 23;
+    const rand = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    for (let n = 0; n < 400; n++) {
+      const count = 2 + Math.floor(rand() * 5);
+      const cols: Column[] = Array.from({ length: count }, (_, i) => {
+        const x = 40 + rand() * 560;
+        const y = 60 + rand() * 360;
+        const half = 10 + rand() * 20;
+        return {
+          id: `b${i}`,
+          x,
+          y,
+          rank: rand() * 3000,
+          focus: rand() < 0.3,
+          tag: [60 + rand() * 70, 20 + rand() * 6] as [number, number],
+          ...(rand() < 0.8 ? { body: { left: x - half, right: x + half, top: y, bottom: y + half * 4 } } : {}),
+          ...(rand() < 0.55 ? { bubble: [120 + rand() * 110, 40 + rand() * 40] as [number, number], said: i } : {}),
+        };
+      });
+      // Half the time, a phone's chat over the foot of the stage too.
+      const foot = rand() < 0.5 ? { bottom: 330 + rand() * 160 } : {};
+      const screen = {
+        left: 0,
+        right: 640,
+        top: 40,
+        ...foot,
+        covered: [{ left: 0, right: 200 + rand() * 400, top: 40, bottom: 60 + rand() * 140 }],
+      };
+      const out = stack(cols, screen);
+      for (const c of cols) {
+        const at = out.get(c.id) as Stacked;
+        if (!c.bubble || at.gone) continue;
+        expect(at.hidden).toBe(false);
+        expect(endsOnOwn(c, at, cols, out)).toBe(true);
+      }
+    }
   });
 
   it("puts away a tag a bubble brought back on the screen had to come down over", () => {

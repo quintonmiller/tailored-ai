@@ -72,6 +72,16 @@ export function flyWheelStep(pixels: number): number {
   return -(pixels / 100) * FLY_SPEED * FLY_NOTCH_SECONDS;
 }
 
+/**
+ * How far a pinch flies you, in metres along the way you look, as the
+ * fingers go from `apart` to `now` pixels apart: spread, forward, and
+ * closed, back, as a pinch zooms walking; 100 pixels of it a notch of the
+ * wheel (`flyWheelStep`).
+ */
+export function flyPinchStep(apart: number, now: number): number {
+  return flyWheelStep(apart - now);
+}
+
 /** A pace this many times a body's own walking speed is a run. Halfway between a walk and a Shift run. */
 const RUN_ABOVE = (1 + RUN_FACTOR) / 2;
 /** The walk cycle plays no slower or faster than this, so a stumble or a sprint never smears it. */

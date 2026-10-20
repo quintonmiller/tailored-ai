@@ -1184,6 +1184,8 @@ const DOOR_LOOKS: Record<RoomDoor["kind"], { panel?: number; plate: string; ink:
 
 /** How tall a gate's posts are, at an open side of a room: about a hand above the waist. */
 const GATE_POST = 1.12;
+/** How thick a gate's mat is: more than a rug, so one laid across the open side doesn't hide it. */
+const GATE_MAT = 0.05;
 
 /** One shared see-through pane for glass doors: out to the street, into the town hall and the office. */
 let glass: THREE.MeshStandardMaterial | undefined;
@@ -1194,8 +1196,9 @@ let glass: THREE.MeshStandardMaterial | undefined;
  * town hall and the office), a name plate over it and a mat in front. At an open side of the room the wall
  * is cut away, so the door is too: a low gateway, two capped posts and a
  * rail across their tops with the plate hanging from it, readable from
- * either side, open to see through below it, that never stands between the
- * camera and the room. A gate at the open right side is seen almost edge on
+ * either side, open to see through below it, and its name again on the
+ * mat at its foot, which stays while the rest of it fades for someone behind
+ * it. A gate at the open right side is seen almost edge on
  * from where the room is looked at, so it has a signpost too (`signpost`): its
  * nearer post goes up, with the plate again on top of it, turned to face the
  * front. A home's door has a light by its plate, and a lit strip along it,
@@ -1293,8 +1296,21 @@ export function buildDoor(
       g.add(plate);
     }
   }
-  // A mat in front, so a door is found by where it meets the floor as well.
-  box(g, 1.3, 0.014, 0.55, 0x4a4038, 0, 0.007, 0.45).castShadow = false;
+  // A mat in front, so a door is found by where it meets the floor as well. A gate's is thick enough to lie on a rug
+  // rather than under it.
+  const matTop = opts.freestanding ? GATE_MAT : 0.014;
+  const mat = box(g, 1.3, matTop, 0.55, 0x4a4038, 0, matTop / 2, 0.45);
+  mat.castShadow = false;
+  if (opts.freestanding) {
+    // A gate says where it goes on its mat too, read from the view in, and the mat stays while the gate all but goes
+    // for someone behind it (`keep`, see `fade.ts`): on the floor, where it hides nobody, the way out is still there.
+    const words = new THREE.Mesh(new THREE.PlaneGeometry(wide, 0.27), face.material);
+    words.position.set(0, matTop + 0.002, 0.45);
+    words.rotation.set(-Math.PI / 2, 0, Math.PI);
+    g.add(words);
+    mat.userData.keep = true;
+    words.userData.keep = true;
+  }
   // Lit up while the pointer is on it: a bright edge round the doorway and the mat, and the plate brighter.
   const edge = new THREE.MeshBasicMaterial({ color: 0xffd98a, toneMapped: false, transparent: true, opacity: 0.9 });
   const glow = new THREE.Group();
@@ -1302,14 +1318,18 @@ export function buildDoor(
     const mesh = solid(new THREE.BoxGeometry(w, h, d), edge, x, y, z);
     mesh.castShadow = false;
     glow.add(mesh);
+    return mesh;
   };
   const up = opts.freestanding ? GATE_POST : tall;
   const front = opts.freestanding ? 0.13 : 0.15;
   for (const x of [-0.6, 0.6]) bar(0.035, up, 0.02, x, up / 2, front);
   bar(1.235, 0.035, 0.02, 0, up, front);
-  // The mat's outline, just above it.
-  for (const z of [0.18, 0.72]) bar(1.3, 0.008, 0.03, 0, 0.018, z);
-  for (const x of [-0.65, 0.65]) bar(0.03, 0.008, 0.57, x, 0.018, 0.45);
+  // The mat's outline, just above it: kept with the mat while a gate fades, so pointing at it still lights it.
+  const kept = (mesh: THREE.Mesh) => {
+    if (opts.freestanding) mesh.userData.keep = true;
+  };
+  for (const z of [0.18, 0.72]) kept(bar(1.3, 0.008, 0.03, 0, matTop + 0.004, z));
+  for (const x of [-0.65, 0.65]) kept(bar(0.03, 0.008, 0.57, x, matTop + 0.004, 0.45));
   glow.visible = false;
   g.add(glow);
   const highlight = (on: boolean) => {

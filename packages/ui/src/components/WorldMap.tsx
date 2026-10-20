@@ -442,19 +442,21 @@ export function WorldMap({
                         <span className="world-map-dot" aria-hidden="true">
                           {MARKS[b.activity.doing]}
                         </span>
-                        <span className="world-map-busy-who">{nameOf(b.agent)}</span>
-                        <span className="world-map-busy-what">
-                          {b.activity.what}
-                          {b.activity.detail ? ` · ${b.activity.detail}` : ""}
-                        </span>
-                        <span className="world-map-busy-where">
-                          {b.place.id === here
-                            ? "here"
-                            : b.place.kind === "room"
-                              ? `in #${b.place.name}`
-                              : b.place.kind === "home" && b.place.owner === b.agent
-                                ? "at home"
-                                : `in ${b.place.name}`}
+                        <span className="world-map-busy-text">
+                          <span className="world-map-busy-who">{nameOf(b.agent)}</span>
+                          <span className="world-map-busy-what">
+                            {b.activity.what}
+                            {b.activity.detail ? ` · ${b.activity.detail}` : ""}
+                          </span>
+                          <span className="world-map-busy-where">
+                            {b.place.id === here
+                              ? "here"
+                              : b.place.kind === "room"
+                                ? `in #${b.place.name}`
+                                : b.place.kind === "home" && b.place.owner === b.agent
+                                  ? "at home"
+                                  : `in ${b.place.name}`}
+                          </span>
                         </span>
                       </button>
                     </li>
@@ -500,10 +502,17 @@ export function WorldMap({
                           type="button"
                           className="world-map-away"
                           aria-current={current(away.id)}
-                          title={`Go to ${placeTitle(away)}, where ${nameOf(agent)} is`}
+                          title={
+                            back?.place === away.id
+                              ? `${nameOf(agent)} is in ${placeTitle(away)}: back to ${back.agent}'s view`
+                              : `Go to ${placeTitle(away)}, where ${nameOf(agent)} is`
+                          }
                           onClick={() => onGo(away.id)}
                         >
                           in {placeTitle(away)}
+                          {back?.place === away.id && (
+                            <span className="world-map-back">back to {back.agent}'s view</span>
+                          )}
                         </button>
                       )}
                     </li>

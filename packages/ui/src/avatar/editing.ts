@@ -152,9 +152,9 @@ function world([lx, lz]: [number, number], [cx, cz]: [number, number], facing: n
 }
 
 /** Seats drawn up to a table or a desk to sit at it, which go where it goes. */
-export const DRAWN_UP_KINDS = new Set(["chair", "stool", "bench"]);
+export const DRAWN_UP_KINDS = new Set(["chair", "stool", "bench", "cafe_chair"]);
 /** What seats are drawn up to. */
-export const TABLE_KINDS = new Set(["table", "round_table", "desk", "coffee_table"]);
+export const TABLE_KINDS = new Set(["table", "round_table", "desk", "coffee_table", "cafe_table"]);
 /** What things stand on, on the floor, and are carried along with it. */
 export const RUG_KINDS = new Set(["rug", "round_rug"]);
 /** How near a seat comes to a table, edge to edge, to be drawn up to it, in metres. */
