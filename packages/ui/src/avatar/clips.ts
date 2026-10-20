@@ -351,7 +351,25 @@ function bake(source: Source, clip: THREE.AnimationClip, vrm: VRM, target: Avata
 }
 
 /** What the stage plays for each moment, found by name in the library. */
-export type ClipRole = "idle" | "talk" | "walk" | "run" | "sit" | "sitTalk" | "foldArms" | "nod" | "shake" | "dance";
+export type ClipRole =
+  | "idle"
+  | "talk"
+  | "walk"
+  | "run"
+  | "sit"
+  | "sitTalk"
+  | "foldArms"
+  | "nod"
+  | "shake"
+  | "dance"
+  | "wave"
+  | "clap"
+  | "cheer"
+  | "bow"
+  | "salute"
+  | "laugh"
+  | "sneak"
+  | "march";
 
 const ROLE_PATTERNS: Record<ClipRole, RegExp[]> = {
   idle: [/^idle(_loop)?$/i, /^idle/i],
@@ -366,7 +384,19 @@ const ROLE_PATTERNS: Record<ClipRole, RegExp[]> = {
   nod: [/^nod/i, /head.?nod/i],
   shake: [/^idle_no/i, /^no$/i, /head.?shake/i],
   dance: [/^dance/i],
+  wave: [/^wav(e|ing)/i],
+  clap: [/clap/i],
+  cheer: [/cheer/i, /victory/i],
+  bow: [/^bow(ing)?(_loop)?$/i],
+  salute: [/salute/i],
+  laugh: [/laugh/i],
+  // A walk of another kind, for a body that walks that way: on bent knees, or a formal stride.
+  sneak: [/^crouch.?(fwd|walk)/i, /^sneak/i],
+  march: [/^walk.?formal/i, /^march/i],
 };
+
+/** The roles a gesture can be played from, one-off or kept going, when the files have one. */
+export const GESTURE_ROLES: ClipRole[] = ["nod", "shake", "dance", "wave", "clap", "cheer", "bow", "salute", "laugh"];
 
 /** The clip that plays each role, by the usual names; a role with none falls back to the code-driven motion. */
 export function rolesFor(names: string[]): Partial<Record<ClipRole, string>> {

@@ -25,11 +25,14 @@
  *
  * What an agent is for, read from its name, description, instructions and
  * tools (`places-roles.ts`), picks the kind of home it starts with and what it
- * wears. It can choose what it wears with the tool's `room` action, and a
- * person from its card: a `wear` record, which no record leaves to its role.
+ * wears. The `body` tool (`places-body.ts`) lets it choose how its body looks
+ * and carries itself, what it wears among the rest, make a gesture, and go to
+ * a spot and stay there; a person chooses the same on its card. The place
+ * tool's `room` action still takes what to wear, as before.
  *
  * Free when unused: with no avatar configured, it registers nothing. An agent
- * with its own `tools:` list needs `place` named in it, like any tool.
+ * with its own `tools:` list needs `place` (and `body`) named in it, like any
+ * tool.
  */
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgent } from "../agent/agents.js";
@@ -40,7 +43,7 @@ import { mediaPart, textPart } from "../content/types.js";
 import { getExploratoryState } from "../db/exploratory-queries.js";
 import type { EventBus, Subscription } from "../events.js";
 import type { TaiHttpRequest, TaiHttpResponse } from "../http/registry.js";
-import { resolveAvatar } from "../live/avatar.js";
+import { avatarModelNamed, avatarModels, resolveAvatar } from "../live/avatar.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import { enrichRoomMessage, IdentityResolver } from "../rooms/identities.js";
 import { getRoomBackend, listRoomBackends } from "../rooms/registry.js";
@@ -51,6 +54,22 @@ import { type Actor, type StateChange, StateConflictError, StateError, type Stat
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
 import { whyAsleep } from "./activity.js";
+import {
+  BODY_SCHEMA,
+  BODY_TYPE,
+  type BodyData,
+  BodyTool,
+  bodyWith,
+  type Chosen,
+  changeBody,
+  EMOTE_SCHEMA,
+  EMOTE_TYPE,
+  looksOf,
+  ranOut,
+  WEAR_SCHEMA,
+  WEAR_TYPE,
+  wornBy,
+} from "./places-body.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
 import { applyEdit, editFrom } from "./places-edit.js";
 import {
@@ -90,17 +109,7 @@ import {
   withDoorwayHeld,
   withSpots,
 } from "./places-layout.js";
-import {
-  type AgentAbout,
-  aOrAn,
-  homeFor,
-  parseWear,
-  type Role,
-  readRole,
-  WEAR,
-  WEAR_MOST,
-  wearWords,
-} from "./places-roles.js";
+import { type AgentAbout, aOrAn, homeFor, parseWear, type Role, readRole, WEAR, wearWords } from "./places-roles.js";
 import {
   homePlace,
   LOBBY,
@@ -136,12 +145,18 @@ export const meta: PluginMeta = {
     "Gives each agent with an avatar a room it can change: a `place` world-state record, the `place` tool, and GET /api/ext/builtin:places/:agent for the page that draws it.",
   registers: [
     { kind: "stateType", id: "place" },
+    { kind: "stateType", id: "body" },
+    { kind: "stateType", id: "emote" },
     { kind: "stateType", id: "wear" },
     { kind: "tool", id: "place" },
+    { kind: "tool", id: "body" },
     { kind: "httpRoutes", id: "places" },
     { kind: "httpRoutes", id: "map" },
   ],
 };
+
+/** Where the page loads one of the deployment's models from, by name (see `avatarModels`). */
+export const modelUrl = (name: string) => `/api/live/avatar?model=${encodeURIComponent(name)}`;
 
 /** The record that holds an agent's own room. */
 export function homeId(agent: string): string {
@@ -330,38 +345,21 @@ async function upgrade(
 /** Where each agent's body has gone: no record means it is at home. */
 export const WHEREABOUTS_TYPE = "whereabouts";
 
+/** The bodies' `wear` record type and schema, from before what a body wears was its body record's. */
+export { WEAR_SCHEMA, WEAR_TYPE } from "./places-body.js";
+
 /**
- * What each agent's body wears, a record in its own scope once the agent or
- * a person has chosen: a few things by name (`WEAR` in `places-roles.ts`), or
- * none. No record means whatever suits its role. Apart from its home, so
- * choosing a hat never counts as changing the room, which would stop the room
- * being brought up to date.
+ * Every body as chosen, by agent, with the old `wear` records: one query each
+ * for a room full of bodies. A store that keeps none has none.
  */
-export const WEAR_TYPE = "wear";
-
-export const WEAR_SCHEMA = {
-  type: "object",
-  required: ["wear"],
-  properties: {
-    wear: { type: "array", maxItems: WEAR_MOST, items: { type: "string", enum: Object.keys(WEAR) } },
-  },
-} as const;
-
-/** What a body wears: what was chosen, while that still makes sense, or else what suits its role. */
-export function wornBy(chosen: unknown, role: Role | undefined): string[] {
-  if (chosen !== undefined) {
-    const asked = parseWear(chosen);
-    if ("wear" in asked) return asked.wear;
-  }
-  return role?.wear ?? [];
-}
-
-/** Every choice of what to wear, by agent: one query for a room full of bodies. A store that keeps none has none. */
-export async function chosenWear(service: StateService, caller: StateCaller): Promise<Map<string, unknown>> {
-  const records = await service
-    .query(caller, { type: WEAR_TYPE, limit: 500 })
-    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
-  return new Map(records.map((r) => [r.id, r.data.wear]));
+export async function chosenBodies(service: StateService, caller: StateCaller): Promise<Chosen> {
+  const all = (type: string) =>
+    service.query(caller, { type, limit: 500 }).catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  const [bodies, wear] = await Promise.all([all(BODY_TYPE), all(WEAR_TYPE)]);
+  return {
+    bodies: new Map(bodies.map((r) => [r.id, r.data as BodyData])),
+    wear: new Map(wear.map((r) => [r.id, r.data.wear])),
+  };
 }
 
 /**
@@ -382,20 +380,11 @@ export function aboutAgent(
   };
 }
 
-/** What an agent is, in a word, and what its body wears, given everyone's choices by agent (`chosenWear`), and whether it chose. */
-export function looksOf(agent: string, role: Role | undefined, chosen: Map<string, unknown>) {
-  return {
-    ...(role ? { role: role.word } : {}),
-    wear: wornBy(chosen.get(agent), role),
-    ...(chosen.has(agent) ? { wearChosen: true as const } : {}),
-  };
-}
-
-/** The map's places, each home saying what its owner is and wears, for the map's list of agents and each agent's card. */
+/** The map's places, each home saying what its owner is, wears and looks like, for the map's list of agents and each agent's card. */
 export function withLooks<P extends { kind: string; owner?: string }>(
   places: P[],
   roleOf: (agent: string) => Role | undefined,
-  chosen: Map<string, unknown>,
+  chosen: Chosen,
 ) {
   return places.map((p) => (p.kind === "home" && p.owner ? { ...p, ...looksOf(p.owner, roleOf(p.owner), chosen) } : p));
 }
@@ -1334,6 +1323,47 @@ export function followTalk(
   ];
 }
 
+/**
+ * End the stays bodies chose that have run out (see `places-body.ts`): a
+ * spot it said to stay at for a while is let go, and from a place it went to
+ * for a while it goes home, if it is still there. Each body record is looked
+ * at again before it is written, so one changed meanwhile stands.
+ */
+export async function endStays(service: StateService, now = Date.now()): Promise<void> {
+  const bodies = await service
+    .query(PRESENCE_CALLER, { type: BODY_TYPE, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  const over = (body: BodyData) => ({ spot: ranOut(body.spot?.until, now), away: ranOut(body.away?.until, now) });
+  for (const { id, data } of bodies) {
+    if (!over(data as BodyData).spot && !over(data as BodyData).away) continue;
+    const ref = { type: BODY_TYPE, id };
+    try {
+      const fresh = await service.get(PRESENCE_CALLER, ref);
+      const body = (fresh?.data ?? {}) as BodyData;
+      const ended = over(body);
+      if (!fresh || (!ended.spot && !ended.away)) continue;
+      if (ended.away && body.away) {
+        const where = await service.get(PRESENCE_CALLER, { type: WHEREABOUTS_TYPE, id });
+        if (where?.data.place === body.away.place) {
+          await service.delete(PRESENCE_CALLER, { type: WHEREABOUTS_TYPE, id }, where.version);
+          await endVisit(service, id);
+        }
+      }
+      const next = bodyWith(body, { ...(ended.spot ? { spot: null } : {}), ...(ended.away ? { away: null } : {}) });
+      if (Object.keys(next).length)
+        await service.put(
+          PRESENCE_CALLER,
+          { ...ref, scope: fresh.scope, data: next as Record<string, unknown> },
+          fresh.version,
+        );
+      else await service.delete(PRESENCE_CALLER, ref, fresh.version);
+    } catch (err) {
+      // Changed a moment ago: looked at again next time round.
+      if (!(err instanceof StateConflictError)) throw err;
+    }
+  }
+}
+
 /** A body the place tool moves leaves any place it was visiting: where it went stands. */
 async function endVisit(service: StateService, agent: string): Promise<void> {
   await service.delete(PRESENCE_CALLER, { type: VISIT_TYPE, id: agent }).catch(() => null);
@@ -1794,6 +1824,68 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
 // The tool
 // --------------------------------------------------------------------------
 
+/** Where an agent is, in a sentence: at home, in a meeting room, or in a shared place. */
+function hereWords(id: string, agent: string, place: Place, talk: TalkRoom | undefined): string {
+  if (id === homeId(agent)) return "You are at home.";
+  return talk
+    ? `You are in the meeting room of #${talk.name}, a room you talk in. Its members can change it.`
+    : `You are in ${place.name}, a shared place.`;
+}
+
+/**
+ * An agent's body goes home, to a shared place, or into the meeting room of
+ * a room it talks in, by name: where it lives from now, leaving any place it
+ * was visiting. Undefined when no place is called that; not ok, with why,
+ * when it can't go in.
+ */
+export async function goTo(
+  service: StateService,
+  caller: StateCaller,
+  agent: string,
+  to: string,
+  meetings: Meetings,
+): Promise<{ ok: boolean; text: string; id?: string } | undefined> {
+  const ref = { type: WHEREABOUTS_TYPE, id: agent };
+  if (/^(home|my room|your room|back home)$/i.test(to) || to === homeId(agent)) {
+    if (await service.get(caller, ref)) await service.delete(caller, ref);
+    await endVisit(service, agent);
+    return { ok: true, text: "You're home.", id: homeId(agent) };
+  }
+  const shared = await sharedPlaces(service, caller);
+  const wanted = slug(to);
+  const place = shared.find((p) => p.id === to || p.id === `${SHARED}${wanted}` || slug(p.name) === wanted);
+  const talk = place
+    ? undefined
+    : meetings.rooms.find(
+        (r) =>
+          roomPlaceId(r.ref) === to ||
+          r.ref === to ||
+          slug(r.name) === wanted ||
+          `${slug(r.name)}-meeting-room` === wanted,
+      );
+  if (talk) {
+    if (!talk.members.includes(agent)) return { ok: false, text: onlyMembers(talk, meetings.hasBody) };
+    const id = roomPlaceId(talk.ref);
+    await service.put(caller, { ...ref, scope: "global", data: { place: id } });
+    await endVisit(service, agent);
+    const there = await whoIsIn(service, caller, id, meetings.hasBody, agent, meetings.rooms);
+    return {
+      ok: true,
+      id,
+      text: `You're in the meeting room of #${talk.name} now.${there.length ? ` Also here: ${there.join(", ")}.` : ""} Change it like your own room; its members see what you do.`,
+    };
+  }
+  if (!place) return undefined;
+  await service.put(caller, { ...ref, scope: "global", data: { place: place.id } });
+  await endVisit(service, agent);
+  const there = await whoIsIn(service, caller, place.id, meetings.hasBody, agent, meetings.rooms);
+  return {
+    ok: true,
+    id: place.id,
+    text: `You're in ${place.name} now.${there.length ? ` Also here: ${there.join(", ")}.` : " Nobody else is here yet."}`,
+  };
+}
+
 const fail = (error: string): ToolResult => ({ success: false, output: "", error });
 
 export class PlaceTool implements Tool {
@@ -1882,22 +1974,28 @@ export class PlaceTool implements Tool {
 
   /** What an agent wears, and whether it chose that or its role did. */
   private async wearing(service: StateService, caller: StateCaller, agent: string): Promise<string> {
-    const found = await service.get(caller, { type: WEAR_TYPE, id: agent }).catch(() => null);
+    const read = (type: string) => service.get(caller, { type, id: agent }).catch(() => null);
+    const [body, old] = await Promise.all([read(BODY_TYPE), read(WEAR_TYPE)]);
     const role = this.roles(agent);
-    const worn = wearWords(wornBy(found?.data.wear, role));
-    return found || !role ? `You wear ${worn}.` : `You wear ${worn}, as suits ${aOrAn(role.word)}.`;
+    const own = body?.data as BodyData | undefined;
+    const worn = wearWords(wornBy(own, old?.data.wear, role));
+    const chose = own?.wear !== undefined || !!old;
+    return chose || !role ? `You wear ${worn}.` : `You wear ${worn}, as suits ${aOrAn(role.word)}.`;
   }
 
-  /** Put on what was asked, or go back to what suits its role: what to tell the agent. */
+  /**
+   * Put on what was asked, or go back to what suits its role: what to tell
+   * the agent. Kept on its body record, as the body tool keeps it: the room's
+   * `wear` is the same choice, made from here.
+   */
   private async dress(service: StateService, caller: StateCaller, agent: string, asked: unknown): Promise<string> {
     const wanted = parseWear(asked);
     if ("problem" in wanted) throw new StateError(wanted.problem);
-    const ref = { type: WEAR_TYPE, id: agent };
     if ("suited" in wanted) {
-      if (await service.get(caller, ref)) await service.delete(caller, ref);
+      await changeBody(service, caller, agent, { wear: null });
       return `You wear ${wearWords(this.roles(agent)?.wear ?? [])} now, what suits your role.`;
     }
-    await service.put(caller, { ...ref, scope: `agent:${agent}`, data: { wear: wanted.wear } });
+    await changeBody(service, caller, agent, { wear: wanted.wear });
     return `You wear ${wearWords(wanted.wear)} now.`;
   }
 
@@ -1917,12 +2015,7 @@ export class PlaceTool implements Tool {
         const { id, place } = await readCurrent(service, caller, agent, meetings, this.homes);
         const others = await whoIsIn(service, caller, id, this.hasBody, agent, meetings.rooms);
         const talk = talkRoomOf(meetings.rooms, id);
-        const where =
-          id === homeId(agent)
-            ? "You are at home."
-            : talk
-              ? `You are in the meeting room of #${talk.name}, a room you talk in. Its members can change it.`
-              : `You are in ${place.name}, a shared place.`;
+        const where = hereWords(id, agent, place, talk);
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
         const wear = await this.wearing(service, caller, agent);
         const shown = describe(shownPurpose(place, talk));
@@ -2059,51 +2152,14 @@ export class PlaceTool implements Tool {
     meetings: Meetings,
   ): Promise<ToolResult> {
     if (!to) return fail('Say where with `to`: "home", a shared place, or a room you talk in. `places` lists them.');
-    const ref = { type: WHEREABOUTS_TYPE, id: agent };
-    if (/^(home|my room|your room|back home)$/i.test(to) || to === homeId(agent)) {
-      if (await service.get(caller, ref)) await service.delete(caller, ref);
-      await endVisit(service, agent);
-      return { success: true, output: "You're home." };
-    }
+    const went = await goTo(service, caller, agent, to, meetings);
+    if (went) return went.ok ? { success: true, output: went.text } : fail(went.text);
     const shared = await sharedPlaces(service, caller);
-    const wanted = slug(to);
-    const place = shared.find((p) => p.id === to || p.id === `${SHARED}${wanted}` || slug(p.name) === wanted);
-    const talk = place
-      ? undefined
-      : meetings.rooms.find(
-          (r) =>
-            roomPlaceId(r.ref) === to ||
-            r.ref === to ||
-            slug(r.name) === wanted ||
-            `${slug(r.name)}-meeting-room` === wanted,
-        );
-    if (talk) {
-      if (!talk.members.includes(agent)) return fail(onlyMembers(talk, this.hasBody));
-      const id = roomPlaceId(talk.ref);
-      await service.put(caller, { ...ref, scope: "global", data: { place: id } });
-      await endVisit(service, agent);
-      const there = await whoIsIn(service, caller, id, this.hasBody, agent, meetings.rooms);
-      return {
-        success: true,
-        output: `You're in the meeting room of #${talk.name} now.${there.length ? ` Also here: ${there.join(", ")}.` : ""} Change it like your own room; its members see what you do.`,
-      };
-    }
-    if (!place) {
-      const known = [
-        ...shared.map((p) => p.name),
-        ...meetings.rooms.filter((r) => r.members.includes(agent)).map((r) => `#${r.name}`),
-      ].join(", ");
-      return fail(
-        `There's no place called "${to}".${known ? ` There is: ${known}.` : ""} Make a shared one with "new".`,
-      );
-    }
-    await service.put(caller, { ...ref, scope: "global", data: { place: place.id } });
-    await endVisit(service, agent);
-    const there = await whoIsIn(service, caller, place.id, this.hasBody, agent, meetings.rooms);
-    return {
-      success: true,
-      output: `You're in ${place.name} now.${there.length ? ` Also here: ${there.join(", ")}.` : " Nobody else is here yet."}`,
-    };
+    const known = [
+      ...shared.map((p) => p.name),
+      ...meetings.rooms.filter((r) => r.members.includes(agent)).map((r) => `#${r.name}`),
+    ].join(", ");
+    return fail(`There's no place called "${to}".${known ? ` There is: ${known}.` : ""} Make a shared one with "new".`);
   }
 
   /** Make a shared place, furnished like a new room, and go there. */
@@ -2226,9 +2282,27 @@ const plugin: Plugin = (ctx) => {
   });
 
   ctx.stateTypes.register({
+    name: BODY_TYPE,
+    description:
+      "How an agent's body looks and carries itself in the 3D world: its colour, model, size and what it wears; its idle style, posture, walk and favourite idle errands; a spot it chose to stay at. A part with nothing chosen is as it always was. Agents choose with the body tool; people on the agent's card.",
+    scope: "agent",
+    schema: BODY_SCHEMA as never,
+  });
+
+  ctx.stateTypes.register({
+    name: EMOTE_TYPE,
+    description:
+      "A gesture an agent's body is making in the 3D world (wave, dance, bow…), since when, and until when if it keeps it going. Kept in memory; gone on restart.",
+    scope: "global",
+    title: "name",
+    provider: "memory",
+    schema: EMOTE_SCHEMA as never,
+  });
+
+  ctx.stateTypes.register({
     name: WEAR_TYPE,
     description:
-      "What an agent's body wears in the 3D world: a few things by name, or none. No record means what suits its role. Agents choose with the place tool; people on the agent's card.",
+      "What an agent's body wore before that was its body record's `wear`: read until the body record says what it wears, and taken away when it does. Nothing writes one now.",
     scope: "agent",
     schema: WEAR_SCHEMA as never,
   });
@@ -2297,6 +2371,39 @@ const plugin: Plugin = (ctx) => {
     ];
   });
 
+  // Every model a body can be drawn in: those the config names, and every VRM in `<TAI_HOME>/avatars/`.
+  const models = () => {
+    const config = runtime.getConfig();
+    return avatarModels(
+      config.live,
+      Object.keys(config.agents ?? {}).map((a) => runtime.getAgentDefinition(a)?.avatar),
+    );
+  };
+  const ownModel = (agent: string) => {
+    const path = resolveAvatar(
+      runtime.getConfig().live,
+      runtime.avatarFor(agent === "default" ? undefined : agent),
+    ).model;
+    return models().find((m) => m.path === path)?.name;
+  };
+
+  ctx.tools.register("body", (config, tctx) => {
+    if (!anyAvatar(config) || !tctx.getStateService) return [];
+    return [
+      new BodyTool(tctx.getStateService, {
+        hasBody,
+        here: async (service, caller, agent) => {
+          const meetings = { rooms: talkRooms(), hasBody };
+          const { id, place } = await readCurrent(service, caller, agent, meetings, homes);
+          return { id, place, words: hereWords(id, agent, place, talkRoomOf(meetings.rooms, id)) };
+        },
+        go: (service, caller, agent, to) => goTo(service, caller, agent, to, { rooms: talkRooms(), hasBody }),
+        models: (agent) => ({ names: models().map((m) => m.name), own: ownModel(agent) }),
+        role: roleOf,
+      }),
+    ];
+  });
+
   // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
   // `map`, `scene/:id` and `transcript/:id` go first, so they aren't read as an agent's name.
   const agentNames = () => ["default", ...Object.keys(runtime.getConfig().agents ?? {}).filter((a) => a !== "default")];
@@ -2316,7 +2423,17 @@ const plugin: Plugin = (ctx) => {
       defaultBackend: config.defaultChannel,
     });
   };
-  const bodyOf = (name: string, chosen: Map<string, unknown>) => {
+  /**
+   * What an agent's body is drawn with (see `looksOf`), and the file to draw
+   * it from when it chose one of the deployment's models: one that has gone
+   * since is its own again.
+   */
+  const looksFor = (name: string, chosen: Chosen, known = models()) => {
+    const { model, ...looks } = looksOf(name, roleOf(name), chosen);
+    const drawn = avatarModelNamed(known, model);
+    return drawn ? { ...looks, model: drawn.name, avatar: modelUrl(drawn.name) } : looks;
+  };
+  const bodyOf = (name: string, chosen: Chosen, known = models()) => {
     const own = runtime.avatarFor(name === "default" ? undefined : name);
     const files = resolveAvatar(runtime.getConfig().live, own);
     const q = name === "default" ? "" : `?agent=${encodeURIComponent(name)}`;
@@ -2325,7 +2442,7 @@ const plugin: Plugin = (ctx) => {
       name,
       avatar: `/api/live/avatar${q}`,
       animations: files.animations.map((_, i) => `/api/live/animations/${i}${q}`),
-      ...looksOf(name, roleOf(name), chosen),
+      ...looksFor(name, chosen, known),
     };
   };
 
@@ -2336,7 +2453,7 @@ const plugin: Plugin = (ctx) => {
       const service = runtime.getStateService();
       const rooms = talkRooms();
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
-      const chosen = await chosenWear(service, PLUGIN_CALLER);
+      const chosen = await chosenBodies(service, PLUGIN_CALLER);
       const places = withLooks(
         await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world),
         roleOf,
@@ -2357,7 +2474,8 @@ const plugin: Plugin = (ctx) => {
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const found = await scene(service, PLUGIN_CALLER, id, rooms, hasBody, world, homes);
       if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
-      const chosen = await chosenWear(service, PLUGIN_CALLER);
+      const chosen = await chosenBodies(service, PLUGIN_CALLER);
+      const known = models();
       // The town's houses say what their owners do, so what stands by each can show it.
       const town = (found.place as Place & { town?: Town }).town;
       const place = town
@@ -2374,7 +2492,7 @@ const plugin: Plugin = (ctx) => {
           type: PLACE_TYPE,
           id: found.id,
           place,
-          company: found.agents.map((a) => bodyOf(a, chosen)),
+          company: found.agents.map((a) => bodyOf(a, chosen, known)),
           doors: found.doors,
           area: world.areaOf.get(found.id) ?? MAIN,
           // What a person changing it on the page writes with: the town and the office's floors are laid out from what
@@ -2443,8 +2561,9 @@ const plugin: Plugin = (ctx) => {
       const { id, place, version, scope } = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody }, homes);
       // Everyone else whose body is here, with what the page needs to draw them.
       const others = await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent, rooms);
-      const chosen = await chosenWear(service, PLUGIN_CALLER);
-      const company = others.map((a) => bodyOf(a, chosen));
+      const chosen = await chosenBodies(service, PLUGIN_CALLER);
+      const known = models();
+      const company = others.map((a) => bodyOf(a, chosen, known));
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const doors = doorsIn(id, place, world);
       return {
@@ -2458,8 +2577,9 @@ const plugin: Plugin = (ctx) => {
           company,
           doors,
           area: world.areaOf.get(id) ?? MAIN,
-          // What the agent itself is, and wears: its body is drawn from /api/live, which says nothing of either.
-          ...looksOf(agent, roleOf(agent), chosen),
+          // What the agent itself is, wears and looks like: its body is drawn from /api/live, which says nothing of
+          // any of it, unless it chose another model to be drawn in.
+          ...looksFor(agent, chosen, known),
         },
       };
     },
@@ -2497,6 +2617,8 @@ const plugin: Plugin = (ctx) => {
   });
   subs.push(...followTalk(ctx.events, talks, messages));
   sweeps.push(() => talks.sweep());
+  // A stay a body chose that has run out: its spot is let go, and from a place it went to for a while, it goes home.
+  sweeps.push(() => endStays(runtime.getStateService()));
   // Bodies go where the talk is: to a room's meeting room while they talk there, and home after a quiet spell.
   const quietMinutes = typeof cfg.quietMinutes === "number" ? cfg.quietMinutes : QUIET_MINUTES;
   if (quietMinutes > 0) {

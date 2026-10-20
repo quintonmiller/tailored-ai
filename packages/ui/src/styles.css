@@ -9362,3 +9362,21 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sf-kiosk-button:active .sf-kiosk-plus { transform: scale(0.95); }
 .sf-kiosk-label { font: 720 36px/1.1 var(--sf-font); letter-spacing: -0.01em; }
 .sf-kiosk-sub { font: 520 20px/1.2 var(--sf-font); color: var(--sf-dim); }
+
+/* An agent's body, chosen on its card (`BodyControls.tsx`). */
+.world-agent-body { display: flex; flex-direction: column; gap: 8px; }
+.body-controls { display: flex; flex-direction: column; gap: 7px; padding: 8px 0 2px; border-top: 1px solid var(--border); }
+.body-row { display: grid; grid-template-columns: 48px 1fr; align-items: center; gap: 4px 8px; }
+.body-row > .body-size-value { grid-column: 2; }
+.body-label { color: var(--text-dim); font-size: 11px; align-self: start; padding-top: 3px; }
+.body-swatches { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.body-swatch { width: 20px; height: 20px; padding: 0; border: 1px solid color-mix(in srgb, var(--text) 25%, transparent); border-radius: 50%; cursor: pointer; }
+.body-swatch[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+.body-swatch:disabled { opacity: 0.6; cursor: default; }
+.body-swatch-own { width: auto; padding: 0 7px; border-radius: 999px; font-family: var(--font); font-size: 11px; line-height: 18px; color: var(--text-dim); background: var(--bg); }
+.body-swatch-any { position: relative; overflow: hidden; background: conic-gradient(#e05252, #e0c252, #52e07a, #52c2e0, #7a52e0, #e052b8, #e05252); }
+.body-swatch-any input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+.body-select { font: inherit; font-size: 12px; padding: 2px 6px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.body-size { width: 100%; accent-color: var(--accent); }
+.body-row:has(.body-size) { grid-template-columns: 48px 1fr auto; }
+.body-row:has(.body-size) > .body-size-value { grid-column: auto; font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 11px; }

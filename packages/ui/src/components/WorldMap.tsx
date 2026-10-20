@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type AgentActivity, hueFor } from "../avatar/doing";
+import { BODY_TYPE, dotColor } from "../avatar/body";
+import type { AgentActivity } from "../avatar/doing";
 import type { TownPlan as Plan } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { nameOf } from "../lib/conversations";
@@ -13,11 +14,11 @@ export type { MapArea, MapPlace } from "../lib/wayfinding";
 /**
  * A body's colour, near enough to the colour it is drawn in, for the dot by an
  * agent's name on its card and in the chat, and the small one by its role in
- * the map's list. The map's larger dot by each agent says what it is doing.
+ * the map's list: the colour it chose, or the one its name gives it. The
+ * map's larger dot by each agent says what it is doing.
  */
-export function agentColor(agent: string): string {
-  const hue = hueFor(agent);
-  return `hsl(${(145 + (hue ?? 0)) % 360} 52% 52%)`;
+export function agentColor(agent: string, color?: string): string {
+  return dotColor(agent, color);
 }
 
 /**
@@ -166,7 +167,7 @@ export function useWorldMap(
       const place = change.type === "place";
       const moved = place && change.before?.area !== change.after?.area;
       const repurposed = place && change.before?.purpose !== change.after?.purpose;
-      const dressed = change.type === WEAR_TYPE;
+      const dressed = change.type === WEAR_TYPE || change.type === BODY_TYPE;
       if (comeOrGone(change.type) || moved || repurposed || dressed || (place && change.id.startsWith("shared:")))
         load();
     });
@@ -234,6 +235,11 @@ export function WorldMap({
 }) {
   const [query, setQuery] = useState("");
   const [floorsOpen, setFloorsOpen] = useState(false);
+  // Each home's owner in the colour it chose for its body, on the plan as in the list.
+  const colorOf = useMemo(() => {
+    const chosen = new Map(places.flatMap((p) => (p.owner && p.color ? [[p.owner, p.color] as const] : [])));
+    return (agent: string) => agentColor(agent, chosen.get(agent));
+  }, [places]);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -355,7 +361,7 @@ export function WorldMap({
             here={here}
             {...(you ? { you } : {})}
             activities={activities}
-            color={agentColor}
+            color={colorOf}
             onGo={onGo}
           />
         )}
@@ -423,7 +429,7 @@ export function WorldMap({
                         <span className="world-map-who-role">
                           <span
                             className="world-map-hue"
-                            style={{ background: agentColor(agent) }}
+                            style={{ background: agentColor(agent, home.color) }}
                             aria-hidden="true"
                           />
                           {roleWord(agent, home.role)}

@@ -7,12 +7,13 @@
 import { type VRM, type VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
-import type { Hold, Sign } from "./doing";
+import type { Tint } from "./body";
+import { type ClipLibrary, type ClipRole, GESTURE_ROLES, loadClipLibrary, rolesFor } from "./clips";
+import type { Hold } from "./doing";
 import { buildPiece, wearColors } from "./dress";
-import { type ArmTurn, armClearance, bodyPoints, earAt, measureWear, reach, wearBone } from "./fit";
+import { type Arm, type ArmTurn, armClearance, bodyPoints, droopOf, earAt, measureWear, reach, wearBone } from "./fit";
 import { Director, findPath, type Obstacle, type Pick, route, slide, turnBetween, Walker } from "./locomotion";
-import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
+import { type BodyState, type Carriage, Motion, POSE_BONES, type Pose } from "./motion";
 import { BUBBLE_PX, GAP_PX, type Over, SETTLE_SECONDS, SIGN_PX, type Stacked, TAG_PX, TAIL_WIDTH_PX } from "./overhead";
 import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
@@ -67,11 +68,10 @@ const EAR_SPAN = 0.5;
 const EAR_ELBOW: V3 = [-1, -1, 0.35];
 
 /**
- * The arm holding a phone to this body's ear, measured in `frame` (the
- * figure's own) while the body stands as made: the hand brought as near the
- * side of its head as it reaches (`reach`). None for a model without the bones.
+ * The right arm as the model was made, measured in `frame` (the figure's
+ * own) while the body stands as made. None for a model without the bones.
  */
-function earTurn(vrm: VRM, frame: THREE.Object3D, fit: BodyFit, gap: number): ArmTurn | undefined {
+function armAsMade(vrm: VRM, frame: THREE.Object3D): Arm | undefined {
   frame.updateMatrixWorld(true);
   const at = (bone: VRMHumanBoneName): V3 | undefined => {
     const node = vrm.humanoid.getNormalizedBoneNode(bone);
@@ -80,10 +80,17 @@ function earTurn(vrm: VRM, frame: THREE.Object3D, fit: BodyFit, gap: number): Ar
   const shoulder = at("rightUpperArm");
   const elbow = at("rightLowerArm");
   const hand = at("rightHand");
-  if (!shoulder || !elbow || !hand) return undefined;
+  return shoulder && elbow && hand ? { shoulder, elbow, hand } : undefined;
+}
+
+/**
+ * The arm holding a phone to this body's ear, as the arm was made: the hand
+ * brought as near the side of its head as it reaches (`reach`).
+ */
+function earTurn(arm: Arm, fit: BodyFit, gap: number): ArmTurn {
   // The elbow down and out to the side, a little forward; the palm to the head, which is to its left (+x), with the
   // phone between them.
-  const { upper, lower } = reach({ shoulder, elbow, hand }, earAt(fit, gap), { elbow: EAR_ELBOW, palm: [1, 0, 0] });
+  const { upper, lower } = reach(arm, earAt(fit, gap), { elbow: EAR_ELBOW, palm: [1, 0, 0] });
   return { upper, lower };
 }
 
@@ -139,6 +146,12 @@ export class Figure {
   private pace = 0;
   /** Its walking speed was set for it, and is kept when a walk clip loads. */
   private readonly paceSet: boolean;
+  /** Its own walking speed, before how it chose to walk speeds it up or slows it down. */
+  private basePace: number;
+  /** How it carries itself: its posture, idle style and walk (see `body.ts`). */
+  private carriage: Carriage = {};
+  /** How big it was made, against its model as made. */
+  readonly scale: number;
   /** What it says, in turn: the line in its bubble, from when to when on the stage's clock, and those said after. */
   private readonly turns = new Turns<{ text: string; who?: string; how: { phone?: boolean; far?: boolean } }>();
   /** The line in its bubble, drawn: the bubble and its tail. */
@@ -172,8 +185,12 @@ export class Figure {
       facing?: number;
       /** The animation files took over. */
       onClips?: () => void;
-      /** Degrees round the colour wheel, so it can be told from others in the same model. */
-      hue?: number;
+      /** How its colours are turned from the model's own, so it can be told from others in the same model. */
+      tint?: Tint;
+      /** How big it is, against its model as made: 1 as made. */
+      size?: number;
+      /** How it carries itself: its posture, idle style and walk. */
+      carriage?: Carriage;
       /**
        * Metres a second it walks, instead of the pace its size or its walk
        * clip suggests: a visitor walks briskly whatever body they have, and
@@ -195,7 +212,10 @@ export class Figure {
     } = {},
   ) {
     this.flip = vrm.meta.metaVersion === "0" ? -1 : 1;
-    if (opts.hue) tintModel(vrm.scene, opts.hue);
+    if (opts.tint) tintModel(vrm.scene, opts.tint);
+    // Made bigger or smaller before it is measured: its speed, stride, seat and what it wears all follow.
+    this.scale = opts.size && opts.size > 0 ? opts.size : 1;
+    vrm.scene.scale.setScalar(this.scale);
     this.body.add(vrm.scene);
     if (start) {
       this.body.position.set(start.at[0], 0, start.at[1]);
@@ -206,15 +226,16 @@ export class Figure {
     this.bounds = new THREE.Box3().setFromObject(this.body);
     // Measured for what it wears while it still stands as made: the poses below move it.
     this.measured = measureWear(vrm, this.body);
-    this.colors = wearColors(opts.hue);
+    this.colors = wearColors(opts.tint);
     this.hipsY =
       vrm.humanoid.getNormalizedBoneNode("hips")?.getWorldPosition(new THREE.Vector3()).y ??
       this.bounds.min.y + (this.bounds.max.y - this.bounds.min.y) / 2;
     this.torso = (this.bounds.max.y + this.hipsY) / 2;
     // A small robot pads along; a tall figure strides.
+    this.basePace = opts.pace ?? Math.max(0.3, this.hipsY * 1.35);
     this.walker = new Walker(
       { x: this.body.position.x, z: this.body.position.z, facing: this.body.rotation.y },
-      opts.pace ?? Math.max(0.3, this.hipsY * 1.35),
+      this.basePace,
     );
     this.paceSet = opts.pace !== undefined;
     if (opts.turn) this.walker.turnSpeed = opts.turn;
@@ -224,11 +245,14 @@ export class Figure {
     this.current = start?.id;
     this.currentAt = start?.at;
     this.motion = new Motion(opts);
+    if (opts.carriage) this.carry(opts.carriage);
     // A little larger than life, so what it holds reads from across the room.
     this.size = 1.3 * Math.min(1.25, Math.max(0.6, (this.bounds.max.y - this.bounds.min.y) / 1.6));
-    // A phone to its own ear: the hand to the side of its own head, however big the head and short the arms. Measured
-    // standing as made, before anything poses it.
-    if (this.measured) this.motion.ear = earTurn(vrm, this.body, this.measured.fit, EAR_GAP * this.size);
+    // A phone to its own ear: the hand to the side of its own head, however big the head and short the arms; and how
+    // far its arms hang as made, for raising an arm in a gesture. Measured standing as made, before anything poses it.
+    const arm = armAsMade(vrm, this.body);
+    if (arm && this.measured) this.motion.ear = earTurn(arm, this.measured.fit, EAR_GAP * this.size);
+    if (arm) this.motion.armDroop = droopOf(arm);
     // Swing the arms out just far enough that the hands clear this body.
     const points = bodyPoints(vrm);
     const probe = new Motion({ reducedMotion: true });
@@ -251,10 +275,13 @@ export class Figure {
       loadClipLibrary(opts.animations, vrm)
         .then((library) => {
           if (this.disposed) return;
-          const player = clipPlayer(library, vrm, !!opts.runs);
+          const player = clipPlayer(library, vrm, !!opts.runs, this.scale);
           if (!player) return;
           this.motion.armClearance = armClearance(vrm, points, (extra) => player.sample("idle", extra, this.flip));
-          if (player.walkSpeed && !this.paceSet) this.walker.speed = player.walkSpeed;
+          if (player.walkSpeed && !this.paceSet) {
+            this.basePace = player.walkSpeed;
+            this.carry(this.carriage);
+          }
           this.clips = player;
           opts.onClips?.();
         })
@@ -584,9 +611,33 @@ export class Figure {
     }
   }
 
-  /** A gesture: a nod or a head shake from the files when they have one, the rest by code. */
-  gesture(name: string, clock: number) {
-    if (!this.clips?.shot(name as ClipRole, clock)) this.motion.gesture(name, clock);
+  /**
+   * A gesture: from the files when they have one (a nod, a dance, a wave), by
+   * code otherwise. Once, or kept going for `seconds`; a new one ends any
+   * kept going before it.
+   */
+  gesture(name: string, clock: number, seconds?: number) {
+    const until = seconds !== undefined && seconds > 0 ? clock + seconds : undefined;
+    this.motion.stopGestures(clock);
+    this.clips?.stop(clock);
+    if (!this.clips?.shot(name as ClipRole, clock, until)) this.motion.gesture(name, clock, until);
+  }
+
+  /** Stop any gesture kept going: wanted for something else now. */
+  stopGesture(clock: number) {
+    this.motion.stopGestures(clock);
+    this.clips?.stop(clock);
+  }
+
+  /**
+   * How it carries itself from now: its posture and idle style, and how it
+   * walks, which speeds it up or slows it down from its own pace. A visitor's
+   * own body, whose pace was set for it, keeps that pace.
+   */
+  carry(carriage: Carriage) {
+    this.carriage = carriage;
+    this.motion.carry(carriage);
+    if (!this.paceSet) this.walker.speed = this.basePace * (carriage.walk?.speed ?? 1);
   }
 
   /**
@@ -613,11 +664,15 @@ export class Figure {
     const activity = doing ? doing.activity : there;
     if (walked > 0) this.lastWalkAt = t;
     if (dt > 0) this.pace += (walked / dt - this.pace) * (1 - Math.exp(-dt / PACE_SECONDS));
+    // A walk of its own kind from the files, when it walks that way and they have one; its arms folded by them too.
+    const styled = this.carriage.walk?.clip;
+    const styledWalk = !!styled && !!this.clips?.covers[styled];
+    const folds = this.carriage.posture === "arms folded" && !!this.clips?.covers.folded && !this.held;
     const pose = this.motion.step(t, input.state, input.loudness, {
       walked,
       stride: this.stride,
       ...(activity ? { activity } : {}),
-      ...(this.clips ? { clips: this.clips.covers } : {}),
+      ...(this.clips ? { clips: { ...this.clips.covers, styledWalk, folded: folds } } : {}),
     });
     this.seated = pose.seated;
     if (this.clips) {
@@ -629,8 +684,11 @@ export class Figure {
         { walk: this.clips.walkSpeed, run: this.clips.runSpeed },
         this.clips.covers.run,
       );
+      const walking = t - this.lastWalkAt < 0.2;
+      const styledRole = walking && styled && styledWalk && stride.role === "walk" ? styled : undefined;
       const role: ClipRole =
-        t - this.lastWalkAt < 0.2
+        styledRole ??
+        (walking
           ? stride.role
           : activity === "sit"
             ? input.state === "speaking"
@@ -640,8 +698,20 @@ export class Figure {
               ? "foldArms"
               : input.state === "speaking"
                 ? "talk"
-                : "idle";
-      this.clips.update(role, t, dt, role === stride.role ? stride.rate : 1);
+                : folds && !activity
+                  ? "foldArms"
+                  : "idle");
+      const madeFor = styledRole ? this.clips.speeds[styledRole] : undefined;
+      const rate = styledRole
+        ? madeFor
+          ? Math.min(4, Math.max(0.25, this.pace / madeFor))
+          : 1
+        : role === stride.role
+          ? stride.rate
+          : role === "idle"
+            ? (this.carriage.pace ?? 1)
+            : 1;
+      this.clips.update(role, t, dt, rate);
       overlay(this.vrm, pose, this.flip);
     } else {
       apply(this.vrm, pose, this.flip);
@@ -653,7 +723,8 @@ export class Figure {
       x += (spot.seat.at[0] - x) * this.seated;
       z += (spot.seat.at[1] - z) * this.seated;
       // From where the hips are now: a sitting clip lowers them itself.
-      y += (spot.seat.height + 0.03 - (this.hipsNode?.position.y ?? this.hipsY)) * this.seated;
+      y +=
+        (spot.seat.height + 0.03 - (this.hipsNode ? this.hipsNode.position.y * this.scale : this.hipsY)) * this.seated;
     }
     this.body.position.set(x, y, z);
     this.body.rotation.y = this.walker.place.facing;
@@ -710,16 +781,30 @@ export class Figure {
 
 /** Plays the animation files' base pose, crossfading between roles, with one-off clips over it. */
 interface ClipPlayer {
-  /** What the files cover, so the code-driven motion leaves it alone. */
-  covers: { walk: boolean; run: boolean; activities: ("sit" | "look")[] };
+  /**
+   * What the files cover, so the code-driven motion leaves it alone: the
+   * walk, the run, the activities, arms folded, and the walks of other kinds.
+   */
+  covers: {
+    walk: boolean;
+    run: boolean;
+    activities: ("sit" | "look")[];
+    folded: boolean;
+    sneak: boolean;
+    march: boolean;
+  };
   /** The walking speed the walk clip was made for, in metres per second, so the feet don't slide. */
   walkSpeed?: number;
   /** The same for the run clip, when there is one. */
   runSpeed?: number;
+  /** The same for the walks of other kinds. */
+  speeds: Partial<Record<"sneak" | "march", number>>;
   /** Play a role as the base; a walk or a run at `rate` times its own speed, to keep pace with the ground. */
   update(role: ClipRole, t: number, dt: number, rate?: number): void;
-  /** Play a one-off over the base: true when the files have one for this role. */
-  shot(role: ClipRole, t: number): boolean;
+  /** Play a gesture over the base, once or round and round until `until`: true when the files have one for it. */
+  shot(role: ClipRole, t: number, until?: number): boolean;
+  /** Bring a gesture kept going to an end now. */
+  stop(t: number): void;
   /** Pose the model as a role looks partway through, arms swung out by `extra`, for fitting. */
   sample(role: ClipRole, extra: number, flip: number): void;
   dispose(): void;
@@ -727,7 +812,8 @@ interface ClipPlayer {
 
 const FADE = 0.35;
 
-function clipPlayer(library: ClipLibrary, vrm: VRM, runs: boolean): ClipPlayer | undefined {
+/** `size` is how big the body was made: the paces the clips were made for are its model's as made. */
+function clipPlayer(library: ClipLibrary, vrm: VRM, runs: boolean, size = 1): ClipPlayer | undefined {
   const roles = rolesFor(library.names());
   // A body that never runs has no run to play, so its run clip is never made.
   if (!runs) delete roles.run;
@@ -753,17 +839,29 @@ function clipPlayer(library: ClipLibrary, vrm: VRM, runs: boolean): ClipPlayer |
     if (from && from !== next) next.crossFadeFrom(from, seconds, false);
     else next.fadeIn(seconds);
   };
-  const madeFor = (role: ClipRole) => (clipFor(role)?.userData as { speed?: number } | undefined)?.speed;
+  const madeFor = (role: ClipRole) => {
+    const speed = (clipFor(role)?.userData as { speed?: number } | undefined)?.speed;
+    return speed ? speed * size : undefined;
+  };
   const walkSpeed = madeFor("walk");
   const runSpeed = roles.run ? madeFor("run") : undefined;
+  const speeds: ClipPlayer["speeds"] = {};
+  for (const role of ["sneak", "march"] as const) {
+    const speed = roles[role] ? madeFor(role) : undefined;
+    if (speed && speed > 0.05) speeds[role] = speed;
+  }
   return {
     covers: {
       walk: !!roles.walk,
       run: !!roles.run,
       activities: [...(roles.sit ? (["sit"] as const) : []), ...(roles.foldArms ? (["look"] as const) : [])],
+      folded: !!roles.foldArms,
+      sneak: !!roles.sneak,
+      march: !!roles.march,
     },
     ...(walkSpeed && walkSpeed > 0.1 ? { walkSpeed } : {}),
     ...(runSpeed && runSpeed > 0.1 ? { runSpeed } : {}),
+    speeds,
     update(role, t, dt, rate = 1) {
       if (oneOff && t >= oneOff.ends) {
         if (base) fadeTo(base, oneOff.action, FADE);
@@ -782,13 +880,17 @@ function clipPlayer(library: ClipLibrary, vrm: VRM, runs: boolean): ClipPlayer |
       for (const bone of POSE_BONES) vrm.humanoid.getNormalizedBoneNode(bone)?.quaternion.identity();
       mixer.update(dt);
     },
-    shot(role, t) {
-      if (!roles[role] || !["nod", "shake", "dance"].includes(role)) return false;
-      const action = actionFor(role, false);
+    shot(role, t, until) {
+      if (!roles[role] || !GESTURE_ROLES.includes(role)) return false;
+      const going = until !== undefined && until > t;
+      const action = actionFor(role, going);
       if (!action) return false;
       fadeTo(action, oneOff?.action ?? base, 0.2);
-      oneOff = { action, ends: t + action.getClip().duration - 0.3 };
+      oneOff = { action, ends: going ? until : t + action.getClip().duration - 0.3 };
       return true;
+    },
+    stop(t) {
+      if (oneOff && oneOff.ends > t + 0.3) oneOff.ends = t + 0.3;
     },
     sample(role, extra, flip) {
       const clip = clipFor(role);
@@ -833,6 +935,12 @@ function overlay(vrm: VRM, pose: Pose, flip: number) {
       if (!r) continue;
       const node = vrm.humanoid.getNormalizedBoneNode(bone as (typeof POSE_BONES)[number]);
       node?.quaternion.slerp(q.setFromEuler(e.set(r[0] * flip, r[1], r[2] * flip)), pose.owned.weight);
+    }
+    // An arm taken over is posed from its shoulder at rest, as the code poses it: a shoulder the files have dropped
+    // or rolled, as an idle often does on one side, would send the same arm somewhere else.
+    for (const side of ["left", "right"] as const) {
+      if (!pose.owned.bones[`${side}UpperArm`]) continue;
+      vrm.humanoid.getNormalizedBoneNode(`${side}Shoulder`)?.quaternion.slerp(q.identity(), pose.owned.weight);
     }
   }
   vrm.expressionManager?.setValue("blink", pose.expressions.blink);

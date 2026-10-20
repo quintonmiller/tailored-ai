@@ -263,7 +263,9 @@ Its voice is set by `voice.voice`, as before.
 Agents sharing one model are told apart first by colour: each body is the
 model turned round the colour wheel by an amount drawn from the agent's
 name, and the dot by its name on its card, in the chat and on the map is the
-same colour. The default agent keeps the model's own colours.
+same colour. The default agent keeps the model's own colours. An agent can
+choose a colour of its own, and another of the models the deployment has, as
+can you on its card (see [An agent in charge of its body](#an-agent-in-charge-of-its-body)).
 
 ### What an agent is for: its home, and what it wears
 
@@ -335,22 +337,120 @@ made once and shared by every body, so a room full of dressed agents costs
 little more than one.
 
 An agent wears what suits its role until it, or you, chooses otherwise. The
-agent chooses with the `place` tool's `room` action and `wear`:
+agent chooses with the `body` tool's `change` action and `wear`:
 `"glasses, scarf"`, `"none"`, or `"default"` for what suits its role again.
-`look` says what it wears. **On its card** (see
+The `place` tool's `room` action takes the same `wear`, for an agent given
+`place` but not `body`, and `look` says what it wears. **On its card** (see
 [What it is doing](#what-it-is-doing)), a row of chips under **Wears** puts
 each thing on or takes it off, in place of whatever was in its place, and
-**back to what suits** goes back to the role's. Either way the choice is a
-`wear` world-state record whose id is the agent's name
-(`/api/state/wear/<agent>`), in the agent's own scope, kept
-apart from the home so that choosing a hat never counts as changing the
-room. No record means what suits its role. The page redraws the body the
-moment the record changes, whoever changed it.
+**back to what suits** goes back to the role's. Either way the choice is the
+`wear` of the agent's `body` record (see
+[An agent in charge of its body](#an-agent-in-charge-of-its-body)), kept apart
+from the home so that choosing a hat never counts as changing the room. No
+`wear` there means what suits its role. The page redraws the body the moment
+the record changes, whoever changed it.
+
+What a body wears used to be a `wear` record of its own. One left from
+before is still read until the body record says what the agent wears, and
+is taken away the first time the agent, or you, chooses again, so an old
+choice can never come back. Nothing writes one now.
 
 **The map and the card say the role in a word**, beside the agent's name and
 its colour: "trip-planner · travel agent". Where the name says it already
 (`coder`, `podcast-producer`), the word is left out and the colour stays.
 Typing a role in the map's search finds every agent of it.
+
+### An agent in charge of its body
+
+An agent with the `body` tool chooses how its body looks and carries itself,
+makes a gesture when it wants to, and goes where it likes. Name `body` in
+the `tools:` list of an agent that has one, as for any tool; an agent that
+never uses it looks and moves exactly as it did.
+
+```
+body action="look"
+body action="change" color="teal" wear="cap, scarf" size=1.2
+body action="change" idle="sleepy" posture="slouched" walk="stroll" errands="naps, reading"
+body action="emote" emote="dance" for="30s"
+body action="go" to="sit on the couch" for="20 min"
+```
+
+- **`look`** says where it is, what it looks like, what it wears and how it
+  carries itself, whether it is staying somewhere, every choice it has, and
+  the spots in the place it is in.
+- **`change`** sets any of: `color`, a colour name (`"teal"`, `"dark red"`)
+  or `#rrggbb`; `model`, one of the deployment's models by name; `size`, 0.6
+  to 1.4 of its model as made; `wear`; `idle`, `posture` and `walk`; and
+  `errands`, what it likes doing when idle. `"default"` takes any of them
+  back to how it always was. Every part is checked first, so a change with
+  one wrong part changes nothing, and says what was wrong.
+- **`emote`** makes a gesture now, once, or for a while with `for` (`"20s"`,
+  at most five minutes). With `at`, it turns to someone or something in the
+  room first; without, to you on the agent's own view, or to whoever is next
+  to it. It turns back to what it was doing after.
+- **`go`** walks to a spot in the place it is in, said in words: `"the
+  couch"`, `"by the window"`, `"sit on the couch"`, `"by the plant"` (a thing
+  with no spot of its own: it stands by it). It stays there until it chooses
+  otherwise (`to="anywhere"`), or for as long as `for` says. Words that name
+  no spot here are a place, as for the `place` tool's `go`: home, a shared
+  place, or the meeting room of a room it talks in; with `for`, it comes home
+  when the time runs out.
+
+| choice | what it does |
+|---|---|
+| `idle: calm` | fidgets less, stays longer at each thing, drawn to the window, the fire, a book and a seat |
+| `idle: lively` | sways more, moves on sooner, stretches, makes coffee, waters the plants, chin up |
+| `idle: focused` | keeps still and long at the desk, the task board and a book, head a little forward |
+| `idle: sleepy` | its head droops, it naps wherever it can sit, its idle plays slower |
+| `posture` | `upright`, `slouched`, `proud` (chin up, chest out), `shy` (head down, arms in), `arms folded` (while its arms have nothing else to do) |
+| `walk` | `brisk` (a third faster, leaning in), `stroll` (slower, easy), `bouncy` (a bob in each step), `sneak` (slow, crouched), `march` (high knees, arms swinging), `swagger` (a sway in the shoulders) |
+| `errands` | up to six of: coffee, reading, the window, plants, the task board, the fire, TV, painting, tidying, naps, stretching, the fish, pictures, sitting. Each comes up three times as often as it would |
+
+The gestures are wave, nod, shake, cheer, clap, dance, bow, shrug, think,
+point, salute, stretch, jump and laugh. With animation files, a gesture plays
+the library's own clip when it has one by the usual name (`Dance_Loop` is
+the dance; a nod, a head shake, a wave, a clap, a cheer, a bow, a salute or
+a laugh are found the same way), and the code's own move otherwise, which
+takes the arms over from whatever the files were doing. Gestures are written
+for a model made in a T-pose; on one made in an A-pose, with its arms hanging
+part way down, an arm a gesture takes over is turned as the T-pose's would
+be, so a wave is up, a stretch overhead and a clap's hands meet in front. A walk of
+another kind plays the library's when there is one: a crouched walk
+(`Crouch_Fwd_Loop`) for a sneak, a formal one (`Walk_Formal_Loop`) for a
+march; arms folded plays its folded-arms idle.
+
+**What comes first.** A spot it chose holds only when nothing else has the
+body: a conversation face to face with someone in the room comes first, then
+its work (a turn sends it to its desk, a book to a seat), then you talking to
+it on the page, and only then the spot. Work done, it walks back. A spot
+holds in the place it was chosen in; gone somewhere else, the agent is
+about its own business there. A stay with a time ends when the time runs
+out, and the plugin lets the spot go, so the agent's own `look` and its card
+never say it is staying somewhere it has left.
+
+**The models to choose from** are every model the config names (the
+deployment's, and each agent's own) and every `.vrm` file in
+`<TAI_HOME>/avatars/`, by file name. Drop another model in that folder and
+agents can be drawn in it. A model that is gone since an agent chose it
+draws the agent in its own again.
+
+**On its card**, a **Body** row says how it looks and carries itself in a
+few words ("teal, 1.2× · lively, proud, brisk"); **change** opens the same
+choices: colours to pick at a touch and any other from a picker, its model
+when there is more than one, a size slider, its idle style, posture and
+walk, what it likes doing, a gesture to make now, and, while it is staying
+somewhere, where, with **let it roam**. Each choice shows on its body the
+moment it is made, wherever it is drawn: on its own view, on your visit, in
+anyone's company.
+
+Everything chosen is one `body` world-state record per agent
+(`/api/state/body/<agent>`), in the agent's own scope, kept like any record,
+so a restart keeps it, and every change has an author and a history. A part
+nothing chose is as it always was, and nothing chosen is no record. A
+gesture is an `emote` record (`/api/state/emote/<agent>`: `{name, at,
+until?, target?}`), kept in memory: it lasts seconds, and a restart forgets
+it. A page that opens after a gesture has run its course doesn't make it
+again.
 
 ### A room the agent can change
 
@@ -1567,8 +1667,9 @@ message carries it, the agent's instructions get the same line, and the
 reply's cues come back as `cue` events before the text is shown.
 
 Cues need no configuration: the chat page declares its body. The avatar
-offers six gestures (wave, nod, shake, shrug, think, bow), walking to any
-spot in its room, and looking or pointing at its furniture or at you. Asked
+offers twelve gestures (wave, nod, shake, shrug, think, bow, cheer, clap,
+dance, laugh, salute, jump), walking to any spot in its room, and looking or
+pointing at its furniture or at you. Asked
 to look at something behind it, or to point, it turns to face the thing
 first. A walk the agent asks for is the same walk as a click. During a
 session the avatar stays wherever the agent sent it. A transport
@@ -1580,8 +1681,8 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name. `company` is everyone else there with a body: `{agent, name, avatar, animations, role?, wear}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `wear` change that someone chose what a body wears |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, street?, role?, wear?, wearChosen?}], areas: [{id, name, places}], town}`. `kind` is `town` (the outdoors), `lobby` (the town hall's), `office` (a floor of the office), `home` (one per agent with a body, `owner` its agent, with `role` and `wear` as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the town; `areas` lists the town first, then each plot, each area's places its way in first. `via` is the place its way in is through: the town for a building, the floor of the office for a room on one, the floor below for a floor; there is none for the town. `street` is the street a building's door is on ("Maple Lane", "The square"). The page's "where you are" trail is read from them. `town` is the town's plan, for drawing it from above: `{width, depth, square, shore, stream, park, roads: [{id, name?, kind, width, points}], buildings: [{id, kind, at, facing, size, label, owner?, style, street}], plots: [{id, name, at, size, gate}], trees, lamps}`, in metres with +X east and +Z south. A building's `id` is the place its door opens on |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name; beside them, whatever its `body` record chose (`color`, `colorName`, `model`, `size`, `idle`, `posture`, `walk`, `errands`, `spot`, `away`), and `avatar`, where to load the model it chose. `company` is everyone else there with a body: `{agent, name, avatar, animations, role?, wear, …}`, with the same, `avatar` the model it chose when it chose one. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `body` change that someone chose how a body looks or carries itself |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, street?, role?, wear?, wearChosen?}], areas: [{id, name, places}], town}`. `kind` is `town` (the outdoors), `lobby` (the town hall's), `office` (a floor of the office), `home` (one per agent with a body, `owner` its agent, with `role`, `wear` and what its `body` record chose as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the town; `areas` lists the town first, then each plot, each area's places its way in first. `via` is the place its way in is through: the town for a building, the floor of the office for a room on one, the floor below for a floor; there is none for the town. `street` is the street a building's door is on ("Maple Lane", "The square"). The page's "where you are" trail is read from them. `town` is the town's plan, for drawing it from above: `{width, depth, square, shore, stream, park, roads: [{id, name?, kind, width, points}], buildings: [{id, kind, at, facing, size, label, owner?, style, street}], plots: [{id, name, at, size, gate}], trees, lamps}`, in metres with +X east and +Z south. A building's `id` is the place its door opens on |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; the town (`town`) and the office's floors (`office`, `office:2`, ...) are laid out from what there is, always drawn fresh. The town's `place` carries `town`, its plan (as for `map`, each house with its owner's `role`), which the page builds the town from. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, at?, facing?, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), or, for a door in the front of a building in the town, where it stands (`at`) and the way out of it (`facing`, degrees, 0 facing south); the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for the town and the office's floors; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
 | `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for, and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
@@ -1589,7 +1690,8 @@ cues, and its text passes through untouched.
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |
-| `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
+| `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing. `?model=` is one of the models a body can be drawn in, by its file name (with or without `.vrm`), for an agent that chose it; `404` for any other name |
+| `GET /api/live/models` | the models a body can be drawn in, by file name: `{models}`. Every model the config names, then every `.vrm` file in `<TAI_HOME>/avatars/` |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/say` | a line in an agent's voice: `{agent?, text}` → the audio, from the live text-to-speech stage with the agent's `voice.voice` (else `live.tts.voice`). Markdown is stripped first. `400` for an empty line or one over 400 characters, `409` when live sessions are off, `502` when the voice can't be made |
 | `POST /api/live/idle` | what the agent does with a quiet moment: `{agent?, body, here?, hour?}` → `{cues}`. `429` within 45 s of the last ask for that agent; `400` for a body that can't go in a prompt |

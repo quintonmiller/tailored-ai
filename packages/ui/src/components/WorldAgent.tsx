@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { type ExploratoryAgent, type ExploratoryRun, fetchExploratoryAgents, fetchExploratoryRuns } from "../api";
+import type { BodyChange, BodyLooks } from "../avatar/body";
 import type { AgentActivity } from "../avatar/doing";
 import { toggleWear, WEAR, wearWords } from "../avatar/wear";
 import { nameOf } from "../lib/conversations";
 import { asleepWords, clockTime as clock, lastDid, wakeWords } from "../lib/did";
 import { ago, lasting } from "../lib/tasks";
 import { nextTurn } from "../lib/wakes";
+import { BodyControls, bodyWords } from "./BodyControls";
 import { agentColor, roleWord } from "./WorldMap";
 import { WorldPanel } from "./WorldPanel";
 
@@ -47,8 +49,9 @@ function ownTurns(agent: ExploratoryAgent, allOn: boolean): string {
 /**
  * An agent, in the world: who it is and what it is for, what it is doing,
  * what it last said and where, when it next runs on its own, where its body
- * is, what it wears, and what you can do about it, from talking to it to
- * sending it home. Its full page is a link at the bottom.
+ * is, what it wears and how its body looks and carries itself, and what you
+ * can do about it, from talking to it to sending it home. Its full page is a
+ * link at the bottom.
  */
 export function WorldAgent({
   agent,
@@ -56,6 +59,9 @@ export function WorldAgent({
   wear,
   chosen,
   onWear,
+  looks,
+  onBody,
+  onEmote,
   activity,
   said,
   roomName,
@@ -81,6 +87,12 @@ export function WorldAgent({
   chosen?: boolean;
   /** Dress it in these, or (null) in whatever suits its role again. */
   onWear?: (wear: string[] | null) => Promise<void>;
+  /** How its body looks and carries itself, as the map says; undefined until the map is in. */
+  looks?: BodyLooks;
+  /** Change how its body looks or carries itself, as its `body` tool would. */
+  onBody?: (change: BodyChange) => Promise<void>;
+  /** Ask its body to make a gesture now. */
+  onEmote?: (emote: string) => Promise<void>;
   activity: AgentActivity | undefined;
   said: Said | undefined;
   /** A room's name, by the ref a line was said in. */
@@ -116,6 +128,7 @@ export function WorldAgent({
     setDressed(undefined);
   }, [(wear ?? []).join(",")]);
   const worn = dressed ?? wear ?? [];
+  const [bodyOpen, setBodyOpen] = useState(false);
   const load = useCallback(async () => {
     if (!online) return;
     const [state, runs] = await Promise.all([
@@ -155,6 +168,8 @@ export function WorldAgent({
         throw err;
       }
     });
+  const reshape = (change: BodyChange) => void act("change its body", async () => onBody?.(change));
+  const gesture = (emote: string) => void act("make the gesture", async () => onEmote?.(emote));
   const post = (path: string, body?: unknown) =>
     fetch(`/api/exploratory/agents/${encodeURIComponent(agent)}/${path}`, {
       method: "POST",
@@ -178,7 +193,11 @@ export function WorldAgent({
       label={`About ${name}`}
       title={
         <span className="world-agent-name">
-          <span className="world-agent-dot" style={{ background: agentColor(agent) }} aria-hidden="true" />
+          <span
+            className="world-agent-dot"
+            style={{ background: agentColor(agent, looks?.color) }}
+            aria-hidden="true"
+          />
           {name}
           {roleWord(agent, role) && <span className="world-agent-role">{role}</span>}
         </span>
@@ -290,6 +309,34 @@ export function WorldAgent({
                   </button>
                 ))}
               </span>
+            </dd>
+          </>
+        )}
+        {looks && onBody && (
+          <>
+            <dt>Body</dt>
+            <dd className="world-agent-body">
+              <span>
+                {bodyWords(looks)}
+                {" · "}
+                <button
+                  type="button"
+                  className="world-panel-inline"
+                  aria-expanded={bodyOpen}
+                  onClick={() => setBodyOpen((open) => !open)}
+                >
+                  {bodyOpen ? "done" : "change"}
+                </button>
+              </span>
+              {bodyOpen && (
+                <BodyControls
+                  name={name}
+                  looks={looks}
+                  busy={busy}
+                  onBody={reshape}
+                  {...(onEmote ? { onEmote: gesture } : {})}
+                />
+              )}
             </dd>
           </>
         )}

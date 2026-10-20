@@ -4,7 +4,8 @@
  * hour and drawn per agent.
  */
 import { describe, expect, it } from "vitest";
-import { chooseErrand, errandAt, idleSpots, isMeeting, seeded } from "./idle";
+import { idleStyle } from "./body";
+import { chooseErrand, errandAt, idleSpots, isMeeting, likesOf, seeded } from "./idle";
 import type { Obstacle } from "./locomotion";
 import type { Prop, Room } from "./scene";
 
@@ -218,6 +219,20 @@ describe("chooseErrand", () => {
     for (let i = 0; i < 300; i++)
       if (chooseErrand(room, { hour: 8, random, here: "idle:plant" })?.spot === "idle:plant") stays++;
     expect(stays).toBeLessThan((tally(8, 300).water ?? 0) / 3);
+  });
+
+  it("does more of what it likes, and what its idle style draws it to", () => {
+    const count = (likes: Record<string, number>, id: string) => {
+      const random = seeded("planner");
+      let n = 0;
+      for (let i = 0; i < 400; i++) if (chooseErrand(room, { hour: 15, random, likes })?.id === id) n++;
+      return n;
+    };
+    expect(count(likesOf({}, ["read"]), "read")).toBeGreaterThan(1.6 * count({}, "read"));
+    expect(count(likesOf(idleStyle("sleepy").likes), "nap")).toBeGreaterThan(3 * count({}, "nap"));
+    // What it likes is never all it does.
+    expect(400 - count(likesOf({}, ["read"]), "read")).toBeGreaterThan(100);
+    expect(errandAt(room, "couch", 15, seeded("x"), likesOf({}, ["nap"]))).toBeDefined();
   });
 
   it("never goes where someone else is", () => {

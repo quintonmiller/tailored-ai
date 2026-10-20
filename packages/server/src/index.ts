@@ -10,6 +10,8 @@ import {
   type AutopilotSettings,
   type AutopilotWorker,
   addTaskComment,
+  avatarModelNamed,
+  avatarModels,
   type Body,
   type Briefing,
   BUDGETED_TOKEN_SOURCES,
@@ -2067,7 +2069,22 @@ export function createServer(opts: ServerOptions) {
     return c.body(await readFile(path), 200, { "Content-Type": "model/gltf-binary" });
   };
 
+  // Every model a body can be drawn in: the ones the config names, and every VRM file in `<TAI_HOME>/avatars/`.
+  const models = () => {
+    const config = runtime.getConfig();
+    const own = Object.keys(config.agents ?? {}).map((a) => runtime.getAgentDefinition(a)?.avatar);
+    return avatarModels(config.live, own);
+  };
+  app.get("/api/live/models", (c) => c.json({ models: models().map((m) => m.name) }));
+
+  // `?model=` is one of those models by name, for a body that chose it; otherwise the agent's own, or the deployment's.
   app.get("/api/live/avatar", async (c) => {
+    const named = c.req.query("model");
+    if (named) {
+      const model = avatarModelNamed(models(), named);
+      if (!model) return c.json({ error: `There's no model called ${named}.` }, 404);
+      return sendAvatarFile(c, model.path);
+    }
     const path = bodyFiles(c.req.query("agent") || undefined).model;
     if (!path) return c.json({ error: "No avatar is configured. Set live.avatar.model to a VRM file." }, 404);
     return sendAvatarFile(c, path);

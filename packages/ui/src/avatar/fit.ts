@@ -101,6 +101,22 @@ export interface Arm {
   hand: V3;
 }
 
+/** The most an arm is taken to hang below level as made: past this, it is a model posed some other way. */
+const DROOP_MOST = 0.9;
+
+/**
+ * How far below level the upper arm hangs as the model was made, in radians:
+ * none for a T-pose, more for an A-pose. Poses are written for a T-pose, so
+ * an arm a gesture raises is raised this much more, to end up where it was
+ * meant to (`armDroop` in `motion.ts`).
+ */
+export function droopOf(arm: Arm): number {
+  const down = arm.shoulder[1] - arm.elbow[1];
+  const out = Math.hypot(arm.elbow[0] - arm.shoulder[0], arm.elbow[2] - arm.shoulder[2]);
+  if (out < 1e-6) return down > 0 ? DROOP_MOST : 0;
+  return Math.min(DROOP_MOST, Math.max(0, Math.atan2(down, out)));
+}
+
 /**
  * How the right arm is turned, in full: the upper arm and the lower, each as
  * Euler angles (x, y, z) from the arm as made, in the body's own frame, as a

@@ -237,6 +237,14 @@ const LOOKS: Record<string, (args: Record<string, unknown>, room: RoomWords) => 
         : a.action === "look" || a.action === "places"
           ? { what: "looking around" }
           : { what: "rearranging the room" },
+  body: (a) =>
+    a.action === "go"
+      ? { what: "going somewhere", detail: words(a.to) }
+      : a.action === "emote"
+        ? { what: "making a gesture", detail: words(a.emote) }
+        : a.action === "look"
+          ? { what: "looking itself over" }
+          : { what: "changing how it looks" },
 };
 
 export interface ActivityOptions {

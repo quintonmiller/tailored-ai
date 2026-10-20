@@ -36,6 +36,7 @@ vi.mock("../avatar/stage", () => ({
       setRoom() {},
       setCompany() {},
       setWear() {},
+      setLooks() {},
       setLights() {},
       cue() {},
       onSurfaces: () => () => {},
@@ -65,6 +66,9 @@ beforeEach(() => {
             id: "home:guide",
             place: { name: "guide's room", props: [], spots: [], start: "middle" },
             wear: ["beret", "scarf"],
+            color: "#2a8a8a",
+            size: 1.2,
+            posture: "proud",
           }),
         );
       if (url === "/api/ext/builtin:places/planner")
@@ -104,9 +108,10 @@ describe("the snapshot page", () => {
       still: { spot: "couch", gesture: "wave" },
       room: { name: "guide's room" },
       lights: "home",
-      // In its own colours, wearing what it wears in the world.
+      // In its own colours, wearing what it wears in the world, and looking as it chose to.
       agent: "guide",
       wear: ["beret", "scarf"],
+      looks: { color: "#2a8a8a", size: 1.2, posture: "proud" },
     });
     expect(frame().dataset.snapshot).toBe("ready");
     // Nothing to click in a photo.

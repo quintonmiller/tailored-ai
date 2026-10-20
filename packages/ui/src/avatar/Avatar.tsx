@@ -1,6 +1,7 @@
 import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardWidgetSpec } from "../api";
 import type { BoardTask } from "./boards";
+import type { BodyLooks, EmoteRecord } from "./body";
 import type { CalendarView } from "./calendar";
 import type { Cue } from "./cues";
 import { type AgentActivity, DOING_VARS } from "./doing";
@@ -92,6 +93,8 @@ export function Avatar({
   onGreeted,
   onBody,
   wear,
+  looks,
+  emotes,
   edit,
 }: {
   url: string;
@@ -177,6 +180,14 @@ export function Avatar({
   onBody?: (agent: string) => boolean;
   /** What the body wears, by name (see `wear.ts`). */
   wear?: string[];
+  /**
+   * How the body chose to look and carry itself (see `body.ts`): another
+   * model, colour or size makes it again where it stands, without building
+   * the stage again.
+   */
+  looks?: BodyLooks;
+  /** The gesture each agent is making, by agent: each plays on its body when it is here. */
+  emotes?: Record<string, EmoteRecord>;
   /** Rearranging the room: what is picked, where it is going, and what the page hears; none while you aren't. */
   edit?: StageEdit;
 }) {
@@ -214,6 +225,18 @@ export function Avatar({
   useEffect(() => {
     stage.current?.setWear(wearRef.current ?? []);
   }, [wearKey]);
+  const looksRef = useRef(looks);
+  looksRef.current = looks;
+  const looksKey = JSON.stringify(looks ?? {});
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when the looks changed; the ref holds them.
+  useEffect(() => {
+    stage.current?.setLooks(looksRef.current ?? {});
+  }, [looksKey]);
+  const emotesRef = useRef(emotes);
+  emotesRef.current = emotes;
+  useEffect(() => {
+    if (emotes) stage.current?.setEmotes(emotes);
+  }, [emotes]);
   const activitiesRef = useRef(activities);
   activitiesRef.current = activities;
   useEffect(() => {
@@ -355,6 +378,7 @@ export function Avatar({
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
           ...(agentRef.current ? { agent: agentRef.current } : {}),
           ...(wearRef.current?.length ? { wear: wearRef.current } : {}),
+          ...(looksRef.current ? { looks: looksRef.current } : {}),
           ...(visitor
             ? {
                 visitor: true,
@@ -425,6 +449,8 @@ export function Avatar({
         shownPlace.current = placeRef.current;
         s.setCompany(companyRef.current ?? []);
         s.setWear(wearRef.current ?? []);
+        s.setLooks(looksRef.current ?? {});
+        if (emotesRef.current) s.setEmotes(emotesRef.current);
         if (activitiesRef.current) s.setActivities(activitiesRef.current);
         if (speechRef.current) s.setSpeech(speechRef.current);
         if (tasksRef.current) s.setTasks(tasksRef.current);

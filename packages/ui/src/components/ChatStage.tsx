@@ -12,6 +12,7 @@ import {
 } from "../api";
 import { type AgentAction, Avatar, type AvatarControls } from "../avatar/Avatar";
 import type { BoardTask } from "../avatar/boards";
+import { BODY_TYPE, type BodyChange, type BodyLooks, EMOTE_TYPE, type EmoteRecord } from "../avatar/body";
 import {
   type Booked,
   type CalendarView,
@@ -31,6 +32,7 @@ import type { Companion, UseSpot } from "../avatar/stage";
 import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
 import { isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
+import { changeBody, makeGesture } from "../lib/body";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
@@ -122,6 +124,7 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
             ...(id ? { id } : {}),
             ...areaOf(body),
             ...(body?.wear ? { wear: body.wear } : {}),
+            looks: looksIn(body, body?.id),
             ...recordOfPlace(body),
           };
           setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
@@ -133,8 +136,8 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
     void load();
     const off = subscribeStateChanges((change) => {
       // Someone came or went, maybe this agent itself: where it is and who is there are asked again. And for
-      // someone choosing what a body here wears.
-      if (comeOrGone(change.type) || change.type === WEAR_TYPE) void load();
+      // someone choosing what a body here wears, or how it looks and carries itself.
+      if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -164,6 +167,8 @@ export interface SceneInfo {
   area?: string;
   /** What the agent whose place this is wears, for its own body: an agent's own place only. */
   wear?: string[];
+  /** How the agent whose place this is chose to look and carry itself: an agent's own place only. */
+  looks?: BodyLooks;
   /** What a person rearranging it writes with: the record's version (0 while drawn fresh) and scope. */
   version?: number;
   scope?: string;
@@ -887,26 +892,11 @@ async function sendHome(who: string): Promise<void> {
 }
 
 /**
- * What a person chose for an agent's body to wear, kept where the agent's own
- * choice goes; null takes the choice away, back to what suits its role.
+ * What a person chose for an agent's body to wear, kept on its body record
+ * where the agent's own choice goes; null takes the choice away, back to what
+ * suits its role.
  */
-async function dressAgent(who: string, wear: string[] | null): Promise<void> {
-  const path = `/api/state/${WEAR_TYPE}/${encodeURIComponent(who)}`;
-  if (wear === null) {
-    const res = await fetch(path, { method: "DELETE" });
-    // Nothing to take away is a body already in what suits it.
-    if (res.status !== 404) await must(Promise.resolve(res), "change what it wears");
-    return;
-  }
-  await must(
-    fetch(path, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scope: `agent:${who}`, data: { wear } }),
-    }),
-    "change what it wears",
-  );
-}
+const dressAgent = (who: string, wear: string[] | null) => changeBody(who, { wear }, "change what it wears");
 
 /**
  * Any place, by id, as a visitor sees it: its room and everyone in it, asked
@@ -942,7 +932,7 @@ export function useScene(id: string | null): SceneInfo | null {
     };
     void load();
     const off = subscribeStateChanges((change) => {
-      if (comeOrGone(change.type) || change.type === WEAR_TYPE) void load();
+      if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
       // A place made, gone, or moved to another area elsewhere may add or take away a door here.
       if (
         change.type === "place" &&
@@ -974,19 +964,41 @@ export function useScene(id: string | null): SceneInfo | null {
   return scene;
 }
 
+/**
+ * How a body chose to look and carry itself, as the server sends it beside
+ * the rest, for the stage: its spot to stay at only when that is in the place
+ * it is in (`place`).
+ */
+export function looksIn(info: Partial<BodyLooks> | null | undefined, place: string | undefined): BodyLooks {
+  if (!info) return {};
+  const { color, colorName, model, avatar, size, idle, posture, walk, errands, spot } = info;
+  return {
+    ...(color ? { color } : {}),
+    ...(colorName ? { colorName } : {}),
+    ...(model ? { model } : {}),
+    ...(model && avatar ? { avatar } : {}),
+    ...(size ? { size } : {}),
+    ...(idle ? { idle } : {}),
+    ...(posture ? { posture } : {}),
+    ...(walk ? { walk } : {}),
+    ...(errands?.length ? { errands } : {}),
+    ...(spot && place && spot.place === place ? { spot } : {}),
+  };
+}
+
 /** What the server says about the place an agent is in. */
-export interface PlaceInfo {
+export interface PlaceInfo extends Omit<BodyLooks, "wear"> {
   id?: string;
   place?: Room;
   /** Everyone else in it. */
-  company?: {
+  company?: ({
     agent: string;
     name?: string;
     avatar?: string;
     animations?: string[];
     role?: string;
     wear?: string[];
-  }[];
+  } & Omit<BodyLooks, "wear" | "avatar">)[];
   /** Its doors to other places. */
   doors?: RoomDoor[];
   /** The area it is in, by id. */
@@ -1001,21 +1013,26 @@ export interface PlaceInfo {
   lent?: string[];
 }
 
-/** The others in the place, as the stage takes them; anyone without a body file is left out. */
+/**
+ * The others in the place, as the stage takes them: each with how it chose
+ * to look and carry itself, its body file the model it chose if it chose one.
+ * Anyone without a body file is left out.
+ */
 export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
-  return (info?.company ?? []).flatMap((c) =>
-    c.avatar
-      ? [
-          {
-            agent: c.agent,
-            name: c.name ?? c.agent,
-            url: c.avatar,
-            animations: c.animations ?? [],
-            ...(c.wear?.length ? { wear: c.wear } : {}),
-          },
-        ]
-      : [],
-  );
+  return (info?.company ?? []).flatMap((c) => {
+    if (!c.avatar) return [];
+    const looks = looksIn({ ...c, avatar: undefined }, info?.id);
+    return [
+      {
+        agent: c.agent,
+        name: c.name ?? c.agent,
+        url: c.avatar,
+        animations: c.animations ?? [],
+        ...(c.wear?.length ? { wear: c.wear } : {}),
+        ...(Object.keys(looks).length ? { looks } : {}),
+      },
+    ];
+  });
 }
 
 /** What can be open over the stage. A task opened from the list goes back to it. */
@@ -1230,6 +1247,8 @@ export function useChatStage({
   // Everything waiting on you, for the "Needs you" list and each agent's card.
   const needs = useMemo(() => needsFrom(activities, approvals.list, allTasks), [activities, approvals.list, allTasks]);
   const speech = useRecords<Said>("speech", showStage);
+  // The gesture each agent is making: its body here makes it.
+  const emotes = useRecords<EmoteRecord>(EMOTE_TYPE, showStage);
   const { online, names: agentNames, placeless: cantPlace } = useAgentRoster(showStage);
   const canPlace = useCallback((who: string) => !cantPlace.has(who), [cantPlace]);
   // What agents just did to the room on screen shows over their heads, like something they said.
@@ -1346,7 +1365,9 @@ export function useChatStage({
     whereWas.current = now;
     if (!was || placeId !== "town" || !isOutdoors(room)) return;
     for (const trip of tripsBetween(was, now, room.town)) {
-      const wear = map.places.find((p) => p.kind === "home" && p.owner === trip.agent)?.wear;
+      // Its home on the map says how its owner chose to look: in the street as in any room.
+      const home = map.places.find((p) => p.kind === "home" && p.owner === trip.agent);
+      const wear = home?.wear;
       fetch(`/api/live${trip.agent === "default" ? "" : `?agent=${encodeURIComponent(trip.agent)}`}`)
         .then((res) => (res.ok ? (res.json() as Promise<LiveInfo>) : null))
         .then((body) => {
@@ -1354,9 +1375,10 @@ export function useChatStage({
           controls.current?.walkBy({
             agent: trip.agent,
             name: nameOf(trip.agent),
-            url: body.avatar,
+            url: home?.model ? `/api/live/avatar?model=${encodeURIComponent(home.model)}` : body.avatar,
             animations: body.animations ?? [],
             ...(wear ? { wear } : {}),
+            ...(home ? { looks: home } : {}),
             from: trip.from,
             to: trip.to,
           });
@@ -1948,6 +1970,9 @@ export function useChatStage({
               wear: homeOf.wear ?? [],
               chosen: !!homeOf.wearChosen,
               onWear: (wear: string[] | null) => dressAgent(who, wear),
+              looks: homeOf,
+              onBody: (change: BodyChange) => changeBody(who, change),
+              onEmote: (name: string) => makeGesture(who, name),
             }
           : {})}
         activity={shownActivities[who]}
@@ -1995,8 +2020,10 @@ export function useChatStage({
         onDoor={onDoor}
         company={company}
         agent={showing.visiting ? "you" : shown}
-        // Your own body wears nothing of the agent's.
+        // Your own body wears nothing of the agent's, and looks and carries itself its own way.
         {...(!showing.visiting && own.wear ? { wear: own.wear } : {})}
+        {...(!showing.visiting && own.looks ? { looks: own.looks } : {})}
+        emotes={emotes}
         activities={shownActivities}
         speech={saidAll}
         menuFor={menuFor}
