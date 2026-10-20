@@ -5,7 +5,7 @@
  */
 import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
-import { type Fadeable, paintFaded } from "./fade";
+import { type Fadeable, fadedBy, paintFaded } from "./fade";
 
 /** A door, near enough: a plate that lights under the pointer, and a light that says who is behind it. */
 function door() {
@@ -97,5 +97,58 @@ describe("paintFaded", () => {
     f.level = 1;
     paintFaded(f);
     expect(d.plateMesh.material).toBe(hole);
+  });
+});
+
+describe("a building fading to a ghost", () => {
+  /** A building in the town, near enough: its walls and roof in one lit material, its windows in another. */
+  function building() {
+    const walls = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    const glass = new THREE.MeshLambertMaterial({ color: 0xffd38a, emissive: 0xffc56e, emissiveIntensity: 1.15 });
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.BoxGeometry(5, 3, 4), walls);
+    const panes = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), glass);
+    group.add(body, panes);
+    return { group, walls, glass, body, panes };
+  }
+  const ghost = { color: 0xdfe7f5, faded: 0.2 };
+
+  it("says how far a fade has gone, from its own self to its faintest", () => {
+    expect(fadedBy(1, 0.2)).toBe(0);
+    expect(fadedBy(0.2, 0.2)).toBe(1);
+    expect(fadedBy(0.6, 0.2)).toBeCloseTo(0.5, 6);
+    expect(fadedBy(0.1, 0.2)).toBe(1);
+  });
+
+  it("turns to one pale glow as it fades, and is its own again once clear", () => {
+    const b = building();
+    const f: Fadeable = { group: b.group, level: 0.2, ghost };
+    paintFaded(f);
+    const walls = b.body.material as THREE.MeshLambertMaterial;
+    const panes = b.panes.material as THREE.MeshLambertMaterial;
+    for (const m of [walls, panes]) {
+      expect(m.emissive.getHex()).toBe(ghost.color);
+      expect(m.emissiveIntensity).toBeCloseTo(1, 6);
+      expect(m.opacity).toBeCloseTo(0.2, 6);
+    }
+    // Its windows' own light is left as it was, for when it comes back.
+    expect(b.glass.emissive.getHex()).toBe(0xffc56e);
+    // Halfway, halfway to the glow.
+    f.level = 0.6;
+    paintFaded(f);
+    expect((b.panes.material as THREE.MeshLambertMaterial).emissiveIntensity).toBeCloseTo(0.5, 6);
+    f.level = 1;
+    paintFaded(f);
+    expect(b.body.material).toBe(b.walls);
+    expect(b.panes.material).toBe(b.glass);
+  });
+
+  it("leaves anything that fades without one a see-through copy of itself, in its own colours", () => {
+    const b = building();
+    const f: Fadeable = { group: b.group, level: 0.22 };
+    paintFaded(f);
+    const panes = b.panes.material as THREE.MeshLambertMaterial;
+    expect(panes.emissive.getHex()).toBe(0xffc56e);
+    expect(panes.emissiveIntensity).toBeCloseTo(1.15, 6);
   });
 });

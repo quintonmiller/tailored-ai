@@ -6,7 +6,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WidgetCard } from "./widgets";
+import type { DashboardWidgetSpec } from "../api";
+import { WidgetCard, widgetRenderers } from "./widgets";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,5 +89,37 @@ describe("a widget drawn again", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(container.textContent).toContain("Online");
     expect(container.textContent).not.toContain("Starting");
+  });
+});
+
+describe("the clock widget", () => {
+  it("ticks by the second on the Board, and only by the minute where told to leave the seconds off", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 20, 9, 41, 7));
+    const Clock = widgetRenderers.clock;
+    const widget = { id: "clock", type: "clock" } as DashboardWidgetSpec;
+    try {
+      act(() => root.render(<Clock widget={widget} />));
+      const time = () => container.querySelector(".widget-clock-time")?.textContent ?? "";
+      const ticking = time();
+      expect(ticking).toMatch(/07/);
+      act(() => vi.advanceTimersByTime(1000));
+      expect(time()).not.toBe(ticking);
+      // On a wall in the world, away from being read up close: the minute, its words left alone between minutes.
+      act(() => root.render(<Clock widget={widget} seconds={false} />));
+      const still = time();
+      expect(still).not.toMatch(/:0?8\b/);
+      const changes: MutationRecord[] = [];
+      const watch = new MutationObserver((m) => changes.push(...m));
+      watch.observe(container, { subtree: true, characterData: true, childList: true });
+      act(() => vi.advanceTimersByTime(30_000));
+      watch.disconnect();
+      expect(time()).toBe(still);
+      expect(changes).toEqual([]);
+      act(() => vi.advanceTimersByTime(30_000));
+      expect(time()).not.toBe(still);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

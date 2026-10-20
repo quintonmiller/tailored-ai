@@ -99,7 +99,7 @@ import {
   onWall,
   ridersOf,
 } from "./editing";
-import { type Fadeable, paintFaded } from "./fade";
+import { type Fadeable, type Ghost, paintFaded } from "./fade";
 import { Figure, loadModel } from "./figure";
 import { faceToFace, sideFor } from "./greet";
 import { type Fit, Handles, type Patch } from "./handles";
@@ -112,10 +112,12 @@ import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildPlaque, buildProp, buildShell, disposeTree } from "./props";
 import { chatDue, chatPause, drawNotes, type Notes, talkedWords } from "./routines";
 import {
+  centrepieces,
   changesShown,
   closeDistance,
   DEFAULT_ROOM,
   farFor,
+  fitView,
   framedIn,
   type Lighting,
   type Lights,
@@ -146,6 +148,7 @@ import { byPhone, heardThrough, standBy, talkingHere, talkMove } from "./talk";
 import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
 import {
+  Arrival,
   clampReach,
   ease,
   flyPinchStep,
@@ -159,6 +162,7 @@ import {
   REACH,
   REACH_PER_NOTCH,
   RUN_KEYS,
+  reachAt,
   type Travel,
   travelSpeed,
   VISITOR_TURN,
@@ -404,6 +408,18 @@ export type StageInput = () => { state: BodyState; loudness: () => number; engag
 
 /** Seconds to move between views. */
 const VIEW_SECONDS = 0.8;
+/**
+ * A building in the town between the camera and you fades to this: a pale,
+ * even glow at a fifth of itself, by day or night, its shape plain and the
+ * street seen clear through it, rather than its walls and roof going murky.
+ */
+const TOWN_GHOST: Ghost = { color: 0xdfe7f5, faded: 0.2 };
+/** Seconds the camera takes to come back round to you from the shot of a room on the way in. */
+const LEAD_SECONDS = 0.7;
+/** How high the head of a tall body sat at a meeting table comes: the shot on the way in keeps it in. */
+const SEATED_TOP = 1.9;
+/** Pixels kept between what the shot on the way in frames and the keys hint along the stage's foot. */
+const HINT_MARGIN = 6;
 
 interface Framing {
   target: THREE.Vector3;
@@ -910,7 +926,7 @@ export async function createStage(
     obstacles = town ? [...town.obstacles] : [];
     if (town) {
       for (const b of town.buildings) {
-        fadeable.push({ group: b.group, solid: b.solid, level: 1 });
+        fadeable.push({ group: b.group, solid: b.solid, level: 1, ghost: TOWN_GHOST });
         b.group.userData.approach = b.approach;
         clickable.push(b.group);
       }
@@ -1325,7 +1341,10 @@ export async function createStage(
     }
     f.go(room, id, waysFor(f));
   };
-  /** Where `f` stands to talk to `partner`, on the side it comes from: clear of everyone else. */
+  /**
+   * Where `f` stands to talk to `partner`, on the side it comes from: clear of everyone else. Come to talk to you on a
+   * visit, beside you as the camera sees you, so you are both in the picture rather than one behind the other.
+   */
   const standFor = (f: Figure, partner: Figure) => {
     const others: [number, number][] = [];
     for (const g of [me, ...companions.values()])
@@ -1333,6 +1352,7 @@ export async function createStage(
     return standBy(room, obstacles, [partner.walker.place.x, partner.walker.place.z], {
       from: [f.walker.place.x, f.walker.place.z],
       others,
+      ...(partner === me && opts.visitor ? { eye: [camera.position.x, camera.position.z] as [number, number] } : {}),
     });
   };
   /** One goes over to stand and talk with another. */
@@ -1441,7 +1461,7 @@ export async function createStage(
     layer.dom.style.setProperty("--surface-paper", lights === "home" && l.lamp.on ? LAMPLIT : "none");
     // Outdoors: the sky for the hour, the street lamps on after dark, and the far distance lost in the sky's haze.
     if (town) {
-      town.setHour(hour, l.lamp.on);
+      town.setHour(hour, l.lamp.on, l.glow ?? 0);
       town.setWindows(activities, hour, occupied);
       scene.fog = new THREE.Fog(skyFor(hour).horizon, 90, 380);
       aimSun(sunAt ?? [me.walker.place.x, me.walker.place.z]);
@@ -1576,9 +1596,80 @@ export async function createStage(
   const visibleTall = () => Math.min(1, Math.max(0.2, (part.bottom - part.top) / stageH));
   /** How much round you the walking camera takes in, as last zoomed: indoors or out. */
   const reachNow = () => (isOutdoors(room) ? outdoorReachKept : reachKept);
+  /**
+   * Coming into a room on a visit, the camera shows what the room is
+   * gathered round as well as you (`centrepieces`): its table and its task
+   * board, rather than you alone at the door. It looks `lead` past your head,
+   * taking in what `entering` says, until you walk off from where you came in
+   * or zoom; then it comes back to you, smoothly.
+   */
+  const lead = new THREE.Vector3();
+  const entering = new Arrival();
+  /** Done with the shot of the room on the way in, at once: flying off, or brought to stand before someone. */
+  const dropLead = () => {
+    entering.drop();
+    lead.set(0, 0, 0);
+  };
+  /** How much round you the walking camera takes in this moment: on the way in, what it shows of the room. */
+  const reachShown = () => entering.reach ?? reachNow();
   /** How far back the camera following a visitor sits: the reach they zoomed to, in what can be seen of this room. */
   const followBack = () =>
-    followDistance(clampReach(reachNow(), widestReach(room)), visibleAspect(), ROOM_VIEW.fov, visibleTall());
+    followDistance(clampReach(reachShown(), widestReach(room)), visibleAspect(), ROOM_VIEW.fov, visibleTall());
+  /**
+   * The share of what can be seen that the keys hint covers along its foot:
+   * the shot on the way in is framed above it, so your feet aren't under it.
+   */
+  const hintFoot = () => {
+    const h = part.bottom - part.top;
+    const tops = hints
+      .filter((b) => b.left < part.right && part.left < b.right && b.top < part.bottom)
+      .map((b) => b.top);
+    if (!tops.length || h <= 0) return 0;
+    return Math.min(0.4, Math.max(0, (part.bottom - Math.min(...tops) + HINT_MARGIN) / h));
+  };
+  /** Where you stand come into a room, and how much of it the camera shows from there: see `lead`. */
+  const aimArrival = () => {
+    lead.set(0, 0, 0);
+    entering.reach = undefined;
+    if (!entering.holds || !opts.visitor || travel !== "walk" || isOutdoors(room)) return;
+    const boxes = centrepieces(room).flatMap((id) => {
+      const thing = things.get(id);
+      return thing ? [new THREE.Box3().setFromObject(thing)] : [];
+    });
+    if (!boxes.length) return;
+    const p = me.walker.place;
+    // You from your feet to the top of your head, however tall you were made, the corners of each thing, and
+    // everyone here and every seat at the table to the top of a tall body's head, so nobody sat there is cut off.
+    const tops = [...companions.values()].map((c): [number, number, number] => [
+      c.walker.place.x,
+      c.bounds.max.y + 0.15,
+      c.walker.place.z,
+    ]);
+    const seats = room.spots
+      .filter((sp) => /^seat-\d+$/.test(sp.id))
+      .map((sp): [number, number, number] => [sp.at[0], SEATED_TOP, sp.at[1]]);
+    const points: [number, number, number][] = [
+      [p.x, 0, p.z],
+      [p.x, me.bounds.max.y + 0.15, p.z],
+      ...tops,
+      ...seats,
+      ...boxes.flatMap((b) =>
+        [b.min, b.max].flatMap((y) =>
+          [
+            [b.min.x, b.min.z],
+            [b.max.x, b.min.z],
+            [b.min.x, b.max.z],
+            [b.max.x, b.max.z],
+          ].map(([x, z]): [number, number, number] => [x, y.y, z]),
+        ),
+      ),
+    ];
+    const shot = fitView(points, visibleAspect(), visibleTall(), hintFoot());
+    const reach = reachAt(shot.distance, visibleAspect(), ROOM_VIEW.fov, visibleTall());
+    // Further than the room's widest is the whole room already: as near as that, looking where the shot says.
+    entering.fit(reach, reachNow(), visibleTall(), widestReach(room));
+    lead.set(...shot.target).sub(me.head());
+  };
 
   const framing = (view: StageView): Framing => {
     if (view === "close") {
@@ -1603,7 +1694,7 @@ export async function createStage(
       opts.visitor || opts.still
         ? undefined
         : roomFocus(room, visibleAspect(), me.walker.place, zoomKept, visibleTall());
-    const target = opts.visitor ? me.head() : new THREE.Vector3(...(focus?.target ?? ROOM_TARGET));
+    const target = opts.visitor ? me.head().add(lead) : new THREE.Vector3(...(focus?.target ?? ROOM_TARGET));
     const distance = opts.visitor
       ? followBack()
       : (focus?.distance ?? roomDistance(room, visibleAspect(), visibleTall()));
@@ -1691,6 +1782,8 @@ export async function createStage(
       raiseWall(reading, f);
       return;
     }
+    // Still where you came in, the shot of the room is fitted to what can be seen now: a chat panel opened beside it.
+    if (entering.holds) aimArrival();
     // A visitor's camera eases to its distance each frame (`frameUp`); flying, it stays where it was flown.
     if (tween || opts.visitor) return;
     // Keep the angle the person dragged to; only the distance follows the frame's shape.
@@ -1702,6 +1795,11 @@ export async function createStage(
   const observer = new ResizeObserver(resize);
   observer.observe(host);
   resize();
+  // On a visit, come in showing what the room is gathered round as well as you.
+  if (opts.visitor) {
+    entering.begin([me.walker.place.x, me.walker.place.z]);
+    aimArrival();
+  }
   settle(framing(view));
   framed = true;
 
@@ -1736,6 +1834,9 @@ export async function createStage(
   const zoomTo = (reach: number) => {
     if (isOutdoors(room)) outdoorReachKept = reach;
     else reachKept = reach;
+    // Zoomed by hand, the shot on the way in is over, as if you had walked off: the reach is yours from here, the
+    // camera comes back round to you as you zoom, and a panel opening or someone coming in doesn't put the shot back.
+    entering.zoomed();
   };
   /** The chat page's view of the agent, which the wheel and a pinch bring nearer or take further back. */
   const ownView = () => !opts.visitor && !opts.still && view === "room";
@@ -1771,7 +1872,7 @@ export async function createStage(
     if (!opts.visitor || travel !== "walk") return;
     e.preventDefault();
     const widest = widestReach(room);
-    zoomTo(wheelReach(clampReach(reachNow(), widest), wheelPixels(e), widest));
+    zoomTo(wheelReach(clampReach(reachShown(), widest), wheelPixels(e), widest));
   };
   // Fingers on the stage, by pointer, for a pinch; and whether this touch has been one, so it isn't a tap as well.
   const touches = new Map<number, [number, number]>();
@@ -1803,7 +1904,7 @@ export async function createStage(
       if (editing) editZoomTo((editZoom * apart) / now);
       else if (ownView()) zoomKept = ownZoom((zoomKept * apart) / now, room, visibleAspect(), visibleTall());
       else if (flyingFree()) flyAlong(flyPinchStep(apart, now));
-      else zoomTo(pinchReach(clampReach(reachNow(), widest), apart, now, widest));
+      else zoomTo(pinchReach(clampReach(reachShown(), widest), apart, now, widest));
     }
     apart = now;
   };
@@ -3079,6 +3180,8 @@ export async function createStage(
           companions.set(c.agent, figure);
           rekeep();
           show(c.agent, figure);
+          // Still where you came in: the shot of the room takes in whoever has just come.
+          if (entering.holds) aimArrival();
           // The agent you came to see: you stand in front of it now that it is here.
           if (greeting === c.agent) standBefore(c.agent);
           // In through the door, and on to somewhere free.
@@ -3351,6 +3454,7 @@ export async function createStage(
     const to = faceToFace(room, obstacles, [p.x, p.z], sideFor(p.facing, OPEN_SIDES));
     me.placeAt(to.at, to.facing);
     lastAt = [to.at[0], to.at[1]];
+    dropLead();
     // The same view as on arriving anywhere, centred on where you now stand.
     tween = null;
     const shot = framing("room");
@@ -3374,7 +3478,15 @@ export async function createStage(
       travel === "walk" && !leaving ? doorReached(room, [p.x, p.z], [moved[0], moved[2]], pushing) : undefined;
     if (through) leave(through);
     if (tween || travel !== "walk" || editing || reading) return;
-    const head = me.head();
+    // Walked off from where you came in: the camera comes back round to you, and in to the reach you zoomed to.
+    entering.moved([p.x, p.z]);
+    if (!entering.holds && lead.lengthSq() > 0) {
+      const k = opts.reducedMotion ? 1 : 1 - Math.exp(-dt / LEAD_SECONDS);
+      lead.multiplyScalar(1 - k);
+      if (lead.lengthSq() < 1e-4) lead.set(0, 0, 0);
+    }
+    entering.settle(reachNow(), dt, opts.reducedMotion ? 0 : LEAD_SECONDS);
+    const head = me.head().add(lead);
     const t = controls.target;
     const step = new THREE.Vector3(...keepUp([t.x, t.y, t.z], [head.x, head.y, head.z], moved, dt));
     controls.target.add(step);
@@ -3453,7 +3565,13 @@ export async function createStage(
     const hiding = new Set([...inWay].map((i) => tall[i]));
     const behind = wallsBehind(room, eye);
     for (const f of fadeable) {
-      const want = f.wall ? (behind.has(f.wall) ? FADED_WALL : 1) : hiding.has(f) ? (f.faint ?? FADED) : 1;
+      const want = f.wall
+        ? behind.has(f.wall)
+          ? FADED_WALL
+          : 1
+        : hiding.has(f)
+          ? (f.faint ?? f.ghost?.faded ?? FADED)
+          : 1;
       // At rest and its own self, there is nothing to draw; faded, it is drawn every frame, keeping up.
       if (f.level === want && !f.own) continue;
       f.level = opts.reducedMotion ? want : ease(f.level, want, dt, SEE_THROUGH_SECONDS);
@@ -4195,6 +4313,9 @@ export async function createStage(
         : { at: first?.at ?? ([0, 0] as [number, number]), facing: rad(first?.facing ?? 0) };
       me.placeAt(to.at, to.facing);
       lastAt = [to.at[0], to.at[1]];
+      // The camera shows what the room is gathered round as well as you, until you walk off from here.
+      entering.begin([to.at[0], to.at[1]]);
+      aimArrival();
       // You stop on the threshold; Shift still runs once you set off again.
       for (const key of [...held])
         if (key in MOVE_KEYS) {
@@ -4202,10 +4323,10 @@ export async function createStage(
           waiting.add(key);
         }
       tween = null;
-      // The same view as on arriving anywhere, centred on where you came in; flying, you turn about a point
-      // just ahead of you from there, as you did before the door.
+      // The same view as on arriving anywhere, centred on where you came in and what the room is gathered round;
+      // flying, you turn about a point just ahead of you from there, as you did before the door.
       const f = framing("room");
-      const shift = me.head().sub(f.target);
+      const shift = me.head().add(lead).sub(f.target);
       f.target.add(shift);
       f.position.add(shift);
       settle(f);
@@ -4372,6 +4493,7 @@ export async function createStage(
       // Walking, the wheel zooms the camera following you; flying, it flies you along the way you look (`onWheel`).
       me.body.visible = next === "walk";
       if (next === "fly") {
+        dropLead();
         turnAboutAhead();
         if (near) {
           near = undefined;

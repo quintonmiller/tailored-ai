@@ -1,5 +1,6 @@
 import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardWidgetSpec } from "../api";
+import { BarSwitch } from "../components/WorldBar";
 import type { Need } from "../lib/needs";
 import { type Anchor, SHEET_BELOW } from "./anchors";
 import type { BoardTask } from "./boards";
@@ -114,6 +115,7 @@ export function Avatar({
   visitor = false,
   onNear,
   tools,
+  bar,
   overlay,
   tasks,
   screen,
@@ -190,6 +192,13 @@ export function Avatar({
   onNear?: (agent: string | undefined) => void;
   /** Controls laid over the top left of the stage. */
   tools?: ReactNode;
+  /**
+   * On a narrow stage (a phone), the controls as one row over the top, given
+   * the way you get around (or the view) to put at its front: in place of
+   * `tools` and the toggles of their own, so the scene keeps most of the
+   * stage. Rearranging the room, `tools` are the edit tools, as anywhere.
+   */
+  bar?: (lead: ReactNode) => ReactNode;
   /** Something laid over the whole stage, like a map. */
   overlay?: ReactNode;
   /** What the task boards on the walls show. */
@@ -662,9 +671,39 @@ export function Avatar({
   };
 
   if (problem) return <p className="talk-avatar-problem">Couldn't show the avatar: {problem}</p>;
+  // One row of tools over a narrow stage, the way you get around (or the view) at its front.
+  const inBar = !!bar && !edit;
+  const lead = !inBar ? undefined : visitor ? (
+    <BarSwitch
+      label="How you get around"
+      options={[
+        { id: "walk", label: "Walk", icon: "walk" },
+        { id: "fly", label: "Fly", icon: "fly" },
+      ]}
+      value={travel}
+      onChange={(t: Travel) => {
+        setTravel(t);
+        stage.current?.setTravel(t);
+      }}
+    />
+  ) : fixedView ? undefined : (
+    <BarSwitch
+      label="Avatar view"
+      options={[
+        { id: "room", label: "Room", icon: "room" },
+        { id: "close", label: "Close up", icon: "close" },
+      ]}
+      value={view}
+      onChange={choose}
+    />
+  );
   return (
-    // What agents are doing, in the colours the doors and signs use, for everything over the stage.
-    <div className={fill ? "talk-stage fill" : "talk-stage"} style={DOING_VARS as CSSProperties}>
+    // What agents are doing, in the colours the doors and signs use, for everything over the stage; and where the
+    // page's own bar over the stage ends, for the row of tools under it.
+    <div
+      className={fill ? "talk-stage fill" : "talk-stage"}
+      style={{ ...DOING_VARS, "--stage-top": `${insetTop}px` } as CSSProperties}
+    >
       <div
         className="talk-avatar"
         ref={host}
@@ -695,7 +734,11 @@ export function Avatar({
         </div>
       )}
       {shown && panels?.map((p) => <Anchored key={p.id} panel={p} stage={shown} />)}
-      {tools && <div className="talk-tools">{tools}</div>}
+      {inBar ? (
+        <div className="talk-tools compact">{bar?.(lead)}</div>
+      ) : (
+        tools && <div className="talk-tools">{tools}</div>
+      )}
       {reading && (
         <button type="button" className="talk-back" onClick={() => stage.current?.focusSurface(null)}>
           ← Step back
@@ -704,31 +747,38 @@ export function Avatar({
       {overlay}
       {visitor && !edit && (
         <>
-          <fieldset className="talk-view" aria-label="How you get around">
-            {(["walk", "fly"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                aria-pressed={travel === t}
-                onClick={() => {
-                  setTravel(t);
-                  stage.current?.setTravel(t);
-                }}
-              >
-                {t === "walk" ? "Walk" : "Fly"}
-              </button>
-            ))}
-          </fieldset>
+          {!inBar && (
+            <fieldset className="talk-view" aria-label="How you get around">
+              {(["walk", "fly"] as const).map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  aria-pressed={travel === t}
+                  onClick={() => {
+                    setTravel(t);
+                    stage.current?.setTravel(t);
+                  }}
+                >
+                  {t === "walk" ? "Walk" : "Fly"}
+                </button>
+              ))}
+            </fieldset>
+          )}
           <p className="talk-keys">
             {reading
               ? "Esc, F or click away to step back"
-              : travel === "walk"
-                ? "WASD or arrows to walk · Shift to run · click the floor to go there · click a screen to use it · drag to look · wheel to zoom"
-                : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to fly on or back"}
+              : inBar
+                ? // A narrow stage is mostly a phone's: a finger's ways round, short enough for one line at 360 pixels.
+                  travel === "walk"
+                  ? "Tap to go · drag to look · pinch to zoom"
+                  : "Drag to turn · pinch to move in"
+                : travel === "walk"
+                  ? "WASD or arrows to walk · Shift to run · click the floor to go there · click a screen to use it · drag to look · wheel to zoom"
+                  : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to fly on or back"}
           </p>
         </>
       )}
-      {!fixedView && !visitor && !edit && (
+      {!fixedView && !visitor && !edit && !inBar && (
         <fieldset className="talk-view" aria-label="Avatar view">
           {(["room", "close"] as const).map((v) => (
             <button key={v} type="button" aria-pressed={view === v} onClick={() => choose(v)}>

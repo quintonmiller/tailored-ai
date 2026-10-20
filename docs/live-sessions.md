@@ -643,6 +643,26 @@ soon as you point at one of its steps. On a phone it folds as short as it
 gets and follows on after the buttons, beside the last of them where there
 is room for it and under them where there isn't.
 
+**On a phone** (a screen narrower than 720 pixels) the stage's tools are one
+row across the top of it, so the scene keeps most of what little stage there
+is: Walk and Fly (or Room and Close up, in an agent's own view) as icons, then
+the map, the tasks, and whatever wants you now, what agents wait on you for
+with a count and the name of an agent beside you to talk to, then **⋯** and
+where you are. Hold a finger on an icon to see what it is; the pointer shows
+it too. **⋯**, or the name of where you are, opens a menu with the rest in
+words (this place, Edit room, Back to, the voices) and the way to where you
+are, each step of it a click. While the menu is open the chat steps aside for
+it, as it does for a card; a tap anywhere else closes it, and a tap on
+**Chat** brings the chat back. The map keeps its place in the row however
+little room there is: the tasks give way to the menu first, then the name of
+whoever is beside you is cut short, or with no room for a few letters shows
+as its talk icon alone, the name in its words when you hold a finger on it.
+The scene is framed under the row, in the full width of what the chat
+leaves, and the session's key that would take a line of its own over it is
+left off. The keys hint along the foot says what a finger does instead: tap
+to go, drag to look, pinch to zoom; flying, drag to turn and pinch to move
+in.
+
 **Busy now**, at the top, lists every agent that is doing something, most
 pressing first: waiting on you, then stuck, then talking, working and
 thinking. Each line says what it is doing and where its body is ("writing
@@ -677,6 +697,17 @@ the stage you can see: with the chat or a panel open over the right of it,
 or along the bottom on a phone, the camera backs off so you see as much round
 you as with it closed, and you stay in the middle of what is left. A panel opening or closing slides the
 picture over rather than jumping.
+
+**Coming into a room**, through a door or by the map, the camera shows what
+the room is gathered round as well as you: its table and its task board, and
+everyone sat at the table, however tall their bodies, rather than you alone at
+the door. It frames them in what you can see, beside the chat or a panel if
+one is open and above the keys hint, and frames them again if one opens while
+you stand there. In the short strip over a phone's chat it comes in closer as
+well, so the room fills the strip rather than drawing as a sliver in the
+middle of it. Walk a step or two, or zoom, and that shot is over: the camera
+comes round to you, as it always follows you, at the reach you zoomed to, and
+a panel opening or someone coming in afterwards leaves it there.
 
 **Fly** puts your body away and lets the camera go
 anywhere, faster again (6 metres a second, twice that with Shift): WASD to
@@ -742,7 +773,11 @@ home's door does.
 
 East of the square, on the avenue, is **the office**, where the rooms agents
 talk in are. Inside is an atrium: a directory by the way in, which opens
-the map with every room listed, and the meeting rooms' doors round its walls and standing along its open right side, up to
+the map with every room listed, a front desk minded toward the way in, its
+screen of who is doing what turned to whoever walks up, a couch to wait on, a
+lounge, a table to work at, a reading corner, plants, a notice board of what
+got done lately on the back wall past the last of its doors, however many a
+floor has, with a plant beside it, and the meeting rooms' doors round its walls and standing along its open right side, up to
 14 to a floor. More rooms take more floors, with stairs between them, cut by
 first letter as lanes are. A meeting room dressed as a tavern, a studio, a
 workshop or a library has **a building of its own on Main Street**, which
@@ -763,11 +798,16 @@ puts you on that street outside the door, facing away from it.
 around](#getting-around-the-map-walking-and-flying)). The town has a sky:
 the sun by day, high in the south behind you as you face the town hall, low
 and orange in the evening, and at night the moon, the stars and the street
-lamps, the four nearest you lighting the street and the rest glowing. Shadows
+lamps, the four nearest you lighting the street and the rest glowing. The
+moonlight lights the walls across town in blue, and the buildings give off a
+faint glow of their own after dark, so a roof turned away from the moon is a
+dark blue roof rather than a black mass. The nearest buildings on Main Street
+still fill the foot of the picture as you arrive. Shadows
 fall away from the sun and are drawn round you as you go. The sea and the
 stream stop you at the water's edge; you cross the stream at its bridges. A building
-between the camera and you fades to a ghost so you can see past it, as a
-tall thing in a room does.
+between the camera and you fades to a pale ghost, one even glow over its
+shape, by day or night, so you can see the street through it, rather than its
+walls and roof thinning to a murky box.
 
 **Bodies going by.** You only see the bodies in the place you're in, and the
 town is nobody's place. But while you're out in it, an agent whose body goes
@@ -1130,7 +1170,10 @@ way: "on the phone with writer" or "talking with writer".
 **You count too.** On a visit in your own body, talking to an agent (typing,
 or holding **Talk**) works the same way. With its body in the place you are
 in, it turns to face you, walking over if you are far apart, and stays with
-you rather than going off to its desk to think. What you say shows in a
+you rather than going off to its desk to think. It comes to stand beside you
+as the camera sees you, a little further from the camera than you are, so you
+are both in the picture, turned a little toward it, and neither is hidden
+behind the other. What you say shows in a
 bubble over your head, and its answer over its own, and your conversation
 stands beside it. With its body anywhere else, it holds a phone to its ear
 where it is, and so do you: your words show over you with a small phone at
@@ -1834,6 +1877,12 @@ small fixed room, and the agent can't change it.
 
 #### Screens and calendars
 
+The town hall's lobby has its kiosks, task board, calendar and widgets, a
+lounge by the left wall, tables, a reading corner, a front desk on the open
+side with its screen of who is doing what turned to the room, and benches to
+wait on either side of the way out, its back corners left clear for a door an
+agent puts in.
+
 The lobby has a big **screen** over its kiosks. It shows your dashboard, the
 one on the **Board** page, a widget at a time: the first five a screen can
 draw (the clock, system status, task lists, recent agent activity, a number,
@@ -1841,7 +1890,10 @@ a list, a note, links), turning to the next every 15 seconds. Embeds, and the
 widgets made to be clicked and typed into, stay on the Board. Dots in the
 corner say which page is up, and a thin line fills as the next comes. Each
 page is drawn live by the Board page's own widget, in the screen's colours
-and large enough to read across the room. Bring the screen up to read it:
+and large enough to read across the room. A clock on it keeps the minute,
+and the seconds only while the screen is brought up close: a clock ticking
+every second redrew the whole screen every second, and that made the town
+hall's frames uneven. Bring the screen up to read it:
 the page holds still, and the dots, the arrows beside them, the arrow keys
 or a sideways swipe turn it. A task in a
 widget opens its card in the world, not the Tasks page, and the page's

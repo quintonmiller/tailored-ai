@@ -199,6 +199,27 @@ export function heardThrough(
   return undefined;
 }
 
+/** How far round past your side, away from the camera, an agent come to talk to you stands: radians. */
+const BEHIND = 0.35;
+
+/**
+ * The ways round `target` to stand by someone the camera is on, from where
+ * it looks (`eye`), best first: beside them as the camera sees them, a little
+ * further from it than they are, so both are in the picture, turned a little
+ * toward it as they face each other, and neither stands behind the other.
+ * The side `toward` (where it comes from) first, then the other; on each, a
+ * little nearer the side, then a little further round. None without an eye.
+ */
+function beside(target: [number, number], toward: number, eye: [number, number] | undefined): number[] {
+  if (!eye || Math.hypot(eye[0] - target[0], eye[1] - target[1]) < 0.05) return [];
+  const seen = Math.atan2(eye[0] - target[0], eye[1] - target[1]);
+  const apart = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+  const sides = [1, -1].sort(
+    (a, b) => apart(seen + (a * Math.PI) / 2, toward) - apart(seen + (b * Math.PI) / 2, toward),
+  );
+  return sides.flatMap((s) => [BEHIND, 0, BEHIND * 2].map((k) => seen + s * (Math.PI / 2 + k)));
+}
+
 /**
  * Where a body stands to talk to someone at `target`, and the way it faces
  * (radians, as the walker keeps them): on the side it comes from (`from`; the
@@ -208,12 +229,14 @@ export function heardThrough(
  * stand round it rather than on top of each other. Somewhere is always found:
  * when no spot is clear of the others, the nearest one clear of the
  * furniture, and when even that fails, the one on the side it comes from.
+ * With the camera on the one it came to see, from `eye` on the floor (you, on
+ * a visit), it stands beside them as the camera sees them first (`beside`).
  */
 export function standBy(
   room: Pick<Room, "width" | "depth">,
   obstacles: Obstacle[],
   target: [number, number],
-  opts: { from?: [number, number]; others?: [number, number][] } = {},
+  opts: { from?: [number, number]; others?: [number, number][]; eye?: [number, number] } = {},
 ): { at: [number, number]; facing: number } {
   const [tx, tz] = target;
   const [fx, fz] = opts.from ?? [0, 0];
@@ -222,12 +245,16 @@ export function standBy(
   const step = (2 * Math.PI) / ROUND;
   // The way it comes first, then either side of that, further and further round.
   const turns = [0, ...Array.from({ length: ROUND / 2 }, (_, i) => [i + 1, -(i + 1)]).flat()].slice(0, ROUND);
-  const ring = (r: number) =>
-    turns.map((k): [number, number] => {
-      const a = toward + k * step;
-      return [round(tx + Math.sin(a) * r), round(tz + Math.cos(a) * r)];
-    });
-  const clear = [...ring(STAND_OFF), ...ring(STAND_OFF + 0.45)].filter((p) => standsClear(room, obstacles, p));
+  const pointAt = (a: number, r: number): [number, number] => [
+    round(tx + Math.sin(a) * r),
+    round(tz + Math.cos(a) * r),
+  ];
+  const ring = (r: number) => turns.map((k) => pointAt(toward + k * step, r));
+  const clear = [
+    ...beside(target, toward, opts.eye).map((a) => pointAt(a, STAND_OFF)),
+    ...ring(STAND_OFF),
+    ...ring(STAND_OFF + 0.45),
+  ].filter((p) => standsClear(room, obstacles, p));
   const others = opts.others ?? [];
   const spaced = clear.find((p) => others.every((o) => Math.hypot(o[0] - p[0], o[1] - p[1]) >= SPACING));
   const [x, z] = spaced ?? clear[0] ?? ring(STAND_OFF)[0];

@@ -7,16 +7,19 @@ import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import {
   bodyFor,
+  centrepieces,
   changesShown,
   closeDistance,
   DEFAULT_ROOM,
   farFor,
+  fitView,
   framedIn,
   GESTURES,
   lightingFor,
   lightsFor,
   lookTarget,
   MIN_ASPECT,
+  NIGHT_GLOW,
   nearestWithin,
   OPEN_SIDES,
   OWN_NEAREST,
@@ -155,6 +158,18 @@ describe("the town's light", () => {
     expect(night.lamp.reach ?? 1).toBeGreaterThan(lightingFor(23, "home").lamp.reach ?? 1);
   });
 
+  it("gives the town's buildings a faint glow of their own at night only, so a roof turned from the moon isn't black", () => {
+    for (const hour of [21, 23, 2]) expect(lightingFor(hour, "outdoor").glow).toBe(NIGHT_GLOW);
+    for (const hour of [6, 12, 18]) expect(lightingFor(hour, "outdoor").glow).toBeUndefined();
+    // Indoors the lamps do it.
+    expect(lightingFor(23, "home").glow).toBeUndefined();
+    expect(lightingFor(23, "public").glow).toBeUndefined();
+    // Faint, and moonlit blue: a fifth or less of full in every channel, blue the most.
+    const [r, g, b] = [NIGHT_GLOW >> 16, (NIGHT_GLOW >> 8) & 0xff, NIGHT_GLOW & 0xff];
+    expect(Math.max(r, g, b)).toBeLessThanOrEqual(0x55);
+    expect(b).toBeGreaterThan(Math.max(r, g));
+  });
+
   it("sees out past the woods round the town to the horizon", () => {
     const town = { ...DEFAULT_ROOM, width: 160, depth: 150, town: {} as never };
     expect(farFor(town)).toBeGreaterThan(300);
@@ -290,6 +305,16 @@ describe("framedIn", () => {
     const part = framedIn({ left: 0, right: 390, top: 90, bottom: 700 }, controls);
     expect(part.top).toBeGreaterThanOrEqual(300);
     expect(part).toMatchObject({ left: 0, right: 390, bottom: 700 });
+  });
+
+  it("frames under a phone's one row of tools across the top, though it never reaches the middle", () => {
+    const row = { left: 8, right: 382, top: 96, bottom: 134 };
+    const part = framedIn(strip, [row]);
+    expect(part).toEqual({ left: 0, right: 390, top: 142, bottom: 395 });
+    // A button or two up in the corner is no bar: the scene is framed past it, as before.
+    expect(framedIn(strip, [{ left: 8, right: 120, top: 96, bottom: 134 }])).toEqual(strip);
+    // Nor is a row along the foot of the strip.
+    expect(framedIn(strip, [{ ...row, top: 350, bottom: 388 }]).top).toBe(90);
   });
 });
 
@@ -575,5 +600,107 @@ describe("what a change did to a room's things", () => {
     // The same place changing: the plant moved, and glides.
     const moved = { ...mine, props: [{ ...mine.props[0], at: [2, -1] as [number, number] }, mine.props[1]] };
     expect([...(changesShown(mine, moved, true)?.moved.keys() ?? [])]).toEqual(["plant"]);
+  });
+});
+
+describe("fitView", () => {
+  // The camera's way of looking, as the room view has it, to put the points where the camera would see them.
+  const { azimuth: a, elevation: e, fov } = ROOM_VIEW;
+  const back = new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a));
+  /**
+   * Each point's place across and up what can be seen, -1 to 1 at its edges,
+   * from a camera framed as `fitView` says. The camera's own frame is the
+   * whole stage: what can be seen is `tall` of it each way, its shape
+   * `aspect`, so a point at its edge is at `tall` in the camera's frame.
+   */
+  const onFrame = (points: [number, number, number][], aspect: number, tall = 1, foot = 0) => {
+    const { target, distance } = fitView(points, aspect, tall, foot);
+    const camera = new THREE.PerspectiveCamera(fov, aspect, 0.05, 500);
+    camera.position.copy(new THREE.Vector3(...target).addScaledVector(back, distance));
+    camera.lookAt(...target);
+    camera.updateMatrixWorld();
+    return points.map((p) => new THREE.Vector3(...p).project(camera)).map((v) => [v.x / tall, v.y / tall]);
+  };
+  // You at the door of a meeting room, its table in the middle and its task board on the back wall.
+  const you: [number, number, number][] = [
+    [-3.5, 0, 2.5],
+    [-3.5, 1.9, 2.5],
+  ];
+  const table: [number, number, number][] = [
+    [-0.6, 0.75, -0.8],
+    [0.6, 0.75, 0.4],
+    [-0.6, 0, 0.4],
+  ];
+  const board: [number, number, number][] = [
+    [-0.7, 1.95, -3.3],
+    [0.7, 1.05, -3.3],
+  ];
+  const points = [...you, ...table, ...board];
+
+  it("has you, the table and the board all in the frame, with a margin, however the frame is shaped", () => {
+    // Wide and narrow, and two short: one wide strip over a phone's chat, one narrow, held in by its width.
+    for (const [aspect, tall] of [
+      [1.6, 1],
+      [0.9, 1],
+      [2.6, 0.45],
+      [0.7, 0.5],
+    ]) {
+      for (const [x, y] of onFrame(points, aspect, tall)) {
+        expect(Math.abs(x), `${aspect} ${tall}`).toBeLessThanOrEqual(0.93);
+        expect(Math.abs(y), `${aspect} ${tall}`).toBeLessThanOrEqual(0.93);
+      }
+    }
+  });
+
+  it("keeps them all above the keys hint along the foot, using the rest of the frame", () => {
+    for (const [aspect, tall, foot] of [
+      [1.6, 1, 0.08],
+      [0.9, 1, 0.15],
+      [2.6, 0.45, 0.25],
+    ]) {
+      const seen = onFrame(points, aspect, tall, foot);
+      // The hint covers the bottom `foot` of the height: -1 up to -1 + 2 * foot.
+      for (const [x, y] of seen) {
+        expect(Math.abs(x), `${aspect} ${tall} ${foot}`).toBeLessThanOrEqual(0.93);
+        expect(y, `${aspect} ${tall} ${foot}`).toBeGreaterThanOrEqual(-1 + 2 * foot);
+        expect(y, `${aspect} ${tall} ${foot}`).toBeLessThanOrEqual(0.93);
+      }
+      // And no further back than it has to be: something is at an edge of what is left, across or up and down.
+      const out = Math.max(
+        ...seen.map(([x, y]) => Math.max(Math.abs(x) / 0.92, Math.abs(y - foot) / ((1 - foot) * 0.92))),
+      );
+      expect(out, `${aspect} ${tall} ${foot}`).toBeGreaterThan(0.97);
+    }
+  });
+
+  it("looks at the middle of them, not at you, and comes no further back than it has to", () => {
+    const { target, distance } = fitView(points, 1.6);
+    const looked = onFrame(points, 1.6);
+    // Something is right at an edge: it backs off only as far as the furthest out needs.
+    expect(Math.max(...looked.flat().map(Math.abs))).toBeGreaterThan(0.85);
+    // Toward the table from where you stand.
+    expect(target[0]).toBeGreaterThan(-3);
+    expect(fitView(you, 1.6).distance).toBeLessThan(distance);
+    // A narrower frame backs off further for the same things.
+    expect(fitView(points, 0.9).distance).toBeGreaterThan(distance);
+  });
+});
+
+describe("centrepieces", () => {
+  const prop = (id: string, kind: string, at: [number, number]) => ({ id, name: id, kind, at, facing: 0 }) as never;
+
+  it("is the table nearest the middle and the task board: what a room is gathered round", () => {
+    const room = {
+      props: [
+        prop("side", "side_table", [0, 0]),
+        prop("coffee", "coffee_table", [2.5, 1]),
+        prop("table-1", "round_table", [0.2, -0.3]),
+        prop("board", "board", [0, -3.3]),
+        prop("lamp", "lamp", [0, 0.1]),
+      ],
+    };
+    expect(centrepieces(room)).toEqual(["table-1", "board"]);
+    // A room with neither has nothing the camera needs to show on the way in.
+    expect(centrepieces({ props: [prop("side", "side_table", [0, 0]), prop("couch", "couch", [1, 1])] })).toEqual([]);
   });
 });

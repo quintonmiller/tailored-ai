@@ -162,6 +162,82 @@ export function followDistance(reach: number, aspect: number, fov: number, tall 
   return reach / Math.min(tanV, tanV * aspect);
 }
 
+/** The reach that sits the camera `distance` back: `followDistance` the other way round. */
+export function reachAt(distance: number, aspect: number, fov: number, tall = 1): number {
+  const tanV = Math.tan((fov * Math.PI) / 360) * tall;
+  return distance * Math.min(tanV, tanV * aspect);
+}
+
+/** Metres you walk from where you came into a room before the camera, showing the room, comes back round to you. */
+export const ARRIVAL_WALKED = 0.6;
+/**
+ * Under this share of the stage's height, what can be seen is a short strip
+ * (a phone's, over its chat), where the reach you walk at takes in the whole
+ * room as a sliver: the shot on the way in comes in closer there, as well as
+ * backing off where it has to.
+ */
+export const SHORT_STRIP = 0.5;
+
+/**
+ * The shot of a room the camera shows on the way in, as rules: it holds
+ * while you stand where you came in (`at`), fitted again whenever what can be
+ * seen changes or someone comes in, taking in `reach` while that is not the
+ * reach you zoomed to. It is over once you walk off from there or zoom, and
+ * then it eases back to your own reach. The stage keeps where it looks.
+ */
+export class Arrival {
+  /** Where you came in, while the shot holds. */
+  at: [number, number] | undefined;
+  /** How much round you it takes in, when that isn't your own reach. */
+  reach: number | undefined;
+
+  /** Come into a room at `at`. */
+  begin(at: [number, number]) {
+    this.at = [at[0], at[1]];
+    this.reach = undefined;
+  }
+
+  get holds(): boolean {
+    return this.at !== undefined;
+  }
+
+  /**
+   * Fitted to what can be seen now: the shot `needs` that reach, against
+   * `yours`. It backs off to show what it has to; in a short strip (`tall`,
+   * the share of the stage's height seen) it comes in as near as it needs
+   * too, never nearer than close behind you. Over, it fits nothing.
+   */
+  fit(needs: number, yours: number, tall: number, widest: number) {
+    this.reach = undefined;
+    if (!this.at) return;
+    if (needs > yours || tall < SHORT_STRIP) this.reach = clampReach(needs, widest);
+  }
+
+  /** You are at `p`: walked off from where you came in, the shot is over. */
+  moved(p: [number, number]) {
+    if (this.at && Math.hypot(p[0] - this.at[0], p[1] - this.at[1]) > ARRIVAL_WALKED) this.at = undefined;
+  }
+
+  /** You zoomed, by the wheel or a pinch: the shot is over, and the reach is yours at once. */
+  zoomed() {
+    this.at = undefined;
+    this.reach = undefined;
+  }
+
+  /** Over at once: you flew off, or were brought to stand before someone. */
+  drop() {
+    this.at = undefined;
+    this.reach = undefined;
+  }
+
+  /** Over, a frame `dt` seconds long eases what it takes in back to `yours`, in about `seconds`: at once for none. */
+  settle(yours: number, dt: number, seconds: number) {
+    if (this.at || this.reach === undefined) return;
+    this.reach = seconds > 0 ? ease(this.reach, yours, dt, seconds) : yours;
+    if (Math.abs(this.reach - yours) < 0.02) this.reach = undefined;
+  }
+}
+
 /** `from` moved toward `to` for a frame `dt` seconds long, closing the gap in about `seconds`; there once near enough. */
 export function ease(from: number, to: number, dt: number, seconds: number): number {
   if (Math.abs(to - from) < 1e-3) return to;

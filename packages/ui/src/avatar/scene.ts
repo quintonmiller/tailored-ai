@@ -460,6 +460,12 @@ export interface Lighting {
   lamp: { on: boolean; intensity: number; reach?: number };
   /** The window glass glows with what is outside. */
   window: { color: number; glow: number };
+  /**
+   * Outdoors at night, the colour the town's buildings give off of their
+   * own: the moonlight off everything round, which no one light gives, so a
+   * roof turned from the moon reads as a roof rather than a black mass.
+   */
+  glow?: number;
 }
 
 /**
@@ -516,6 +522,9 @@ export function lightingFor(hour: number, lights: Lights = "home"): Lighting {
   };
 }
 
+/** The town's buildings' own glow at night (see `Lighting.glow`): a dim moonlit blue. */
+export const NIGHT_GLOW = 0x283252;
+
 /**
  * The town's light: a bright sun and a blue sky by day, low and orange in the
  * evening, and at night the moon, the sky's glow and the street lamps, enough
@@ -536,11 +545,15 @@ function outdoorLighting(hour: number): Lighting {
       lamp: { on: true, intensity: 1.8, reach: 1.6 },
       window: { color: 0xffb88a, glow: 0.55 },
     };
+  // A clear night: moonlight enough to read the walls across town as blue shapes, and the street lamps' pools still
+  // warm round each one. A roof turned from the moon has only the sky's glow, which leaves a dark one black: the
+  // buildings' own faint glow keeps it a roof.
   return {
-    sun: { color: 0x9db2ff, intensity: 0.65 },
-    sky: { color: 0x6878a8, ground: 0x2e3a3a, intensity: 0.95 },
+    sun: { color: 0xa9bcff, intensity: 1.15 },
+    sky: { color: 0x8496cc, ground: 0x3c4a50, intensity: 1.9 },
     lamp: { on: true, intensity: 3, reach: 1.8 },
     window: { color: 0x2b3a66, glow: 0.25 },
+    glow: NIGHT_GLOW,
   };
 }
 
@@ -606,6 +619,79 @@ export function roomDistance(room: Room, aspect: number, tall = 1): number {
     distance = Math.max(distance, Math.abs(dot(p, right)) / tanH + toward, Math.abs(dot(p, up)) / tanV + toward);
   }
   return distance;
+}
+
+type V3 = [number, number, number];
+
+/** The room view's own way of looking: toward the camera from what it looks at, and the frame's right and up. */
+function viewAxes(): { back: V3; right: V3; up: V3 } {
+  const { azimuth: a, elevation: e } = ROOM_VIEW;
+  const back: V3 = [Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a)];
+  const right: V3 = [Math.cos(a), 0, -Math.sin(a)];
+  const up: V3 = [
+    back[1] * right[2] - back[2] * right[1],
+    back[2] * right[0] - back[0] * right[2],
+    back[0] * right[1] - back[1] * right[0],
+  ];
+  return { back, right, up };
+}
+
+/**
+ * Where to look, and from how far back, to have every one of `points` in the
+ * frame from the room view's angle, with a margin: the middle of them as the
+ * camera sees them, and far enough back that the furthest out is inside the
+ * edge, a point nearer the camera needing more room by as much as it is
+ * nearer. `aspect` and `tall` are the shape of what can be seen, as for
+ * `roomDistance`; `foot` is the share of its height along the bottom that is
+ * covered (the keys hint), which the points are kept above.
+ */
+export function fitView(points: V3[], aspect: number, tall = 1, foot = 0): { target: V3; distance: number } {
+  // Half of what can be seen, each way, as the tangent of the angle out to its edge; up and down, what is left over
+  // the foot.
+  const half = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * tall;
+  const tanH = half * aspect * FRAME_FILL;
+  const tanV = half * (1 - foot) * FRAME_FILL;
+  const { back, right, up } = viewAxes();
+  const dot = (p: V3, q: V3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  if (!points.length) return { target: [...ROOM_TARGET], distance: 0 };
+  const across = points.map((p) => dot(p, right));
+  const high = points.map((p) => dot(p, up));
+  const mid = (xs: number[]) => (Math.min(...xs) + Math.max(...xs)) / 2;
+  const deep = points.reduce((sum, p) => sum + dot(p, back), 0) / points.length;
+  const [r, u] = [mid(across), mid(high)];
+  const middle = [0, 1, 2].map((i) => right[i] * r + up[i] * u + back[i] * deep) as V3;
+  let distance = 0;
+  for (const p of points) {
+    const d: V3 = [p[0] - middle[0], p[1] - middle[1], p[2] - middle[2]];
+    const toward = dot(d, back);
+    // Up and down it is measured from the middle of what is left over the foot, where the points are put (below):
+    // a point nearer the camera sits that much higher in it.
+    distance = Math.max(
+      distance,
+      Math.abs(dot(d, right)) / tanH + toward,
+      Math.abs(dot(d, up) + half * foot * toward) / tanV + toward,
+    );
+  }
+  // The middle of what is left over the foot is above the middle of what can be seen, by the foot's share of its
+  // half-height: the camera looks that much below the middle of the points, so they sit up there.
+  const drop = distance * half * foot;
+  return { target: [0, 1, 2].map((i) => middle[i] - up[i] * drop) as V3, distance };
+}
+
+/** Tables a room isn't gathered round: beside a chair, or under a lamp. */
+const SMALL_TABLES = new Set(["side_table", "night_table", "bedside_table"]);
+
+/**
+ * What a room is gathered round, for the camera to show you on the way in:
+ * its table (the one nearest the middle, as a meeting room's is), and the
+ * task board on its wall. Their ids; none in a room with neither.
+ */
+export function centrepieces(room: Pick<Room, "props">): string[] {
+  const tables = room.props
+    .filter((p) => /table$/.test(p.kind) && !SMALL_TABLES.has(p.kind) && !p.on)
+    .sort((a, b) => Math.hypot(...a.at) - Math.hypot(...b.at));
+  const boards = room.props.filter((p) => p.kind === "board");
+  return [...tables.slice(0, 1), ...boards].map((p) => p.id);
 }
 
 /** The narrowest the visible part of the stage is taken to be: a phone in portrait with a panel over it. */
@@ -708,20 +794,32 @@ export interface Part {
 /** Pixels kept between the controls over the stage and the part the agent is framed in beside or under them. */
 const CONTROLS_MARGIN = 8;
 
+/** How much of the width a row of controls along the top spans for the scene to be framed under it, not past it. */
+const ACROSS = 0.6;
+
 /**
  * The part of the stage to frame the agent in. Mostly `open`, what the page
  * leaves uncovered: the controls over the stage (`controls`) sit up in a
- * corner, over the far wall. But where they reach into the middle third of
- * it, where the framed agent stands, as they do in the short strip above a
- * phone's chat, the agent is framed clear of them: under them or beside
- * them, whichever it comes out bigger in, taking in `OWN_VIEW`.
+ * corner, over the far wall. A row of them right across the top (a phone's
+ * one row of tools) is a bar, and the part starts under it. Where they reach
+ * into the middle third of it, where the framed agent stands, as they do in
+ * the short strip above a phone's chat, the agent is framed clear of them:
+ * under them or beside them, whichever it comes out bigger in, taking in
+ * `OWN_VIEW`.
  */
-export function framedIn(open: Part, controls: Part[]): Part {
+export function framedIn(given: Part, controls: Part[]): Part {
+  const touching = (c: Part, p: Part) => c.left < p.right && p.left < c.right && c.top < p.bottom && p.top < c.bottom;
+  let open = given;
+  const bars = controls.filter(
+    (c) =>
+      touching(c, given) &&
+      c.right - c.left >= (given.right - given.left) * ACROSS &&
+      c.top < given.top + (given.bottom - given.top) / 4,
+  );
+  if (bars.length) open = { ...given, top: Math.max(given.top, ...bars.map((c) => c.bottom + CONTROLS_MARGIN)) };
   const w = open.right - open.left;
   const h = open.bottom - open.top;
-  const on = controls.filter(
-    (c) => c.left < open.right && open.left < c.right && c.top < open.bottom && open.top < c.bottom,
-  );
+  const on = controls.filter((c) => !bars.includes(c) && touching(c, open));
   const middle = {
     left: open.left + w / 3,
     right: open.right - w / 3,

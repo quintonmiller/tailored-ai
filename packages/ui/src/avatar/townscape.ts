@@ -330,6 +330,9 @@ function feature(body: Parts, lights: Parts, f: Feature, b: TownBuilding, accent
   }
 }
 
+/** How far the town hall's pilasters stand out from its front, in metres: what hangs between them is just off the wall. */
+export const PILLAR_DEPTH = 0.14;
+
 /** The town hall: stone, a pediment over the door, pilasters either side of it, tall windows, and a clock tower. */
 function townHall(body: Parts, glass: Parts, b: TownBuilding) {
   const [w, d, h] = b.size;
@@ -337,9 +340,11 @@ function townHall(body: Parts, glass: Parts, b: TownBuilding) {
   body.box(w + 0.4, 0.35, d + 0.4, 0xb8b0a0, [0, 0.175, 0]);
   body.box(w, h, d, stone, [0, h / 2, 0]);
   body.box(w + 0.5, 0.4, d + 0.5, 0xc4bcaa, [0, h + 0.2, 0]);
-  // Where the town says, so what hangs on the front is hung between them.
+  // Where the town says, so what hangs on the front is hung between them; shallow, so seen from the side of the
+  // square they don't stand across the edges of what hangs beside them.
   const pillars = b.pillars ?? { x: [], width: 0 };
-  for (const x of pillars.x) body.box(pillars.width, h - 0.2, 0.3, 0xe8e2d4, [x, h / 2, d / 2 + 0.12]);
+  for (const x of pillars.x)
+    body.box(pillars.width, h - 0.2, PILLAR_DEPTH, 0xe8e2d4, [x, h / 2, d / 2 + PILLAR_DEPTH / 2 - 0.03]);
   // The pediment over the middle, and the roof behind it.
   body.add(gables(1, 4.4, 1.6), 0xe8e2d4, [0, h + 0.4, d / 2 + 0.1], Math.PI / 2, 0, [0.6, 1, 1]);
   body.add(slopes(d - 0.4, w * 0.92, 1.4), 0x6a6e78, [0, h + 0.4, -0.3], Math.PI / 2);
@@ -568,8 +573,11 @@ export interface BuiltTown {
   sky: THREE.Group;
   /** Light each building's windows for the hour, by what its owner is doing, and who is in it when that is known. */
   setWindows(activities: Record<string, AgentActivity>, hour: number, inside?: ReadonlySet<string>): void;
-  /** Colour the sky, show the stars or not, and light the street lamps, for an hour. */
-  setHour(hour: number, lamps: boolean): void;
+  /**
+   * Colour the sky, show the stars or not, and light the street lamps, for
+   * an hour; and give the buildings `glow` of their own (none by day).
+   */
+  setHour(hour: number, lamps: boolean, glow: number): void;
   dispose(): void;
 }
 
@@ -929,7 +937,7 @@ export function buildTown(plan: TownPlan): BuiltTown {
   );
   sky.add(domeMesh, stars, sun, moon);
 
-  const setHour = (hour: number, lampsOn: boolean) => {
+  const setHour = (hour: number, lampsOn: boolean, glow: number) => {
     const { zenith, horizon, stars: night } = skyFor(hour);
     const top = new THREE.Color(zenith);
     const low = new THREE.Color(horizon);
@@ -953,6 +961,8 @@ export function buildTown(plan: TownPlan): BuiltTown {
       body.lookAt(0, 0, 0);
     }
     lampGlow.emissiveIntensity = lampsOn ? 1.4 : 0;
+    // The buildings' walls and roofs, all in the one paint: a faded one's see-through copy keeps up with it.
+    paint.emissive.setHex(glow);
   };
 
   const setWindows = (activities: Record<string, AgentActivity>, hour: number, inside?: ReadonlySet<string>) => {
