@@ -8698,6 +8698,16 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .room-edit-kinds button:disabled { opacity: 0.5; cursor: default; }
 .room-edit-goes { font-size: 10px; color: var(--text-dim); }
 .room-edit-more { margin-top: 6px; font-size: 12px; }
+/* Where a door can lead: the places by name, each a button like the catalogue's, found by typing. */
+.room-edit-doors { display: grid; gap: 8px; margin-top: 8px; }
+.room-edit-door-find { width: 100%; box-sizing: border-box; padding: 6px 9px; font-family: var(--font); font-size: 12px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); }
+.room-edit-door-find:focus-visible { border-color: var(--accent); outline: none; }
+.room-edit-doors ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; max-height: 240px; overflow-y: auto; }
+.room-edit-doors li button { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 9px; font-family: var(--font); font-size: 12px; text-align: left; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); cursor: pointer; overflow-wrap: anywhere; }
+.room-edit-doors li button:hover, .room-edit-doors li button:focus-visible { border-color: var(--accent); outline: none; }
+.room-edit-doors li button:disabled { opacity: 0.5; cursor: default; }
+/* A door picked: its name says where it goes, which needs more room than a thing's. */
+.room-edit-name.room-edit-door { max-width: 30ch; }
 
 /* The map: every place, to go to in one click. */
 .world-map { position: absolute; top: 44px; left: 8px; bottom: 8px; z-index: 6; width: min(420px, calc(100% - 16px)); display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); }
@@ -8761,6 +8771,8 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-plan-road.promenade { stroke: #c9a676; }
 .world-plan-square { fill: #e3d9c5; }
 .world-plan-plot { fill: #8fb870; stroke: #efe8d6; stroke-width: 0.5; stroke-dasharray: 1.5 1; }
+/* A door an agent or a person put in, between the two places it joins: a dotted line, the same width however the plan is drawn. */
+.world-plan-link { fill: none; stroke: #fff6d6; stroke-width: 2.5px; stroke-dasharray: 2px 5px; stroke-linecap: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 1px rgba(20, 24, 30, 0.8)); }
 .world-plan-building { position: absolute; display: grid; place-items: center; padding: 0; border: 1px solid rgba(20, 24, 30, 0.55); border-radius: 2px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); cursor: pointer; }
 .world-plan-building:hover, .world-plan-building:focus-visible { z-index: 2; outline: 2px solid var(--accent); outline-offset: 1px; }
 .world-plan-building.here { z-index: 1; outline: 2px solid #fff; box-shadow: 0 0 0 4px var(--accent); }

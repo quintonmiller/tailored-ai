@@ -1191,13 +1191,16 @@ let glass: THREE.MeshStandardMaterial | undefined;
  * town hall and the office), a name plate over it and a mat in front. At an open side of the room the wall
  * is cut away, so the door is too: a low gate of two posts with the plate
  * across them, readable from either side, that never stands between the
- * camera and the room. A home's door has a light by its plate, and a lit strip
- * along it, that the stage colours by what its agent is doing. In a room lower
- * than a door and its plate (`height`), the door is made shorter to fit.
+ * camera and the room. A gate at the open right side is seen almost edge on
+ * from where the room is looked at, so it has a signpost too (`signpost`): its
+ * nearer post goes up, with the plate again on top of it, turned to face the
+ * front. A home's door has a light by its plate, and a lit strip along it,
+ * that the stage colours by what its agent is doing. In a room lower than a
+ * door and its plate (`height`), the door is made shorter to fit.
  */
 export function buildDoor(
   door: Pick<RoomDoor, "label" | "kind" | "occupant">,
-  opts: { freestanding: boolean; trim?: string; height: number },
+  opts: { freestanding: boolean; trim?: string; height: number; signpost?: boolean },
 ): {
   group: THREE.Group;
   light?: THREE.MeshBasicMaterial;
@@ -1262,6 +1265,23 @@ export function buildDoor(
     plate.position.set(0, plateY, 0.06 + side * 0.022);
     if (side < 0) plate.rotation.y = Math.PI;
     g.add(plate);
+  }
+  if (opts.freestanding && opts.signpost) {
+    // The post on the gate's left (the front of the room, for a gate at the right side) goes up past the gate, and
+    // the plate stands on it again, out into the room, facing the front and the back so it reads from the view in.
+    const top = Math.min(1.95, opts.height - 0.25);
+    box(g, 0.08, top - 1.06, 0.08, trim, 0.66, 1.06 + (top - 1.06) / 2, 0.06);
+    const sign = Math.min(1.1, wide);
+    const at = 0.06 + 0.05 + sign / 2;
+    box(g, 0.035, 0.31, sign + 0.04, 0x2a2e38, 0.66, top - 0.2, at).castShadow = false;
+    const blade = canvasFace(sign, 0.27, 440);
+    drawPlate(blade.canvas, door.label, look.plate, look.ink);
+    for (const side of [1, -1]) {
+      const plate = new THREE.Mesh(new THREE.PlaneGeometry(sign, 0.27), blade.material);
+      plate.position.set(0.66 + side * 0.019, top - 0.2, at);
+      plate.rotation.y = (side * Math.PI) / 2;
+      g.add(plate);
+    }
   }
   // A mat in front, so a door is found by where it meets the floor as well.
   box(g, 1.3, 0.014, 0.55, 0x4a4038, 0, 0.007, 0.45).castShadow = false;

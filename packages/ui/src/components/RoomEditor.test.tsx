@@ -11,6 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Move } from "../avatar/editing";
 import { DEFAULT_ROOM, type Room } from "../avatar/scene";
+import type { MapPlace } from "../lib/wayfinding";
 import { type EditablePlace, type RoomEditor, recordOf, useRoomEditor } from "./RoomEditor";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,7 +51,9 @@ interface Server {
   answer: (
     edit: Record<string, unknown>,
     place: Room,
-  ) => { place?: Room; item?: string; why?: string; models?: Record<string, unknown> };
+  ) => { place?: Room; item?: string; why?: string; models?: Record<string, unknown>; far?: unknown };
+  /** The versions other places' records are at, by URL: the far side of a door put in. */
+  others?: Record<string, number>;
 }
 let server: Server;
 
@@ -68,6 +71,12 @@ function fakeFetch(url: string, init?: RequestInit): Promise<Response> {
     if (method === "PUT") {
       const body = JSON.parse(String(init?.body));
       server.writes.push({ url, ...body });
+      const other = server.others?.[url];
+      if (other !== undefined) {
+        if (body.expectedVersion !== other) return json({ error: "changed" }, 409);
+        (server.others as Record<string, number>)[url] = other + 1;
+        return json({ version: other + 1 });
+      }
       if (body.expectedVersion !== server.version) return json({ error: "changed" }, 409);
       server.version += 1;
       server.by = { kind: "user", name: "owner" };
@@ -95,8 +104,10 @@ const movedTo = (place: Room, item: string, at: [number, number], facing?: numbe
 
 let root: Root;
 let editor: RoomEditor;
+/** Every place there is, as the map has them, for where a door can lead. */
+let mapPlaces: MapPlace[] = [];
 function Harness({ place }: { place: EditablePlace }) {
-  editor = useRoomEditor(place);
+  editor = useRoomEditor(place, undefined, mapPlaces);
   return (
     <div>
       {editor.tools}
@@ -133,6 +144,7 @@ const button = (label: string) =>
 const move = (at: [number, number], facing = 0): Move => ({ item: "couch", at, facing });
 
 beforeEach(() => {
+  mapPlaces = [];
   server = {
     edits: [],
     writes: [],
@@ -460,5 +472,96 @@ describe("rearranging a room", () => {
     expect(editor.stage?.selected).toBe("model");
     // Its colours are its parts': nothing to repaint.
     expect((document.querySelector(".room-edit-swatches") as HTMLFieldSetElement).disabled).toBe(true);
+  });
+
+  it("puts in a door with its way back saved first, picks it once it is there, and takes it out", async () => {
+    mapPlaces = [
+      { id: "home:assistant", name: "assistant's room", kind: "home", owner: "assistant", agents: [] },
+      { id: "shared:reading-room", name: "the reading room", kind: "shared", agents: [] },
+      { id: "town", name: "the town", kind: "town", agents: [] },
+    ];
+    const far = "/api/state/place/shared%3Areading-room";
+    server.others = { [far]: 2 };
+    const link = { to: "shared:reading-room", wall: "front", along: 0, by: "sam" };
+    server.answer = (edit, place) =>
+      edit.op === "door"
+        ? {
+            place: { ...place, links: [link] } as Room,
+            item: "door:shared:reading-room",
+            far: {
+              id: "shared:reading-room",
+              name: "the reading room",
+              place: { ...recordOf(DEFAULT_ROOM), links: [{ ...link, to: "home:assistant" }] },
+              version: 2,
+              scope: "global",
+            },
+          }
+        : { place: { ...place, links: undefined } as Room, item: String(edit.item) };
+    await render(home());
+    await act(async () => button("Add things").click());
+    await act(async () => button("A door to another placeits way back goes in there").click());
+    // Only the places this one has no door to: not itself, nor the town.
+    const offered = [...document.querySelectorAll(".room-edit-doors li button")].map((b) => b.textContent);
+    expect(offered).toEqual(["the reading roomShared place"]);
+    await act(async () => (document.querySelector(".room-edit-doors li button") as HTMLButtonElement).click());
+    await settle();
+    expect(server.edits.at(-1)?.edit).toEqual({ op: "door", to: "shared:reading-room" });
+    // The way back first, with its own version and scope; then the door here, each saying what you did.
+    expect(server.writes.map((w) => [w.url, w.expectedVersion, w.scope])).toEqual([
+      [far, 2, "global"],
+      ["/api/state/place/home%3Aassistant", 3, "agent:assistant"],
+    ]);
+    expect(server.writes[0].data.changes?.[0]).toMatchObject({ who: "sam", what: "put in a door to assistant's home" });
+    expect(server.writes[1].data.changes?.[0]).toMatchObject({ what: "put in a door to the reading room" });
+    expect(editor.stage?.selected).toBe("door:shared:reading-room");
+    // The page hears of the door, with its plate: picked, it can be taken out, and nothing else.
+    const door = {
+      wall: "front" as const,
+      along: 0,
+      to: "shared:reading-room",
+      label: "Reading room",
+      kind: "shared" as const,
+      by: "sam",
+    };
+    await hear({ ...home(4, { ...DEFAULT_ROOM, doors: [door] }) });
+    expect(text()).toMatch(/the door to the reading room/);
+    expect(text()).toMatch(/Put in by you/);
+    expect(button("Copy")).toBeUndefined();
+    // It keeps the colours of where it leads: nothing to repaint.
+    expect((document.querySelector(".room-edit-swatches") as HTMLFieldSetElement).disabled).toBe(true);
+    await act(async () => button("Take out").click());
+    await settle();
+    expect(server.edits.at(-1)?.edit).toEqual({ op: "remove", item: "door:shared:reading-room" });
+    expect(server.writes.at(-1)?.data.changes?.[0]).toMatchObject({ what: "took out the door to the reading room" });
+  });
+
+  it("drags a door put in along the sides, saves where it went, and shows it there at once", async () => {
+    mapPlaces = [{ id: "shared:reading-room", name: "the reading room", kind: "shared", agents: [] }];
+    const link = { to: "shared:reading-room", wall: "front", along: 0, by: "sam" };
+    const door = { ...link, wall: "front" as const, label: "Reading room", kind: "shared" as const };
+    server.answer = (edit, place) => ({
+      place: { ...place, links: [{ ...link, wall: "left", along: 1 }] } as Room,
+      item: String(edit.item),
+    });
+    await render(home(3, { ...DEFAULT_ROOM, links: [link], doors: [door] } as Room));
+    const dragged: Move = { item: "door:shared:reading-room", at: [-2, 1], facing: 0 };
+    await act(async () => editor.stage?.onDrop(dragged));
+    await settle();
+    expect(server.edits.at(-1)?.edit).toEqual({ op: "move", ...dragged });
+    expect(server.writes.at(-1)?.data.changes?.[0]).toMatchObject({ what: "moved the door to the reading room" });
+    // Shown where it went, before the server sends the room's doors again; its plate is still the server's.
+    expect(editor.room?.doors).toEqual([{ ...door, wall: "left", along: 1 }]);
+  });
+
+  it("says why when there is no room for a door, and writes nothing", async () => {
+    mapPlaces = [{ id: "shared:lounge", name: "the lounge", kind: "shared", agents: [] }];
+    server.answer = () => ({ why: "There's no room in the lounge for the way back." });
+    await render(home());
+    await act(async () => button("Add things").click());
+    await act(async () => button("A door to another placeits way back goes in there").click());
+    await act(async () => (document.querySelector(".room-edit-doors li button") as HTMLButtonElement).click());
+    await settle();
+    expect(server.writes).toEqual([]);
+    expect(text()).toMatch(/no room in the lounge for the way back/);
   });
 });

@@ -29,11 +29,13 @@ const MARKED = new Set<AgentActivity["doing"]>(["waiting", "stuck", "working", "
  * and every building, each a button that takes you into it. A house is its
  * owner's colour, with a dot when its owner is at work or waiting on you, and
  * any building someone is in has a dot for them. The building you are in is
- * ringed; out in the town, a dot is where you stand.
+ * ringed; out in the town, a dot is where you stand. Two places joined by a
+ * door an agent or a person put in have a dotted line between them.
  */
 export function TownPlan({
   plan,
   places,
+  links = [],
   here,
   you,
   activities,
@@ -42,6 +44,8 @@ export function TownPlan({
 }: {
   plan: Plan;
   places: MapPlace[];
+  /** The places joined by doors put in, each pair once. */
+  links?: [string, string][];
   /** The place on screen now. */
   here: string | undefined;
   /** Where you stand in the town, while you are out in it. */
@@ -61,6 +65,17 @@ export function TownPlan({
     return { x: x0, z: z0, w: x1 - x0, d: z1 - z0 };
   }, [plan]);
   const byId = useMemo(() => new Map(places.map((p) => [p.id, p])), [places]);
+  // Each door put in, as a line from one building to the other: a room upstairs is in the office, the lobby the hall.
+  const joins = useMemo(() => {
+    const office = plan.buildings.find((b) => b.kind === "office");
+    const building = (id: string) =>
+      plan.buildings.find((b) => b.id === id) ??
+      (office && (byId.get(id)?.kind === "office" || byId.get(id)?.via?.startsWith("office")) ? office : undefined);
+    return links.flatMap(([a, b]) => {
+      const [from, to] = [building(a), building(b)];
+      return from && to && from !== to ? [{ key: `${a}|${b}`, from: from.at, to: to.at }] : [];
+    });
+  }, [links, plan, byId]);
   // The building you are in: your own, or the office for a room on one of its floors.
   const inside = useMemo(() => {
     if (!here) return undefined;
@@ -122,6 +137,9 @@ export function TownPlan({
         ))}
         <circle cx={plan.square.at[0]} cy={plan.square.at[1]} r={plan.square.radius} className="world-plan-square" />
         <circle cx={plan.square.at[0]} cy={plan.square.at[1]} r={2.4} className="world-plan-water" />
+        {joins.map((j) => (
+          <line key={j.key} x1={j.from[0]} y1={j.from[1]} x2={j.to[0]} y2={j.to[1]} className="world-plan-link" />
+        ))}
       </svg>
       {lanes.map((r) => {
         // Partway along it; the avenue's middle is the square, so its name goes out along its eastern half.

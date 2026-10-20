@@ -3,16 +3,19 @@
  * move or turn something, add or copy a thing, recolour it or take it away,
  * checked the way the `place` tool checks its own changes. Nothing goes in
  * front of a door, through a wall or into anything else, so a person can't
- * make a room the tool would refuse. Pure: `places.ts` answers the page with
- * it over HTTP, and the page writes what comes back to the place's record
- * through the world-state API, as the person.
+ * make a room the tool would refuse. A person can put in a door to any other
+ * place, and drag or take out any door put in (`places-doors.ts`). Pure: `places.ts`
+ * answers the page with it over HTTP, and the page writes what comes back to
+ * the place's record through the world-state API, as the person.
  */
+import { linkItem, moveDoor, townDoorsOf, withoutLink } from "./places-doors.js";
 import {
   type DoorSlot,
-  doorOf,
+  doorSlotAt,
   findPlacement,
   KINDS,
   LIMITS,
+  linkSlots,
   moveItem,
   newId,
   newName,
@@ -34,7 +37,7 @@ import {
   withDoorsHeld,
   withSpots,
 } from "./places-layout.js";
-import { LOBBY, LOBBY_DOORS } from "./places-rooms.js";
+import { LOBBY } from "./places-rooms.js";
 import { TOWN } from "./places-town.js";
 import { OFFICE } from "./places-world.js";
 
@@ -50,7 +53,9 @@ export type Edit =
   | { op: "remove"; item: string }
   | { op: "color"; item: string; color: string }
   /** What a widget shows (`PlaceItem.shows`); null, back to what its kind shows by itself. */
-  | { op: "shows"; item: string; shows: string | null };
+  | { op: "shows"; item: string; shows: string | null }
+  /** A door to another place, by its id, with the way back on the other side (`places.ts` answers this one). */
+  | { op: "door"; to: string };
 
 /** The room after a person's change: what it is now, the thing it added or changed, and what went with a removal. */
 export interface Edited {
@@ -75,12 +80,10 @@ const DOES: Record<PlaceAction, string> = {
 /**
  * The doors to keep clear while a person changes a place: the lobby's way out
  * on to the square; anywhere else, the door the place has, or would have, as
- * the tool keeps it (`withDoorwayHeld`).
+ * the tool keeps it (`withDoorwayHeld`); and the doors put in.
  */
 export function doorsFor(id: string, place: Place): DoorSlot[] {
-  if (id === LOBBY) return LOBBY_DOORS;
-  const door = doorOf(place);
-  return door ? [door] : [];
+  return [...townDoorsOf(id, place), ...linkSlots(place)];
 }
 
 const isPoint = (v: unknown): v is [number, number] =>
@@ -123,8 +126,12 @@ export function editFrom(body: unknown): Edit | string {
       if (!shows || shows.length > SHOWS_LENGTH) return `\`shows\` is up to ${SHOWS_LENGTH} characters, or null.`;
       return { op: "shows", item, shows };
     }
+    case "door": {
+      const to = text(e.to);
+      return to ? { op: "door", to } : "A door needs `to`, the place it leads to.";
+    }
     default:
-      return "`op` is one of: move, add, remove, color, shows.";
+      return "`op` is one of: move, add, remove, color, shows, door.";
   }
 }
 
@@ -163,16 +170,24 @@ function placed(place: Place, held: Place, item: PlaceItem, edit: Extract<Edit, 
   return whyNotOnFloor(held, placing, edit.at, edit.facing) ?? { at: edit.at, facing: edit.facing };
 }
 
+/** What the doors in a place are called, for saying which one is in the way: its way out, and where each door put in goes. */
+export interface DoorNames {
+  out: string;
+  nameOf: (id: string) => string | undefined;
+}
+
 /**
  * What a place becomes with a person's change, or why it can't have it, in
  * a sentence for the page to show. `id` says which place it is: the lobby
  * keeps its way out clear, and the town and the office's floors, which are
- * laid out from what there is, can't be changed at all.
+ * laid out from what there is, can't be changed at all. `names` names the
+ * doors, for saying which is in the way of a door dragged somewhere.
  */
-export function applyEdit(id: string, place: Place, edit: Edit): Edited | string {
+export function applyEdit(id: string, place: Place, edit: Edit, names?: DoorNames): Edited | string {
   if (id === TOWN) return "The town is laid out from who and what is in it, so it can't be changed.";
   if (id === OFFICE || id.startsWith(`${OFFICE}:`))
     return "The office is laid out from the meeting rooms in it, so it can't be changed.";
+  if (edit.op === "door") return "A door to another place is put in by the server, which can see both places.";
   const held = withDoorsHeld(place, doorsFor(id, place));
   const sound = (next: Place) => {
     const problems = placeProblems(next);
@@ -228,6 +243,21 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
     return sound(next) ?? { place: next, item: added.id };
   }
 
+  // A door put in: it can be taken out, which takes its way back with it, or dragged along the sides of the room to
+  // where there is room for it, its way back staying where it is; but it keeps the colours of the place it leads to.
+  const link = place.links?.find((l) => linkItem(l.to) === edit.item);
+  if (link) {
+    if (edit.op === "remove") return { place: withoutLink(place, link.to), item: edit.item };
+    if (edit.op === "color") return "A door keeps the colours of the place it leads to.";
+    if (edit.op === "shows") return "A door shows where it leads: there's nothing to choose.";
+    const moved = moveDoor(
+      { id, place, name: place.name, out: names?.out ?? "the way out" },
+      link.to,
+      doorSlotAt(place, edit.at),
+      names?.nameOf ?? (() => undefined),
+    );
+    return typeof moved === "string" ? moved : { place: moved.place, item: edit.item };
+  }
   const item = place.props.find((p) => p.id === edit.item);
   if (!item) return "That isn't in the room any more: someone may have just changed it.";
 

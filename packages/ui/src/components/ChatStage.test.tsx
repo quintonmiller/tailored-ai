@@ -110,6 +110,8 @@ const stage = vi.hoisted(() => ({
   occupied: [] as string[][],
   /** The last stage's way to ask where a body leaving the town goes. */
   exitFor: undefined as ((agent: string) => [number, number] | undefined) | undefined,
+  /** The last stage's way to ask where a body last went, and came from. */
+  wentBy: undefined as ((agent: string) => { from?: string; to?: string } | undefined) | undefined,
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (
@@ -133,9 +135,11 @@ vi.mock("../avatar/stage", () => ({
       lights?: string;
       onDoorHover?: (door: { to: string } | undefined, at?: { x: number; y: number }) => void;
       exitFor?: (agent: string) => [number, number] | undefined;
+      wentBy?: (agent: string) => { from?: string; to?: string } | undefined;
     },
   ) => {
     stage.exitFor = opts.exitFor;
+    stage.wentBy = opts.wentBy;
     stage.onLine = opts.onLine;
     stage.onDoor = opts.onDoor;
     stage.wears.push(opts.wear ?? []);
@@ -455,6 +459,7 @@ beforeEach(() => {
   stage.talked.length = 0;
   stage.occupied.length = 0;
   stage.exitFor = undefined;
+  stage.wentBy = undefined;
   stage.moves.length = 0;
   stage.company.length = 0;
   stage.activities.length = 0;
@@ -908,6 +913,22 @@ describe("the chat page's scene", () => {
     await settle();
     expect(stage.company.at(-1)).toEqual(["writer"]);
     expect(stage.rooms.length).toBe(drawn);
+  });
+
+  it("tells the stage where each body went and came from, a visit beginning and ending where the body lives", async () => {
+    await render();
+    const emit = (change: Record<string, unknown>) =>
+      act(async () => FakeEventSource.last?.emit("change", { op: "update", ...change }));
+    // Planner lives in the lounge now, and goes out on its day to a friend's, then back.
+    await emit({ type: "whereabouts", id: "planner", op: "create", after: { place: "shared:lounge" } });
+    expect(stage.wentBy?.("planner")).toEqual({ from: "home:planner", to: "shared:lounge" });
+    await emit({ type: "visit", id: "planner", op: "create", after: { place: "home:writer", errand: "friend" } });
+    expect(stage.wentBy?.("planner")).toEqual({ from: "shared:lounge", to: "home:writer" });
+    await emit({ type: "visit", id: "planner", op: "delete", before: { place: "home:writer" } });
+    expect(stage.wentBy?.("planner")).toEqual({ from: "home:writer", to: "shared:lounge" });
+    // Writer has no whereabouts: it lives at home.
+    await emit({ type: "visit", id: "writer", op: "create", after: { place: "room:local:trip" } });
+    expect(stage.wentBy?.("writer")).toEqual({ from: "home:writer", to: "room:local:trip" });
   });
 
   it("tells the stage who is here, and leaves out anyone without a body to draw", () => {

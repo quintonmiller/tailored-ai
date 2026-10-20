@@ -28,6 +28,7 @@ import {
 } from "../avatar/calendar";
 import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
+import { doorsAsSaved } from "../avatar/editing";
 import type { TaskMove } from "../avatar/Faces";
 import { MODEL_TYPE, type ModelDef } from "../avatar/models";
 import type { BodyState } from "../avatar/motion";
@@ -42,7 +43,7 @@ import {
 } from "../avatar/routines";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
-import type { Companion, UseSpot } from "../avatar/stage";
+import type { BodyMove, Companion, UseSpot } from "../avatar/stage";
 import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
 import { doorInTown, isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
@@ -56,7 +57,7 @@ import { ANSWERED_ELSEWHERE, answerable, type Need, needsFrom, requestsOf, withQ
 import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
-import { isCommon, trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
+import { hopsAfter, isCommon, moveOf, trailThrough, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
@@ -77,6 +78,9 @@ import { facesIn, useWidgetFeeds, whoseIn } from "./WorldWidgets";
  */
 
 const STAGE_KEY = "tai.chat.stage";
+/** No places come through by doors put in: the same empty list each time, so nothing worked out from it is again. */
+const NO_HOPS: string[] = [];
+const NO_THROUGH = { at: "", hops: NO_HOPS };
 const VOICES_KEY = "tai.world.voices";
 /** Lines waiting to be spoken at most: past this, the oldest are let go rather than heard late. */
 const VOICE_QUEUE = 2;
@@ -160,6 +164,8 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
       // here, or changing a record a face here shows, so its picture from across the room says what is true now.
       if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
       else if (drawsModel(shown, change) || facesShow(shown, change.type)) void load();
+      // A door put in or taken out somewhere else may be the way back to here, which shows once both sides are in.
+      if (change.type === "place" && id && change.id !== id && relinked(change)) void load(true);
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -170,7 +176,7 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
         setScene((s) => ({
           ...s,
           // As on a visit: a meeting room's purpose stays its room's while the record has none of its own.
-          room: { ...lentTo(next.room, s), doors: s.room.doors },
+          room: { ...lentTo(next.room, s), doors: doorsAsSaved(s.room.doors, change.after) },
           version: change.version,
         }));
         void load(!next.missing);
@@ -273,6 +279,11 @@ export function steady(was: SceneInfo | null, next: SceneInfo): SceneInfo {
 /** Whether two lists of doors are the same doors in the same places. */
 export function sameDoors(a: RoomDoor[] | undefined, b: RoomDoor[] | undefined): boolean {
   return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+/** A change to the doors put in a place: a door elsewhere shows only once both its sides are in. */
+function relinked(change: { before?: Record<string, unknown>; after?: Record<string, unknown> }): boolean {
+  return JSON.stringify(change.before?.links ?? []) !== JSON.stringify(change.after?.links ?? []);
 }
 
 /** A change that can move a place's doors (made anew, a new size, another area): worth asking for them again. */
@@ -991,6 +1002,8 @@ export function useScene(id: string | null): SceneInfo | null {
         (change.op !== "update" || change.before?.area !== change.after?.area)
       )
         void load();
+      // A door put in or taken out elsewhere may be the way back to here, which shows once both sides are in.
+      else if (change.type === "place" && change.id !== id && relinked(change)) void load(true);
       if (change.type !== "place" || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -1001,7 +1014,7 @@ export function useScene(id: string | null): SceneInfo | null {
             ? {
                 ...s,
                 // A meeting room's purpose is its room's until its members give it one: still lent, if the record has none.
-                room: { ...lentTo(next.room, s), doors: s.room.doors },
+                room: { ...lentTo(next.room, s), doors: doorsAsSaved(s.room.doors, change.after) },
                 version: change.version,
               }
             : s,
@@ -1205,9 +1218,17 @@ export function useChatStage({
   const [visiting, setVisitingTo] = useState<string | null>(null);
   // The place you came from, when you came through a door: you stand just inside the door back to it.
   const [cameFrom, setCameFrom] = useState<string | undefined>(undefined);
-  /** Go somewhere: by the map (to its start), or through a door from `from`. */
-  const setVisiting = useCallback((id: string | null, from?: string) => {
+  // The places you came through by doors agents and people put in, for the trail: kept for the place you came to
+  // (`at`), so going anywhere any other way leaves them behind.
+  const [through, setThrough] = useState<{ at: string; hops: string[] }>(NO_THROUGH);
+  /**
+   * Go somewhere: by the map (to its start), or through a door from `from`.
+   * Only a door someone put in, or going back the way you came by one, says
+   * the way you came (`way`): any other way there starts the trail afresh.
+   */
+  const setVisiting = useCallback((id: string | null, from?: string, way?: { at: string; hops: string[] }) => {
     setCameFrom(from);
+    setThrough(way ?? NO_THROUGH);
     setVisitingTo(id);
   }, []);
   // Whose own view the scene shows: the agent you talk to, until you go visiting. Then it stays the agent you
@@ -1238,6 +1259,20 @@ export function useChatStage({
   const [stageOn, setStageOn] = useState(() => saved(STAGE_KEY, true));
   const has3d = typeof info.avatar === "string";
   const showStage = has3d && stageOn;
+  // Where each body last went, and came from, while the world is shown: it walks out by the door to where it went,
+  // and in by the door from where it was, when the room has one (a door someone put in, perhaps), rather than by the
+  // room's first door. A visit, to talk or out on its day, begins and ends where the body lives.
+  const lives = useRecords<{ place?: string }>("whereabouts", showStage);
+  const livesRef = useRef(lives);
+  livesRef.current = lives;
+  const [moves, setMoves] = useState<Record<string, BodyMove>>({});
+  useEffect(() => {
+    if (!showStage) return;
+    return subscribeStateChanges((change) => {
+      const move = moveOf(change, livesRef.current[change.id]?.place ?? `home:${change.id}`);
+      if (move) setMoves((m) => ({ ...m, [change.id]: move }));
+    });
+  }, [showStage]);
   const [wide, setWide] = useState(() => window.matchMedia?.("(min-width: 720px)").matches ?? true);
   useEffect(() => {
     const q = window.matchMedia?.("(min-width: 720px)");
@@ -1278,9 +1313,16 @@ export function useChatStage({
         : undefined,
     [sceneNow.id, sceneNow.editable, sceneNow.version, sceneNow.scope, sceneNow.lent, sceneNow.room, loading],
   );
+  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
+  // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
+  // Rearranging a room, it says where a door can lead.
+  const map = useWorldMap(
+    showStage,
+    mapOpen || panel?.kind === "agent" || panel?.kind === "needs" || panel?.kind === "calendar",
+  );
   // What the editor offers a widget to show: the rooms on the map and the Board's widgets, known further down.
   const editorHas = useRef<{ rooms?: string[]; widgets?: { id: string; title?: string }[] }>({});
-  const editor = useRoomEditor(editable, () => editorHas.current);
+  const editor = useRoomEditor(editable, () => editorHas.current, map.places);
   const room = editor.room ?? sceneNow.room;
   // How tall the bar over the stage's foot is while rearranging, for framing the room above it.
   const dock = useRef<HTMLDivElement>(null);
@@ -1326,13 +1368,11 @@ export function useChatStage({
   }, []);
   // On a phone the catalogue is a sheet over the foot of the scene, where the bar would be: one at a time.
   const sheet = editor.adding && sheets;
-  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
-  // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
-  const map = useWorldMap(
-    showStage,
-    mapOpen || panel?.kind === "agent" || panel?.kind === "needs" || panel?.kind === "calendar",
+  const hops = through.at && through.at === placeId ? through.hops : NO_HOPS;
+  const trail = useMemo(
+    () => trailThrough(placeId, hops, map.places, map.areas),
+    [placeId, hops, map.places, map.areas],
   );
-  const trail = useMemo(() => trailTo(placeId, map.places, map.areas), [placeId, map.places, map.areas]);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
   const board = useBoardTasks(showStage);
@@ -1902,12 +1942,13 @@ export function useChatStage({
   const onDoor = useCallback(
     (door: RoomDoor) => {
       if (!placeId) return;
-      setVisiting(door.to, placeId);
+      // Through a door someone put in, the trail says the way you came; through the town's own, it starts again.
+      setVisiting(door.to, placeId, door.by ? { at: door.to, hops: hopsAfter(hops, placeId, door.to) } : undefined);
       // What was open beside something in the place you leave stays there, as walking away from it puts it away:
       // only the list of what waits on you, held in front of you, comes along.
       setPanel((open) => (open?.kind === "needs" ? open : null));
     },
-    [placeId, setVisiting],
+    [placeId, hops, setVisiting],
   );
   // Homes, shared places and meeting rooms are agents' to change, and the lobby a person's; the town and the office
   // are laid out from what there is.
@@ -1915,7 +1956,9 @@ export function useChatStage({
   // Going somewhere: to the agent you came from is back with it. Out on to the street by a building's door (`from`),
   // you stand outside it.
   const go = (id: string, from?: string) => {
-    setVisiting(id === own.id ? null : id, from);
+    // Back along the way you came by doors put in, the trail keeps the way to there.
+    const back = hops.indexOf(id);
+    setVisiting(id === own.id ? null : id, from, back >= 0 ? { at: id, hops: hops.slice(0, back) } : undefined);
     setPanel(null);
   };
   // An agent to stand in front of once in its place, asked for by number so asking again is a new ask. Done with
@@ -2064,6 +2107,7 @@ export function useChatStage({
         places={map.places}
         areas={map.areas}
         {...(map.town ? { town: map.town } : {})}
+        links={map.links}
         problem={map.problem}
         here={placeId}
         {...(placeId === "town" && controls.current ? { you: controls.current.where() } : {})}
@@ -2347,6 +2391,7 @@ export function useChatStage({
         arriveFrom={showing.visiting ? cameFrom : undefined}
         onDoor={onDoor}
         company={townCompany}
+        moves={moves}
         agent={showing.visiting ? "you" : shown}
         // Your own body wears nothing of the agent's, and looks and carries itself its own way.
         {...(!showing.visiting && own.wear ? { wear: own.wear } : {})}

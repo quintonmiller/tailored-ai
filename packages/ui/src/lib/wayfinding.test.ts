@@ -6,11 +6,15 @@
 import { describe, expect, it } from "vitest";
 import {
   areaTitle,
+  HOPS_KEPT,
+  hopsAfter,
   type MapArea,
   type MapPlace,
   mapIndex,
+  moveOf,
   placeTitle,
   plaqueWords,
+  trailThrough,
   trailTo,
   wayInto,
 } from "./wayfinding";
@@ -246,5 +250,72 @@ describe("mapIndex", () => {
   it("puts rooms where something is happening first, and keeps the rest in the order they came", () => {
     const index = mapIndex(places, areas, {}, "", (p) => (p.id === "room:local:trip" ? 0 : 10));
     expect(index.rooms.map((p) => p.id)).toEqual(["room:local:trip", "room:local:budget", "room:local:zines"]);
+  });
+});
+
+describe("the trail through doors put in", () => {
+  it("grows by the place you left, going on; shortens to before where you go back to", () => {
+    expect(hopsAfter([], "home:analyst", "shared:lounge")).toEqual(["home:analyst"]);
+    expect(hopsAfter(["home:analyst"], "shared:lounge", "room:local:trip")).toEqual(["home:analyst", "shared:lounge"]);
+    // Back through the door you came in by.
+    expect(hopsAfter(["home:analyst", "shared:lounge"], "room:local:trip", "shared:lounge")).toEqual(["home:analyst"]);
+    expect(hopsAfter(["home:analyst"], "shared:lounge", "home:analyst")).toEqual([]);
+    // Only the last few: where you came from, not the whole walk.
+    const long = hopsAfter(["a", "b", "c"], "d", "e");
+    expect(long).toHaveLength(HOPS_KEPT);
+    expect(long.at(-1)).toBe("d");
+  });
+
+  it("says where you are the way you came: the street of the first place, each place since, and here", () => {
+    expect(trailThrough("shared:lounge", ["home:analyst"], places, areas)).toEqual([
+      { id: "town", label: "Town" },
+      { id: "town", label: "Maple Lane", from: "home:analyst" },
+      // A door away: back through it.
+      { id: "home:analyst", label: "analyst's home", from: "shared:lounge" },
+      { id: "shared:lounge", label: "the lounge" },
+    ]);
+    expect(
+      trailThrough("room:local:trip", ["home:analyst", "shared:lounge"], places, areas).map((c) => c.label),
+    ).toEqual(["Town", "Maple Lane", "analyst's home", "the lounge", "#trip"]);
+    // Came no such way, or by a place that is off the map now: the plain trail.
+    expect(trailThrough("shared:lounge", [], places, areas)).toEqual(trailTo("shared:lounge", places, areas));
+    expect(trailThrough("shared:lounge", ["home:gone"], places, areas)).toEqual(
+      trailTo("shared:lounge", places, areas),
+    );
+  });
+});
+
+describe("where a body went", () => {
+  it("reads it from a change to its whereabouts, no record being home, or to a visit, which knows one end", () => {
+    expect(moveOf({ type: "whereabouts", id: "planner", after: { place: "shared:lounge" } })).toEqual({
+      from: "home:planner",
+      to: "shared:lounge",
+    });
+    expect(moveOf({ type: "whereabouts", id: "planner", before: { place: "shared:lounge" } })).toEqual({
+      from: "shared:lounge",
+      to: "home:planner",
+    });
+    expect(moveOf({ type: "visit", id: "planner", after: { place: "room:local:trip", until: "x" } })).toEqual({
+      to: "room:local:trip",
+    });
+    expect(moveOf({ type: "visit", id: "planner", before: { place: "room:local:trip" } })).toEqual({
+      from: "room:local:trip",
+    });
+    // Where the body lives, when the page knows it: where a visit began, out on its day to a friend's, and where
+    // it went once the visit was over.
+    expect(moveOf({ type: "visit", id: "planner", after: { place: "home:writer" } }, "home:planner")).toEqual({
+      from: "home:planner",
+      to: "home:writer",
+    });
+    expect(moveOf({ type: "visit", id: "planner", before: { place: "home:writer" } }, "shared:lounge")).toEqual({
+      from: "home:writer",
+      to: "shared:lounge",
+    });
+    expect(
+      moveOf({ type: "visit", id: "planner", before: { place: "town" }, after: { place: "room:local:trip" } }, "x"),
+    ).toEqual({ from: "town", to: "room:local:trip" });
+    // A visit made longer goes nowhere, and other records say nothing of where a body went.
+    expect(moveOf({ type: "visit", id: "planner", before: { place: "a" }, after: { place: "a" } })).toBeUndefined();
+    expect(moveOf({ type: "place", id: "shared:lounge", after: { place: "x" } })).toBeUndefined();
   });
 });

@@ -3,10 +3,18 @@ import {
   COLOURS,
   catalogue,
   changeWords,
+  doorItem,
+  doorItemTo,
+  doorPatch,
+  doorPoint,
+  doorSlotAt,
+  doorsAsSaved,
   footprint,
   GROUPS,
   type Kinds,
+  linkable,
   madeByAgents,
+  madeDoors,
   madeHere,
   noSteps,
   onFloor,
@@ -374,5 +382,79 @@ describe("what a person can set a widget to show", () => {
     const room = { props: [{ id: "c", name: "the chart" } as Prop] };
     expect(changeWords({ op: "shows", item: "c", shows: "tokens" }, room, room)).toBe("set the chart to show tokens");
     expect(changeWords({ op: "shows", item: "c", shows: null }, room, room)).toBe("set the chart back to its own");
+  });
+});
+
+describe("doors put in", () => {
+  const places = [
+    { id: "town", name: "the town", kind: "town", agents: [] },
+    { id: "lobby", name: "the town hall", kind: "lobby", agents: [] },
+    { id: "office", name: "the office", kind: "office", agents: [] },
+    { id: "home:writer", name: "writer's room", kind: "home", owner: "writer", agents: [] },
+    { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: [] },
+    { id: "shared:lounge", name: "the lounge", kind: "shared", agents: [] },
+    { id: "shared:attic", name: "the attic", kind: "shared", agents: [] },
+    { id: "room:local:trip", name: "trip", kind: "room", agents: [] },
+  ] as Parameters<typeof linkable>[0];
+  const room: Pick<Room, "doors"> = {
+    doors: [
+      { wall: "back", along: 1, to: "town", label: "Maple Lane", kind: "town" },
+      { wall: "right", along: 0, to: "shared:attic", label: "Attic", kind: "shared", by: "planner" },
+    ],
+  };
+
+  it("offers every home, shared place, meeting room and the town hall a door can lead to, but here and those it has", () => {
+    expect(linkable(places, "home:planner", room).map((p) => [p.label, p.kind])).toEqual([
+      ["writer's home", "Home"],
+      ["the lounge", "Shared place"],
+      ["#trip", "Meeting room"],
+      ["the town hall", "The town hall"],
+    ]);
+    expect(linkable(places, "home:planner", room, "#tr").map((p) => p.id)).toEqual(["room:local:trip"]);
+  });
+
+  it("knows the doors put in by who put them in, picks one by an id of its own, and says what a change to one did", () => {
+    expect(madeDoors(room).map((d) => d.to)).toEqual(["shared:attic"]);
+    expect(doorItem("shared:attic")).toBe("door:shared:attic");
+    expect(doorItemTo("door:shared:attic")).toBe("shared:attic");
+    expect(doorItemTo("couch")).toBeUndefined();
+    const named = (to: string) => ({ "shared:attic": "the attic", "shared:lounge": "the lounge" })[to];
+    expect(changeWords({ op: "door", to: "shared:lounge" }, DEFAULT_ROOM, DEFAULT_ROOM, named)).toBe(
+      "put in a door to the lounge",
+    );
+    expect(changeWords({ op: "remove", item: "door:shared:attic" }, DEFAULT_ROOM, DEFAULT_ROOM, named)).toBe(
+      "took out the door to the attic",
+    );
+    expect(
+      changeWords({ op: "move", item: "door:shared:attic", at: [0, 3], facing: 0 }, DEFAULT_ROOM, DEFAULT_ROOM, named),
+    ).toBe("moved the door to the attic");
+  });
+
+  it("slides a dragged door to the side nearest the pointer, short of the corners, as the server reads it back", () => {
+    const size = { width: 7, depth: 6 };
+    expect(doorSlotAt(size, [1.23, 3.4])).toEqual({ wall: "front", along: 1.25 });
+    expect(doorSlotAt(size, [-3.2, 0.4])).toEqual({ wall: "left", along: 0.4 });
+    expect(doorSlotAt(size, [3.6, -9])).toEqual({ wall: "back", along: 2.4 });
+    expect(doorSlotAt(size, [3.4, -2.6])).toEqual({ wall: "right", along: -1.9 });
+    // Let go there, it says the point on its side, which is that slot again.
+    for (const slot of [
+      { wall: "back", along: -1 },
+      { wall: "left", along: 1.5 },
+      { wall: "front", along: 2 },
+      { wall: "right", along: 0 },
+    ] as const)
+      expect(doorSlotAt(size, doorPoint(size, slot))).toEqual(slot);
+    // The floor in front of it, square to its side and a metre in.
+    expect(doorPatch(size, { wall: "left", along: 1 })).toEqual({ at: [-3, 1], width: 1.6, depth: 1, facing: 90 });
+    expect(doorPatch(size, { wall: "front", along: 2 })).toEqual({ at: [2, 2.5], width: 1.6, depth: 1, facing: 0 });
+  });
+
+  it("shows a door put in where its record now has it, and none it took out, leaving the town's alone", () => {
+    expect(doorsAsSaved(room.doors, { links: [{ to: "shared:attic", wall: "front", along: 1.5 }] })).toEqual([
+      room.doors?.[0],
+      { ...room.doors?.[1], wall: "front", along: 1.5 },
+    ]);
+    expect(doorsAsSaved(room.doors, {})).toEqual([room.doors?.[0]]);
+    expect(doorsAsSaved(undefined, {})).toBeUndefined();
   });
 });
