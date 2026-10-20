@@ -114,6 +114,7 @@ export function Avatar({
   menuFor,
   visitor = false,
   onNear,
+  onPresent,
   tools,
   bar,
   overlay,
@@ -190,6 +191,8 @@ export function Avatar({
   visitor?: boolean;
   /** The agent a visitor is standing next to, as it changes. */
   onNear?: (agent: string | undefined) => void;
+  /** The agents whose bodies are in the place, those still walking out of it included, as that changes. */
+  onPresent?: (agents: string[]) => void;
   /** Controls laid over the top left of the stage. */
   tools?: ReactNode;
   /**
@@ -456,6 +459,8 @@ export function Avatar({
   lineRef.current = onLine;
   const nearRef = useRef(onNear);
   nearRef.current = onNear;
+  const presentRef = useRef(onPresent);
+  presentRef.current = onPresent;
   const [travel, setTravel] = useState<Travel>("walk");
   const agentRef = useRef(agent);
   agentRef.current = agent;
@@ -545,6 +550,7 @@ export function Avatar({
               }
             : {}),
           onUse: (action: string, on?: UseSpot, thing?: string) => onUseRef.current?.(action, on, thing),
+          onPresent: (who: string[]) => presentRef.current?.(who),
           exitFor: (who: string) => exitRef.current?.(who),
           onFocus: setReading,
           // A surface under the pointer says what clicking it does, as a door says where it goes; so does the plaque.

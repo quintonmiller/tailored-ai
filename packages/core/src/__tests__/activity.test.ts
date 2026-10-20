@@ -396,6 +396,29 @@ describe("activity", () => {
     expect(Date.parse(idle.last?.at ?? "")).not.toBeNaN();
   });
 
+  it("doesn't call a tool call that failed, or one the loop turned back, the last thing it did", async () => {
+    // A photo with no browser installed failed, and the status board said "took a photo" all the same.
+    make();
+    started("planner");
+    await tool("planner", "web_search", { query: "ferries" });
+    ended("planner", { stop: { kind: "complete" } });
+    started("planner");
+    const call = await tool("planner", "place", { action: "photo" }, false);
+    events.emit("agent.post_tool_use", { ...call, output: "No photo: …", success: false, durationMs: 1 });
+    // Turned back before it ran: no post_tool_use at all.
+    await tool("planner", "place", { action: "photo", view: 3 }, false);
+    ended("planner", { stop: { kind: "complete" } });
+    // It answered, saying it couldn't: that is what it did.
+    expect((await activity("planner")).last?.what).toBe("replying");
+    // And a turn that searched before its photo failed searched.
+    started("planner");
+    await tool("planner", "web_search", { query: "ferries" });
+    const again = await tool("planner", "place", { action: "photo" }, false);
+    events.emit("agent.post_tool_use", { ...again, output: "No photo: …", success: false, durationMs: 1 });
+    ended("planner", { stop: { kind: "complete" } });
+    expect((await activity("planner")).last).toMatchObject({ what: "searching the web", look: "magnifier" });
+  });
+
   it("says a turn without a tool talked: to the agent that started it, in the room that woke it, or back", async () => {
     make({ roomName: (ref) => (ref === "local:trip" ? "trip" : undefined) });
     events.emit("room.woke", { roomRef: "local:trip", agent: "writer", messageCount: 2 });

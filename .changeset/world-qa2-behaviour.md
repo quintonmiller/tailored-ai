@@ -1,0 +1,18 @@
+---
+'@tailored-ai/server': patch
+'@tailored-ai/cli': patch
+'@tailored-ai/core': patch
+'@tailored-ai/ui': patch
+---
+
+`tai stop` stops in about a second with the 3D world open, and a pass of smaller fixes the world's second QA pass found.
+
+- **Stopping with pages open.** An open page holds event streams (`/api/state/events`, `/api/interfaces/events`) that never finish on their own, and the HTTP server's `close()` waited for them: `tai stop` sat for 30 seconds and killed the process, cutting off the shutdown hooks. The server now tracks every event stream it opens (`streams.ts`), ends them all as it stops, lets each kept-alive connection go once it is quiet, and gives anything else still being answered two seconds. `createServer` returns `stop()`, which the CLI's shutdown uses.
+- **No more "references unknown tool … Available: " at startup.** Looking up an agent's avatar or voice resolved it with no tools, which called every tool in its `tools:` list unknown (about 155 lines a start for a large roster) and used up the once-per-process warning before the real resolve could give it. `resolveAgent` now checks a `tools:` list only against tools it is given; a real unknown tool still warns once, against the real list.
+- **`room` dm takes `to` as one name.** The agent loop reads one string given where a tool's schema asks for a list of strings as the list of one it means, rather than refusing the call (`liftArgs`, before `agent.pre_tool_use`). The room tool reads its recipients the same way when called directly, and a dm naming two agents says to send each its own.
+- **A photo that can't be taken says why, plainly.** Without a browser installed, the model got Playwright's install banner, box drawing and a home-directory path. It now gets one sentence: what is missing and the command a person can run. And a tool call that failed, or one the loop turned back, no longer becomes the agent's "last did": the status board said "took a photo" when no photo was taken.
+- **Agents out on their day are out.** The status board has an "Out and about" group (at the café, on a bench, at a friend's), and stopped saying "Everyone is idle or asleep" with six agents out; the map counts them under Busy now ("6 out: café, benches").
+- **Send home keeps you face to face until the agent has gone.** The conversation card turned into a phone call the moment you sent an agent home, while its body still sat beside you. The stage now says whose bodies are in the place, those walking out included, and the card stays beside the agent until it is through the door.
+- **No 404 in the console for an agent with no whereabouts.** Send home deletes only the records the agent has; no record is the normal at-home state.
+- **"Answer in the chat" puts the cursor in the box**, after the quoted question, and so does a message a kiosk starts for you.
+- **A click on the status board opens the agent's card when you get there.** Arriving at its home used to close the card you came for.

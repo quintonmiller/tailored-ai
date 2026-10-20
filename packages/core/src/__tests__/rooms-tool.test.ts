@@ -175,6 +175,15 @@ describe("room tool — who is speaking", () => {
     expect(res.output).toBe("supervisor (to coder, alex): can you take the migration?");
   });
 
+  it("addresses one name given where the list goes, as a hook calling it directly might", async () => {
+    await createRoom("eng");
+    await post("eng", "can you take the migration?", "supervisor", { to: "coder" });
+
+    const res = await run({ action: "read", room: "eng" }, "coder");
+
+    expect(res.output).toBe("supervisor (to coder): can you take the migration?");
+  });
+
   it("needs a body", async () => {
     await createRoom("eng");
 
@@ -1425,5 +1434,41 @@ describe("room tool — guardrails", () => {
 
     expect(res.success).toBe(true);
     expect(messageCount()).toBe(1);
+  });
+});
+
+describe("room tool — dm", () => {
+  /** A room tool that hands direct messages to `delivered`, and has the recipient say it got it. */
+  const dmTool = (delivered: string[]) =>
+    new RoomTool({
+      store,
+      identities: () => new IdentityResolver(identityOpts),
+      deliverAgentMessage: async (to, from, body) => {
+        delivered.push(`${from} → ${to}: ${body}`);
+        return "got it";
+      },
+    });
+
+  it("sends to the agent named by `agent`, by `to` as one name, or by `to` as a list of one", async () => {
+    // The docs show `to="assistant"`; the schema says a list. Both are what a model writes, and both mean one agent.
+    const delivered: string[] = [];
+    const dm = dmTool(delivered);
+    for (const who of [{ agent: "coder" }, { to: "coder" }, { to: ["coder"] }]) {
+      const res = await dm.execute({ action: "dm", body: "Trip moved to Aug 3.", ...who }, ctx("supervisor"));
+      expect(res.success).toBe(true);
+      expect(res.output).toBe("coder replied:\ngot it");
+    }
+    expect(delivered).toEqual(Array(3).fill("supervisor → coder: Trip moved to Aug 3."));
+  });
+
+  it("won't send one dm to two agents, and says what to do instead", async () => {
+    const delivered: string[] = [];
+    const res = await dmTool(delivered).execute(
+      { action: "dm", body: "Trip moved.", to: ["coder", "alex"] },
+      ctx("supervisor"),
+    );
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/one agent.*coder, alex.*Send each its own, or post in a room/);
+    expect(delivered).toEqual([]);
   });
 });

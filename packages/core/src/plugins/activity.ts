@@ -579,11 +579,10 @@ export class ActivityTracker {
     const look = this.lookOf(p.tool, p.args);
     // The agent on the other end of a dm or delegation will start a turn: it is talking too.
     if (look.with) this.incoming.set(look.with, agent);
+    // What it did last waits for the call to have worked (`toolEnded`): a photo that couldn't be taken, or a call the
+    // loop turned back, was never done.
     this.change(agent, (t) => {
       t.tool = { id: p.toolUseId, name: p.tool, look };
-      t.used = true;
-      if (p.tool === "room" && (p.args.action === "post" || p.args.action === "update")) t.posted = true;
-      t.last = { what: look.what, ...(look.look ? { look: look.look } : {}), at: this.now().toISOString() };
     });
     // Asked in a conversation, which is where an answer to it goes; one asked from a task run is about the task
     // (`question.asked`), which takes the conversation off again.
@@ -598,8 +597,16 @@ export class ActivityTracker {
 
   private toolEnded(e: RuntimeEventPayload<"agent.post_tool_use">): void {
     const agent = nameOf(e.agent);
+    const done = this.lookOf(e.tool, e.args);
     this.change(agent, (t) => {
       if (t.tool?.id === e.toolUseId) t.tool = undefined;
+      // Done, it is what the agent did; failed, the turn goes on as if it hadn't tried, and a reply after it is the
+      // last thing it did.
+      if (e.success) {
+        t.used = true;
+        if (e.tool === "room" && (e.args.action === "post" || e.args.action === "update")) t.posted = true;
+        t.last = { what: done.what, ...(done.look ? { look: done.look } : {}), at: this.now().toISOString() };
+      }
       if (e.tool === "ask_user" && !e.success) t.asked = undefined;
       // A question sent as a choice, form or confirmation waits for the person, like ask_user.
       if (e.tool === "interface" && e.success && e.args.action === "send" && ASKS.has(String(e.args.kind))) {
@@ -613,8 +620,7 @@ export class ActivityTracker {
         };
       }
     });
-    const look = this.lookOf(e.tool, e.args);
-    if (look.with && this.incoming.get(look.with) === agent) this.incoming.delete(look.with);
+    if (done.with && this.incoming.get(done.with) === agent) this.incoming.delete(done.with);
   }
 
   /**

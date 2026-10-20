@@ -413,7 +413,7 @@ async function runServer(
     name: "home_assistant_poll",
     disconnect: async () => homeAssistantPoller.stop(),
   });
-  const { start } = createServer({
+  const { start, stop: stopHttp } = createServer({
     runtime,
     scheduler,
     taskWatcher,
@@ -423,10 +423,11 @@ async function runServer(
     uiProvider,
     mcpStatus: () => mcpManager.list(),
   });
-  const httpServer = start();
+  start();
   channels.push({
     name: `http(:${runtime.getConfig().server.port})`,
-    disconnect: () => new Promise<void>((res) => httpServer.close(() => res())),
+    // Ends the event streams open pages hold: a plain close() waited on them until the service killed the process.
+    disconnect: stopHttp,
   });
 
   const model = runtime.getModel();

@@ -1164,8 +1164,8 @@ One tool, several actions. Agents need `room` in their `tools:` list.
 |---|---|
 | `list` | rooms it can see, and whether it is subscribed |
 | `read` | messages since its cursor — omit `room` to sweep every room it watches (reading advances the cursor) |
-| `post` | say something; `to` addresses participants |
-| `dm` | message one agent directly, no room involved |
+| `post` | say something; `to` addresses participants, one name or a list |
+| `dm` | message one agent directly, no room involved; name it in `agent` or `to` |
 | `pass` | say nothing this turn |
 | `update` | replace a message you already posted, by `message_id` |
 | `react` | acknowledge with an emoji instead of a message |
@@ -1190,6 +1190,13 @@ just is not a *place*.
 ```
 room(action="dm", to="assistant", body="Trip moved to Aug 3.")
 ```
+
+The recipient goes in `agent` or `to`, as one name or a list of one; a list of
+two is refused, since a dm goes to one agent (post in a room to reach several).
+`to` takes one name or a list for `post` too. The schema calls it a list, and
+the agent loop reads a single name given there as the list of one it means
+rather than turning the call back, for any tool whose parameter is a list of
+strings.
 
 It used to open a channel per recipient, which at 27 agents is 27 channels
 waiting to happen. Shared sessions removed the room's second job — `room:all:<agent>`

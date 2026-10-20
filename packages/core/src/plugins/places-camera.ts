@@ -30,6 +30,34 @@ const SHOT_TIMEOUT_MS = 45_000;
 /** The browser stays up this long after a photo, for the next one, then goes. */
 const KEEP_WARM_MS = 120_000;
 
+/** Said when Playwright itself isn't there to start a browser with. */
+const NO_PLAYWRIGHT =
+  "No photo: this server can't take photos, as Playwright isn't installed. Someone running TAI can add it with `npm install playwright`, then `npx playwright install chromium`.";
+
+/**
+ * Why a photo couldn't be taken, in a sentence for the agent to pass on:
+ * what is missing, and what a person can do about it. Playwright's own
+ * errors are a banner in box drawing, a call log and the browser's path in
+ * someone's home directory, which a model repeats word for word. Of anything
+ * else, the first line is kept, without paths.
+ */
+export function photoProblem(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw === NO_PLAYWRIGHT) return raw;
+  if (/missing dependencies|install-deps/i.test(raw))
+    return "No photo: the browser photos are taken with can't start here, as system libraries it needs are missing. Someone running TAI can add them with `npx playwright install-deps chromium`.";
+  if (/Executable doesn't exist|playwright install|download new browsers/i.test(raw))
+    return "No photo: the browser photos are taken with isn't installed on this server. Someone running TAI can install it with `npx playwright install chromium`.";
+  if (/Timeout \d+ms exceeded/i.test(raw)) return "No photo: the room took too long to draw. Try again in a moment.";
+  const first =
+    raw
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line && !/^[\u2500-\u257f]/.test(line)) ?? "";
+  const plain = first.replace(/(?:~|[A-Za-z]:)?(?:[\\/][^\s\\/'"`]+){2,}[\\/]?/g, "…").slice(0, 200);
+  return plain || "No photo: something went wrong taking it.";
+}
+
 export class PlaceCamera {
   private browser: Promise<Browser> | undefined;
   private idle: ReturnType<typeof setTimeout> | undefined;
@@ -37,14 +65,16 @@ export class PlaceCamera {
 
   constructor(private readonly access: () => SelfAccess | undefined) {}
 
-  /** A PNG of the shot. One at a time: a second waits for the first. */
+  /** A PNG of the shot. One at a time: a second waits for the first. Failing, it says why in plain words. */
   take(shot: Shot): Promise<Buffer> {
     const run = this.queue.then(
       () => this.shoot(shot),
       () => this.shoot(shot),
     );
     this.queue = run.catch(() => {});
-    return run;
+    return run.catch((err) => {
+      throw new Error(photoProblem(err));
+    });
   }
 
   private async launch(): Promise<Browser> {
@@ -52,7 +82,7 @@ export class PlaceCamera {
     try {
       pw = await import("playwright");
     } catch {
-      throw new Error("Photos need Playwright: run `npm install playwright && npx playwright install chromium`.");
+      throw new Error(NO_PLAYWRIGHT);
     }
     // No GPU in a headless browser: WebGL runs on SwiftShader, Chromium's software renderer.
     return pw.chromium.launch({

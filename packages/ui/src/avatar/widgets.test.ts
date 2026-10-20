@@ -72,19 +72,30 @@ describe("who is doing what", () => {
     mailer: { agent: "mailer", doing: "idle", what: "idle", last: { what: "sending a mail", at: ago(90) } },
     sorter: { agent: "sorter", doing: "idle", what: "idle", last: { what: "sorting notes", at: ago(10) } },
     sleeper: { agent: "sleeper", doing: "asleep", what: "asleep", detail: "paused" },
+    // Out on its day, as the page reads its outing (`withRoutines`): idle, with a routine.
+    sipper: {
+      agent: "sipper",
+      doing: "idle",
+      what: "having a coffee at the café",
+      last: { what: "sending a mail", at: ago(70) },
+      routine: { errand: "cafe" },
+    },
+    host: { agent: "host", doing: "idle", what: "having sipper round", routine: { errand: "host" } },
   };
 
   it("puts every agent in the group for what it is doing, in the order the board shows them", () => {
     const groups = whoGroups(activities, ["newcomer"], NOW);
-    expect(groups.map((g) => g.id)).toEqual(["waiting", "stuck", "working", "talking", "idle", "asleep"]);
+    expect(groups.map((g) => g.id)).toEqual(["waiting", "stuck", "working", "talking", "out", "idle", "asleep"]);
     const of = (id: string) => groups.find((g) => g.id === id)?.rows.map((r) => r.agent);
     // Waiting longest first; a failed turn apart from the busy, since it needs a person too; busy longest at it first.
     expect(of("waiting")).toEqual(["reviewer", "tester"]);
     expect(of("stuck")).toEqual(["coder"]);
     expect(of("working")).toEqual(["planner", "writer"]);
     expect(of("talking")).toEqual([]);
+    // Out on its day is out, not idle or asleep; at home with a friend round is at home.
+    expect(of("out")).toEqual(["sipper"]);
     // Idle by what it did last, newest first; one never heard from last.
-    expect(of("idle")).toEqual(["sorter", "mailer", "newcomer"]);
+    expect(of("idle")).toEqual(["sorter", "mailer", "host", "newcomer"]);
     expect(of("asleep")).toEqual(["sleeper"]);
   });
 
@@ -94,12 +105,17 @@ describe("who is doing what", () => {
     expect(row("planner")).toMatchObject({ what: "searching the web", detail: "hotels", when: "12 min" });
     expect(row("sorter")).toMatchObject({ what: "sorted notes", when: "10 min ago" });
     expect(row("sleeper")).toMatchObject({ what: "paused" });
+    // Out, where it is says more than what it last did.
+    expect(row("sipper")).toEqual({ agent: "sipper", doing: "idle", what: "having a coffee at the café" });
   });
 
   it("from across a room: how many are busy, and who waits on you", () => {
     const card = statusGlance(whoGroups(activities, [], NOW));
     expect(card.big).toMatchObject({ text: "2 busy", tone: "bad" });
     expect(card.big?.sub).toContain("2 waiting on you · 1 stuck");
+    expect(card.big?.sub).toMatch(/^1 out · 3 idle · 1 asleep/);
+    // Nobody busy, but some out: it says so rather than "All quiet".
+    expect(statusGlance(whoGroups({ sipper: activities.sipper }, [], NOW)).big).toMatchObject({ text: "1 out" });
     expect(card.rows?.[0]).toMatchObject({ text: "reviewer", tag: { text: "you" } });
     const { reviewer: _r, tester: _t, ...unasked } = activities;
     expect(statusGlance(whoGroups(unasked, [], NOW)).rows?.[0]).toMatchObject({

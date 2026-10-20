@@ -186,11 +186,12 @@ function useClock(seconds: boolean): number {
 
 /**
  * Every agent, grouped by what it is doing: waiting on you, stuck (a turn
- * that failed or stalled), working, talking, each a card with a line for
- * each agent (what, and for how long); idle and asleep as rows of names at
- * the foot, the most recently busy first. From across the room, a big
- * number for each group, and one for the stuck only while some are. An
- * agent opens its card; brought up close, its place is one click on.
+ * that failed or stalled), working, talking, out on its day (at the café, on
+ * a bench, at a friend's), each a card with a line for each agent (what, and
+ * for how long); idle and asleep as rows of names at the foot, the most
+ * recently busy first. From across the room, a big number for each group,
+ * and one for the stuck and the out only while some are. An agent opens its
+ * card; brought up close, its place is one click on.
  */
 function StatusFace({ world, surface, actions }: FaceProps) {
   const groups = useMemo(() => whoGroups(world.activities, world.agents, world.now), [world]);
@@ -200,16 +201,17 @@ function StatusFace({ world, surface, actions }: FaceProps) {
   const busy = count("working") + count("talking");
   const waiting = count("waiting");
   const stuck = count("stuck");
+  const out = count("out");
   const go = (agent: string) => actions.onUse?.("go", { agent });
   return (
     <div className="sw sw-status">
       <Head
         title="Who's doing what"
-        sub={`${busy} busy${waiting ? ` · ${waiting} waiting on you` : ""}${stuck ? ` · ${stuck} stuck` : ""} · ${world.agents.length} in all`}
+        sub={`${busy} busy${out ? ` · ${out} out` : ""}${waiting ? ` · ${waiting} waiting on you` : ""}${stuck ? ` · ${stuck} stuck` : ""} · ${world.agents.length} in all`}
       />
       <div className="sw-far sw-status-far" aria-hidden="true">
         {groups
-          .filter((g) => g.id !== "stuck" || g.rows.length)
+          .filter((g) => (g.id !== "stuck" && g.id !== "out") || g.rows.length)
           .map((g) => (
             <div key={g.id} className={`sw-far-tile is-${g.id}`}>
               <span className="sw-far-count">{g.rows.length}</span>

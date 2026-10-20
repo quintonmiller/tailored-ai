@@ -106,6 +106,13 @@ Warnings are printed at CLI startup via `[config] Warning: ...`. Exported from `
 - Basic type matching (string, number, boolean, array)
 - Returns clear errors with expected parameter list to the LLM
 
+Before that, `liftArgs()` reads one string given where the schema asks for a
+list of strings as the list of one it means (`to: "writer"` is
+`to: ["writer"]`), rather than turning the call back. It runs before
+`agent.pre_tool_use`, so subscribers, the approval and the tool all see the
+lifted shape. Nothing else is coerced: a number where a list goes is still an
+error.
+
 ## Model fallback chain
 
 The provider call walks an ordered chain of provider+model pairs

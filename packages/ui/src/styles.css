@@ -8802,6 +8802,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-map-busy:is(:hover, :focus-visible) .world-map-busy-what { -webkit-line-clamp: unset; line-clamp: none; }
 .world-map-busy-where { flex: none; margin-left: auto; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 .world-map-quiet { margin: 0; font-size: 12px; color: var(--text-dim); }
+.world-map-out { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); }
 /* Every agent on a line of its own size, as many to a row as fit; a click goes home, "in …" to where its body is. */
 .world-map-people ul { display: flex; flex-wrap: wrap; gap: 4px; }
 /* An agent's name is cut short only when it alone is wider than the list; where its body is goes under it first. */
@@ -9780,6 +9781,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sw-far-tile.is-working { --tile: var(--doing-working, #3ddc78); }
 .sw-far-tile.is-stuck { --tile: var(--doing-stuck, #ff4d4d); }
 .sw-far-tile.is-talking { --tile: var(--doing-talking, #5aa2ff); }
+.sw-far-tile.is-out { --tile: var(--doing-out, #3cc2a8); }
 .sw-far-tile.is-idle { --tile: var(--doing-idle, #6b7286); }
 .sw-far-tile.is-asleep { --tile: var(--doing-asleep, #9d8cff); }
 .sw-far-tile .sw-far-label { font-size: 28px; white-space: normal; }
@@ -9791,6 +9793,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sw-group.is-working { --tile: var(--doing-working, #3ddc78); }
 .sw-group.is-stuck { --tile: var(--doing-stuck, #ff4d4d); background: rgba(255, 77, 77, 0.08); }
 .sw-group.is-talking { --tile: var(--doing-talking, #5aa2ff); }
+.sw-group.is-out { --tile: var(--doing-out, #3cc2a8); }
 .sw-group-head { display: flex; align-items: center; margin: 0 0 2px; font: 760 20px/1.2 var(--sf-font); letter-spacing: 0.04em; text-transform: uppercase; color: var(--sf-dim); }
 .sw-rows { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .sw-row {

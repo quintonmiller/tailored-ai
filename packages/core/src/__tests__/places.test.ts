@@ -1217,9 +1217,13 @@ describe("talking where the bodies are", () => {
     expect(messageTo("room", { action: "dm", agent: "guest", body: "hi" }, "host", known)).toBe("guest");
     expect(messageTo("room", { action: "dm", to: ["Guesty"], body: "hi" }, "host", known)).toBe("guest");
     expect(messageTo("room", { action: "DM", agent: "guest", body: "hi" }, "host", known)).toBe("guest");
-    // Arguments of a kind the loop turns back before the tool runs: nothing is sent, so nobody picks up.
-    expect(messageTo("room", { action: "dm", to: "guest", body: "hi" }, "host", known)).toBeUndefined();
+    // One name where the list goes is the list of one: the loop lifts it, and the room tool sends it.
+    expect(messageTo("room", { action: "dm", to: "guest", body: "hi" }, "host", known)).toBe("guest");
+    // Arguments of a kind the loop turns back before the tool runs, or two names the tool won't send one dm to:
+    // nothing is sent, so nobody picks up.
     expect(messageTo("room", { action: "dm", agent: ["guest"], body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "dm", to: ["guest", "host"], body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "dm", to: 7, body: "hi" }, "host", known)).toBeUndefined();
     expect(messageTo("room", { action: "dm", agent: "guest", body: 42 }, "host", known)).toBeUndefined();
     // Nothing to say, nobody named, someone unknown, itself, another action, another tool.
     expect(messageTo("room", { action: "dm", agent: "guest", body: " " }, "host", known)).toBeUndefined();
@@ -1376,7 +1380,7 @@ describe("talking where the bodies are", () => {
       await talks.settled();
       expect(await talk("host")).toBeNull();
       // And a call the loop would turn back for its arguments never puts anyone on the line.
-      await dm("host", { action: "dm", to: "guest", body: "hi" }, "refused");
+      await dm("host", { action: "dm", agent: ["guest"], body: "hi" }, "refused");
       expect(await talk("host")).toBeNull();
     });
 

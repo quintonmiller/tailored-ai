@@ -388,6 +388,10 @@ Two placement decisions inside `executeToolCall`, both easy to get wrong:
 - **Before validation.** So whatever actually executes is what got validated,
   original or rewritten. A subscriber is not more trusted than the model.
 
+A subscriber sees the arguments after `liftArgs()`: a single string the model
+gave where the schema asks for a list of strings already arrives as the list
+of one (see [agent-loop.md](./agent-loop.md#tool-parameter-validation)).
+
 What must stay authoritative *after* a human says yes does not belong here.
 Those ceilings live inside the tools — `exec`'s allowlist, the path boundary,
 the sandbox — where nothing can reorder them.

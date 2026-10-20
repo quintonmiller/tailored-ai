@@ -15,6 +15,9 @@ import { useCovered } from "../hooks/useCovered";
 import type { MediaRef } from "../lib/content.js";
 import { agentOfKey, askedIn, draftKey, rowFor } from "../lib/conversations";
 
+/** How long words written for you wait for the box to type them in to take the cursor. */
+const TYPE_WAIT_MS = 10_000;
+
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const store = useChatStore();
   // What is typed is the conversation's, kept by the store for each one: it stays behind when the chat moves on.
@@ -135,11 +138,13 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       // A message written for someone is a chat with them, out of a meeting room's own conversation too. The words
       // are that new conversation's: they wait for it while a reply finishes, and stay in it if you go elsewhere.
       setReading(false);
+      typeWanted.current = Date.now();
       store.setSelectedAgent(name === "default" ? "" : name, { fresh: true, draft: text });
     },
     onReply: (name, session, text) => {
       // An answer goes where the question is: the conversation it asked in, which has everything it was about.
       setReading(false);
+      typeWanted.current = Date.now();
       const who = name === "default" ? "" : name;
       if (session && session === store.sessionId) return setInput(text);
       // Otherwise your chat with it as it stands, and while a reply is on its way, after it (the switch waits).
@@ -205,6 +210,40 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   useEffect(() => onDraftMoved(move), [onDraftMoved, move]);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Words written for you to finish (an answer to a question, a message started for you) put the cursor where you
+  // type them: in your conversation in the world, or the chat's own box. That box may not be there yet, or not take
+  // typing while a reply comes in, so it is asked for (`typeHere`) until it is, for a little while.
+  const worldBox = useRef<HTMLInputElement | null>(null);
+  const barBox = useRef<HTMLInputElement | null>(null);
+  const inWorld = useRef(false);
+  const typeWanted = useRef(0);
+  const typeAgain = useRef(0);
+  const typeHere = () => {
+    if (!typeWanted.current) return;
+    if (Date.now() - typeWanted.current > TYPE_WAIT_MS) {
+      typeWanted.current = 0;
+      return;
+    }
+    const box = inWorld.current ? worldBox.current : barBox.current;
+    if (box?.isConnected && !box.disabled) {
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      // Taken: done. Not taken (still being put in place), it is tried again.
+      if (document.activeElement === box) {
+        typeWanted.current = 0;
+        return;
+      }
+    }
+    // The card in the world is put in its place a frame or two after it is drawn: try again then.
+    if (!typeAgain.current)
+      typeAgain.current = requestAnimationFrame(() => {
+        typeAgain.current = 0;
+        typeHere();
+      });
+  };
+  // After every render: what is typed may just have come, or the box just stopped waiting for a reply.
+  useEffect(typeHere);
+  useEffect(() => () => cancelAnimationFrame(typeAgain.current), []);
 
   function handleSend() {
     const text = input.trim();
@@ -333,6 +372,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   // until then, or while a meeting room's own conversation is read, the chat's bar stays at the foot.
   const columnHidden = scene.showStage && !panelOpen && !scene.stageFailed;
   const boxInWorld = columnHidden && !!scene.stageUp && !showRoom;
+  inWorld.current = boxInWorld;
   // Your conversation in the world, beside whoever you talk to: what was said, the reply coming in, and the box.
   const talkPanel = scene.talk ? (
     <WorldTalk
@@ -366,6 +406,11 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
         <input
           type="text"
           className="world-talk-input"
+          ref={(el) => {
+            worldBox.current = el;
+            // Drawn in the world a moment after the page: the cursor waiting for it goes in now.
+            if (el) typeHere();
+          }}
           // Its header says who it is with: here a name would only be cut off.
           placeholder="Message…"
           aria-label={`Message ${scene.talk.name}`}
@@ -640,6 +685,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           </button>
           <input
             type="text"
+            ref={barBox}
             // The default agent's own name is in the header: here it would only crowd the box.
             placeholder={
               scene.showStage

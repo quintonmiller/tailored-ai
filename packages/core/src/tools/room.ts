@@ -84,7 +84,7 @@ export class RoomTool implements Tool {
       to: {
         type: "array",
         items: { type: "string" },
-        description: "Participants to address, by name. Omit to speak to the room.",
+        description: "Participants to address, by name: one, or a list. Omit to speak to the room.",
       },
       urgency: {
         type: "string",
@@ -416,7 +416,7 @@ export class RoomTool implements Tool {
     // value we emit. Validating a trimmed copy while writing the raw string
     // meant `to: ["supervisor "]` — routine in tool-call JSON — passed the
     // check and was then silently dropped by the envelope formatter.
-    const requested = Array.isArray(args.to) ? args.to.map((t) => String(t)).filter(Boolean) : [];
+    const requested = namesIn(args.to);
     const unknown = requested.filter((t) => !identities.get(t));
     if (unknown.length > 0) {
       const here = this.participantsIn(ref, identities).filter((l) => l.toLowerCase() !== speaker.toLowerCase());
@@ -603,7 +603,11 @@ export class RoomTool implements Tool {
     const body = String(args.body ?? "").trim();
     if (!body) return fail("body is required for dm.");
 
-    const target = String(args.agent ?? args.to ?? args.member ?? "").trim();
+    // One agent, by `agent` or, as models also write it, by `to` (one name, or a list of one) or `member`.
+    const named = [args.agent, args.to, args.member].map(namesIn).find((n) => n.length > 0) ?? [];
+    if (named.length > 1)
+      return fail(`A dm goes to one agent, and you named ${named.join(", ")}. Send each its own, or post in a room.`);
+    const target = (named[0] ?? "").trim();
     if (!target) return fail("agent is required for dm — who are you messaging?");
 
     const identities = this.opts.identities();
@@ -913,6 +917,15 @@ export class RoomTool implements Tool {
     if (!restored) return fail(`Could not unarchive "${room.name}".`);
     return ok(`Reopened "${restored.name}". Everyone who watched it before is watching it again.`);
   }
+}
+
+/**
+ * Names given one at a time or as a list. The loop lifts one name into a
+ * list (`liftArgs`), but a hook or a plugin can call the tool directly.
+ */
+function namesIn(given: unknown): string[] {
+  const all = Array.isArray(given) ? given : given === undefined || given === null ? [] : [given];
+  return all.map((t) => String(t)).filter(Boolean);
 }
 
 function ok(output: string): ToolResult {
