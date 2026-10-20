@@ -31,6 +31,19 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { nameOf } from "../lib/conversations";
 import { aboutLines, asleepWords } from "../lib/did";
+import {
+  type Anchor,
+  boxRound,
+  EDGE,
+  follow,
+  inView,
+  layoutPanels,
+  type PanelIn,
+  PLAQUE,
+  type Placed,
+  plaqueSpot,
+  walkedAway,
+} from "./anchors";
 import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
 import {
   type BodyLooks,
@@ -66,7 +79,7 @@ import { buildModel } from "./models";
 import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
 import { nearestUse, shown, type Use } from "./pick";
-import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
+import { buildDoor, buildPlaque, buildProp, buildShell, disposeTree } from "./props";
 import {
   changesShown,
   closeDistance,
@@ -193,7 +206,7 @@ export interface Stage {
    * right, a toolbar along the top, the chat along the bottom of a phone. The
    * camera frames what is left, and what is said is kept inside it.
    */
-  setInsets(insets: { right: number; top?: number; bottom?: number }): void;
+  setInsets(insets: { right: number; top?: number; bottom?: number; panels?: number }): void;
   /** Walk to a spot in the room, by id. False when there is no such spot. */
   walkTo(spot: string): boolean;
   /**
@@ -278,11 +291,32 @@ export interface Stage {
   walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
   /** Where you are on the floor: your body, walking; what the camera turns about, flying. */
   where(): [number, number];
+  /**
+   * Keep a panel of the page's beside what it is about (see `anchors.ts`):
+   * an agent's body, a thing here, the room's plaque, your own body, or held
+   * in front of you. It is placed every frame, out of the way of the others,
+   * the higher `rank` first; with what it is about off the screen it is held
+   * as `fallback` says. `onAway` hears, once, that you walked away from what
+   * it is about. The function returned lets it go.
+   */
+  anchorPanel(el: HTMLElement, anchor: Anchor, opts?: PanelOptions): () => void;
+  /** The words on the room's plaque by its door, which a click opens the room's card from; none takes it down. */
+  setPlaque(words: string | undefined): void;
   dispose(): void;
 }
 
 /** Metres a second a body walks going by in the town: briskly, somewhere to be. */
 const PASSING_PACE = 2.2;
+
+/** How a panel kept beside something goes (see `Stage.anchorPanel`). */
+export interface PanelOptions {
+  rank?: number;
+  /** Put away rather than laid over another panel. */
+  optional?: boolean;
+  /** How it is held while what it is about is off the screen: in front of you (the default), or docked at the side. */
+  fallback?: "front" | "dock";
+  onAway?: () => void;
+}
 
 /**
  * Rearranging the room on the stage (see `editing.ts`): the kinds of thing
@@ -495,7 +529,7 @@ export async function createStage(
      * Something made to be used was clicked: a kiosk, a task board, a screen, a
      * calendar. Its action; on a board, what was hit; on a screen, the page up.
      */
-    onUse?: (action: string, on?: UseSpot) => void;
+    onUse?: (action: string, on?: UseSpot, thing?: string) => void;
     /**
      * A visitor is within earshot as an agent starts saying something: who,
      * what, and how near (0–1, 1 beside it); `phone`, it is the far side of a
@@ -516,6 +550,8 @@ export async function createStage(
     onFocus?: (surface: string | undefined) => void;
     /** The pointer came over a surface a click brings up (what it is, and where on the page), or left it. */
     onSurfaceHover?: (label: string | undefined, at?: { x: number; y: number }) => void;
+    /** The pointer came over the room's plaque (where on the page), or left it. */
+    onPlaqueHover?: (at: { x: number; y: number } | undefined) => void;
   } = {},
 ): Promise<Stage> {
   // The room as the page gave it, and as drawn: with spots added by things that bring none (see `idleSpots`).
@@ -677,6 +713,38 @@ export async function createStage(
       overDoor = door;
     }
     opts.onDoorHover?.(door, door ? at : undefined);
+  };
+  // The room's plaque by its door, which opens the room's card: the words the page gave for it, and what was built.
+  let plaqueWords: string | undefined;
+  let plaque: { group: THREE.Group; highlight: (on: boolean) => void } | undefined;
+  let overPlaque = false;
+  /**
+   * Hang the plaque in the room as it is now, beside a door in a wall with
+   * room for it (`plaqueSpot`), once the page has said what it says; the one
+   * hung before comes down first.
+   */
+  const hangPlaque = () => {
+    if (plaque) {
+      const old = plaque.group;
+      furniture.remove(old);
+      disposeTree(old);
+      const i = clickable.indexOf(old);
+      if (i >= 0) clickable.splice(i, 1);
+      fadeable = fadeable.filter((f) => f.group !== old);
+      plaque = undefined;
+    }
+    overPlaque = false;
+    const spot = plaqueWords && !opts.still ? plaqueSpot(given) : undefined;
+    if (!spot || !plaqueWords) return;
+    const built = buildPlaque(plaqueWords, PLAQUE.width, PLAQUE.height);
+    built.group.position.set(spot.at[0], PLAQUE.elevation, spot.at[1]);
+    built.group.rotation.y = rad(spot.facing);
+    built.group.userData.action = "place";
+    furniture.add(built.group);
+    clickable.push(built.group);
+    // It hangs on its wall, and fades with it.
+    fadeable.push({ group: built.group, wall: spot.door.wall as Wall, level: 1 });
+    plaque = built;
   };
   const lightDoors = () => {
     for (const d of doorLights) {
@@ -850,6 +918,8 @@ export async function createStage(
       if (built.light && door.occupant) doorLights.push({ occupant: door.occupant, light: built.light });
       doorHighlights.set(door, built.highlight);
     }
+    plaque = undefined;
+    hangPlaque();
     lightDoors();
     layer.sweep();
     scene.add(furniture);
@@ -1274,6 +1344,10 @@ export async function createStage(
   let insetRight = 0;
   let insetTop = 0;
   let insetBottom = 0;
+  /** Pixels of `insetRight` kept for the page's panels beside things (`anchors.ts`): theirs to go in, not the scene's. */
+  let panelRoom = 0;
+  /** How tall a panel shown as a sheet over the stage's foot is, on a narrow stage: the camera frames what is above it. */
+  let sheetTall = 0;
   /** The stage's size in pixels, as of the last resize: read every frame, so not asked of the page every frame. */
   let stageW = Math.max(1, host.clientWidth);
   let stageH = Math.max(1, host.clientHeight);
@@ -1294,7 +1368,10 @@ export async function createStage(
         bottom: r.bottom - box.top,
       }));
     const was = part;
-    part = framedIn({ left: 0, right: stageW - insetRight, top: insetTop, bottom: stageH - insetBottom }, covered);
+    part = framedIn(
+      { left: 0, right: stageW - insetRight, top: insetTop, bottom: stageH - insetBottom - sheetTall },
+      covered,
+    );
     return (
       Math.abs(part.left - was.left) +
         Math.abs(part.right - was.right) +
@@ -1542,6 +1619,11 @@ export async function createStage(
    * door, a use (a kiosk, a board) or a spot to go to. On a board's face, the
    * note or column the pointer is on as well.
    */
+  /** The thing in the room something is part of, by its id: what a panel opened from it is kept beside. */
+  const thingOf = (o: THREE.Object3D | undefined): string | undefined => {
+    for (let p = o; p; p = p.parent ?? undefined) if (typeof p.userData.prop === "string") return p.userData.prop;
+    return undefined;
+  };
   const pick = (e: At): (Use & { on?: UseSpot; object: THREE.Object3D }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
@@ -1629,7 +1711,13 @@ export async function createStage(
     }
     const it = pick(e);
     if (it?.action && opts.onUse) {
-      opts.onUse(it.action, it.on);
+      opts.onUse(it.action, it.on, thingOf(it.object));
+      // What it opened is beside it now: the label saying what a click does would only be under it.
+      if (overPlaque) {
+        plaque?.highlight(false);
+        overPlaque = false;
+        opts.onPlaqueHover?.(undefined);
+      }
       return;
     }
     if (it?.door && opts.onDoor) {
@@ -1681,6 +1769,14 @@ export async function createStage(
         y: e.clientY - box.top,
       });
     hoveredSurface = reads;
+    // The room's plaque lights up, and says what a click on it opens.
+    const plaqued = !who && !!plaque && it?.action === "place";
+    if (plaqued !== overPlaque) {
+      plaque?.highlight(plaqued);
+      overPlaque = plaqued;
+      if (!plaqued) opts.onPlaqueHover?.(undefined);
+    }
+    if (plaqued) opts.onPlaqueHover?.({ x: e.clientX - box.left, y: e.clientY - box.top });
     const approach = !!it?.approach && opts.visitor && travel === "walk";
     canvas.style.cursor =
       (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || door || approach ? "pointer" : "";
@@ -1703,6 +1799,11 @@ export async function createStage(
     layer.hover(undefined);
     if (hoveredSurface) opts.onSurfaceHover?.(undefined);
     hoveredSurface = undefined;
+    if (overPlaque) {
+      plaque?.highlight(false);
+      overPlaque = false;
+      opts.onPlaqueHover?.(undefined);
+    }
   };
   // Walking, the camera easing or zooming, or someone stepping in front of a door all change what is under a pointer
   // that hasn't moved: it is looked at again, a few times a second, while the view moves or something is lit.
@@ -1751,8 +1852,11 @@ export async function createStage(
   }
   // A visitor's keys: held keys move them every frame, unless they are typing or working in a panel over the stage.
   const held = new Set<string>();
+  // Keys pressed in a panel in the world (a conversation's buttons, say) are the panel's, as a dialog's are.
   const typing = (e: KeyboardEvent) =>
-    (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']");
+    (e.target as HTMLElement | null)?.closest?.(
+      "input, textarea, select, [contenteditable='true'], [role='dialog'], .world-anchor",
+    );
   // Keys held through a door, until they are let go: the view faces the same way on the other side, so holding W
   // into a door at the back would otherwise walk you straight back out of the one you came in by.
   const waiting = new Set<string>();
@@ -2119,7 +2223,7 @@ export async function createStage(
    */
   function readingBox(): Part {
     const top = insetTop;
-    const bottom = stageH - insetBottom;
+    const bottom = stageH - insetBottom - sheetTall;
     const middle = (top + bottom) / 2;
     const below = covered.filter((c) => c.top < middle).reduce((low, c) => Math.max(low, c.bottom), top);
     const low = bottom - Math.max(READ_GAP, READ_FOOT - insetBottom);
@@ -2975,6 +3079,21 @@ export async function createStage(
 
   // A head's place on the screen, and its distance in front of the camera, worked out in this.
   const onScreen = new THREE.Vector3();
+  /** What floats over each head on the stage this frame, by whose head: its tag, sign and bubble, as boxes. */
+  let overheads = new Map<string, Box[]>();
+  /** The corners of some boxes, for the box round all of them. */
+  const boxCorners = (boxes: Box[]): [number, number][] =>
+    boxes.flatMap((b): [number, number][] => [
+      [b.left, b.top],
+      [b.right, b.bottom],
+    ]);
+  /** A box `size` big on the stage, standing on `bottom` and centred on `x`. */
+  const overBox = (x: number, bottom: number, [w, h]: [number, number]): Box => ({
+    left: x - w / 2,
+    right: x + w / 2,
+    top: bottom - h,
+    bottom,
+  });
   /**
    * Each frame, what floats over every head, sized to read on the screen and
    * stacked so nothing covers anything else (see `overhead.ts`): the tags and
@@ -3008,6 +3127,17 @@ export async function createStage(
       bottom: stageH - insetBottom,
       covered,
     });
+    // Where each tag, sign and bubble is on the stage now, for the panels to keep off (`placePanels`).
+    overheads = new Map();
+    for (const c of columns) {
+      const at = laid.get(c.id);
+      if (!at) continue;
+      const boxes: Box[] = [];
+      if (c.tag) boxes.push(overBox(c.x, c.y - at.tag, c.tag));
+      if (c.sign && !c.bubble) boxes.push(overBox(c.x, c.y - at.sign, [c.sign, c.sign]));
+      if (c.bubble) boxes.push(overBox(c.x + at.across, c.y - at.bubble, c.bubble));
+      if (boxes.length) overheads.set(c.id, boxes);
+    }
     const said = columns
       .filter((c) => c.bubble)
       .sort((a, b) => (a.said ?? 0) - (b.said ?? 0))
@@ -3040,6 +3170,196 @@ export async function createStage(
       for (const d of townDoors) d.visible = Math.hypot(d.position.x - at.x, d.position.z - at.z) < DOOR_SHOWN;
     }
   }
+
+  // --- Panels of the page's, kept beside what they are about (see `anchors.ts`) ---
+
+  interface Pin extends PanelOptions {
+    id: string;
+    el: HTMLElement;
+    anchor: Anchor;
+    /** Its size in CSS pixels, as last measured. */
+    size: [number, number];
+    /** Where it was put last frame. */
+    at?: Placed;
+    /** Where you stood, and how far that was from what it is about, when it was first put beside it. */
+    from?: { you: [number, number]; off: number };
+    /** You walked away from it, and the page heard. */
+    left?: boolean;
+    watch?: ResizeObserver;
+  }
+  const pins = new Set<Pin>();
+  let pinCount = 0;
+  const onStageAt = new THREE.Vector3();
+  /** Where a point in the room is on the stage, in CSS pixels; none when it is behind the camera. */
+  const onStage = (p: THREE.Vector3): [number, number] | undefined => {
+    if (-onStageAt.copy(p).applyMatrix4(camera.matrixWorldInverse).z <= 0.05) return undefined;
+    onStageAt.copy(p).project(camera);
+    return [((onStageAt.x + 1) / 2) * stageW, ((1 - onStageAt.y) / 2) * stageH];
+  };
+  /** A body on the stage: all of it, crown to feet, and its head, which a panel never covers. */
+  const bodyOnStage = (f: Figure): PanelIn["target"] | undefined => {
+    if (!f.body.visible) return undefined;
+    const crown = f.crown();
+    const top = onStage(crown);
+    const foot = onStage(f.body.position);
+    if (!top || !foot) return undefined;
+    const perPixel = metresPerPixel(
+      -onStageAt.copy(crown).applyMatrix4(camera.matrixWorldInverse).z,
+      camera.fov,
+      stageH,
+    );
+    const half = 0.34 / perPixel;
+    return {
+      box: { left: top[0] - half, right: top[0] + half, top: top[1], bottom: foot[1] },
+      keep: {
+        left: top[0] - half * 0.7,
+        right: top[0] + half * 0.7,
+        top: top[1] - 6,
+        bottom: top[1] + 0.34 / perPixel,
+      },
+    };
+  };
+  /** Something in the room on the stage: the box round all of it, which a panel beside it never covers. */
+  const thingOnStage = (o: THREE.Object3D): PanelIn["target"] | undefined => {
+    const b = new THREE.Box3().setFromObject(o);
+    if (b.isEmpty()) return undefined;
+    const points: [number, number][] = [];
+    for (const x of [b.min.x, b.max.x])
+      for (const y of [b.min.y, b.max.y])
+        for (const z of [b.min.z, b.max.z]) {
+          const p = onStage(new THREE.Vector3(x, y, z));
+          // Partly behind the camera, its box on the stage means nothing: it is off the screen.
+          if (!p) return undefined;
+          points.push(p);
+        }
+    const box = boxRound(points) as Box;
+    return { box, keep: box };
+  };
+  /** What an anchor is on the stage this frame, and where on the floor, for walking away from it. */
+  const anchorOnStage = (a: Anchor): { target?: PanelIn["target"]; floor?: [number, number] } => {
+    if ("held" in a) return {};
+    if ("agent" in a || "you" in a) {
+      const f = "you" in a ? (opts.visitor ? me : undefined) : figureOf(a.agent);
+      if (!f) return {};
+      const body = bodyOnStage(f);
+      // What is over its head is part of what the panel is about: its name, what it is doing, what it says.
+      const over = overheads.get("you" in a ? "you" : a.agent) ?? [];
+      const target = body && { ...body, keep: boxRound(boxCorners([body.keep, ...over])) as Box };
+      return { target, floor: [f.walker.place.x, f.walker.place.z] };
+    }
+    const o = "plaque" in a ? plaque?.group : things.get(a.thing);
+    if (!o) return {};
+    const p = o.getWorldPosition(new THREE.Vector3());
+    return { target: thingOnStage(o), floor: [p.x, p.z] };
+  };
+  /**
+   * Each frame, every panel beside what it is about (`layoutPanels`): in
+   * what can be seen of the stage, the strip kept for panels included, clear
+   * of the tools over it, of your own body and of a surface being read, and
+   * of each other; then eased to where it goes (`follow`). A panel whose
+   * thing is off the screen is held instead. One you walked away from is
+   * said to the page, once.
+   */
+  function placePanels(dt: number) {
+    if (!pins.size) {
+      if (sheetTall) {
+        sheetTall = 0;
+        if (measureOverlays()) refit();
+      }
+      return;
+    }
+    camera.updateMatrixWorld();
+    const view: Box = {
+      left: EDGE,
+      right: stageW - (insetRight - panelRoom) - EDGE,
+      top: insetTop + EDGE,
+      bottom: stageH - insetBottom - EDGE,
+    };
+    const avoid: Box[] = [];
+    const walking = opts.visitor && travel === "walk";
+    const yours = walking ? bodyOnStage(me) : undefined;
+    if (yours) avoid.push(yours.box);
+    // Your own head, and the tag over it, are never covered either: you always see where you are.
+    const keepClear: Box[] = [...covered];
+    if (yours) keepClear.push(boxRound(boxCorners([yours.keep, ...(overheads.get("you") ?? [])])) as Box);
+    // Nor what is said over a head, or the tag saying who it is and what it is doing.
+    for (const boxes of overheads.values()) avoid.push(...boxes);
+    // Nobody's face is covered if there is anywhere else to go: a panel about one agent keeps off the others'.
+    for (const f of opts.visitor ? companions.values() : [me, ...companions.values()]) {
+      const face = bodyOnStage(f)?.keep;
+      if (face) avoid.push(face);
+    }
+    if (reading) avoid.push(readingBox());
+    const floors = new Map<Pin, [number, number] | undefined>();
+    const panels: PanelIn[] = [];
+    for (const p of pins) {
+      const { target, floor } = anchorOnStage(p.anchor);
+      floors.set(p, floor);
+      const shown = target && inView(target.box, view) ? target : undefined;
+      const held = "held" in p.anchor ? p.anchor.held : (p.fallback ?? "front");
+      panels.push({
+        id: p.id,
+        size: p.size,
+        rank: p.rank ?? 0,
+        ...(p.optional ? { optional: true } : {}),
+        ...(p.at ? { was: p.at.side } : {}),
+        ...(shown ? { target: shown } : { held }),
+      });
+    }
+    const laid = layoutPanels(panels, view, avoid, stageW, keepClear);
+    let sheet = 0;
+    for (const p of pins) {
+      const next = laid.get(p.id);
+      if (!next) continue;
+      const at = follow(p.at, next, dt);
+      p.at = at;
+      const el = p.el;
+      if (el.dataset.side !== at.side) el.dataset.side = at.side;
+      const loose = at.side === "sheet" || at.side === "away";
+      const moved = loose ? "" : `translate3d(${Math.round(at.x)}px, ${Math.round(at.y)}px, 0)`;
+      if (el.style.transform !== moved) el.style.transform = moved;
+      const tail = `${at.tail}px`;
+      if (el.style.getPropertyValue("--tail") !== tail) el.style.setProperty("--tail", tail);
+      const room = `${Math.round(Math.max(160, view.bottom - view.top))}px`;
+      if (el.style.getPropertyValue("--room-h") !== room) el.style.setProperty("--room-h", room);
+      if (!("placed" in el.dataset)) el.dataset.placed = "";
+      if (at.side === "sheet") sheet = p.size[1];
+      // Walked off from what it is about, having stood somewhere else as it opened: the page is told, once.
+      const floor = floors.get(p);
+      if (p.onAway && !p.left && walking && floor && !loose) {
+        const you: [number, number] = [me.walker.place.x, me.walker.place.z];
+        const off = Math.hypot(floor[0] - you[0], floor[1] - you[1]);
+        if (!p.from) p.from = { you, off };
+        else if (walkedAway(p.from.off, off, Math.hypot(you[0] - p.from.you[0], you[1] - p.from.you[1]))) {
+          p.left = true;
+          p.onAway();
+        }
+      }
+    }
+    // A sheet over the stage's foot covers it as a phone's chat does: the camera frames what is above.
+    if (Math.abs(sheet - sheetTall) > 4) {
+      sheetTall = sheet;
+      if (measureOverlays()) refit();
+    }
+  }
+  /** Keep a panel beside what it is about: see `Stage.anchorPanel`. */
+  const anchorPanel = (el: HTMLElement, anchor: Anchor, o: PanelOptions = {}) => {
+    const pin: Pin = { ...o, id: `panel ${++pinCount}`, el, anchor, size: [el.offsetWidth, el.offsetHeight] };
+    if (typeof ResizeObserver !== "undefined") {
+      pin.watch = new ResizeObserver(() => {
+        // Put away, it has no size of its own: the one it had stays, or it would fit anywhere and come back at once.
+        if (el.offsetWidth && el.offsetHeight) pin.size = [el.offsetWidth, el.offsetHeight];
+      });
+      pin.watch.observe(el);
+    }
+    pins.add(pin);
+    // Somewhere at once, rather than wherever it fell until the next frame.
+    placePanels(0);
+    return () => {
+      pin.watch?.disconnect();
+      pins.delete(pin);
+    };
+  };
 
   renderer.setAnimationLoop((now: number) => {
     // A photo's frame, once ready, holds: the screenshot is of that moment, not a later one.
@@ -3292,6 +3612,7 @@ export async function createStage(
     }
     if (town) keepTown(t);
     floatOver(dt);
+    placePanels(dt);
     seeThrough(dt);
     if (reading) clearView();
     renderer.render(scene, camera);
@@ -3338,7 +3659,8 @@ export async function createStage(
       view = next;
       moveCamera(framing(next));
     },
-    setInsets({ right, top = 0, bottom = 0 }) {
+    setInsets({ right, top = 0, bottom = 0, panels = 0 }) {
+      panelRoom = Math.max(0, Math.min(right, panels));
       if (right === insetRight && top === insetTop && bottom === insetBottom) return;
       insetRight = Math.max(0, right);
       insetTop = Math.max(0, top);
@@ -3506,6 +3828,12 @@ export async function createStage(
     where() {
       const p = me.walker.place;
       return travel === "walk" ? [p.x, p.z] : [controls.target.x, controls.target.z];
+    },
+    anchorPanel,
+    setPlaque(words) {
+      if (words === plaqueWords) return;
+      plaqueWords = words;
+      hangPlaque();
     },
     setWear(wear) {
       myWear = wear;

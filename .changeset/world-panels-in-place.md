@@ -1,0 +1,5 @@
+---
+"@tailored-ai/ui": patch
+---
+
+The cards and conversations of the 3D world open in the world, beside what they are about, instead of in the chat's column. An agent's card and what it waits on float by its shoulder and follow it; a task's card, the task list and the new-task form are pinned beside the board they came from; the room's card hangs on a plaque by the door; the map and the "Needs you" list are held in front of you, and the catalogue is docked at the side. Opening one slides the scene over so it has room, a card never covers the face, name or bubble of what it is about, the controls or your own head, and Escape, its close button, walking away or going through a door puts it away. Your conversation with an agent shows beside it as a dialogue, its reply coming in as it is written, with the box to type in, Talk and Send under it, or as a phone in your hand when the agent is somewhere else; the whole chat starts hidden, a click on Chat away. On a phone each opens as a sheet along the bottom.

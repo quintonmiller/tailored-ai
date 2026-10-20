@@ -40,7 +40,7 @@ const stage = vi.hoisted(() => ({
   /** The last visitor stage's way to say a line started near you. */
   onLine: undefined as ((agent: string, text: string, nearness: number, phone?: boolean) => void) | undefined,
   /** The last stage's way to say a kiosk or a board was clicked. */
-  onUse: undefined as ((action: string, on?: Record<string, string>) => void) | undefined,
+  onUse: undefined as ((action: string, on?: Record<string, string>, thing?: string) => void) | undefined,
   /** The last stage's listener for which surfaces are live: a test hands it surfaces to draw faces into. */
   surfaces: undefined as ((views: unknown[]) => void) | undefined,
   /** What the boards were told to show, each time. */
@@ -89,6 +89,13 @@ const stage = vi.hoisted(() => ({
   walks: [] as { agent: string; from: [number, number]; to: [number, number] }[],
   /** The last stage's way to say the pointer is over a door, or left it. */
   onDoorHover: undefined as ((door: { to: string } | undefined, at?: { x: number; y: number }) => void) | undefined,
+  /** The panels kept beside things now, by their element, with what each is beside and how it goes. */
+  anchored: new Map<
+    HTMLElement,
+    { anchor: unknown; opts?: { rank?: number; optional?: boolean; fallback?: string; onAway?: () => void } }
+  >(),
+  /** What each stage's plaque said, each time it was told. */
+  plaques: [] as (string | undefined)[],
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (
@@ -102,7 +109,7 @@ vi.mock("../avatar/stage", () => ({
       onPick?: (agent: string, at: { x: number; y: number }) => void;
       visitor?: boolean;
       onNear?: (agent: string | undefined) => void;
-      onUse?: (action: string, on?: Record<string, string>) => void;
+      onUse?: (action: string, on?: Record<string, string>, thing?: string) => void;
       onLine?: (agent: string, text: string, nearness: number, phone?: boolean) => void;
       company?: { agent: string }[];
       wear?: string[];
@@ -169,6 +176,18 @@ vi.mock("../avatar/stage", () => ({
       where: () => [-4, 9] as [number, number],
       walkBy: (w: { agent: string; from: [number, number]; to: [number, number] }) =>
         stage.walks.push({ agent: w.agent, from: w.from, to: w.to }),
+      anchorPanel: (
+        el: HTMLElement,
+        anchor: unknown,
+        o?: { rank?: number; optional?: boolean; onAway?: () => void },
+      ) => {
+        const pin = { anchor, ...(o ? { opts: o } : {}) };
+        stage.anchored.set(el, pin);
+        return () => {
+          if (stage.anchored.get(el) === pin) stage.anchored.delete(el);
+        };
+      },
+      setPlaque: (words: string | undefined) => stage.plaques.push(words),
     };
   },
 }));
@@ -409,6 +428,8 @@ beforeEach(() => {
   stage.tasks.length = 0;
   stage.screens.length = 0;
   stage.calendars.length = 0;
+  stage.anchored.clear();
+  stage.plaques.length = 0;
   homeExtra = [];
   townExtra = [];
   bookedRows = [];
@@ -727,6 +748,12 @@ function Harness({ following, ...props }: Partial<ChatStageOptions> & { followin
       )}
       {scene.voiceEnabled && <TalkButton voice={scene.voice} />}
       {scene.voice.error && <p className="voice-error">{scene.voice.error}</p>}
+      {scene.talk && (
+        <p className="talk-shown">
+          {scene.talk.phone ? "on the phone with" : "beside"} {scene.talk.name}
+          {scene.talk.brief ? ", briefly" : ""}
+        </p>
+      )}
     </div>
   );
 }
@@ -2407,6 +2434,157 @@ describe("the chat page's scene", () => {
     await settle();
     expect(container.querySelector(".world-panel-title")?.textContent).toMatch(/talker/);
     expect(container.querySelector(".world-calendar-panel")).toBeNull();
+  });
+
+  describe("panels in the world, each beside what it is about", () => {
+    /** The panel of a kind kept beside something now: what it is beside, and how it goes. */
+    const pinned = (kind: string) => [...stage.anchored].find(([el]) => el.dataset.panel === kind)?.[1];
+    const anchorOf = (kind: string) => pinned(kind)?.anchor;
+    const planner = { agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] };
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+
+    it("opens an agent's card by its body, in its colour, and the map held in front of you in its place", async () => {
+      placeId = "shared:lounge";
+      company = [planner];
+      await render();
+      await settle(60);
+      await press(await pick("planner"), "About planner");
+      expect(anchorOf("agent")).toEqual({ agent: "planner" });
+      const card = container.querySelector('.world-anchor[data-panel="agent"]') as HTMLElement;
+      expect(card.classList.contains("world-anchor-card")).toBe(true);
+      expect(card.style.getPropertyValue("--who")).not.toBe("");
+      expect(card.querySelector(".world-panel-title")?.textContent).toMatch(/planner/);
+      // A card has the right of the stage kept for it, so the agent is framed with room beside it.
+      expect(stage.insets.at(-1)).toBeGreaterThan(440);
+      await act(async () => tool("Map").click());
+      await settle();
+      expect(anchorOf("map")).toEqual({ held: "front" });
+      expect(anchorOf("agent")).toBeUndefined();
+      expect(container.querySelector('.world-anchor-held[data-panel="map"] .world-map')).not.toBeNull();
+    });
+
+    it("answers what an agent waits on beside its body, and holds it in front of you when it has none to go to", async () => {
+      const waiting = (agent: string) => ({
+        id: agent,
+        data: { agent, doing: "waiting", what: "has a question for you", question: "Window or aisle?" },
+      });
+      activityRecords = [waiting("planner"), waiting("scheduler")];
+      await render();
+      await act(async () => tool("Needs you · 2").click());
+      await settle();
+      // The list of everything waiting on you is held in front of you.
+      expect(anchorOf("needs")).toEqual({ held: "front" });
+      const row = (who: string) =>
+        [...container.querySelectorAll(".world-needs-row")].find((r) => r.textContent?.includes(who)) as HTMLElement;
+      await act(async () => row("planner").click());
+      await settle(60);
+      // Into planner's home, in front of it, its question open by its shoulder.
+      expect(stage.greeted).toEqual(["planner"]);
+      expect(anchorOf("need")).toEqual({ agent: "planner" });
+      expect(container.querySelector('.world-anchor-card[data-panel="need"] .world-need')?.textContent).toContain(
+        "Window or aisle?",
+      );
+      // One with no body anywhere: its card in front of you, wherever you are.
+      await act(async () => tool("Needs you · 2").click());
+      await settle();
+      await act(async () => row("scheduler").click());
+      await settle(60);
+      expect(anchorOf("need")).toEqual({ held: "front" });
+    });
+
+    it("pins a task's card beside the board it was opened from, and what it opens stays there too", async () => {
+      // Two boards: the one clicked is the one beside it, not merely the first.
+      homeExtra = [
+        { ...wall("board"), action: "tasks" },
+        { ...wall("board"), id: "board-2", at: [1.2, -1.79], action: "tasks" },
+      ];
+      await render();
+      await settle(60);
+      await act(async () => stage.onUse?.("tasks", {}, "board-2"));
+      await settle();
+      expect(anchorOf("tasks")).toEqual({ thing: "board-2" });
+      expect(container.querySelector('.world-anchor-pinned[data-panel="tasks"] .world-anchor-mark')).not.toBeNull();
+      await act(async () => (container.querySelector(".world-list-row") as HTMLButtonElement).click());
+      await settle();
+      expect(anchorOf("task")).toEqual({ thing: "board-2" });
+      // A note on the other board opens its card beside that one.
+      await act(async () => stage.onUse?.("tasks", { task: "t1" }, "board"));
+      await settle();
+      expect(anchorOf("task")).toEqual({ thing: "board" });
+      // From the Tasks button, the list is pinned beside the first board here.
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })));
+      await act(async () => tool("Tasks").click());
+      await settle();
+      expect(anchorOf("tasks")).toEqual({ thing: "board" });
+    });
+
+    it("hangs the room's plaque by its door, and opens the room's card on it", async () => {
+      await render();
+      await settle(60);
+      expect(stage.plaques.at(-1)).toBe("talker's room");
+      await act(async () => stage.onUse?.("place"));
+      await settle();
+      expect(anchorOf("place")).toEqual({ plaque: true });
+      expect(container.querySelector(".world-anchor-plaque .world-panel")).not.toBeNull();
+      // The Room button opens the same card, on the same plaque.
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true })));
+      expect(anchorOf("place")).toBeUndefined();
+      await act(async () => tool("Room").click());
+      await settle();
+      expect(anchorOf("place")).toEqual({ plaque: true });
+    });
+
+    it("puts a card away once you walk away from what it is about", async () => {
+      placeId = "shared:lounge";
+      company = [planner];
+      await render();
+      await settle(60);
+      await press(await pick("planner"), "About planner");
+      expect(container.querySelector('[data-panel="agent"] .world-panel')).not.toBeNull();
+      await act(async () => pinned("agent")?.opts?.onAway?.());
+      await settle();
+      expect(container.querySelector('[data-panel="agent"]')).toBeNull();
+    });
+
+    it("keeps your conversation beside the agent you talk to, and on the phone once you are somewhere it isn't", async () => {
+      await render({ dialogue: true, panelOpen: false });
+      await settle(60);
+      expect(anchorOf("talk")).toEqual({ agent: "talker" });
+      expect(pinned("talk")?.opts).toMatchObject({ optional: true, fallback: "dock" });
+      expect(container.querySelector(".talk-shown")?.textContent).toBe("beside talker");
+      await act(async () => tool("Map").click());
+      await settle();
+      // The map has the room: your conversation steps aside while it is open.
+      expect(anchorOf("talk")).toBeUndefined();
+      const trip = [...container.querySelectorAll(".world-map-place")].find((b) =>
+        b.querySelector(".world-map-name")?.textContent?.startsWith("#trip"),
+      ) as HTMLButtonElement;
+      await act(async () => trip.click());
+      await settle(60);
+      expect(anchorOf("talk")).toEqual({ you: true });
+      expect(container.querySelector(".talk-shown")?.textContent).toBe("on the phone with talker");
+      expect(container.querySelector('.world-anchor-phone[data-panel="talk"]')).not.toBeNull();
+      // A card about someone here opens beside them: the call stays, down to its last few words, out of its way.
+      await press(await pick("planner"), "About planner");
+      expect(anchorOf("agent")).toEqual({ agent: "planner" });
+      expect(anchorOf("talk")).toEqual({ you: true });
+      expect(container.querySelector(".talk-shown")?.textContent).toBe("on the phone with talker, briefly");
+    });
+
+    it("leaves your conversation out while the whole chat is open, or the agent's own card has its place", async () => {
+      await render({ dialogue: true, panelOpen: true });
+      await settle(60);
+      expect(anchorOf("talk")).toBeUndefined();
+      expect(container.querySelector(".talk-shown")).toBeNull();
+      act(() => root.unmount());
+      root = createRoot(container);
+      await render({ dialogue: true, panelOpen: false });
+      await settle(60);
+      await press(await pick("talker"), "About talker");
+      expect(anchorOf("agent")).toEqual({ agent: "talker" });
+      expect(anchorOf("talk")).toBeUndefined();
+    });
   });
 
   it("turns the 3D view off, and remembers that next time", async () => {

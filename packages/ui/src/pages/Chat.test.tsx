@@ -7,11 +7,11 @@
  * "follow the URL" effect then fought its "keep the URL in step" effect, and
  * the view flickered between the two before settling on the wrong one.
  */
-import { act } from "react";
+import { act, useContext } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatProvider } from "../components/ChatContext";
-import type { ChatStageOptions } from "../components/ChatStage";
+import { type ChatStageOptions, TalkSlot } from "../components/ChatStage";
 import { ToastProvider } from "../components/Toast";
 import { ROOM_ASK } from "../components/WorldPlace";
 import { Chat } from "./Chat";
@@ -555,5 +555,78 @@ describe("the chat beside a panel in the world", () => {
     expect(closed).toEqual(["closed"]);
     // And the chat is to be shown once it closes, not hidden as a press of a showing chat would.
     expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(false);
+  });
+});
+
+describe("your conversation in the world", () => {
+  /** Where the stage would be: what the page draws into the conversation in the world shows there. */
+  function TalkInWorld() {
+    return <div className="fake-stage">{useContext(TalkSlot)}</div>;
+  }
+  /** A scene with your conversation shown in the world beside whoever you talk to: on the phone, or face to face. */
+  function sceneTalking(phone = false) {
+    return {
+      ...sceneAt(null),
+      stage: <TalkInWorld />,
+      talk: { phone, name: "talker" },
+      worldPanel: false,
+      chatCovered: false,
+      closePanel: () => {},
+    };
+  }
+  const world = () => container.querySelector(".fake-stage .world-talk") as HTMLElement;
+  const lines = () => [...world().querySelectorAll(".world-talk-line")].map((l) => l.textContent);
+
+  async function sayInWorld(text: string) {
+    const input = world().querySelector(".world-talk-input") as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+  }
+
+  it("hides the whole chat at first, shows the last turns beside the agent, and sends from there", async () => {
+    localStorage.setItem("tai.chat.activeSessionId", "sess-1");
+    localStorage.setItem("tai.chat.activeSessionKey", "web:kitchen");
+    fakeScene = () => sceneTalking();
+    await render();
+    expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(true);
+    expect(lines()).toEqual(["Earlier question", "Earlier answer"]);
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    await sayInWorld("Hey!");
+    expect(chatPosts.map((p) => p.sessionKey)).toEqual(["web:kitchen"]);
+    // The reply comes in beside the agent as it arrives, and the box is the chat's own: empty again for both.
+    expect(world().querySelector(".world-talk-live")?.textContent).toBe("Hello!");
+    expect((container.querySelector(".chat-input-bar input[type=text]") as HTMLInputElement).value).toBe("");
+    await act(async () => release());
+    await settle();
+    expect(lines()).toEqual(["Earlier question", "Earlier answer", "Hey!", "Hello!"]);
+    expect(world().querySelector(".world-talk-live")).toBeNull();
+    // The whole conversation is a click away, beside the world.
+    await act(async () => (world().querySelector(".world-talk-full") as HTMLButtonElement).click());
+    expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(false);
+  });
+
+  it("is a call when the agent is somewhere else, and a message written for someone is ready in it to send", async () => {
+    let draft: ((name: string, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      draft = opts.onDraft;
+      return sceneTalking(true);
+    };
+    await render();
+    expect(world().classList.contains("world-talk-phone")).toBe(true);
+    expect(world().querySelector(".world-talk-head")?.textContent).toMatch(/On the phone with talker/);
+    await act(async () => draft?.("planner", ROOM_ASK));
+    await settle();
+    expect((world().querySelector(".world-talk-input") as HTMLInputElement).value).toBe(ROOM_ASK);
+    // Ready to send where you are: the whole chat stays hidden.
+    expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(true);
   });
 });

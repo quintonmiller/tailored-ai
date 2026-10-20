@@ -45,8 +45,9 @@ Talking happens on the **Chat** page, in the same conversation as typing.
 Pick an agent, then hold **Talk** beside the message box (or hold Space when
 you're not typing) and let go to send. Allow the microphone the first time.
 
-- What you said and the agent's reply appear in the chat as it is written,
-  and its voice plays a sentence at a time while the rest is still being made.
+- What you said and the agent's reply appear as it is written, beside the
+  agent when it has a body and in the chat otherwise, and its voice plays a
+  sentence at a time while the rest is still being made.
 - Spoken and typed turns are one history: say something, type the next
   thing, and the agent has both. A new chat gets its conversation on its
   first spoken turn.
@@ -216,16 +217,18 @@ browser asks for reduced motion.
 
 ### On the chat page
 
-When the agent has a body, its room fills the chat page and the conversation
-becomes a panel laid over it, on the right on a wide screen and at the bottom
-on a phone. The camera frames the agent in the part the panel and the
-toolbar leave clear: beside the panel, or above it on a phone, so the agent
-is never under the chat. On a phone the buttons over the scene reach a long
-way down that strip, so the agent is framed beside them rather than behind
-them.
-**3D** in the toolbar turns the scene off and on, and the page remembers the
-choice. **Chat** hides the panel when you want the whole room; the message
-box stays. An agent without a body has no 3D button, just the chat.
+When the agent has a body, its room fills the chat page, and your
+conversation is in the room with it: beside the agent, the last few things
+you said to each other, its words in white bubbles like the ones over its
+head and yours in your own colour, with the box to type in underneath (see
+[Your conversation in the world](#your-conversation-in-the-world)). The
+camera frames the agent with room beside it for that, and on a phone the
+conversation is a sheet along the bottom with the agent framed above it.
+**Chat** in the toolbar opens the whole conversation in a column down the
+right, as the chat page always had it; while that is open, your
+conversation in the room steps aside, since the column has it. **3D** turns
+the scene off and on, and the page remembers the choice. An agent without a
+body has no 3D button, just the chat.
 
 During a conversation the avatar stays where it is, or where it was sent.
 The first turn after three quiet minutes calls it back to face you.
@@ -821,10 +824,13 @@ in the middle of its open front.
 
 #### Who you are talking to
 
-The top of the chat panel says who the conversation is with: their name, a
-dot in their body's colour (the default agent has none), and what they are
-doing right now, from their `activity` record. **Talk to** beside it switches
-to someone else. The conversation follows who you are with:
+Your conversation in the world is headed by who it is with, in their body's
+colour, and it stands beside their body, or is a phone in your hand when
+they are somewhere else. With the whole chat open, its top says the same:
+their name, a dot in their body's colour (the default agent has none), and
+what they are doing right now, from their `activity` record, with **Talk to**
+beside it to switch to someone else. The conversation follows who you are
+with:
 
 - **Going to an agent's home**, on the map or any other way, talks to that
   agent. The conversation you left it in comes back; the first time you go to
@@ -955,15 +961,16 @@ Talking in a room of conversation still takes the body to its meeting room
 The map's **Busy now**, the tags and an agent's card all say it the same
 way: "on the phone with writer" or "talking with writer".
 
-**You count too.** On a visit in your own body, talking to an agent (typing in
-the chat, or holding **Talk**) works the same way. With its body in the place
-you are in, it turns to face you, walking over if you are far apart, and
-stays with you rather than going off to its desk to think. What you say shows
-in a bubble over your head, and its answer over its own. With its body
-anywhere else, it holds a phone to its ear where it is, and so do you: your
-words show over you with a small phone at the top, and its answer comes out
-of your phone. In the agent's own view nothing changes: it faces you there as
-before.
+**You count too.** On a visit in your own body, talking to an agent (typing,
+or holding **Talk**) works the same way. With its body in the place you are
+in, it turns to face you, walking over if you are far apart, and stays with
+you rather than going off to its desk to think. What you say shows in a
+bubble over your head, and its answer over its own, and your conversation
+stands beside it. With its body anywhere else, it holds a phone to its ear
+where it is, and so do you: your words show over you with a small phone at
+the top, its answer comes out of your phone, and your conversation is the
+phone in your hand, marked as a call. In the agent's own view nothing
+changes: it faces you there as before.
 
 Each talk is a `talk` record, one per agent, naming who it is `with`, whether
 it is on the `phone`, whether it `started` the conversation, and an `until`.
@@ -1121,8 +1128,9 @@ where you were.
   catalogue stands in for one.
 - **Repaint** it from the swatches: the room's own colours first (its walls,
   its floor, what is in it), then a few that go with most rooms.
-- **Add things** opens the catalogue in the chat's column (on a phone, a
-  sheet over the lower half): everything an
+- **Add things** opens the catalogue docked at the right of the stage, with
+  the room framed beside it (on a phone, a sheet over the lower half):
+  everything an
   agent can place, grouped as seating, tables, storage, lights, plants,
   decor, things for the walls, and boards and screens, but a kiosk, which
   only does something as one of the lobby's. Pick one and it goes somewhere
@@ -1167,6 +1175,103 @@ change, by a change, an undo or a redo: you're told who changed it, the room
 comes back as it is now, and what you were about to undo is let go. A change
 you make after an agent's starts your undo afresh, so it never reaches back
 past theirs. No model is called while you rearrange.
+
+#### Panels in the world
+
+What you open in the world opens in the world, next to what it is about,
+rather than in the chat's column. Each is a card laid over the stage, kept
+beside its thing as the camera and the thing move, with a small tail
+pointing at it:
+
+- **An agent's card**, and **what it waits on you for** (its question, or
+  the tool call it wants your OK on), float by its shoulder, edged in its
+  colour, and follow it if it walks off. Approve or deny right there, by the
+  agent that asked.
+- **A task's card**, the **task list** and the **new-task form** are pinned
+  to the wall beside the board they came from, a pin through the top. The
+  new-task form opens beside the lobby's kiosk; the dashboard and a
+  calendar's full list beside their screen and calendar.
+- **The room's card** hangs on its plaque. Every home, shared place, meeting
+  room and the lobby has a small brass-edged plaque on the wall beside a
+  door, with the room's name and "About this room" on it: click it, or the
+  **Room** button, and the card opens there.
+- **The map** and the **Needs you** list are held in front of you, like a
+  tablet, a clip at the top. They sit in the middle of what can be seen,
+  low down, clear of faces where they can be.
+- **The catalogue** you rearrange a room from is docked at the right, out of
+  the room's way.
+
+Opening one moves the camera gently: the scene slides left to leave room on
+the right, so whatever the card is beside has room next to it, and a board
+you are reading is framed again in what is left. A card never covers the
+face of the agent it is about, its name or what it is saying, nor the
+thing it is pinned to, the buttons over the stage, or your own head; it
+keeps off everyone else's faces and names where it can, and two panels
+never overlap. A card whose thing is off the screen is held in front of
+you instead. **Escape** or **×** closes it, and so does walking away: about
+the width of a room further than you stood when it opened (an agent walking
+off with its card open doesn't count; the card goes with it). Going through
+a door closes anything opened beside something in the place you left; the
+**Needs you** list, which you hold, comes along.
+
+The cards are ordinary page elements, so Tab, focus and screen readers work
+in them as anywhere on the page, and keys pressed in one are its own: typing
+never walks your body, and Space presses the button you are on instead of
+starting to talk. On a phone, or a stage narrower than 600 pixels, there is
+no room beside anything: what opens is a sheet along the bottom, one at a
+time, and the camera frames the room above it.
+
+#### Your conversation in the world
+
+Talking to an agent shows beside it, as a dialogue: the last four things you
+said to each other, its words in white bubbles as over its head and yours in
+your own colour, a long one cut to its first few lines. A reply comes in as
+it is written, with a caret where the next words go; while the agent is
+still thinking, or using a tool, a line under it says so in the words its
+sign uses ("Calling web_search…"), and its body shows the same over its
+head. Tool calls waiting on your OK show here too, to approve or reject. The
+box to type in is underneath, with **+** to attach a file, **Talk** to hold
+and speak (Space still works when you aren't typing) and **Send** or
+**Stop**: everything the chat's bar does. **Whole chat** opens the full
+conversation in the column.
+
+Talking to an agent whose body isn't where you are is a call: the same
+conversation, in a phone in your hand, headed "On the phone with planner",
+its words edged in dashes as a call's are over a head (see [Near and
+far](#near-and-far)). With nobody to stand beside in the agent's own view,
+it docks at the side. While a card has most of the room, the conversation
+shows only your last exchange and keeps out of the card's way, docked at the
+side if it has to be; it steps aside altogether while the agent's own card
+is open, while you hold the map, while you rearrange the room, in a meeting
+room while you read the room's own conversation, and while the whole chat
+is open.
+
+##### How panels in the world work, for work on the world
+
+The page hands the stage each panel's element and what it is beside, and the
+stage places it every frame (`stage.anchorPanel(el, anchor, opts)`, which
+returns a function that lets it go):
+
+```ts
+const off = stage.anchorPanel(el, { thing: "board-2" }, { rank: 2, onAway: close });
+// or { agent: "planner" }, { plaque: true }, { you: true }, { held: "front" | "dock" }
+```
+
+What it is beside is worked out on the stage each frame: a body's box from
+its crown to its feet, and its head with what floats over it as the part
+never to cover; a thing's box from what was built. Where each panel goes is
+pure and tested (`avatar/anchors.ts`): `layoutPanels` tries each side of its
+thing and the screen's edges, scores what each would cover (a face, the
+controls, your head, another panel, the edge of the stage), and places the
+higher ranked first so the rest keep out of their way; `follow` eases a
+panel to its new place so a breathing body never shakes it; `walkedAway`
+says when you have left; `anchorFor` and `talkAnchor` say which panel goes
+beside what, and `plaqueSpot` where the plaque hangs. The stage writes each
+panel's place as a transform, the side it went to as `data-side` and where
+its tail meets its edge as `--tail`, so a panel's look is all CSS. The
+Avatar component draws the page's panels (`panels`, each with an `anchor`,
+a `node`, a `look` and a rank), keeps `panelRoom` pixels on the right for
+them, and tells the stage what its plaque says (`plaque`).
 
 #### Surfaces: using what hangs on the walls
 
@@ -1435,15 +1540,11 @@ card goes back to the list. **+ New task** opens the new-task form. The
 keeps the 300 most recently changed tasks; when there are more it says so,
 and **Open the Tasks page** at the bottom has the rest.
 
-These panels, and an agent's card (below), take the chat's column while they
-are open: the chat steps aside, the scene stays in view beside the panel, and
-closing the panel (× or Escape) brings the chat back. So does anything that
-asks for the chat: the toolbar's **Chat** button, or **Chat with** on an
-agent's menu. Escape on a panel only closes it: a reply on its way in the
-hidden chat goes on. On a phone they open as a sheet over the lower part of
-the screen, where the chat sits, and scroll inside. Keys pressed in a panel
-are the panel's: typing never walks your body, and Space there presses the
-button instead of starting to talk.
+A task's card, the list and the new-task form open in the room, pinned
+beside the board they came from (see [Panels in the
+world](#panels-in-the-world)). From the **Tasks** button they go beside the
+board in the place you are in, or, with none, in front of you. Escape on one
+only closes it: a reply on its way goes on.
 
 **The lobby**, inside the town hall, is the biggest room, and what it has is
 out on the square too: the same kiosks, task board, screen and calendar, on

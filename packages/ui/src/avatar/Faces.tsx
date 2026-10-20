@@ -47,8 +47,8 @@ export interface FaceData {
   widgets?: DashboardWidgetSpec[];
   /** What the calendars here show. */
   calendar?: CalendarView;
-  /** Something on a face was used: what it is for, and where on it. */
-  onUse?: (action: string, on?: UseSpot) => void;
+  /** Something on a face was used: what it is for, where on it, and which thing in the room the face is on. */
+  onUse?: (action: string, on?: UseSpot, thing?: string) => void;
   /** A note was moved to another column on a board: save it. Rejects with why it couldn't be. */
   onTaskMove?: (id: string, change: TaskMove) => Promise<unknown>;
 }
@@ -91,6 +91,13 @@ export function SurfacePortals({ views, data, stage }: { views: SurfaceView[]; d
 function SurfaceFrame({ view, stage, reading }: { view: SurfaceView; stage: SurfaceStage; reading: boolean }) {
   const root = useRef<HTMLElement>(null);
   const { id, focused } = view;
+  // What is used on this face says which thing it is on, so what it opens can be kept beside that thing.
+  const data = useContext(Faces);
+  const thing = view.prop?.id;
+  const own = useMemo(
+    (): FaceData => ({ ...data, onUse: (action, on) => data.onUse?.(action, on, thing) }),
+    [data, thing],
+  );
   useLayoutEffect(() => {
     stage.surfaceReady(id);
   }, [stage, id]);
@@ -104,23 +111,25 @@ function SurfaceFrame({ view, stage, reading }: { view: SurfaceView; stage: Surf
   );
   const active = focused || (view.use === "direct" && !reading);
   return (
-    <SurfaceContext.Provider value={api}>
-      <section
-        ref={root}
-        className={`sf sf-${view.component ? "face" : (view.prop?.kind ?? "own")}`}
-        inert={!active}
-        tabIndex={-1}
-        aria-label={view.label}
-      >
-        {view.render ? (
-          view.render()
-        ) : view.component ? (
-          <ModelFace spec={view.component} />
-        ) : view.prop ? (
-          <PropFace prop={view.prop} />
-        ) : null}
-      </section>
-    </SurfaceContext.Provider>
+    <Faces.Provider value={own}>
+      <SurfaceContext.Provider value={api}>
+        <section
+          ref={root}
+          className={`sf sf-${view.component ? "face" : (view.prop?.kind ?? "own")}`}
+          inert={!active}
+          tabIndex={-1}
+          aria-label={view.label}
+        >
+          {view.render ? (
+            view.render()
+          ) : view.component ? (
+            <ModelFace spec={view.component} />
+          ) : view.prop ? (
+            <PropFace prop={view.prop} />
+          ) : null}
+        </section>
+      </SurfaceContext.Provider>
+    </Faces.Provider>
   );
 }
 
