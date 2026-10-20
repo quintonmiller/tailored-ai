@@ -271,6 +271,11 @@ export class SurfaceLayer {
     return !!s && this.live.has(s.spec.id) && s.ready && (s.spec.use === "direct" || this.focusedId === id);
   }
 
+  /** The faces of every surface: what a pointer is tried against first, before anything in front of one is looked for. */
+  faces(): THREE.Object3D[] {
+    return [...this.byMesh.keys()];
+  }
+
   /** Whether any live surface is used there and then: only then does the pointer need looking at for one. */
   anyDirect(): boolean {
     for (const id of this.live) if (this.all.get(id)?.spec.use === "direct") return true;

@@ -60,6 +60,18 @@ export function travelSpeed(travel: Travel, running: boolean, outdoors = false):
   return pace * (running ? RUN_FACTOR : 1);
 }
 
+/** How long a moment's flying a notch of the wheel is worth, in seconds: the wheel flies you along the way you look. */
+export const FLY_NOTCH_SECONDS = 0.4;
+
+/**
+ * How far a turn of the wheel flies you, in metres along the way you look: a
+ * notch (100 pixels) is `FLY_NOTCH_SECONDS` of flying; rolled toward you (a
+ * positive `pixels`), back, as the wheel zooms out walking; away, forward.
+ */
+export function flyWheelStep(pixels: number): number {
+  return -(pixels / 100) * FLY_SPEED * FLY_NOTCH_SECONDS;
+}
+
 /** A pace this many times a body's own walking speed is a run. Halfway between a walk and a Shift run. */
 const RUN_ABOVE = (1 + RUN_FACTOR) / 2;
 /** The walk cycle plays no slower or faster than this, so a stumble or a sprint never smears it. */

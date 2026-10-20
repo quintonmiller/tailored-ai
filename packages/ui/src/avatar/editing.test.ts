@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COLOURS,
+  carriedTo,
   catalogue,
   changeWords,
   doorItem,
@@ -11,11 +12,13 @@ import {
   doorsAsSaved,
   footprint,
   GROUPS,
+  groupOf,
   type Kinds,
   linkable,
   madeByAgents,
   madeDoors,
   madeHere,
+  moveKey,
   noSteps,
   onFloor,
   onTop,
@@ -504,5 +507,114 @@ describe("doors put in", () => {
     ]);
     expect(doorsAsSaved(room.doors, {})).toEqual([room.doors?.[0]]);
     expect(doorsAsSaved(undefined, {})).toBeUndefined();
+  });
+});
+
+describe("what goes with a thing you move", () => {
+  const more: Kinds = {
+    ...kinds,
+    round_table: {
+      noun: "round table",
+      mount: "floor",
+      footprint: [1.1, 1.1],
+      height: 0.75,
+      surface: 0.75,
+      round: true,
+    },
+    round_rug: { noun: "round rug", mount: "floor", footprint: [1.8, 1.8], height: 0.03, round: true },
+    beanbag: { noun: "beanbag", mount: "floor", footprint: [0.75, 0.75], height: 0.6 },
+    vase: { noun: "vase", mount: "on", footprint: [0.14, 0.14], height: 0.42, round: true },
+    stool: { noun: "stool", mount: "floor", footprint: [0.4, 0.4], height: 0.5, round: true },
+    table: { noun: "table", mount: "floor", footprint: [1.2, 0.8], height: 0.75, surface: 0.75 },
+  };
+  const thing = (id: string, kind: Prop["kind"], at: [number, number], facing = 0, on?: string): Prop => ({
+    id,
+    name: `the ${id}`,
+    kind,
+    at,
+    facing,
+    ...(on ? { on } : {}),
+  });
+  // The lobby's corner: a round table on a round rug, three chairs drawn up to it, a vase on it; and beside it, two
+  // beanbags on a rug of their own.
+  const lounge = {
+    props: [
+      thing("round-rug", "round_rug", [3.4, 2.3]),
+      thing("round-table", "round_table", [3.4, 2.3]),
+      thing("vase", "vase", [3.4, 2.3], 0, "round-table"),
+      thing("chair", "chair", [3.4, 3.08], 180),
+      thing("chair-2", "chair", [4.08, 1.91], -60),
+      thing("chair-3", "chair", [2.72, 1.91], 60),
+      thing("round-rug-2", "round_rug", [-2.3, 2.7]),
+      thing("beanbag", "beanbag", [-2.85, 2.55], 25),
+      thing("beanbag-2", "beanbag", [-1.75, 2.55], -25),
+      thing("picture", "picture", [3.4, -4.9]),
+      thing("couch", "couch", [-6, 0], 90),
+    ],
+  };
+
+  it("takes a table's chairs along with it, and nothing it merely stands near", () => {
+    expect(groupOf(lounge, more, "round-table")).toEqual(["chair", "chair-2", "chair-3"]);
+    // The vase stands on the table, and goes with it as anything on top does: it isn't in the group.
+    expect(groupOf(lounge, more, "round-table")).not.toContain("vase");
+  });
+
+  it("takes everything on a rug along with it, and the chairs at a table on it", () => {
+    expect(groupOf(lounge, more, "round-rug")).toEqual(["chair", "chair-2", "chair-3", "round-table"]);
+    expect(groupOf(lounge, more, "round-rug-2")).toEqual(["beanbag", "beanbag-2"]);
+  });
+
+  it("moves a chair, a couch or a picture by itself", () => {
+    expect(groupOf(lounge, more, "chair")).toEqual([]);
+    expect(groupOf(lounge, more, "couch")).toEqual([]);
+    expect(groupOf(lounge, more, "picture")).toEqual([]);
+    expect(groupOf(lounge, more, "vase")).toEqual([]);
+  });
+
+  it("gives a seat between two tables to the nearer one only", () => {
+    const two = {
+      props: [
+        thing("table", "table", [0, 0]),
+        thing("table-2", "table", [2, 0]),
+        // 0.3 m off the first table's end and 0.5 m off the second's: near enough to both, nearer the first.
+        thing("stool", "stool", [0.9, 0]),
+        thing("chair", "chair", [0, 0.7], 180),
+      ],
+    };
+    expect(groupOf(two, more, "table")).toEqual(["chair", "stool"]);
+    expect(groupOf(two, more, "table-2")).toEqual([]);
+  });
+
+  it("keeps each thing in a group in its place round the one it goes with, moved and turned as it is", () => {
+    const moved = carriedTo(lounge, {
+      item: "round-table",
+      at: [3.4, 1.8],
+      facing: 0,
+      with: ["chair", "chair-2"],
+    });
+    expect(moved).toEqual([
+      { id: "chair", at: [3.4, 2.58], facing: 180 },
+      { id: "chair-2", at: [4.08, 1.41], facing: -60 },
+    ]);
+    // A quarter turn about the table's middle: the chair in front of it goes to its right, turned with it.
+    const [chair] = carriedTo(lounge, { item: "round-table", at: [3.4, 2.3], facing: 90, with: ["chair"] });
+    expect(chair).toEqual({ id: "chair", at: [4.18, 2.3], facing: -90 });
+  });
+
+  it("says what went with a thing in the room's recent changes", () => {
+    const after = { props: lounge.props };
+    const two = { op: "move" as const, item: "round-rug-2", at: [-2.3, 3.2] as [number, number], facing: 0 };
+    expect(changeWords({ ...two, with: ["beanbag", "beanbag-2"] }, lounge, after)).toBe(
+      "moved the round-rug-2 with the beanbag and the beanbag-2",
+    );
+    const three = { op: "move" as const, item: "round-table", at: [3.4, 1.8] as [number, number], facing: 0 };
+    expect(changeWords({ ...three, with: ["chair", "chair-2", "chair-3"] }, lounge, after)).toBe(
+      "moved the round-table, and the 3 things with it",
+    );
+  });
+
+  it("asks again about the same place when what goes with it is different", () => {
+    const alone = { item: "round-table", at: [3.4, 1.8] as [number, number], facing: 0 };
+    expect(moveKey(alone)).not.toBe(moveKey({ ...alone, with: ["chair"] }));
   });
 });

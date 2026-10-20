@@ -8725,6 +8725,9 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-map-room { border-style: dashed; }
 .world-map-name { font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; gap: 6px; overflow-wrap: anywhere; }
 .world-map-here { font-size: 10px; font-weight: 500; color: var(--accent); white-space: nowrap; }
+/* While you visit: the one place that takes you back to the agent's own view rather than in, said on it and above. */
+.world-map-back { color: var(--text-dim); font-style: italic; }
+.world-map-rule { margin: 6px 10px 0; font-size: 11px; color: var(--text-dim); }
 .world-map-purpose { font-size: 11px; color: var(--text-dim); overflow-wrap: anywhere; }
 .world-map-agents { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 11px; color: var(--text-dim); }
 .world-map-agent { display: inline-flex; align-items: center; gap: 4px; }
@@ -8783,31 +8786,35 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-plan-street { position: absolute; font-size: 9px; font-weight: 600; letter-spacing: 0.02em; color: #f6f2e8; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7); white-space: nowrap; pointer-events: none; }
 /* Who is busy, at the top: one line each, straight to where they are. */
 .world-map-busy-list ul { grid-template-columns: 1fr; gap: 4px; }
-.world-map-busy { width: 100%; display: grid; grid-template-columns: 12px auto 1fr auto; align-items: center; gap: 6px; text-align: left; padding: 6px 8px; font-family: var(--font); font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--doing-thinking); border-radius: calc(var(--radius) - 2px); cursor: pointer; }
+.world-map-busy { width: 100%; display: grid; grid-template-columns: 12px auto 1fr auto; align-items: center; gap: 2px 6px; text-align: left; padding: 6px 8px; font-family: var(--font); font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--doing-thinking); border-radius: calc(var(--radius) - 2px); cursor: pointer; }
 .world-map-busy:hover, .world-map-busy:focus-visible { border-color: var(--accent); outline: none; }
 .world-map-busy.doing-waiting { border-left-color: var(--doing-waiting); }
 .world-map-busy.doing-stuck { border-left-color: var(--doing-stuck); }
 .world-map-busy.doing-working { border-left-color: var(--doing-working); }
 .world-map-busy-who { font-weight: 600; white-space: nowrap; }
-.world-map-busy-what { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* What it is doing takes a second line before it is cut short, and is all there while the row is pointed at or
+   focused; where it is goes under it when the row is too narrow for both. */
+.world-map-busy-what { color: var(--text-dim); min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; }
+.world-map-busy:is(:hover, :focus-visible) .world-map-busy-what { -webkit-line-clamp: unset; line-clamp: none; }
 .world-map-busy-where { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 .world-map-quiet { margin: 0; font-size: 12px; color: var(--text-dim); }
 /* Every agent on a line of its own size, as many to a row as fit; a click goes home, "in …" to where its body is. */
 .world-map-people ul { display: flex; flex-wrap: wrap; gap: 4px; }
-.world-map-person { display: inline-flex; align-items: center; max-width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); }
+/* An agent's name is cut short only when it alone is wider than the list; where its body is goes under it first. */
+.world-map-person { display: inline-flex; flex-wrap: wrap; align-items: center; max-width: 100%; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); }
 .world-map-person:has(.world-map-who:hover, .world-map-who:focus-visible) { border-color: var(--accent); }
-.world-map-who { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 2px 7px; font-family: var(--font); background: transparent; color: var(--text); border: 0; border-radius: inherit; cursor: pointer; }
+.world-map-who { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; padding: 2px 7px; font-family: var(--font); background: transparent; color: var(--text); border: 0; border-radius: inherit; cursor: pointer; }
 .world-map-who:focus-visible { outline: none; }
-.world-map-who-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.world-map-who-name { flex: 0 0 auto; max-width: 100%; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .world-map-who-doing { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 /* What it is for, with its body's own colour: the dot by its name is what it is doing. */
-.world-map-who-role { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+.world-map-who-role { display: inline-flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .world-map-hue { flex: none; width: 7px; height: 7px; border-radius: 50%; }
 .world-map-who.doing-waiting .world-map-who-doing { color: var(--doing-waiting); }
 .world-map-who.doing-stuck .world-map-who-doing { color: var(--doing-stuck); }
 /* Idle and asleep are said by the dot alone, and in words only to a screen reader. */
 .world-map-who-doing.calm { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.world-map-away { min-width: 0; padding: 2px 7px; font-family: var(--font); font-size: 11px; color: var(--accent); background: transparent; border: 0; border-left: 1px solid var(--border); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.world-map-away { min-width: 0; max-width: 100%; padding: 2px 7px; font-family: var(--font); font-size: 11px; color: var(--accent); background: transparent; border: 0; border-left: 1px solid var(--border); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .world-map-away:hover, .world-map-away:focus-visible { text-decoration: underline; outline: none; }
 /* A dot on the map is what an agent is doing, in the colour the door lights and the signs over heads use for it. */
 .doing-working > .world-map-dot { background: var(--doing-working); }
@@ -8829,8 +8836,24 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 
 /* Where you are, from the area down, under the stage's tools: each step goes there. */
 .talk-tools-break { flex-basis: 100%; height: 0; }
-.world-trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px 9px; font-family: var(--font); font-size: 11px; color: var(--text-dim); background: color-mix(in srgb, var(--bg-surface) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius); backdrop-filter: blur(6px); }
-.world-trail-step { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+/* Where you are, on one short line: the steps between the town and here fold into "…" when they don't fit (see
+   `foldedSteps`), and open out while the pointer is on it or you tab into it. Only its steps take the pointer: over
+   the rest of it, the pointer is on what is behind. */
+.world-trail { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; max-width: min(380px, 100%); overflow: hidden; white-space: nowrap; padding: 3px 9px; font-family: var(--font); font-size: 11px; color: var(--text-dim); background: color-mix(in srgb, var(--bg-surface) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius); backdrop-filter: blur(6px); pointer-events: none; transition: opacity 0.2s ease; }
+.world-trail button, .world-trail-more { pointer-events: auto; }
+.world-trail-step, .world-trail-more { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.world-trail-here { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.world-trail.folded [data-fold] { display: none; }
+.world-trail.folded:is(:hover, :focus-within) [data-fold] { display: inline-flex; }
+.world-trail.folded:is(:hover, :focus-within) .world-trail-more { display: none; }
+/* Out of the way while you, or what the pointer is on, is behind it (the stage marks it); back when it is used. */
+.world-trail[data-behind] { opacity: 0.2; }
+.world-trail:is(:hover, :focus-within) { opacity: 1; }
+@media (max-width: 719px) {
+  /* On a phone it goes in the row of buttons, folded as short as it gets, rather than a row of its own. */
+  .talk-tools-break { display: none; }
+  .world-trail { max-width: 52vw; }
+}
 .world-trail-sep { padding: 0 3px; opacity: 0.7; }
 .world-trail button { padding: 0; font: inherit; color: var(--text-dim); background: transparent; border: 0; cursor: pointer; }
 .world-trail button:hover, .world-trail button:focus-visible { color: var(--accent); text-decoration: underline; outline: none; }

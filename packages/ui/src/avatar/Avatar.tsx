@@ -38,6 +38,8 @@ const DOOR_TIP_ROOM = 240;
 export const OVERLAYS = ":scope > .talk-view, :scope > .talk-back, :scope > .talk-tools > :not(.talk-tools-break)";
 /** What else is laid over the stage that panels in the world keep clear of, though the camera frames past it. */
 export const HINTS = ":scope > .talk-keys";
+/** What over the stage steps aside while what you are looking at is behind it: the trail of where you are. */
+export const FADES = ":scope > .talk-tools > .world-trail";
 
 /** One thing the menu on an agent's body offers. */
 export interface AgentAction {
@@ -52,6 +54,8 @@ export interface AvatarControls {
   walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
   /** Where you are on the floor (see `Stage.where`). */
   where(): [number, number];
+  /** Where every body here stands (see `Stage.standing`). */
+  standing(): [number, number][];
 }
 
 /** A panel the page keeps in the world, beside what it is about (see `anchors.ts`). */
@@ -556,6 +560,7 @@ export function Avatar({
           // where they reach far down a short stage the agent is framed clear of them.
           overlays: () => [...(host.current?.parentElement?.querySelectorAll(OVERLAYS) ?? [])],
           hints: () => [...(host.current?.parentElement?.querySelectorAll(HINTS) ?? [])],
+          fades: () => [...(host.current?.parentElement?.querySelectorAll(FADES) ?? [])],
           ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {
@@ -596,7 +601,12 @@ export function Avatar({
         shownRef.current?.(true);
         unsurface = s.onSurfaces(setSurfaces);
         if (controlsRef.current)
-          controlsRef.current.current = { cue: (c) => s.cue(c), walkBy: (w) => s.walkBy(w), where: () => s.where() };
+          controlsRef.current.current = {
+            cue: (c) => s.cue(c),
+            walkBy: (w) => s.walkBy(w),
+            where: () => s.where(),
+            standing: () => s.standing(),
+          };
         s.setInsets(insetRef.current);
         // The room, or who is in it, may have arrived or changed while the stage was loading.
         s.setLights(lightsFor(placeRef.current));

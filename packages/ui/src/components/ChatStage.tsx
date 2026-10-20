@@ -1,4 +1,14 @@
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  Fragment,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   type DashboardWidgetSpec,
   fetchDashboard,
@@ -57,7 +67,15 @@ import { ANSWERED_ELSEWHERE, answerable, type Need, needsFrom, requestsOf, withQ
 import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
-import { hopsAfter, isCommon, moveOf, trailThrough, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
+import {
+  foldedSteps,
+  hopsAfter,
+  isCommon,
+  moveOf,
+  TRAIL_CHARS,
+  trailThrough,
+  plaqueWords as wordsOnPlaque,
+} from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
@@ -1322,7 +1340,12 @@ export function useChatStage({
   );
   // What the editor offers a widget to show: the rooms on the map and the Board's widgets, known further down.
   const editorHas = useRef<{ rooms?: string[]; widgets?: { id: string; title?: string }[] }>({});
-  const editor = useRoomEditor(editable, () => editorHas.current, map.places);
+  const editor = useRoomEditor(
+    editable,
+    () => editorHas.current,
+    map.places,
+    () => controls.current?.standing() ?? [],
+  );
   const room = editor.room ?? sceneNow.room;
   // How tall the bar over the stage's foot is while rearranging, for framing the room above it.
   const dock = useRef<HTMLDivElement>(null);
@@ -1373,6 +1396,7 @@ export function useChatStage({
     () => trailThrough(placeId, hops, map.places, map.areas),
     [placeId, hops, map.places, map.areas],
   );
+  const folded = useMemo(() => foldedSteps(trail, wide ? TRAIL_CHARS.wide : TRAIL_CHARS.narrow), [trail, wide]);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
   const board = useBoardTasks(showStage);
@@ -2079,22 +2103,37 @@ export function useChatStage({
       )}
       {trail.length > 0 && <span className="talk-tools-break" aria-hidden="true" />}
       {trail.length > 0 && (
-        <nav className="world-trail" aria-label="Where you are">
+        // One short line: the steps between the town and here fold into "…" when they don't fit, and open out while
+        // the pointer is on it or you tab into it. It fades while you, or what the pointer is on, is behind it.
+        <nav
+          className={`world-trail${folded.size ? " folded" : ""}`}
+          aria-label="Where you are"
+          title={trail.map((step) => step.label).join(" › ")}
+        >
           {trail.map((step, i) => (
-            <span key={`${i}:${step.id}`} className="world-trail-step">
-              {i > 0 && (
-                <span className="world-trail-sep" aria-hidden="true">
-                  ›
+            <Fragment key={`${i}:${step.id}`}>
+              <span className="world-trail-step" {...(folded.has(i) ? { "data-fold": "" } : {})}>
+                {i > 0 && (
+                  <span className="world-trail-sep" aria-hidden="true">
+                    ›
+                  </span>
+                )}
+                {step.id === placeId ? (
+                  <span className="world-trail-here" aria-current={i === trail.length - 1 ? "location" : undefined}>
+                    {step.label}
+                  </span>
+                ) : (
+                  <button type="button" title={`Go to ${step.label}`} onClick={() => go(step.id, step.from)}>
+                    {step.label}
+                  </button>
+                )}
+              </span>
+              {i === 0 && folded.size > 0 && (
+                <span className="world-trail-more" aria-hidden="true">
+                  <span className="world-trail-sep">›</span>…
                 </span>
               )}
-              {step.id === placeId ? (
-                <span aria-current={i === trail.length - 1 ? "location" : undefined}>{step.label}</span>
-              ) : (
-                <button type="button" title={`Go to ${step.label}`} onClick={() => go(step.id, step.from)}>
-                  {step.label}
-                </button>
-              )}
-            </span>
+            </Fragment>
           ))}
         </nav>
       )}
@@ -2112,6 +2151,7 @@ export function useChatStage({
         here={placeId}
         {...(placeId === "town" && controls.current ? { you: controls.current.where() } : {})}
         activities={shownActivities}
+        {...(visiting && own.id ? { back: { place: own.id, agent: nameOf(shown) } } : {})}
         onGo={go}
         onNeed={(who) => seeTo(who)}
         onClose={closePanel}

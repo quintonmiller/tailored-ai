@@ -607,7 +607,15 @@ agent has the word for it beside its name too ("working", "waiting on you"),
 and every agent what it is for, by a small dot in its body's colour
 ("trip-planner · travel agent").
 Click an agent to go into its home; when its body is somewhere else, "in
-#trip" beside its name goes there instead. Rooms and places show who is in
+#trip" beside its name goes there instead. While you visit in your own body,
+everywhere you pick you walk into as you, except one place: the home of the
+agent you are talking to, which is its own view rather than somewhere to
+walk into. The map says so in a line under its search, and marks that place
+"back to its view", by the agent's name or on the place's card. Names are
+cut short only when one alone is wider than the list: what an agent is for,
+and where its body is, wrap under its name first. What a busy agent is doing
+takes a second line before it is cut short, and is there in full while you
+point at it or focus it. Rooms and places show who is in
 each, with a mark for anyone waiting on you (`!`), stuck (`?`) or asleep (`z`).
 The map asks the server again each time it opens, so an agent or a room made
 since you last looked is on it.
@@ -623,7 +631,14 @@ and into another (see [The town, and its doors](#the-town-and-its-doors)).
 › Maple Lane › analyst's home", or "Town › The Avenue › Office › #standup".
 Each step is a click: "Town" goes to the square, a street takes you out of
 the door on to it (out of analyst's home on to Maple Lane, out of the office
-on to the avenue), and a floor of the office to that floor.
+on to the avenue), and a floor of the office to that floor. It keeps to one
+short line: when the steps don't fit, the ones between the town and where you
+are fold into "…" (on a phone, almost always), and open out again while the
+pointer is on it or you tab into it. It gets out of the way, too: while your
+body (in the agent's own view, the agent's), what is over its head, or the
+pointer on the picture is behind it, it fades almost away, and comes back as
+soon as you point at one of its steps. On a phone it sits in the row of
+buttons rather than a row of its own.
 
 **Busy now**, at the top, lists every agent that is doing something, most
 pressing first: waiting on you, then stuck, then talking, working and
@@ -662,7 +677,9 @@ picture over rather than jumping.
 
 **Fly** puts your body away and lets the camera go
 anywhere, faster again (6 metres a second, twice that with Shift): WASD to
-move, `E` up, `Q` down, drag to turn, and the wheel moves you the way you look.
+move, `E` up, `Q` down, drag to turn, and the wheel flies you the way you
+look, on as you roll it away from you and back as you roll it toward you, a
+couple of metres a notch (`flyWheelStep`).
 Agents keep their own calmer pace in
 their rooms. Every speed is named in one place,
 `packages/ui/src/avatar/travel.ts`, with how far the camera can zoom (`REACH`).
@@ -760,8 +777,11 @@ is drawn smaller to fit, and a name too long for that at a size worth reading
 goes on two lines, broken at a hyphen, a space or an underscore
 (`#quarterly-` / `planning-and-review`), so a name is never cut off. On the open
 front and right sides, where the wall is cut away so the camera can see in,
-the door is cut away too: a low gate with the plate across it, readable from
-either side, that never stands between you and the room. A door to a home has
+the door is cut away too: a low gateway, two capped posts and a rail across
+their tops with the plate hanging from it, readable from either side, open to
+see through below it. When someone stands behind it from where the camera is,
+the gate all but disappears, rather than going half see-through like a pane
+of glass in front of them; it comes back when they move. A door to a home has
 a light by its dark plate, and a lit strip along it, that says what that agent
 is doing, from its `activity` record, in the colours the map uses: green
 working, blue thinking or talking, orange waiting on you, red stuck, grey idle,
@@ -1260,8 +1280,19 @@ where you were.
   says why: "It would bump into the floor lamp.", "It would block the way
   through the door.", "It would be where someone stands to use the couch."
   Let go somewhere red and it goes back.
+- **What goes with it comes too.** Drag a table or a desk and the chairs,
+  stools and benches drawn up to it come along, each keeping its place round
+  it (a seat between two tables goes with the nearer); drag a rug and
+  everything standing on it comes, with the chairs at any table on it. Their
+  footprints are outlined with it while you drag, the line under the bar says
+  what comes ("Drag it to move it with its 3 chairs"), and the whole group is
+  checked where it lands, together, so the bar names the piece that doesn't
+  fit: "The dining chair 2 would stick out of the room." Hold **Alt** while
+  you drag, or turn with Alt+R, to move or turn it alone. Things standing on
+  top of something always go with it.
 - **Turn it** with R, or Shift+R the other way, a quarter turn at a time;
-  the buttons turn it by a quarter or by 15°. A turn with no room shows red,
+  the buttons turn it by a quarter or by 15°. What goes with it turns with
+  it, round its middle. A turn with no room shows red,
   for you to drag it somewhere it fits.
 - **Remove** it with Delete or Backspace, or **Copy** it: the copy goes
   beside it, in the same colour and size. The lobby's kiosks and its task
@@ -1276,7 +1307,8 @@ where you were.
   agent can place, grouped as seating, tables, storage, lights, plants,
   decor, things for the walls, and boards and screens, but a kiosk, which
   only does something as one of the lobby's. Pick one and it goes somewhere
-  free near the middle, picked, ready to drag where you want it. A task
+  free near the middle, never where you or an agent is standing, picked,
+  ready to drag where you want it. A task
   board you add shows the tasks and opens them, like the ones rooms come
   with. Above them all, **Made by agents** lists the models agents have made,
   newest first, by name and whose each is (see
@@ -1492,8 +1524,13 @@ open beside it first (a task's card, say), and puts the surface down the
 next time. A kiosk's button is the one thing you press without bringing it
 up first, and F never brings one up; while you read something else, the
 kiosks don't take clicks, so a click off what you read only steps back.
-With the pointer over something you can bring up, its edge lights and a
-label by the pointer says so ("Use the task board · click or F"). Reading
+With the pointer over something you can bring up, its edge lights, the
+pointer turns into a hand, and a label by the pointer says so ("Use the task
+board · click or F"): any face you can use, a calendar on its wall, a notes
+card on a desk or the face of a model an agent made and hung up. The page
+finds what is under the pointer for this the way a click does, so what the
+label says is what a click does, and a door or the plaque behind a board
+doesn't light up while the pointer is on the board. Reading
 something high on a wall, the wall goes on up past the top of the stage
 rather than leaving the dark over the room showing above it.
 
@@ -2060,8 +2097,13 @@ Tags, signs and bubbles are drawn to read on your screen however far back
 the camera is: as they are in the room when that reads, and never smaller
 than a name about 14 pixels high, or larger than one about 22. Where bodies
 stand close, their tags don't pile up: the one you are pointing at or
-standing by keeps its place, and the others step up clear of it, each still
-over its own body.
+standing by keeps its place, then whoever is talking, and the others step
+clear of it, up or a little to the side, whichever is less of a move, each
+still mostly over its own body. A tag that had to go more than a few pixels
+from its head has a thin line down to it, so you can tell whose it is. Where
+three or more tags would meet, round a meeting table say, they are a crowd:
+everyone's but the one you are pointing at or standing by, and whoever is
+talking, is drawn faint, so the speaker's name stands out.
 Point at a body, or walk up to it on a visit, and the tag says more. An idle
 agent's says what it is up to ("watering the plant"), what it did last and
 how long ago ("last: searched the web, 40 min ago"), and when it next wakes
@@ -2111,16 +2153,30 @@ plugins:
 What agents say shows too. The plugin keeps a `speech` record per agent, the
 last thing it said in a room or to another agent directly, and the page puts
 it in a bubble over the speaker's head as it is said, mouth moving, for long
-enough to read. The bubble names the speaker, since its tag steps aside while
-it talks, and its tail points down to the speaker, over anyone else's tag on
-the way. Both halves of a direct message show, the answer just after the
-question: the answer sits over its speaker and the question moves up above
-it, so two agents talking read from the top down, like a comic, the newest
-drawn on top. Said down the phone, a bubble has a small phone by the name;
-the other end of a call shows over the one holding the phone here, its
-bubble edged in dashes, and takes its turn after what that one said. A bubble that would run off the top of the stage, under the
-buttons over it, or under the chat comes back into view, over its speaker if
-it has to. Only people can read speech records: the type is closed to
+enough to read. The bubble names the speaker, and sits over the speaker's
+own tag, which stays while it talks; its tail points at that tag. Where
+someone else stands in line between them, a body further back or their tag,
+the tail leaves the bubble further along and leans round them, so it never
+looks like it points at the wrong person; where there is no way round, it
+passes behind their name rather than through it. Both halves of a direct
+message show, the answer just after the question: the answer sits over its
+speaker and the question moves up above it, so two agents talking read from
+the top down, like a comic, the newest drawn on top. Said down the phone, a
+bubble has a small phone by the name; the other end of a call shows over the
+one holding the phone here, its bubble edged in dashes, and takes its turn
+after what that one said. A bubble that would run off the top of the stage,
+under the buttons over it, under the chat or the line of keys along the
+foot comes back into view, all of it even when its speaker is at the edge or
+past it, its tail leaning back toward them. Brought down so far that it
+would cover its own speaker's tag or head, or another speaker's tag, it goes
+beside its speaker's head instead, on whichever side covers least of
+anyone else, with its tail pointing across or up to them: so an agent
+standing far back, under the buttons, says "Hello." beside where it is,
+never over your head. A tag a bubble still has to come down over is put away
+until the bubble goes. In a busy room the newest lines win: an earlier
+bubble with no room left above a newer one gives way to it for the rest of
+its line, rather than pushing it down on to its speaker. Everything said is
+in the room's conversation beside the stage anyway. Only people can read speech records: the type is closed to
 agents, so a direct message stays as private from other agents as it was.
 `speech: false` in the plugin's config keeps none. A room post shows when its
 speaker's room name is the agent's own name.
@@ -2339,7 +2395,7 @@ cues, and its text passes through untouched.
 | `GET /api/state/visit` | where bodies are away from where they live, one record per agent (it is a world-state type like any other): `{place, until}` for a body gone somewhere to talk, and for an outing on its day also `errand` (`cafe`, `bench`, `park`, `read`, `meeting`, `friend`, or `sleep` for a night at home), `spot` (its seat in `place`), `with` (who it keeps company with) and `what` ("having a coffee at the café"). Kept in memory; people can end one with `DELETE` |
 | `GET /api/state/chatter` | what each room agents talk in said last, one record per room (`room:<backend>:<id>`): `{room, last, lines: [{id, who, agent?, words, at}]}`, its latest four lines' first words and who said them, and when it last talked. Kept in memory from what the rooms hear; people only |
 | `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, models, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for; the models agents made, `{id, name, owner, kind, size, faces, about?}`, newest first, at most 200; and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
-| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "add", model}` (a model an agent made, by its record id; the answer carries it in `models`, to draw at once), `{op: "remove", item}`, `{op: "color", item, color}`, or `{op: "door", to}`, a door to the place `to` with its way back there, which answers `{place, item, far: {id, name, place, version, scope}}`: the page writes `far.place` to `far.id` first, then this place. A door put in is the `item` `door:<to>`, which `remove` takes out and `move` slides to the side of the room nearest `at`. A `remove` of one of the lobby's kiosks or its task board is a `why`, and so is a `color` for a model; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
+| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?, with?}` (on the floor, along the back or left wall, or on top of `on`; `with`, up to 24 floor things that go with it, like the chairs at a table, each kept in its place round it, moved as far and turned as much, and the lot checked where it lands together, a `why` naming the piece that doesn't fit), `{op: "add", kind, like?, avoid?}` (somewhere free near the middle; `like`, a copy of that thing beside it; `avoid`, up to 24 `[x, z]` points where someone stands, which nothing new lands on), `{op: "add", model}` (a model an agent made, by its record id; the answer carries it in `models`, to draw at once), `{op: "remove", item}`, `{op: "color", item, color}`, or `{op: "door", to}`, a door to the place `to` with its way back there, which answers `{place, item, far: {id, name, place, version, scope}}`: the page writes `far.place` to `far.id` first, then this place. A door put in is the `item` `door:<to>`, which `remove` takes out and `move` slides to the side of the room nearest `at`. A `remove` of one of the lobby's kiosks or its task board is a `why`, and so is a `color` for a model; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |

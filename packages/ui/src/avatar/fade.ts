@@ -19,6 +19,8 @@ export interface Fadeable {
   solid?: Solid;
   wall?: Wall;
   level: number;
+  /** How much of it shows while it hides a body, when that isn't the usual: a gate all but goes. */
+  faint?: number;
   own?: Map<THREE.Mesh, THREE.Material | THREE.Material[]>;
 }
 

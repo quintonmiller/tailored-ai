@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   clampReach,
   ease,
+  FLY_NOTCH_SECONDS,
   FLY_SPEED,
+  flyWheelStep,
   followDistance,
   gait,
   heldMove,
@@ -55,6 +57,17 @@ describe("travelSpeed", () => {
     // A run across the square and a lane or two takes seconds, not a minute: 60 m in under 8 s.
     expect(60 / travelSpeed("walk", true, true)).toBeLessThan(8);
     expect(travelSpeed("fly", false, true)).toBe(FLY_SPEED);
+  });
+});
+
+describe("flyWheelStep", () => {
+  it("flies you back as the wheel rolls toward you and on as it rolls away, a moment's flying a notch", () => {
+    expect(flyWheelStep(100)).toBeCloseTo(-FLY_SPEED * FLY_NOTCH_SECONDS);
+    expect(flyWheelStep(-100)).toBeCloseTo(FLY_SPEED * FLY_NOTCH_SECONDS);
+    // A notch goes a couple of metres: far enough to feel, never across the town.
+    expect(Math.abs(flyWheelStep(100))).toBeGreaterThan(1);
+    expect(Math.abs(flyWheelStep(100))).toBeLessThan(5);
+    expect(flyWheelStep(0)).toBeCloseTo(0);
   });
 });
 

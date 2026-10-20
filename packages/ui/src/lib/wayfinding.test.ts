@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   areaTitle,
+  foldedSteps,
   HOPS_KEPT,
   hopsAfter,
   type MapArea,
@@ -14,6 +15,7 @@ import {
   moveOf,
   placeTitle,
   plaqueWords,
+  TRAIL_CHARS,
   trailThrough,
   trailTo,
   wayInto,
@@ -317,5 +319,26 @@ describe("where a body went", () => {
     // A visit made longer goes nowhere, and other records say nothing of where a body went.
     expect(moveOf({ type: "visit", id: "planner", before: { place: "a" }, after: { place: "a" } })).toBeUndefined();
     expect(moveOf({ type: "place", id: "shared:lounge", after: { place: "x" } })).toBeUndefined();
+  });
+});
+
+describe("foldedSteps", () => {
+  const step = (label: string) => ({ id: label, label });
+  const home = [step("Town"), step("Maple Lane"), step("analyst's home")];
+  const office = [step("Town"), step("The Avenue"), step("Office · 2nd floor"), step("#quarterly-planning")];
+
+  it("folds nothing while the trail fits on its line", () => {
+    expect(foldedSteps(home, TRAIL_CHARS.wide)).toEqual(new Set());
+    expect(foldedSteps([step("Town")], 4)).toEqual(new Set());
+  });
+
+  it("folds the steps between the town and where you are when it doesn't", () => {
+    expect(foldedSteps(office, TRAIL_CHARS.wide)).toEqual(new Set([1, 2]));
+    // A phone has less room: the same short trail folds there.
+    expect(foldedSteps(home, TRAIL_CHARS.narrow)).toEqual(new Set([1]));
+  });
+
+  it("never folds the town or where you are, however long they are", () => {
+    expect(foldedSteps([step("Town"), step("a very long name for somewhere to be")], 5)).toEqual(new Set());
   });
 });

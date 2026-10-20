@@ -106,6 +106,58 @@ describe("moving things", () => {
   });
 });
 
+describe("moving a thing with what goes with it", () => {
+  const CHAIRS = ["chair", "chair-2", "chair-3"];
+
+  it("moves a table with its chairs, each keeping its place round it, and what stands on it", () => {
+    const before = lobby();
+    const { place } = made({ op: "move", item: "round-table", at: [3.4, 1.8], facing: 0, with: CHAIRS }, before, LOBBY);
+    expect(item(place, "round-table").at).toEqual([3.4, 1.8]);
+    for (const id of CHAIRS) {
+      const [x, z] = item(before, id).at;
+      expect(item(place, id).at).toEqual([x, Math.round((z - 0.5) * 100) / 100]);
+      expect(item(place, id).facing).toBe(item(before, id).facing);
+    }
+    expect(item(place, "vase").at).toEqual([3.4, 1.8]);
+  });
+
+  it("can't move the table alone a short way, into its own chairs", () => {
+    expect(refused({ op: "move", item: "round-table", at: [3.4, 2.7], facing: 0 }, lobby(), LOBBY)).toMatch(
+      /bump into the dining chair/,
+    );
+    // With them, the same move goes.
+    made({ op: "move", item: "round-table", at: [3.4, 2.7], facing: 0, with: CHAIRS }, lobby(), LOBBY);
+  });
+
+  it("turns a table's chairs round it as it turns", () => {
+    const { place } = made(
+      { op: "move", item: "round-table", at: [3.4, 2.3], facing: 90, with: CHAIRS },
+      lobby(),
+      LOBBY,
+    );
+    // The chair in front of it goes round to its right, a quarter turned.
+    expect(item(place, "chair")).toMatchObject({ at: [4.18, 2.3], facing: -90 });
+  });
+
+  it("says which piece doesn't fit when the group can't go there", () => {
+    // Up against the right of the room, the chair on that side would go through the wall.
+    expect(refused({ op: "move", item: "round-table", at: [6.2, 2.3], facing: 0, with: CHAIRS }, lobby(), LOBBY)).toBe(
+      "The dining chair 2 would stick out of the room.",
+    );
+  });
+
+  it("moves a rug with the beanbags on it", () => {
+    const before = lobby();
+    const { place } = made(
+      { op: "move", item: "round-rug-2", at: [-2.3, 3.2], facing: 0, with: ["beanbag", "beanbag-2"] },
+      before,
+      LOBBY,
+    );
+    expect(item(place, "beanbag").at[1]).toBeCloseTo(item(before, "beanbag").at[1] + 0.5);
+    expect(item(place, "beanbag-2").at[1]).toBeCloseTo(item(before, "beanbag-2").at[1] + 0.5);
+  });
+});
+
 describe("adding, copying, recolouring and taking away", () => {
   it("adds a new thing near the middle, with a name and id of its own", () => {
     const place = lobby();
@@ -116,6 +168,18 @@ describe("adding, copying, recolouring and taking away", () => {
     expect(place.props.some((p) => p.id === added.id || p.name === added.name)).toBe(false);
     // It brings a spot to sit at, like any armchair.
     expect(next.spots.some((s) => s.item === added.id)).toBe(true);
+  });
+
+  it("never puts something new down where someone is standing", () => {
+    const place = lobby();
+    const alone = made({ op: "add", kind: "armchair" }, place, LOBBY);
+    const where = item(alone.place, alone.item as string).at;
+    // Someone stands just there: the armchair goes somewhere else, clear of them.
+    const avoided = made({ op: "add", kind: "armchair", avoid: [where] }, place, LOBBY);
+    const at = item(avoided.place, avoided.item as string).at;
+    expect(Math.hypot(at[0] - where[0], at[1] - where[1])).toBeGreaterThan(0.6);
+    // Nobody standing is kept in the room.
+    expect(avoided.place.props.some((p) => p.id.startsWith("someone-standing"))).toBe(false);
   });
 
   it("hangs a new wall thing on a wall and stands a small one on something", () => {
@@ -214,6 +278,19 @@ describe("what the page sends", () => {
       on: "desk",
     });
     expect(editFrom({ op: "add", kind: "lamp", like: "lamp" })).toEqual({ op: "add", kind: "lamp", like: "lamp" });
+    // What goes along with a thing moved, and where people stand when one is added: only what makes sense of each.
+    expect(editFrom({ op: "move", item: "table", at: [0, 0], facing: 0, with: ["chair", " chair ", 3, ""] })).toEqual({
+      op: "move",
+      item: "table",
+      at: [0, 0],
+      facing: 0,
+      with: ["chair"],
+    });
+    expect(editFrom({ op: "add", kind: "lamp", avoid: [[1, 2], [1, "x"], "y"] })).toEqual({
+      op: "add",
+      kind: "lamp",
+      avoid: [[1, 2]],
+    });
     expect(editFrom({ op: "remove", item: "lamp" })).toEqual({ op: "remove", item: "lamp" });
     expect(editFrom({ op: "color", item: "lamp", color: "#AABBCC" })).toEqual({
       op: "color",
