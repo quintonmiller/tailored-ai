@@ -613,8 +613,8 @@ describe("fitView", () => {
    * whole stage: what can be seen is `tall` of it each way, its shape
    * `aspect`, so a point at its edge is at `tall` in the camera's frame.
    */
-  const onFrame = (points: [number, number, number][], aspect: number, tall = 1, foot = 0) => {
-    const { target, distance } = fitView(points, aspect, tall, foot);
+  const onFrame = (points: [number, number, number][], aspect: number, tall = 1, foot = 0, head = 0) => {
+    const { target, distance } = fitView(points, aspect, tall, foot, head);
     const camera = new THREE.PerspectiveCamera(fov, aspect, 0.05, 500);
     camera.position.copy(new THREE.Vector3(...target).addScaledVector(back, distance));
     camera.lookAt(...target);
@@ -670,6 +670,24 @@ describe("fitView", () => {
         ...seen.map(([x, y]) => Math.max(Math.abs(x) / 0.92, Math.abs(y - foot) / ((1 - foot) * 0.92))),
       );
       expect(out, `${aspect} ${tall} ${foot}`).toBeGreaterThan(0.97);
+    }
+  });
+
+  it("keeps them all under the rows of tools along the top and over the keys hint, using what is between", () => {
+    for (const [aspect, tall, foot, head] of [
+      [1.6, 1, 0.08, 0.18],
+      [1.3, 1, 0.05, 0.3],
+      [0.9, 1, 0.15, 0.1],
+    ]) {
+      const seen = onFrame(points, aspect, tall, foot, head);
+      // The tools cover the top `head` of the height: 1 - 2 * head up to 1.
+      for (const [x, y] of seen) {
+        expect(Math.abs(x)).toBeLessThanOrEqual(0.93);
+        expect(y, `${aspect} ${foot} ${head}`).toBeGreaterThanOrEqual(-1 + 2 * foot);
+        expect(y, `${aspect} ${foot} ${head}`).toBeLessThanOrEqual(1 - 2 * head);
+      }
+      // With nothing along the top it frames as it did.
+      expect(fitView(points, aspect, tall, foot, 0)).toEqual(fitView(points, aspect, tall, foot));
     }
   });
 

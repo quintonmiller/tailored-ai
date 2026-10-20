@@ -604,6 +604,40 @@ describe("stack", () => {
     expect(pointed.get("b5")?.hidden).toBe(false);
   });
 
+  it("puts away a faint tag in a crowd that would sit over the whiteboard or the task board", () => {
+    // Four round a table, the whiteboard on the wall just over the two at the back.
+    const table = [
+      body("host", 300, 300),
+      body("left", 250, 315),
+      body("right", 350, 312),
+      body("near", 305, 328, { focus: true }),
+    ];
+    const whiteboard: Box = { left: 200, right: 330, top: 200, bottom: 285 };
+    const screen = { left: 0, right: 1000, top: 0, boards: [whiteboard] };
+    const out = stack(table, screen);
+    for (const c of table) {
+      const { tag } = drawn(c, out.get(c.id) as Stacked);
+      // No faint tag is left over the board; the one to read stays, wherever it is.
+      if (tag && (out.get(c.id) as Stacked).faded) expect(meets(tag, whiteboard)).toBe(false);
+    }
+    expect(out.get("near")?.hidden).toBe(false);
+    expect(table.some((c) => out.get(c.id)?.hidden)).toBe(true);
+    // With nothing on the wall there, the same crowd keeps every tag it kept before.
+    const bare = stack(table, { left: 0, right: 1000, top: 0 });
+    expect(table.filter((c) => bare.get(c.id)?.hidden)).toEqual([]);
+  });
+
+  it("puts away a tag that would sit under the keys hint along the foot of the stage", () => {
+    // Flown up high, someone at the foot of the view has their head under the hint.
+    const out = stack([body("low", 300, 712), body("high", 500, 400)], { left: 0, right: 1000, top: 0, bottom: 700 });
+    expect(out.get("low")?.hidden).toBe(true);
+    expect(out.get("high")?.hidden).toBe(false);
+    // Just over it, the tag stands clear above the hint, and shows.
+    expect(stack([body("low", 300, 724)], { left: 0, right: 1000, top: 0, bottom: 760 }).get("low")?.hidden).toBe(
+      false,
+    );
+  });
+
   it("never covers a speaker's tag, and ends every tail on its own speaker, in any crowd", () => {
     let seed = 23;
     const rand = () => {

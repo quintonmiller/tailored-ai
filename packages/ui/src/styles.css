@@ -9617,6 +9617,8 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden;
 }
 .world-talk-agent { align-self: flex-start; background: rgba(252, 252, 255, 0.96); color: #1d2230; border-bottom-left-radius: 5px; }
+/* At rest, only the last thing said shows, and only its first few lines: the card covers little of what you came to. */
+.world-talk.is-idle .world-talk-text { -webkit-line-clamp: 3; line-clamp: 3; }
 .world-talk-you { align-self: flex-end; background: color-mix(in srgb, var(--accent) 78%, #10162c); color: #fff; border-bottom-right-radius: 5px; }
 .world-talk-live .world-talk-text { display: inline; }
 /* The reply coming in: a caret where the next words go. */

@@ -108,6 +108,41 @@ describe("your conversation beside an agent", () => {
     expect(container.querySelector(".world-talk-live [aria-label='Replying']")).not.toBeNull();
   });
 
+  it("shows only the last thing said while at rest, and the last few turns again once you click into it", () => {
+    const lines = [
+      { who: "you" as const, text: "Where should we stay?" },
+      { who: "agent" as const, text: "Alfama." },
+      { who: "you" as const, text: "Book it." },
+      { who: "agent" as const, text: "Done: three nights from Friday." },
+    ];
+    act(() =>
+      root.render(
+        <WorldTalk name="planner" lines={lines} idle onFull={() => {}}>
+          <input aria-label="Message planner" />
+        </WorldTalk>,
+      ),
+    );
+    const said = () => [...container.querySelectorAll(".world-talk-line")].map((l) => l.textContent);
+    expect(said()).toEqual(["Done: three nights from Friday."]);
+    expect(container.querySelector(".world-talk")?.classList.contains("is-idle")).toBe(true);
+    // Into the box to type: the conversation so far comes back, to answer from.
+    act(() => (container.querySelector("input") as HTMLInputElement).focus());
+    expect(said()).toEqual(lines.map((l) => l.text));
+    expect(container.querySelector(".world-talk")?.classList.contains("is-idle")).toBe(false);
+    // Away again: at rest.
+    act(() => (container.querySelector("input") as HTMLInputElement).blur());
+    expect(said()).toEqual(["Done: three nights from Friday."]);
+    // Not at rest (a reply on its way, or something typed), the last few turns show without a click.
+    act(() =>
+      root.render(
+        <WorldTalk name="planner" lines={lines} replying="Let me" onFull={() => {}}>
+          <input aria-label="Message planner" />
+        </WorldTalk>,
+      ),
+    );
+    expect(said()).toEqual([...lines.map((l) => l.text), "Let me"]);
+  });
+
   it("offers Space to talk only where live voice is on", () => {
     act(() =>
       root.render(

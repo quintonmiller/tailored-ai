@@ -599,6 +599,86 @@ describe("what goes with a thing you move", () => {
     expect(groupOf(two, more, "table-2")).toEqual([]);
   });
 
+  it("moves a meeting room's long table, laid out as tables end to end, whole, with its armchairs", () => {
+    const armchair = {
+      noun: "armchair",
+      mount: "floor" as const,
+      footprint: [0.85, 0.8] as [number, number],
+      height: 0.85,
+    };
+    const k: Kinds = { ...more, armchair };
+    // Eight seats, four a side set back for someone to walk between, at four tables pushed end to end on a rug.
+    const meeting = {
+      props: [
+        thing("rug", "rug", [0, -0.3]),
+        ...[0, 1, 2, 3].map((i) => thing(`table-${i + 1}`, "table", [-1.8 + i * 1.2, -0.3])),
+        ...[0, 1, 2, 3].flatMap((i) => [
+          thing(`seat-${2 * i + 1}`, "armchair", [i - 1.5, -1.75], 0),
+          thing(`seat-${2 * i + 2}`, "armchair", [i - 1.5, 1.15], 180),
+        ]),
+        // An armchair by the window, turned away, is nobody's seat at the table.
+        thing("reading", "armchair", [2.6, -2.6], 90),
+      ],
+    };
+    const seats = Array.from({ length: 8 }, (_, i) => `seat-${i + 1}`);
+    for (const table of ["table-1", "table-3"])
+      expect(groupOf(meeting, k, table)).toEqual(
+        [...seats, "table-1", "table-2", "table-3", "table-4"].filter((id) => id !== table).sort(),
+      );
+    expect(groupOf(meeting, k, "table-2")).not.toContain("reading");
+    // An armchair moves by itself.
+    expect(groupOf(meeting, k, "seat-1")).toEqual([]);
+  });
+
+  it("takes the armchairs round a round meeting table with it, set back as they are", () => {
+    const armchair = {
+      noun: "armchair",
+      mount: "floor" as const,
+      footprint: [0.85, 0.8] as [number, number],
+      height: 0.85,
+    };
+    const k: Kinds = { ...more, armchair };
+    // Six round a table scaled up to 1.4, each 1.79 m from its middle, facing it.
+    const ring = Array.from({ length: 6 }, (_, i) => {
+      const a = 30 + 60 * i;
+      const r = (a * Math.PI) / 180;
+      return thing(`seat-${i + 1}`, "armchair", [1.79 * Math.sin(r), 1.79 * Math.cos(r)], a + 180);
+    });
+    const round = { props: [{ ...thing("table", "round_table", [0, 0]), scale: 1.4 }, ...ring] };
+    expect(groupOf(round, k, "table")).toEqual(ring.map((s) => s.id));
+  });
+
+  it("keeps a table apart from one a step away, and joins one pushed up to it, nudged a little apart or not", () => {
+    const two = { props: [thing("table", "table", [0, 0]), thing("table-2", "table", [1.7, 0])] };
+    expect(groupOf(two, more, "table")).toEqual([]);
+    for (const x of [1.2, 1.29])
+      expect(
+        groupOf({ props: [thing("table", "table", [0, 0]), thing("table-2", "table", [x, 0.05])] }, more, "table"),
+      ).toEqual(["table-2"]);
+  });
+
+  it("moves a long table whole once it has been nudged out of line, as a room someone rearranged has it", () => {
+    const armchair = {
+      noun: "armchair",
+      mount: "floor" as const,
+      footprint: [0.85, 0.8] as [number, number],
+      height: 0.85,
+    };
+    const k: Kinds = { ...more, armchair };
+    // Four tables a hand's width apart, each a little further back than the last, seven armchairs round them.
+    const nudged = {
+      props: [
+        thing("table-1", "table", [-1.8, -0.3]),
+        thing("table-2", "table", [-0.51, -0.25]),
+        thing("table-3", "table", [0.77, -0.2]),
+        thing("table-4", "table", [2.06, -0.15]),
+        ...[-1.5, -0.5, 0.5, 1.5].map((x, i) => thing(`seat-${2 * i + 1}`, "armchair", [x, -1.75], 0)),
+        ...[-1, 0, 1].map((x, i) => thing(`seat-${2 * i + 2}`, "armchair", [x, 1.15], 180)),
+      ],
+    };
+    expect(groupOf(nudged, k, "table-2")).toHaveLength(10);
+  });
+
   it("keeps each thing in a group in its place round the one it goes with, moved and turned as it is", () => {
     const moved = carriedTo(lounge, {
       item: "round-table",

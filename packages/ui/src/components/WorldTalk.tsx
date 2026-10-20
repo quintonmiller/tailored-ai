@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { contentText, type MessageContent } from "../lib/content";
 
 /** Something you or the agent said, as your conversation in the world shows it. */
@@ -46,7 +46,10 @@ function Handset() {
  * it all the box to type in, with talking and sending as in the chat. Talking
  * to an agent somewhere else is a call: the same conversation, in a phone.
  * The whole chat is a click away. Not a dialog: keys pressed outside it still
- * walk you, and Escape still stops a reply.
+ * walk you, and Escape still stops a reply. At rest (`idle`: nothing coming
+ * in, nothing typed), it shows only the last thing said, a few lines of it,
+ * so it covers as little as it can of what you walked up to; clicking into
+ * it brings back the last few turns.
  *
  * For a screen reader, a reply is read out once, when it has all come in,
  * rather than again with every few words that arrive; and what the agent is
@@ -61,6 +64,7 @@ export function WorldTalk({
   elapsed,
   phone = false,
   voice = false,
+  idle = false,
   approvals,
   problem,
   children,
@@ -81,6 +85,8 @@ export function WorldTalk({
   phone?: boolean;
   /** Holding Space talks out loud: live voice is on. */
   voice?: boolean;
+  /** Nothing coming in and nothing typed: only the last thing said shows, until you click into it. */
+  idle?: boolean;
   /** Tool calls waiting on your approval. */
   approvals?: ReactNode;
   /** What went wrong with talking out loud: no microphone, say. */
@@ -92,10 +98,18 @@ export function WorldTalk({
   const said = heard ? [...lines, { who: "you" as const, text: heard }] : lines;
   // Its last answer, once it has all come in: what a screen reader reads out.
   const answered = replying === undefined ? [...said].reverse().find((l) => l.who === "agent")?.text : undefined;
+  // Clicked into, or tabbed to, it shows the last few turns again, at rest or not.
+  const [focused, setFocused] = useState(false);
+  const resting = idle && !focused;
+  const shown = resting ? said.slice(-1) : said;
   return (
     <section
-      className={`world-talk${phone ? " world-talk-phone" : ""}`}
+      className={`world-talk${phone ? " world-talk-phone" : ""}${resting ? " is-idle" : ""}`}
       aria-label={phone ? `On the phone with ${name}` : `Talking with ${name}`}
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
+      }}
     >
       <header className="world-talk-head">
         {phone && <Handset />}
@@ -113,15 +127,15 @@ export function WorldTalk({
         </button>
       </header>
       <ol className="world-talk-lines" aria-label="What was said" aria-busy={replying !== undefined}>
-        {said.length === 0 && replying === undefined && (
+        {shown.length === 0 && replying === undefined && (
           <li className="world-talk-hint">
             {phone ? "They'll hear you down the line." : `Say something to ${name}.`}{" "}
             {voice ? "Type below, or hold Space to talk." : "Type below."}
           </li>
         )}
-        {said.map((l, i) => (
+        {shown.map((l, i) => (
           // The same text can be said twice; where it is in the conversation is what tells them apart.
-          <li key={i} className={`world-talk-line world-talk-${l.who}`}>
+          <li key={said.length - shown.length + i} className={`world-talk-line world-talk-${l.who}`}>
             <span className="world-talk-text">{l.text}</span>
           </li>
         ))}

@@ -9,10 +9,15 @@
 
 export type Vec3 = [number, number, number];
 
-/** Something solid in the room, by the corners of the box round it. */
+/**
+ * Something solid in the room, by the corners of the box round it; and, for
+ * something with open space in its box (a cart under its awning, a lamp on
+ * its post), the boxes round each of its parts, which are what can hide a body.
+ */
 export interface Solid {
   min: Vec3;
   max: Vec3;
+  parts?: Solid[];
 }
 
 /** How tall something has to be to hide a body, in metres: a plant, a lamp, a shelf. A table or a couch never fades. */
@@ -27,10 +32,17 @@ const inside = (p: Vec3, s: Solid) =>
 
 /**
  * Whether the straight line from `eye` to `to` passes through `solid` on its
- * way. Something `to` is inside, like the umbrella over a body, never hides it.
+ * way: through one of its parts, when it has them, not just the space between
+ * them. Something `to` is inside, like the umbrella over a body, never hides it.
  */
 export function blocks(solid: Solid, eye: Vec3, to: Vec3): boolean {
   if (inside(to, solid)) return false;
+  if (!crosses(solid, eye, to)) return false;
+  return !solid.parts?.length || solid.parts.some((p) => crosses(p, eye, to));
+}
+
+/** Whether the straight line from `eye` to `to` passes through a box. */
+function crosses(solid: Solid, eye: Vec3, to: Vec3): boolean {
   let t0 = 0;
   let t1 = 1;
   for (let i = 0; i < 3; i++) {

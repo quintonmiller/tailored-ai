@@ -681,6 +681,8 @@ export interface Where {
   corner?: string;
   on?: string;
   middle?: boolean;
+  /** On open floor: where it has the most room round it (`OPEN_FLOOR`), nearest the middle of those. */
+  open?: boolean;
   x?: number;
   z?: number;
   facing?: string | number;
@@ -831,6 +833,25 @@ export function whyNotOnWall(
   elevation: number,
 ): string | undefined {
   return wallTrouble(place, placing, wall, along, elevation);
+}
+
+/** Floor clear round a thing, in metres, as open as it gets: any more is no more open. */
+export const OPEN_FLOOR = 1;
+/** How far apart the places looked at for open floor are, in metres. */
+const OPEN_STEP = 0.2;
+/** The floor clear round a thing that `roomRound` tells apart, most first. */
+const OPEN_LEVELS = [OPEN_FLOOR, 0.75, 0.5, 0.25];
+
+/**
+ * How much floor is clear round a thing put here, in metres, to the nearest
+ * of `OPEN_LEVELS`: how far every other thing that stands on the floor is
+ * from it, up to `OPEN_FLOOR`. The walls don't count: against one is as open
+ * as the middle.
+ */
+function roomRound(place: Place, placing: Placing, rect: Rect): number {
+  const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
+  const others = place.props.filter((o) => !ignore.has(o.id) && blocks(o)).map(rectOf);
+  return OPEN_LEVELS.find((gap) => others.every((o) => !overlaps(rect, o, gap))) ?? 0;
 }
 
 /** Points around `[x, z]`, nearest first, out to `reach` metres. */
@@ -1262,6 +1283,24 @@ function placeOnFloor(place: Place, placing: Placing, where: Where): Placement |
   if (where.middle) {
     const got = tryAt(around([0, 0.2], 2.5), (at) => explicit(at) ?? 0);
     return got ?? "There's no room for it in the middle of the room.";
+  }
+
+  if (where.open) {
+    // Anywhere it fits, nearest the middle first, keeping the one with the most floor clear round it.
+    const facingAt = (at: [number, number]) =>
+      explicit(at) ?? (kind?.use?.activity === "sit" ? towards(at, [0, 0.6]) : 0);
+    let best: { at: [number, number]; facing: number; room: number } | undefined;
+    for (const at of around([0, 0], Math.max(3.5, Math.hypot(place.width, place.depth) / 2), OPEN_STEP)) {
+      const facing = facingAt(at);
+      const rect = { at, hw: w / 2, hd: d / 2, facing: kind?.round ? 0 : facing };
+      if (!floorFits(place, placing, rect)) continue;
+      const room = roomRound(place, placing, rect);
+      if (!best || room > best.room) best = { at, facing, room };
+      if (room >= OPEN_FLOOR) break;
+    }
+    return best
+      ? { at: best.at, facing: best.facing }
+      : "The room is too full for it. Remove something, or make the room bigger.";
   }
 
   if (kind?.wallward) {

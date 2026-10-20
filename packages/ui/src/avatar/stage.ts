@@ -107,7 +107,7 @@ import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, likesOf, see
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import { buildModel } from "./models";
 import type { BodyState } from "./motion";
-import { type Box, type Column, metresPerPixel, stack } from "./overhead";
+import { type Box, type Column, metresPerPixel, stack, TAG_PX } from "./overhead";
 import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildPlaque, buildProp, buildShell, disposeTree } from "./props";
 import { chatDue, chatPause, drawNotes, type Notes, talkedWords } from "./routines";
@@ -143,20 +143,24 @@ import {
 import { drawScreen, drawStrip, pageAt, type ScreenCard } from "./screens";
 import { takeDown } from "./shared";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
+import { disposeSprite, fitSprite, liftSprite, thinkingCue } from "./signs";
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { behindView, blocksView, facingSurface, focusDistance, focusFraming, overWalls, solidInWay } from "./surfaces";
 import { byPhone, heardThrough, presentIn, standBy, talkingHere, talkMove } from "./talk";
+import { type Thinker, thinkingTogether, thinkingWords } from "./together";
 import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
 import {
   Arrival,
   clampReach,
   ease,
+  flyBounds,
   flyPinchStep,
   flyWheelStep,
   followDistance,
   heldMove,
   keepUp,
+  keptIn,
   MOVE_KEYS,
   OUTDOOR_PACE,
   pinchReach,
@@ -165,6 +169,7 @@ import {
   RUN_KEYS,
   reachAt,
   type Travel,
+  takeOff,
   travelSpeed,
   VISITOR_TURN,
   WALK_SPEED,
@@ -375,6 +380,12 @@ export interface PanelOptions {
   rank?: number;
   /** Put away rather than laid over another panel. */
   optional?: boolean;
+  /**
+   * Beside the body it is about and what that is with (whoever is gathered
+   * round it, what it is at or standing by), rather than over them: your
+   * conversation, which shouldn't cover what you walked up to.
+   */
+  gathered?: boolean;
   /** How it is held while what it is about is off the screen: in front of you (the default), or docked at the side. */
   fallback?: "front" | "dock";
   onAway?: () => void;
@@ -421,6 +432,28 @@ const LEAD_SECONDS = 0.7;
 const SEATED_TOP = 1.9;
 /** Pixels kept between what the shot on the way in frames and the keys hint along the stage's foot. */
 const HINT_MARGIN = 6;
+/** Bodies this near an agent, in metres on the floor, are gathered with it: a panel about it goes beside them too. */
+const GATHERED = 2;
+/** Where a cue over several thinking together is laid out among the tags: after every one, so it goes up over theirs. */
+const CUE_RANK = -1e9;
+/** A tall thing on the floor this near a body, in metres from its edge, is what it stands by: a panel keeps off it too. */
+const BESIDE_THING = 0.9;
+/** A room's boards to be read, which a faint tag in a crowd never sits over. */
+const BOARD_KINDS = new Set(["board", "whiteboard"]);
+/** What hangs on a room's walls to be read, which the shot on the way in takes in with what the room is gathered round. */
+const READ_ON_WALLS = new Set([
+  "board",
+  "whiteboard",
+  "screen",
+  "calendar",
+  "status_board",
+  "needs_board",
+  "feed",
+  "chart",
+  "agenda",
+  "todo",
+  "ticker",
+]);
 
 interface Framing {
   target: THREE.Vector3;
@@ -557,6 +590,18 @@ const READ_LEAST = 160;
 
 /** The box round something, as one that can hide a body. */
 const solidOf = (box: THREE.Box3): Solid => ({ min: box.min.toArray(), max: box.max.toArray() });
+/**
+ * A thing as solid as it is: the box round all of it, and the boxes round each
+ * of its parts, so only those, not the open space between them (under a cart's
+ * awning, beside a lamp's post), can hide a body.
+ */
+const shapeOf = (group: THREE.Object3D, box: THREE.Box3): Solid => {
+  const parts: Solid[] = [];
+  group.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh) parts.push(solidOf(new THREE.Box3().setFromObject(o)));
+  });
+  return { ...solidOf(box), ...(parts.length > 1 ? { parts } : {}) };
+};
 
 const bare = (s: string) =>
   s
@@ -727,6 +772,8 @@ export async function createStage(
   };
   // Each thing in the room as built, by its id: what is picked and dragged while the room is rearranged.
   let things = new Map<string, THREE.Group>();
+  // What stands on the floor, by the box round it as built: what someone standing by it is with (`withOnStage`).
+  let floorBoxes = new Map<string, THREE.Box3>();
   // Rearranging the room (see `setEditing`): what the page says, and how far back the camera sits for it, as a share
   // of taking in the whole room. Here, ahead of everything that asks whether the room is being rearranged.
   let editing: StageEdit | null = null;
@@ -910,6 +957,7 @@ export async function createStage(
   const furnish = (fresh: Set<string> = new Set(), moved: Map<string, Prop> = new Map()) => {
     furniture = new THREE.Group();
     things = new Map();
+    floorBoxes = new Map();
     shifted.clear();
     scenery.length = 0;
     clickable.length = 0;
@@ -997,7 +1045,9 @@ export async function createStage(
       if (!prop.on && !WALL_KINDS.has(prop.kind) && !FLAT_KINDS.has(prop.kind)) {
         const box = new THREE.Box3().setFromObject(built.group);
         obstacles.push({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z });
-        if (box.max.y >= TALL) fadeable.push({ group: built.group, solid: solidOf(box), level: 1 });
+        floorBoxes.set(prop.id, box);
+        if (box.max.y >= TALL)
+          fadeable.push({ group: built.group, solid: shapeOf(built.group, box), level: 1, shadeless: true });
       }
       // What hangs on a wall fades with it.
       const wall = WALL_KINDS.has(prop.kind) ? wallOf(room, prop.at) : undefined;
@@ -1636,16 +1686,34 @@ export async function createStage(
     if (!tops.length || h <= 0) return 0;
     return Math.min(0.4, Math.max(0, (part.bottom - Math.min(...tops) + HINT_MARGIN) / h));
   };
+  /**
+   * The share of what can be seen that the rows of tools along its top cover:
+   * the shot on the way in is framed below them, so nothing on the far wall
+   * is under a button. They are no bar the whole scene is framed under (see
+   * `framedIn`), being up in a corner, but what hangs there is there to read.
+   */
+  const toolsHead = () => {
+    const h = part.bottom - part.top;
+    const bottoms = covered
+      .filter((b) => b.left < part.right && part.left < b.right && b.top < part.top + h / 4 && b.bottom > part.top)
+      .map((b) => b.bottom);
+    if (!bottoms.length || h <= 0) return 0;
+    return Math.min(0.4, Math.max(0, (Math.max(...bottoms) - part.top + HINT_MARGIN) / h));
+  };
   /** Where you stand come into a room, and how much of it the camera shows from there: see `lead`. */
   const aimArrival = () => {
     lead.set(0, 0, 0);
     entering.reach = undefined;
     if (!entering.holds || !opts.visitor || travel !== "walk" || isOutdoors(room)) return;
-    const boxes = centrepieces(room).flatMap((id) => {
-      const thing = things.get(id);
-      return thing ? [new THREE.Box3().setFromObject(thing)] : [];
-    });
-    if (!boxes.length) return;
+    const gathered = centrepieces(room);
+    if (!gathered.length) return;
+    // What the room is gathered round, and what hangs on its walls to be read: its calendar, its screens, its boards.
+    const boxes = [...gathered, ...room.props.filter((p) => READ_ON_WALLS.has(p.kind)).map((p) => p.id)].flatMap(
+      (id) => {
+        const thing = things.get(id);
+        return thing ? [new THREE.Box3().setFromObject(thing)] : [];
+      },
+    );
     const p = me.walker.place;
     // You from your feet to the top of your head, however tall you were made, the corners of each thing, and
     // everyone here and every seat at the table to the top of a tall body's head, so nobody sat there is cut off.
@@ -1673,7 +1741,7 @@ export async function createStage(
         ),
       ),
     ];
-    const shot = fitView(points, visibleAspect(), visibleTall(), hintFoot());
+    const shot = fitView(points, visibleAspect(), visibleTall(), hintFoot(), toolsHead());
     const reach = reachAt(shot.distance, visibleAspect(), ROOM_VIEW.fov, visibleTall());
     // Further than the room's widest is the whole room already: as near as that, looking where the shot says.
     entering.fit(reach, reachNow(), visibleTall(), widestReach(room));
@@ -1738,10 +1806,11 @@ export async function createStage(
     controls.target.copy(f.target);
     [controls.minAzimuthAngle, controls.maxAzimuthAngle] = f.azimuth;
     [controls.minPolarAngle, controls.maxPolarAngle] = f.polar;
-    // A visitor can look all the way round, and from nearly overhead to the floor; reading a surface, straight at it.
+    // A visitor can look all the way round, and from nearly overhead to the floor, or flying, any way at all;
+    // reading a surface, straight at it.
     if (opts.visitor && !reading) {
       [controls.minAzimuthAngle, controls.maxAzimuthAngle] = [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY];
-      [controls.minPolarAngle, controls.maxPolarAngle] = [0.15, 1.5];
+      [controls.minPolarAngle, controls.maxPolarAngle] = travel === "fly" ? [0.05, Math.PI - 0.05] : [0.15, 1.5];
     }
     // Reading a surface, the view holds still on it: dragging doesn't turn it away.
     controls.enabled = !reading;
@@ -1856,6 +1925,7 @@ export async function createStage(
     const along = controls.target.clone().sub(camera.position).normalize().multiplyScalar(metres);
     camera.position.add(along);
     controls.target.add(along);
+    keepFlying();
   };
   /** A zoom while rearranging, kept between the nearest it comes and the whole room. */
   const editZoomTo = (zoom: number) => {
@@ -2944,6 +3014,8 @@ export async function createStage(
     opts.onPresent(now);
   };
 
+  /** Who is thinking with others round them this frame, whose sign and "thinking" one cue says for all (`poolThinking`). */
+  let pooled = new Set<string>();
   // Whose tag says more: the body under the pointer, and the one a visitor stands next to.
   let hovered: string | undefined;
   let near: string | undefined;
@@ -2960,8 +3032,13 @@ export async function createStage(
     const behavior = behaviorFor(activity);
     const was = shows.get(f);
     const close = closeTo(agent) && !(f === me && opts.visitor);
-    const status =
-      behavior.label && (!behavior.quiet || close)
+    // Thinking with others round it, one cue over them all says so (`poolThinking`): its tag is its name alone, and
+    // it has no sign of its own, unless you point at it or stand by it.
+    const together = pooled.has(agent) && behavior.sign === "think" && !close;
+    f.signs.pool(together);
+    const status = together
+      ? undefined
+      : behavior.label && (!behavior.quiet || close)
         ? close && activity?.doing === "asleep"
           ? `asleep · ${asleepWords(activity)}`
           : behavior.detail
@@ -3425,6 +3502,48 @@ export async function createStage(
     controls.update();
   }
 
+  /**
+   * Flying, the camera stays where you can fly (`flyBounds`): in a room,
+   * between its floor and ceiling and within its walls; outdoors, over the
+   * town. Taken out of them by the keys, the wheel or a turn, it is brought
+   * straight back in, and the point it turns about with it, so the way it
+   * looks doesn't change.
+   */
+  function keepFlying() {
+    const p = camera.position;
+    const [x, y, z] = keptIn([p.x, p.y, p.z], flyBounds(room));
+    const moved = new THREE.Vector3(x - p.x, y - p.y, z - p.z);
+    if (moved.lengthSq() < 1e-12) return;
+    camera.position.add(moved);
+    controls.target.add(moved);
+  }
+
+  /**
+   * Starting to fly in a room, the camera comes down into it from wherever
+   * the view following you was, to take off from your head a step back
+   * (`takeOff`), looking on the way it looked, a little down, turning about
+   * a point just ahead as flying does.
+   */
+  const liftOff = (): Framing => {
+    const { fwd } = heading();
+    const head = me.head();
+    const at = new THREE.Vector3(...takeOff([head.x, head.y, head.z], [fwd.x, fwd.z], flyBounds(room)));
+    const look = fwd.clone().setY(-0.3).normalize();
+    return {
+      target: at.clone().add(look.multiplyScalar(1.2)),
+      position: at,
+      azimuth: [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY],
+      polar: [0.05, Math.PI - 0.05],
+    };
+  };
+  /** Flying on from somewhere new (another room, or face to face with someone): in a room, from your head. */
+  const flyOn = () => {
+    if (isOutdoors(room)) {
+      turnAboutAhead();
+      keepFlying();
+    } else settle(liftOff());
+  };
+
   /** The camera's heading on the floor, and its right, for keys that move relative to the view. */
   const heading = () => {
     const fwd = controls.target.clone().sub(camera.position);
@@ -3458,6 +3577,7 @@ export async function createStage(
         .multiplyScalar(speed);
       camera.position.add(v);
       controls.target.add(v);
+      keepFlying();
     }
   }
 
@@ -3487,7 +3607,7 @@ export async function createStage(
     shot.target.add(shift);
     shot.position.add(shift);
     settle(shot);
-    if (travel === "fly") turnAboutAhead();
+    if (travel === "fly") flyOn();
   }
 
   /**
@@ -3574,11 +3694,11 @@ export async function createStage(
     if (!fadeable.length) return;
     const eye: Vec3 = [camera.position.x, camera.position.y, camera.position.z];
     const targets: Vec3[] = [];
-    for (const f of [me, ...companions.values()]) {
-      // Flying, your body is put away: nothing need fade for it.
-      if (f === me && opts.visitor && travel !== "walk") continue;
-      const head = f.head();
-      const feet = f.body.position.y;
+    // Only what hides you, on a visit, or the agent the chat page shows: a cart beside you that hides someone across
+    // the café stays as it is. Flying, your body is put away: nothing need fade for it.
+    if (!(opts.visitor && travel !== "walk")) {
+      const head = me.head();
+      const feet = me.body.position.y;
       targets.push([head.x, head.y, head.z], [head.x, feet + (head.y - feet) * 0.6, head.z]);
     }
     const tall = fadeable.filter((f) => f.solid);
@@ -3603,6 +3723,70 @@ export async function createStage(
       paintFaded(f);
     }
   }
+
+  /** The cue over each group thinking together, by who is in it: where over them it stands, and its size as last laid out. */
+  const cues = new Map<string, { sprite: THREE.Sprite; at: THREE.Vector3; perPixel: number }>();
+  /**
+   * Who is thinking together this frame (`thinkingTogether`): three or more
+   * round a table, or close by, thinking at once. Each group has one cue over
+   * the middle of it saying how many are thinking, in place of a thought cloud
+   * and "thinking" over every one of them; whoever joins or leaves a group
+   * shows its own again, or gives them up. The cues, by group.
+   */
+  function poolThinking(): Map<string, { sprite: THREE.Sprite; at: THREE.Vector3; perPixel: number }> {
+    const here: Thinker[] = [];
+    const figures = new Map<string, Figure>();
+    for (const [agent, f] of opts.visitor ? [...companions] : [[self, me] as [string, Figure], ...companions]) {
+      if (!f.body.visible) continue;
+      figures.set(agent, f);
+      const thinking = shows.get(f)?.behavior.sign === "think" && !f.speaking(clock);
+      here.push({ id: agent, at: [f.walker.place.x, f.walker.place.z], thinking });
+    }
+    const groups = opts.still ? [] : thinkingTogether(here);
+    const now = new Set(groups.flat());
+    const changed = [...new Set([...pooled, ...now])].filter((a) => pooled.has(a) !== now.has(a));
+    pooled = now;
+    for (const agent of changed) {
+      const f = figureOf(agent);
+      if (f) show(agent, f);
+    }
+    const keys = new Set(groups.map((g) => g.join(",")));
+    for (const [key, cue] of cues)
+      if (!keys.has(key)) {
+        disposeSprite(cue.sprite);
+        cues.delete(key);
+      }
+    for (const g of groups) {
+      const key = g.join(",");
+      let cue = cues.get(key);
+      if (!cue) {
+        cue = { sprite: thinkingCue(thinkingWords(g.length)), at: new THREE.Vector3(), perPixel: 0.005 };
+        cues.set(key, cue);
+        scene.add(cue.sprite);
+      }
+      // Over the middle of them, as high as the tallest head there.
+      const crowns = g.flatMap((a) => {
+        const f = figures.get(a);
+        return f ? [f.crown()] : [];
+      });
+      cue.at.set(0, 0, 0);
+      for (const c of crowns) cue.at.add(c);
+      cue.at.divideScalar(Math.max(1, crowns.length));
+      cue.at.y = Math.max(...crowns.map((c) => c.y));
+      cue.sprite.position.copy(cue.at);
+    }
+    return cues;
+  }
+  /** Where things of some kinds in the room are on the stage: what is put up on its walls to be read, say. */
+  const kindsOnStage = (kinds: ReadonlySet<string>): Box[] =>
+    room.props.flatMap((p) => {
+      if (!kinds.has(p.kind)) return [];
+      const o = things.get(p.id);
+      const at = o && thingOnStage(o);
+      return at ? [at.box] : [];
+    });
+  /** A room's whiteboard and its task board, where they are on the stage, for faint tags to keep off. */
+  const boardsOnStage = () => kindsOnStage(BOARD_KINDS);
 
   // A head's place on the screen, and its distance in front of the camera, worked out in this.
   const onScreen = new THREE.Vector3();
@@ -3634,6 +3818,22 @@ export async function createStage(
     ];
     camera.updateMatrixWorld();
     const columns: Column[] = [];
+    // One cue over each group thinking together, laid out with the tags: last of all, so it goes up over theirs.
+    for (const [key, cue] of poolThinking()) {
+      const depth = -onScreen.copy(cue.at).applyMatrix4(camera.matrixWorldInverse).z;
+      cue.sprite.visible = depth > 0.05;
+      if (!cue.sprite.visible) continue;
+      cue.perPixel = metresPerPixel(depth, camera.fov, stageH);
+      onScreen.copy(cue.at).project(camera);
+      columns.push({
+        id: key,
+        x: ((onScreen.x + 1) / 2) * stageW,
+        y: ((1 - onScreen.y) / 2) * stageH,
+        tag: fitSprite(cue.sprite, cue.perPixel, TAG_PX),
+        rank: CUE_RANK,
+        focus: true,
+      });
+    }
     for (const [id, f] of bodies) {
       // A body put away, like yours while you fly, shows nothing over its head for others to make way for.
       if (!f.body.visible) continue;
@@ -3662,7 +3862,20 @@ export async function createStage(
     const foot = hints
       .filter((h) => h.top > stageH / 2 && h.right - h.left > seen / 2)
       .reduce((y, h) => Math.min(y, h.top), stageH - insetBottom);
-    const laid = stack(columns, { left: 0, right: seen, top: insetTop, bottom: foot, covered });
+    const laid = stack(columns, {
+      left: 0,
+      right: seen,
+      top: insetTop,
+      bottom: foot,
+      covered,
+      boards: boardsOnStage(),
+    });
+    for (const [key, cue] of cues) {
+      const at = laid.get(key);
+      if (!at || !cue.sprite.visible) continue;
+      liftSprite(cue.sprite, at.tag, cue.perPixel, at.tagAcross);
+      cue.sprite.visible = !at.hidden;
+    }
     // Where each tag, sign and bubble is on the stage now, for the panels to keep off (`placePanels`).
     overheads = new Map();
     for (const c of columns) {
@@ -3799,7 +4012,11 @@ export async function createStage(
   };
   /** Something in the room on the stage: the box round all of it, which a panel beside it never covers. */
   const thingOnStage = (o: THREE.Object3D): PanelIn["target"] | undefined => {
-    const b = new THREE.Box3().setFromObject(o);
+    const box = boxOnStage(new THREE.Box3().setFromObject(o));
+    return box && { box, keep: box };
+  };
+  /** A box in the room on the stage: the box round its corners there, or none when it is partly behind the camera. */
+  const boxOnStage = (b: THREE.Box3): Box | undefined => {
     if (b.isEmpty()) return undefined;
     const points: [number, number][] = [];
     for (const x of [b.min.x, b.max.x])
@@ -3810,20 +4027,53 @@ export async function createStage(
           if (!p) return undefined;
           points.push(p);
         }
-    const box = boxRound(points) as Box;
-    return { box, keep: box };
+    return boxRound(points);
+  };
+  /**
+   * What a body is with, on the stage: the bodies gathered round it (at its
+   * table, on the bench beside it, round the cart), the thing it is at (its
+   * seat, the board it works at) and anything tall it stands right by (the
+   * cart). A panel about it goes beside all of them, not over them: they are
+   * what you walked up to.
+   */
+  const withOnStage = (f: Figure): Box[] => {
+    const p = f.walker.place;
+    const out: Box[] = [];
+    for (const c of companions.values()) {
+      if (c === f || Math.hypot(c.walker.place.x - p.x, c.walker.place.z - p.z) > GATHERED) continue;
+      const b = bodyOnStage(c);
+      if (b) out.push(b.box);
+    }
+    // The thing it is at, by its spot; and whatever on the floor it stands right by, like a cart it walked up to.
+    const spot = f.here ? spotById(room, f.here) : undefined;
+    const thing = spot?.item ? things.get(spot.item) : undefined;
+    const at = thing && thingOnStage(thing);
+    if (at) out.push(at.box);
+    for (const [id, b] of floorBoxes) {
+      if (id === spot?.item) continue;
+      const off = Math.hypot(Math.max(0, b.min.x - p.x, p.x - b.max.x), Math.max(0, b.min.z - p.z, p.z - b.max.z));
+      if (off > BESIDE_THING || b.max.y < TALL) continue;
+      const by = boxOnStage(b);
+      if (by) out.push(by);
+    }
+    return out;
   };
   /** What an anchor is on the stage this frame, and where on the floor, for walking away from it. */
-  const anchorOnStage = (a: Anchor): { target?: PanelIn["target"]; floor?: [number, number] } => {
+  const anchorOnStage = (a: Anchor, gathered = false): { target?: PanelIn["target"]; floor?: [number, number] } => {
     if ("held" in a) return {};
     if ("agent" in a || "you" in a) {
       // A card beside an agent stays beside it as it walks out, until it is gone through the door.
       const f = "you" in a ? (opts.visitor ? me : undefined) : bodyOf(a.agent);
       if (!f) return {};
       const body = bodyOnStage(f);
-      // What is over its head is part of what the panel is about: its name, what it is doing, what it says.
+      // What is over its head is part of what the panel is about: its name, what it is doing, what it says. For your
+      // conversation, so is whoever and whatever it is with, which it goes beside rather than over: the phone in your
+      // hand keeps off what you walked up to, too.
       const over = overheads.get("you" in a ? "you" : a.agent) ?? [];
-      const target = body && { ...body, keep: boxRound(boxCorners([body.keep, ...over])) as Box };
+      const target = body && {
+        box: gathered ? (boxRound(boxCorners([body.box, ...withOnStage(f)])) as Box) : body.box,
+        keep: boxRound(boxCorners([body.keep, ...over])) as Box,
+      };
       return { target, floor: [f.walker.place.x, f.walker.place.z] };
     }
     const o = "plaque" in a ? plaque?.group : things.get(a.thing);
@@ -3864,6 +4114,8 @@ export async function createStage(
     if (yours) keepClear.push(boxRound(boxCorners([yours.keep, ...(overheads.get("you") ?? [])])) as Box);
     // Nor what is said over a head, or the tag saying who it is and what it is doing.
     for (const boxes of overheads.values()) avoid.push(...boxes);
+    // Nor what hangs on the walls to be read, the calendar and the screens, if there is anywhere else to go.
+    if (opts.visitor) avoid.push(...kindsOnStage(READ_ON_WALLS));
     // Nobody's face is covered if there is anywhere else to go: a panel about one agent keeps off the others'.
     for (const f of opts.visitor ? companions.values() : [me, ...companions.values()]) {
       const face = bodyOnStage(f)?.keep;
@@ -3873,7 +4125,7 @@ export async function createStage(
     const floors = new Map<Pin, [number, number] | undefined>();
     const panels: PanelIn[] = [];
     for (const p of pins) {
-      const { target, floor } = anchorOnStage(p.anchor);
+      const { target, floor } = anchorOnStage(p.anchor, !!p.gathered);
       floors.set(p, floor);
       const shown = target && inView(target.box, view) ? target : undefined;
       const held = "held" in p.anchor ? p.anchor.held : (p.fallback ?? "front");
@@ -3979,6 +4231,8 @@ export async function createStage(
       }
     } else if (!reading) {
       controls.update();
+      // Turned past where you can fly, the camera comes back in; rearranging the room, it looks in from outside.
+      if (opts.visitor && travel === "fly" && !editing) keepFlying();
     }
     if (opts.hour === undefined && hourNow() !== hour) {
       hour = hourNow();
@@ -4153,7 +4407,8 @@ export async function createStage(
       // The controls over the stage change with what is on it (a button to talk to who you stand by, where you are).
       // Where that moves the part the agent is framed in, a close-up is fitted to it again; the other views ease
       // there by themselves, frame by frame.
-      if (measureOverlays() && view === "close") refit();
+      // Coming into a room, the shot of it is fitted again to the part it is framed in now.
+      if (measureOverlays() && (view === "close" || entering.holds)) refit();
       // Reading a surface, a tool coming or going over the stage (someone to talk to, say) frames it again round them.
       if (reading && boxKey() !== readBox) {
         readBox = boxKey();
@@ -4358,7 +4613,7 @@ export async function createStage(
       f.target.add(shift);
       f.position.add(shift);
       settle(f);
-      if (travel === "fly") turnAboutAhead();
+      if (travel === "fly") flyOn();
       // Whoever is in the new place, at free spots in it.
       meet(wanted);
       requestAnimationFrame(fadeIn);
@@ -4523,7 +4778,11 @@ export async function createStage(
       me.body.visible = next === "walk";
       if (next === "fly") {
         dropLead();
-        turnAboutAhead();
+        // Outdoors you fly on from where the camera is; in a room, it comes down into the room to take off.
+        if (isOutdoors(room)) {
+          turnAboutAhead();
+          keepFlying();
+        } else moveCamera(liftOff());
         if (near) {
           near = undefined;
           opts.onNear?.(undefined);
@@ -4559,8 +4818,9 @@ export async function createStage(
         drag = undefined;
         controls.enablePan = false;
         canvas.style.cursor = "";
-        // Back to the view you had: following you on a visit, the agent on the chat page.
-        moveCamera(framing(view));
+        // Back to the view you had: following you on a visit, the agent on the chat page; flying in a room, from
+        // inside it again.
+        moveCamera(opts.visitor && travel === "fly" && !isOutdoors(room) ? liftOff() : framing(view));
       }
       markEdit();
     },
@@ -4594,6 +4854,8 @@ export async function createStage(
       for (const c of companions.values()) c.dispose();
       companions.clear();
       for (const d of departing.splice(0)) d.fig.dispose();
+      for (const c of cues.values()) disposeSprite(c.sprite);
+      cues.clear();
       shows.clear();
       unfade();
       // The renderer and all it drew, in the order that lets the page forget them (`shared.ts`).

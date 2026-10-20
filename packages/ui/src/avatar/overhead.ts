@@ -155,6 +155,11 @@ export interface Screen {
   /** The foot of what can be seen, when something covers the stage's foot, like the chat on a phone. */
   bottom?: number;
   covered?: Box[];
+  /**
+   * What is on the walls to be read, where it is on the screen: a room's
+   * whiteboard and its task board. A faint tag in a crowd never sits over one.
+   */
+  boards?: Box[];
 }
 
 /** Pixels a bubble keeps from the edges of what can be seen. */
@@ -322,7 +327,11 @@ function tailFrom(b: Box, to: [number, number], others: Box[]): [number, number]
  * `LEADER_PX` has a line down to its head, drawn by the body. Where three or
  * more tags would meet, they are a crowd: the ones that aren't to read
  * (`Column.focus`, or a speaker's) are drawn faint, and a faint one that
- * would have to go a column high is put away instead (`CROWD_LIFT`).
+ * would have to go a column high, or would sit over a board on the wall
+ * (`Screen.boards`), is put away instead (`CROWD_LIFT`). A tag that would
+ * sit under the foot of what can be seen (`Screen.bottom`: the keys hint, a
+ * phone's chat) is put away too, as the head it names is under there,
+ * unless it is a speaker's.
  *
  * Then the bubbles, newest first: the newest sits over its speaker's tag, and
  * each earlier one goes up above whatever it would cover, so a conversation
@@ -363,10 +372,14 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
     const base = c.y - gap;
     const way = c.tag || sign ? makeWay(c.x, base, w, h + sign, tags, gap, screen) : { up: 0, across: 0 };
     const faded = !!c.tag && !c.focus && !c.bubble && crowd.has(c.id);
-    // Faint, with no sign to show, and going a column high to make way: put away, keeping no room from the others.
-    const away = faded && !sign && way.up > CROWD_LIFT * (h + gap);
+    const at = box(c.x + way.across, base - way.up, w, h + sign);
+    // Faint, with no sign to show, and going a column high to make way, or laid over a board on the wall that is
+    // there to be read: put away, keeping no room from the others. And a tag that would sit under the keys hint along
+    // the foot of the stage, where the head it names is too; but a speaker's, which its bubble's tail ends on.
+    const crowded = way.up > CROWD_LIFT * (h + gap) || (screen?.boards ?? []).some((b) => overlapArea(at, b) > 0);
+    const under = !!c.tag && !c.bubble && screen?.bottom !== undefined && at.bottom > screen.bottom + 1;
+    const away = (faded && !sign && crowded) || under;
     if ((c.tag || sign) && !away) {
-      const at = box(c.x + way.across, base - way.up, w, h + sign);
       tags.push(at);
       tagOf.set(c.id, at);
     }
