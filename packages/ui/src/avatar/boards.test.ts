@@ -4,7 +4,16 @@
  * finds the note under it.
  */
 import { describe, expect, it } from "vitest";
-import { type BoardTask, boardAt, boardAtUv, columnsFor, layoutBoard } from "./boards";
+import {
+  type BoardTask,
+  boardAt,
+  boardAtUv,
+  type ColumnSpan,
+  columnAt,
+  columnsFor,
+  layoutBoard,
+  moveTo,
+} from "./boards";
 
 const task = (id: string, status: string, assignee = "planner"): BoardTask => ({
   id,
@@ -36,6 +45,65 @@ describe("columnsFor", () => {
     expect(cols[0].notes.map((n) => n.id)).toEqual(["0", "1", "2", "3"]);
     expect(cols[0].more).toBe(3);
     expect(cols[1]).toMatchObject({ notes: [], more: 0 });
+  });
+
+  it("fits as many as it is told to", () => {
+    const cols = columnsFor(
+      Array.from({ length: 7 }, (_, i) => task(String(i), "backlog")),
+      6,
+    );
+    expect(cols[0].notes).toHaveLength(6);
+    expect(cols[0].more).toBe(1);
+    expect(columnsFor([task("a", "done")], Number.POSITIVE_INFINITY)[3]).toMatchObject({ more: 0 });
+  });
+});
+
+describe("columnAt", () => {
+  // Four columns 200 wide with a 20 gap between, as the HTML board lays them out.
+  const spans: ColumnSpan[] = (["todo", "doing", "blocked", "done"] as const).map((id, i) => ({
+    id,
+    left: 20 + i * 220,
+    width: 200,
+  }));
+
+  it("is the column under the point", () => {
+    expect(columnAt(25, spans)).toBe("todo");
+    expect(columnAt(250, spans)).toBe("doing");
+    expect(columnAt(519, spans)).toBe("blocked");
+    expect(columnAt(700, spans)).toBe("done");
+  });
+
+  it("past either end, the column at that end", () => {
+    expect(columnAt(-40, spans)).toBe("todo");
+    expect(columnAt(5000, spans)).toBe("done");
+  });
+
+  it("in the gap between two, the nearer", () => {
+    // "doing" ends at 440, "blocked" starts at 460.
+    expect(columnAt(445, spans)).toBe("doing");
+    expect(columnAt(456, spans)).toBe("blocked");
+  });
+
+  it("is none on a board with no columns", () => {
+    expect(columnAt(10, [])).toBeUndefined();
+  });
+});
+
+describe("moveTo", () => {
+  it("is the first status the column gathers", () => {
+    expect(moveTo({ status: "backlog" }, "doing")).toEqual({ status: "in_progress" });
+    expect(moveTo({ status: "in_progress" }, "done")).toEqual({ status: "done" });
+    expect(moveTo({ status: "done" }, "todo")).toEqual({ status: "backlog" });
+  });
+
+  it("is nothing for a task already in that column, under any of its statuses", () => {
+    expect(moveTo({ status: "in_review" }, "doing")).toBeUndefined();
+    expect(moveTo({ status: "completed" }, "done")).toBeUndefined();
+  });
+
+  it("lets go of the reason a task was blocked as it comes out of Blocked", () => {
+    expect(moveTo({ status: "blocked" }, "doing")).toEqual({ status: "in_progress", blocked_reason: null });
+    expect(moveTo({ status: "backlog" }, "blocked")).toEqual({ status: "blocked" });
   });
 });
 

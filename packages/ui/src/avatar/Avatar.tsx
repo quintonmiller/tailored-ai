@@ -1,13 +1,15 @@
-import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import type { DashboardWidgetSpec } from "../api";
 import type { BoardTask } from "./boards";
 import type { CalendarView } from "./calendar";
 import type { Cue } from "./cues";
 import { type AgentActivity, DOING_VARS } from "./doing";
 import { doorWords } from "./doors";
+import { type FaceData, SurfacePortals, type SurfaceStage, type TaskMove } from "./Faces";
 import type { BodyState } from "./motion";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
 import type { ScreenCard } from "./screens";
-import type { Companion, Line, Stage, StageEdit, StageView, Travel, UseSpot } from "./stage";
+import type { Companion, Line, Stage, StageEdit, StageView, SurfaceView, Travel, UseSpot } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
 /** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
@@ -17,7 +19,7 @@ const DOOR_TIP_ROOM = 240;
  * each of the tools over the top. Each tool by itself, not the row they wrap
  * in, whose box runs on past them as wide as all of them end to end.
  */
-export const OVERLAYS = ":scope > .talk-view, :scope > .talk-tools > :not(.talk-tools-break)";
+export const OVERLAYS = ":scope > .talk-view, :scope > .talk-back, :scope > .talk-tools > :not(.talk-tools-break)";
 
 /** One thing the menu on an agent's body offers. */
 export interface AgentAction {
@@ -74,8 +76,10 @@ export function Avatar({
   overlay,
   tasks,
   screen,
+  widgets,
   calendar,
   onUse,
+  onTaskMove,
   onLine,
   place,
   arriveFrom,
@@ -136,6 +140,8 @@ export function Avatar({
   tasks?: BoardTask[];
   /** The pages the screens on the walls go through. */
   screen?: ScreenCard[];
+  /** The dashboard's widgets, for a screen outside a home to draw live with the Board page's renderers. */
+  widgets?: DashboardWidgetSpec[];
   /** What the calendars on the walls show. */
   calendar?: CalendarView;
   /**
@@ -143,6 +149,8 @@ export function Avatar({
    * on a board the note or column clicked, on a screen the page that was up.
    */
   onUse?: (action: string, on?: UseSpot) => void;
+  /** A note was dragged to another column on a task board: save the change. */
+  onTaskMove?: (id: string, change: TaskMove) => Promise<unknown>;
   /** A visitor is near an agent as it starts saying something, nearness 0–1; `phone`, heard down the line. */
   onLine?: (agent: string, text: string, nearness: number, phone?: boolean) => void;
   /**
@@ -235,6 +243,32 @@ export function Avatar({
   placeRef.current = place;
   const onUseRef = useRef(onUse);
   onUseRef.current = onUse;
+  const moveRef = useRef(onTaskMove);
+  moveRef.current = onTaskMove;
+  // The surfaces live now, which the faces are drawn into, and the one being read close up.
+  const [surfaces, setSurfaces] = useState<SurfaceView[]>([]);
+  const [reading, setReading] = useState<string | undefined>(undefined);
+  const surfaceStage = useMemo(
+    (): SurfaceStage => ({
+      surfaceReady: (id) => stage.current?.surfaceReady(id),
+      focusSurface: (id) => stage.current?.focusSurface(id),
+      surfacePoint: (id, at) => stage.current?.surfacePoint(id, at),
+    }),
+    [],
+  );
+  const faces = useMemo(
+    (): FaceData => ({
+      tasks: tasks ?? [],
+      ...(screen ? { cards: screen } : {}),
+      ...(widgets ? { widgets } : {}),
+      ...(calendar ? { calendar } : {}),
+      onUse: (action, on) => onUseRef.current?.(action, on),
+      ...(onTaskMove
+        ? { onTaskMove: (id: string, change: TaskMove) => moveRef.current?.(id, change) ?? Promise.resolve() }
+        : {}),
+    }),
+    [tasks, screen, widgets, calendar, onTaskMove],
+  );
   const lineRef = useRef(onLine);
   lineRef.current = onLine;
   const nearRef = useRef(onNear);
@@ -304,6 +338,7 @@ export function Avatar({
     const el = host.current;
     if (!el) return;
     let gone = false;
+    let unsurface: (() => void) | undefined;
     setProblem(null);
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
     import("./stage")
@@ -325,6 +360,10 @@ export function Avatar({
               }
             : {}),
           onUse: (action: string, on?: UseSpot) => onUseRef.current?.(action, on),
+          onFocus: setReading,
+          // A surface under the pointer says what clicking it does, as a door says where it goes.
+          onSurfaceHover: (label: string | undefined, at?: { x: number; y: number }) =>
+            setDoorTip(label && at ? { words: `Use ${label} · click or F`, x: at.x, y: at.y } : null),
           ...(doors
             ? {
                 onDoor: (door: RoomDoor) => doorRef.current?.(door),
@@ -372,6 +411,7 @@ export function Avatar({
           return;
         }
         stage.current = s;
+        unsurface = s.onSurfaces(setSurfaces);
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
         s.setInsets(insetRef.current);
         // The room, or who is in it, may have arrived or changed while the stage was loading.
@@ -396,8 +436,11 @@ export function Avatar({
       });
     return () => {
       gone = true;
+      unsurface?.();
       stage.current?.dispose();
       stage.current = null;
+      setSurfaces([]);
+      setReading(undefined);
       setDoorTip(null);
       if (controlsRef.current) controlsRef.current.current = null;
     };
@@ -423,13 +466,13 @@ export function Avatar({
       <div
         className="talk-avatar"
         ref={host}
-        aria-hidden="true"
         title={
           edit
             ? "Drag things to move them. Drag the floor to look around."
             : "Drag to look around. Click furniture to send it there."
         }
       />
+      <SurfacePortals views={surfaces} data={faces} stage={surfaceStage} />
       {picked && (
         <AgentMenu
           agent={picked.agent}
@@ -450,6 +493,11 @@ export function Avatar({
         </div>
       )}
       {tools && <div className="talk-tools">{tools}</div>}
+      {reading && (
+        <button type="button" className="talk-back" onClick={() => stage.current?.focusSurface(null)}>
+          ← Step back
+        </button>
+      )}
       {overlay}
       {visitor && !edit && (
         <>
@@ -469,9 +517,11 @@ export function Avatar({
             ))}
           </fieldset>
           <p className="talk-keys">
-            {travel === "walk"
-              ? "WASD or arrows to walk · Shift to run · click the floor to go there · drag to look · wheel to zoom"
-              : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to zoom"}
+            {reading
+              ? "Esc, F or click away to step back"
+              : travel === "walk"
+                ? "WASD or arrows to walk · Shift to run · click the floor to go there · click a screen to use it · drag to look · wheel to zoom"
+                : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to zoom"}
           </p>
         </>
       )}

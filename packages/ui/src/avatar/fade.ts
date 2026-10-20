@@ -63,7 +63,8 @@ export function paintFaded(f: Fadeable) {
   const own = (f.own ??= new Map());
   f.group.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh) return;
+    // A live surface's hole (`surface-layer.ts`) stays as it is: a surface isn't live while what it hangs on fades.
+    if (!mesh.isMesh || (mesh.material as THREE.Material).userData?.hole) return;
     // A photo hung after it faded is put in see-through copies when it comes.
     if (!own.has(mesh)) {
       own.set(mesh, mesh.material);

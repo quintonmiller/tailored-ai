@@ -978,6 +978,85 @@ comes back as it is now, and what you were about to undo is let go. A change
 you make after an agent's starts your undo afresh, so it never reaches back
 past theirs. No model is called while you rearrange.
 
+#### Surfaces: using what hangs on the walls
+
+The task boards, screens, calendars and kiosk faces in a room are real web
+pages laid on the wall, not pictures of one. Up close their words are as
+sharp as the rest of the page, their buttons press, their lists scroll, and
+a body or a chair standing in front of one hides the part behind it.
+
+**Click a board, a screen or a calendar**, or face one and press **F**, and
+the camera flies to it and holds it head-on, as large as fits between the
+tools at the top of the stage and the chat's bar at the foot. Now you use it
+like a screen: click what is on it, scroll it, Tab through its buttons. The
+walking keys rest while you read, and keys go to what you are reading: Space
+presses the button you are on rather than starting to talk. The
+Walk and Fly switch and the trail step aside, and **← Step back** takes their
+place. **Escape**, **F** again, **← Step back** or a click anywhere off it
+puts it down and flies you back to where you were. Escape closes a panel
+open beside it first (a task's card, say), and puts the surface down the
+next time. A kiosk's button is the one thing you press without bringing it
+up first. With the pointer over something you can bring up, its edge lights
+and a label by the pointer says so ("Use the task board · click or F").
+
+A surface is live only while it is big enough on the stage to read: about
+44 pixels tall, and up to eight at once, the biggest first. Further off,
+turned away, or on a wall faded to show someone behind it, it shows a
+picture drawn of it instead, which costs nothing to keep. Seen from across a
+room, a live one shows less and larger (a board's notes lose their names, a
+calendar its "done today"), and everything once you come close. In a photo
+nothing is live: screens are dark and calendars show only the date.
+
+On a phone, reading a surface fills the part of the stage above the chat,
+and the tools over the stage step aside until you step back.
+
+##### How surfaces work, for work on the world
+
+Surfaces live in a layer under the 3D picture (`avatar/surface-layer.ts`).
+The browser places each one's HTML where its plane is, every frame, with a
+3D transform (three.js's `CSS3DRenderer`), and the picture is drawn with a
+clear hole where each live surface is, so the HTML shows through and anything
+nearer the camera still draws over it. The pointer goes to the picture until
+it is over a surface in use (a kiosk, or the one being read), and then to the
+HTML. The faces themselves are React components (`avatar/Faces.tsx`), drawn
+into each surface through a portal, so they use the page's components, hooks
+and styles and read the page's data. What can be worked out without a page
+(how tall a surface shows, which are live, where the camera stands to read
+one, which one you face, which bodies are in the way, where a pointer is on
+one, which column a note is dropped in) is in `avatar/surfaces.ts` and
+`avatar/boards.ts`, with tests.
+
+To put a surface of your own in the room, give the stage one:
+
+```ts
+const remove = stage.addSurface({
+  id: "notes:fridge", // the same id is the same surface: a room rebuilt round it keeps it as it was
+  anchor: { at: [1.2, -3.4], elevation: 1.3, facing: 0 }, // or a THREE.Object3D: its x-y face, centred, facing +z
+  size: [0.8, 0.5], // metres
+  label: "the fridge notes", // what a screen reader calls it, and the label by the pointer
+  render: () => <FridgeNotes />, // drawn through a portal, inside the page's providers
+  use: "focus", // brought up to read before it is used; "direct" works there and then
+  live: "near", // live while near enough to read; "always" keeps it live anywhere
+});
+```
+
+Lay a face out at 640 CSS pixels a metre (`SURFACE_PX`): a 0.8 by 0.5 metre
+surface is a 512 by 320 pixel page, and a surface made bigger shows the same
+page larger. `stage.onSurfaces(views => ...)` hears which surfaces are live
+(the page draws into each `view.el`), `stage.focusSurface(id)` brings one up
+and `focusSurface(null)` puts it down, and `stage.surfacePoint(id, event)`
+says where a pointer is on one, in its own pixels, for dragging. A surface
+you add belongs to the place on the stage when you add it, and going to
+another place takes it down. Inside a face, `inert` holds until the surface
+is in use, so a click on it brings it up rather than pressing a button.
+
+Two things bit while this was built. Chrome loses track of what is under the
+pointer in an element that is both turned in 3D and clipped, so a surface's
+own element is never `overflow: hidden` (the face inside it is). And laid out
+in metres, everything sits so near the browser's eye that its sums for what
+is under the pointer come apart, so the layer's copy of the room is scaled up
+to pixels, camera and all.
+
 #### Task boards and the lobby
 
 A **task board** (`board`) hangs on the wall and shows tasks as sticky notes
@@ -986,7 +1065,13 @@ shared place or a meeting room, those of whoever is there. Every meeting room
 has one on its back wall, some homes start with one, and an agent can put one
 in its own room ("add a task board on the back wall").
 
-**Click a note** to open that task's card, right there in the world. The card
+Bring a board up (click it, or face it and press **F**: see
+[Surfaces](#surfaces-using-what-hangs-on-the-walls)) and **click a note** to
+open that task's card, right there in the world. **Drag a note** to another
+column to move the task there, or pick it with Tab and press **Shift** with
+the left or right arrow: the board shows it moved at once, and the change is
+saved as the card saves it, coming out of Blocked with no reason left on it.
+If it can't be saved, the note goes back and the board says why. The card
 shows the title, the details, the status, who has it, its project and tags,
 who made it and when, when it last changed, and its latest few comments. From
 the card you can:
@@ -1006,8 +1091,8 @@ Every change shows on the board the moment it is saved, without waiting for
 the board's half-minute refresh. **Open on the Tasks page** at the bottom of
 the card is there for anything the card doesn't do.
 
-**Click a board away from any note** to open the **task list**. Clicking in a
-column opens it at that column; in a home it starts on the owner's tasks. The
+**Click a column's heading**, or the "+3 more" under a full one, to open the
+**task list** at that column; in a home it starts on the owner's tasks. The
 list filters by status (open, to do, doing, blocked, done, archived, all, with
 a count on each) and by whose tasks they are (anyone's, nobody's yet, or one
 agent's), newest first. Click a row for its card, and **← All tasks** on the
@@ -1027,7 +1112,8 @@ are the panel's: typing never walks your body, and Space there presses the
 button instead of starting to talk.
 
 **The lobby** is first on the map, and the biggest room. Its three kiosks
-start things. **New
+start things: walk up and press the button on one, or click one from across
+the room. **New
 agent** opens a fresh chat with the default agent, a request already written
 for you to send ("I'd like a new agent. Ask me what it should do…"), so the
 agent asks what it needs and sets it up. **New room** first says what will
@@ -1060,16 +1146,20 @@ one on the **Board** page, a widget at a time: the first five a screen can
 draw (the clock, system status, task lists, recent agent activity, a number,
 a list, a note, links), turning to the next every 15 seconds. Embeds, and the
 widgets made to be clicked and typed into, stay on the Board. Dots in the
-corner say which page is up. **Click the screen** to open the whole dashboard
-in a panel, drawn by the Board's own widgets and scrolled to the one that was
-on screen. A task in it opens its card in the world, not the Tasks page.
-**Open the Board page** at the bottom is there for changing the layout.
+corner say which page is up, and a thin line fills as the next comes. Each
+page is drawn live by the Board page's own widget, in the screen's colours
+and large enough to read across the room. Bring the screen up to read it:
+the page holds still, and the dots or the arrow keys turn it. A task in a
+widget opens its card in the world, not the Tasks page, and the page's
+title opens the whole dashboard in a panel, scrolled to that widget.
+**Open the Board page** at the bottom of the panel is there for changing the
+layout.
 
 An agent can hang a screen in its own room ("add a screen on the back wall").
 There it shows what the agent is up to: what it is doing now (with what it
 did last and when it next wakes, while it rests), the open tasks on its list,
 and what is coming up for it. A click opens what the page on screen is about:
-the agent's card, its tasks, or its calendar. A screen in a shared place or a
+the agent's card, its tasks, or its calendar: click its title. A screen in a shared place or a
 meeting room shows the dashboard. Until the dashboard answers a screen is
 dark; when the Board has no widgets, or the dashboard can't be had, the
 screen and its panel say so. In a photo, which is never told what is on
@@ -1090,7 +1180,9 @@ next wakes in time order, each with whose it is. Anywhere else, a calendar
 shows the wakes of whoever is there. While agents are paused, it says
 nothing wakes until you resume them.
 
-**Click a calendar** for the whole list. Each wake says when, what kind it
+Bring a calendar up to read all of it: every wake this week and everything
+done today. Click a wake for that agent's list, something it finished for
+the task's card, and the date band for the whole list. Each wake in the list says when, what kind it
 is, whose it is, what it will do (a booked wake's note in full, a cron job's
 prompt), how often it comes round, and where a booked wake wakes the agent:
 in a room, or in its own conversation. The list is the calendar's own: its

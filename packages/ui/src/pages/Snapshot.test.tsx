@@ -38,6 +38,7 @@ vi.mock("../avatar/stage", () => ({
       setWear() {},
       setLights() {},
       cue() {},
+      onSurfaces: () => () => {},
     };
   },
 }));

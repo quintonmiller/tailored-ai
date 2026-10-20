@@ -8,6 +8,7 @@ import {
   fetchWidgetData,
   type PendingApprovalRequest,
   type ProjectTask,
+  updateProjectTask,
 } from "../api";
 import { type AgentAction, Avatar, type AvatarControls } from "../avatar/Avatar";
 import type { BoardTask } from "../avatar/boards";
@@ -22,6 +23,7 @@ import {
 } from "../avatar/calendar";
 import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
+import type { TaskMove } from "../avatar/Faces";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
@@ -1193,6 +1195,15 @@ export function useChatStage({
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
   const board = useBoardTasks(showStage);
   const allTasks = board.tasks;
+  // A note moved to another column on a board in the room: saved as its card saves it, and put on every board.
+  const { put: putTask, reload: reloadTasks } = board;
+  const moveTask = useCallback(
+    async (id: string, change: TaskMove) => {
+      putTask(await updateProjectTask(id, change));
+      reloadTasks();
+    },
+    [putTask, reloadTasks],
+  );
   const watcher = useTaskWatcher(
     showStage &&
       (panel?.kind === "task" || panel?.kind === "new-task" || panel?.kind === "tasks" || panel?.kind === "agent"),
@@ -1397,7 +1408,8 @@ export function useChatStage({
     return () => window.removeEventListener("keydown", toggle);
   }, [showStage, editor.editing]);
 
-  // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel.
+  // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel or on a
+  // surface in the room.
   const { hold, release } = voice;
   // Whether Space started talking. Letting it go ends that wherever the key comes up: clicking a body while
   // holding it puts the focus in that body's menu, which would otherwise keep the microphone open, and the key
@@ -1406,7 +1418,9 @@ export function useChatStage({
   useEffect(() => {
     if (!info.enabled) return;
     const typing = (e: KeyboardEvent) =>
-      (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']");
+      (e.target as HTMLElement | null)?.closest?.(
+        "input, textarea, select, [contenteditable='true'], [role='dialog'], .world-surface",
+      );
     const down = (e: KeyboardEvent) => {
       if (e.code === "Space" && !e.repeat && !typing(e)) {
         e.preventDefault();
@@ -1542,7 +1556,9 @@ export function useChatStage({
         return;
       }
       if (action === "calendar") {
-        setPanel({ kind: "calendar", ...(owner ? { who: owner } : placeId !== "lobby" ? { here: true } : {}) });
+        // A line about an agent opens that agent's list; anywhere else on it, the list the calendar shows.
+        const who = on && "agent" in on ? on.agent : owner;
+        setPanel({ kind: "calendar", ...(who ? { who } : placeId !== "lobby" ? { here: true } : {}) });
         return;
       }
       if (action === "tasks") {
@@ -1945,6 +1961,9 @@ export function useChatStage({
         tools={editor.editing ? editor.tools : tools}
         tasks={boardTasks}
         {...(screenCards ? { screen: screenCards } : {})}
+        // Outside a home, a screen drawn live goes through the dashboard's widgets, by the Board page's renderers.
+        {...(hasScreen && !owner && dashboard.widgets.length ? { widgets: dashboard.widgets } : {})}
+        onTaskMove={moveTask}
         {...(calendarView ? { calendar: calendarView } : {})}
         onUse={onUse}
         onLine={hearLine}
