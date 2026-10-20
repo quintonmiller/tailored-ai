@@ -7,7 +7,7 @@
 import { type VRM, type VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import type { Tint } from "./body";
+import { makesOwnGesture, type Tint } from "./body";
 import { type ClipLibrary, type ClipRole, GESTURE_ROLES, loadClipLibrary, rolesFor } from "./clips";
 import type { Hold } from "./doing";
 import { buildPiece, wearColors } from "./dress";
@@ -127,6 +127,8 @@ export class Figure {
   pending: string | undefined;
   /** A point on the floor it was sent to while seated: it stands up first, then goes. */
   private headed: [number, number] | undefined;
+  /** Until when a gesture asked for is kept going, on the stage's clock: none once over, or for one made once. */
+  private keptUntil: number | undefined;
   seated = 0;
   clips: ClipPlayer | undefined;
   /** The animation files have loaded, or failed to. */
@@ -402,7 +404,7 @@ export class Figure {
     } else {
       this.motion.look(yaw, pitch, clock);
     }
-    if (point) this.motion.gesture("point", clock);
+    if (point) this.gesture("point", clock);
   }
 
   /**
@@ -614,17 +616,22 @@ export class Figure {
   /**
    * A gesture: from the files when they have one (a nod, a dance, a wave), by
    * code otherwise. Once, or kept going for `seconds`; a new one ends any
-   * kept going before it.
+   * kept going before it. One the body makes by itself (`auto`: a wave to
+   * someone walking up, a stretch on getting somewhere) is left out while a
+   * gesture asked for is kept going, which lasts as long as it was asked to.
    */
-  gesture(name: string, clock: number, seconds?: number) {
+  gesture(name: string, clock: number, seconds?: number, how: { auto?: boolean } = {}) {
+    if (how.auto && !makesOwnGesture(this.keptUntil, clock)) return;
     const until = seconds !== undefined && seconds > 0 ? clock + seconds : undefined;
     this.motion.stopGestures(clock);
     this.clips?.stop(clock);
+    this.keptUntil = until;
     if (!this.clips?.shot(name as ClipRole, clock, until)) this.motion.gesture(name, clock, until);
   }
 
   /** Stop any gesture kept going: wanted for something else now. */
   stopGesture(clock: number) {
+    this.keptUntil = undefined;
     this.motion.stopGestures(clock);
     this.clips?.stop(clock);
   }
@@ -931,16 +938,22 @@ function overlay(vrm: VRM, pose: Pose, flip: number) {
     vrm.humanoid.getNormalizedBoneNode(bone)?.quaternion.multiply(q.setFromEuler(e.set(x * flip, y, z * flip)));
   }
   if (pose.owned) {
-    for (const [bone, r] of Object.entries(pose.owned.bones)) {
+    const { bones, weights, weight } = pose.owned;
+    for (const [bone, r] of Object.entries(bones)) {
       if (!r) continue;
       const node = vrm.humanoid.getNormalizedBoneNode(bone as (typeof POSE_BONES)[number]);
-      node?.quaternion.slerp(q.setFromEuler(e.set(r[0] * flip, r[1], r[2] * flip)), pose.owned.weight);
+      node?.quaternion.slerp(
+        q.setFromEuler(e.set(r[0] * flip, r[1], r[2] * flip)),
+        weights[bone as (typeof POSE_BONES)[number]] ?? weight,
+      );
     }
     // An arm taken over is posed from its shoulder at rest, as the code poses it: a shoulder the files have dropped
     // or rolled, as an idle often does on one side, would send the same arm somewhere else.
     for (const side of ["left", "right"] as const) {
-      if (!pose.owned.bones[`${side}UpperArm`]) continue;
-      vrm.humanoid.getNormalizedBoneNode(`${side}Shoulder`)?.quaternion.slerp(q.identity(), pose.owned.weight);
+      if (!bones[`${side}UpperArm`]) continue;
+      vrm.humanoid
+        .getNormalizedBoneNode(`${side}Shoulder`)
+        ?.quaternion.slerp(q.identity(), weights[`${side}UpperArm`] ?? weight);
     }
   }
   vrm.expressionManager?.setValue("blink", pose.expressions.blink);

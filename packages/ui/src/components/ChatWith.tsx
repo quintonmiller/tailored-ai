@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentActivity, behaviorFor } from "../avatar/doing";
+import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
 import { renderMarkdown } from "../lib/markdown.js";
-import { agentColor } from "./WorldMap";
 
 /**
  * Who the conversation over the scene is with, at the top of the chat panel:
@@ -38,9 +38,10 @@ export function ChatWith({
   onSwitch: (agent: string) => void;
 }) {
   const doing = doingLine(activity);
+  const colorOf = useAgentColor();
   return (
     <div className="chat-with" aria-label="Who you are talking to">
-      {agent && <span className="chat-with-dot" style={{ background: agentColor(agent) }} aria-hidden="true" />}
+      {agent && <span className="chat-with-dot" style={{ background: colorOf(agent) }} aria-hidden="true" />}
       <div className="chat-with-who">
         <strong>{nameOf(agent)}</strong>
         {next !== null ? (
@@ -167,6 +168,7 @@ export function RoomWith({
   onTalk: (agent: string) => void;
 }) {
   const name = talk.name ?? fallbackName;
+  const colorOf = useAgentColor();
   return (
     <div className="chat-with chat-with-room" aria-label="The room you are in">
       <div className="chat-with-who">
@@ -191,7 +193,7 @@ export function RoomWith({
             onClick={() => onTalk(m)}
           >
             {m !== "default" && (
-              <span className="chat-with-dot" style={{ background: agentColor(m) }} aria-hidden="true" />
+              <span className="chat-with-dot" style={{ background: colorOf(m) }} aria-hidden="true" />
             )}
             {nameOf(m)}
           </button>
@@ -216,6 +218,7 @@ export function RoomLines({ talk }: { talk: RoomTalk }) {
   // The latest line in view, like any conversation: when it arrives, not on every quiet re-read, so reading
   // further up isn't pulled back down.
   const list = useRef<HTMLOListElement>(null);
+  const colorOf = useAgentColor();
   const latest = talk.lines.at(-1)?.id;
   useEffect(() => {
     const box = list.current?.parentElement;
@@ -229,9 +232,7 @@ export function RoomLines({ talk }: { talk: RoomTalk }) {
       {talk.lines.map((l) => (
         <li key={l.id} className="room-line">
           <div className="room-line-head">
-            {l.agent && (
-              <span className="chat-with-dot" style={{ background: agentColor(l.agent) }} aria-hidden="true" />
-            )}
+            {l.agent && <span className="chat-with-dot" style={{ background: colorOf(l.agent) }} aria-hidden="true" />}
             <strong>{l.who}</strong>
             {l.to.length > 0 && <span className="room-line-to">to {l.to.join(", ")}</span>}
             <time dateTime={l.at}>{said(l.at)}</time>

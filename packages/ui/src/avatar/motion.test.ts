@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import { EMOTES, type WalkStyle, walkStyle } from "./body";
-import { asMade, type BodyState, type Carriage, MOVES, Motion, type Pose } from "./motion";
+import { asMade, type BodyState, type Carriage, layer, MOVES, Motion, type Pose } from "./motion";
 import { GESTURES } from "./scene";
 
 /** Run at 60 fps from `from` for `seconds`, returning the last pose. */
@@ -274,6 +274,63 @@ describe("Motion", () => {
     motion.hold("chest");
     const holding = run(motion, "idle", 2, 0, 2.02);
     expect(holding.bones.leftLowerArm[1]).toBeGreaterThan(-0.5);
+  });
+
+  it("takes an arm from what it holds into a gesture and back smoothly, without files", () => {
+    const motion = new Motion({ random: steady, reducedMotion: true });
+    motion.hold("chest");
+    const held = run(motion, "idle", 2);
+    motion.gesture("wave", 2.1);
+    // The first frame of the wave: the arm is still where the hold had it, not dropped to rest.
+    const first = motion.step(2.1 + 1 / 60, "idle", 0);
+    for (let i = 0; i < 3; i++) expect(first.bones.rightUpperArm[i]).toBeCloseTo(held.bones.rightUpperArm[i], 1);
+    // Midway it is the wave's: up and out.
+    const mid = run(motion, "idle", 0.8, 0, 2.1 + 2 / 60);
+    expect(mid.bones.rightUpperArm[2]).toBeCloseTo(-0.9, 1);
+    // Over, it holds the thing again.
+    const after = run(motion, "idle", 1.5, 0, 3);
+    for (let i = 0; i < 3; i++) expect(after.bones.rightUpperArm[i]).toBeCloseTo(held.bones.rightUpperArm[i], 1);
+  });
+
+  it("unfolds its arms into a gesture and folds them again smoothly, with files or without", () => {
+    const coded = new Motion({ random: steady, reducedMotion: true });
+    coded.carry({ posture: "arms folded" });
+    const folded = run(coded, "idle", 2);
+    coded.gesture("clap", 2.1);
+    const first = coded.step(2.1 + 1 / 60, "idle", 0);
+    for (const bone of ["leftLowerArm", "rightLowerArm"] as const)
+      for (let i = 0; i < 3; i++) expect(first.bones[bone][i]).toBeCloseTo(folded.bones[bone][i], 1);
+    // With files, folded arms are posed in full; a one-arm wave starts from folded, not at its full height.
+    const filed = new Motion({ random: steady, reducedMotion: true });
+    const clips = { walk: true, activities: [] };
+    filed.carry({ posture: "arms folded" });
+    let pose = filed.step(0, "idle", 0, { walked: 0, stride: 0.45, clips });
+    for (let t = 0; t <= 2; t += 1 / 60) pose = filed.step(t, "idle", 0, { walked: 0, stride: 0.45, clips });
+    const fold = pose.owned?.bones.rightUpperArm;
+    expect(fold).toBeDefined();
+    filed.gesture("wave", 2.1);
+    pose = filed.step(2.1 + 1 / 60, "idle", 0, { walked: 0, stride: 0.45, clips });
+    for (let i = 0; i < 3; i++) expect(pose.owned?.bones.rightUpperArm?.[i]).toBeCloseTo(fold?.[i] ?? 0, 1);
+    for (let t = 2.1 + 2 / 60; t <= 2.9; t += 1 / 60)
+      pose = filed.step(t, "idle", 0, { walked: 0, stride: 0.45, clips });
+    expect(pose.owned?.bones.rightUpperArm?.[2]).toBeCloseTo(-0.9, 1);
+    // The left arm stays folded throughout, held as far as folded arms have it.
+    expect(pose.owned?.weights.leftUpperArm).toBeGreaterThan(0.95);
+  });
+
+  it("layers one pose over another as far as each has the bone", () => {
+    const under: [[number, number, number], number] = [[1, 0, 0], 1];
+    const over: [[number, number, number], number] = [[0, 0, 1], 0.25];
+    expect(layer(under, over)).toEqual([[0.75, 0, 0.25], 1]);
+    // Nothing under: the top, as far as it goes.
+    expect(layer(undefined, over)).toEqual(over);
+    // Nothing on top, or the top not there yet: what is under.
+    expect(layer(under, undefined)).toEqual(under);
+    expect(layer(under, [[0, 0, 1], 0])).toEqual(under);
+    // Fully over whatever is under: the top's, in full.
+    const full = layer([[1, 0, 0], 0.3], [[0, 0, 1], 1]);
+    expect(full?.[0]).toEqual([0, 0, 1]);
+    expect(full?.[1]).toBe(1);
   });
 
   it("fidgets as much as its idle style says, and droops when sleepy", () => {

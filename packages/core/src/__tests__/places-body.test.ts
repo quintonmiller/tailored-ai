@@ -6,7 +6,7 @@
  * runs out.
  */
 import Database from "better-sqlite3";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { endStays, homeId, WHEREABOUTS_TYPE } from "../plugins/places.js";
 import {
   BODY_TYPE,
@@ -38,7 +38,7 @@ import type { ToolContext } from "../tools/interface.js";
 const home = (): Place => firstHome("planner's room");
 
 describe("reading a change to a body", () => {
-  const models = ["051_Polybot.vrm", "fox.vrm"];
+  const models = ["robot.vrm", "fox.vrm"];
 
   it("takes a colour by name or hex, and back to its own with default", () => {
     expect(changeFrom({ color: "teal" }, models)).toEqual({
@@ -58,7 +58,7 @@ describe("reading a change to a body", () => {
     expect(changeFrom({ model: "FOX.vrm" }, models)).toMatchObject({ change: { model: "fox.vrm" } });
     expect(changeFrom({ model: "default" }, models)).toMatchObject({ change: { model: null } });
     expect(changeFrom({ model: "dragon" }, models)).toEqual({
-      problem: 'There\'s no model called "dragon". You can be drawn in: 051_Polybot.vrm, fox.vrm.',
+      problem: 'There\'s no model called "dragon". You can be drawn in: robot.vrm, fox.vrm.',
     });
   });
 
@@ -72,7 +72,7 @@ describe("reading a change to a body", () => {
   it("reads idle style, posture and walk by their words, and default takes each back", () => {
     expect(changeFrom({ idle: "sleepy", posture: "Arms Folded", walk: "brisk" }, models)).toEqual({
       change: { idle: "sleepy", posture: "arms folded", walk: "brisk" },
-      said: ["you pass the quiet sleepily", "you stand with your arms folded", "you walk with a brisk step"],
+      said: ["you're sleepy when idle", "you stand with your arms folded", "you walk with a brisk step"],
     });
     expect(changeFrom({ posture: "relaxed", walk: "default" }, models)).toMatchObject({
       change: { posture: null, walk: null },
@@ -111,6 +111,13 @@ describe("gestures and lengths of time, in a model's words", () => {
     expect(emoteFrom("Waving")).toBe("wave");
     expect(emoteFrom("waves")).toBe("wave");
     expect(emoteFrom("danced")).toBe("dance");
+    // A consonant doubled before the ending.
+    expect(emoteFrom("clapping")).toBe("clap");
+    expect(emoteFrom("clapped")).toBe("clap");
+    expect(emoteFrom("nodding")).toBe("nod");
+    expect(emoteFrom("nodded")).toBe("nod");
+    expect(emoteFrom("shrugging")).toBe("shrug");
+    expect(emoteFrom("hopping")).toBe("jump");
     expect(emoteFrom("hooray")).toBe("cheer");
     expect(emoteFrom("yes")).toBe("nod");
     expect(emoteFrom("juggle")).toBeUndefined();
@@ -123,6 +130,11 @@ describe("gestures and lengths of time, in a model's words", () => {
     expect(durationFrom("20 seconds", "minutes")).toBe(20_000);
     expect(durationFrom("2 min", "seconds")).toBe(120_000);
     expect(durationFrom("half an hour", "seconds")).toBe(1_800_000);
+    // An article before the unit is part of the phrase, with or without "for".
+    expect(durationFrom("an hour", "seconds")).toBe(3_600_000);
+    expect(durationFrom("for an hour", "seconds")).toBe(3_600_000);
+    expect(durationFrom("a minute", "seconds")).toBe(60_000);
+    expect(durationFrom("A moment", "seconds")).toBe(60_000);
     expect(durationFrom("1.5 hours", "seconds")).toBe(5_400_000);
     expect(durationFrom("for 10 minutes", "seconds")).toBe(600_000);
     expect(durationFrom(15, "seconds")).toBe(15_000);
@@ -219,7 +231,7 @@ describe("the body tool", () => {
       went.push(to);
       return { ok: true, text: "You're in the lounge now.", id: "shared:lounge" };
     },
-    models: () => ({ names: ["051_Polybot.vrm", "fox.vrm"], own: "051_Polybot.vrm" }),
+    models: () => ({ names: ["robot.vrm", "fox.vrm"], own: "robot.vrm" }),
     role: (agent) => readRole({ name: agent }),
     now: () => clock,
     ...over,
@@ -241,9 +253,9 @@ describe("the body tool", () => {
     const text = String(look.output);
     expect(text).toMatch(/^You are at home\./);
     expect(text).toMatch(
-      /You are drawn in 051_Polybot\.vrm, in your own colour\. You wear a headset and glasses, as suits a coder\./,
+      /You are drawn in robot\.vrm, in your own colour\. You wear a headset and glasses, as suits a coder\./,
     );
-    expect(text).toMatch(/model \(051_Polybot\.vrm, fox\.vrm\)/);
+    expect(text).toMatch(/model \(robot\.vrm, fox\.vrm\)/);
     expect(text).toMatch(/Emotes: wave, nod/);
     expect(text).toMatch(
       /Spots here to go to: the middle of the room, the couch, the desk, the window, the bookshelf\./,
@@ -257,7 +269,7 @@ describe("the body tool", () => {
     );
     expect(done.success, done.error).toBe(true);
     expect(done.output).toBe(
-      "Done: you're coral, you're 1.2 times your normal size, you wear a beret and a scarf, you pass the quiet in a lively way and you walk with a bouncy step.",
+      "Done: you're coral, you're 1.2 times your normal size, you wear a beret and a scarf, you're lively when idle and you walk with a bouncy step.",
     );
     expect(await body("planner")).toEqual({
       color: "#ee7f6d",
@@ -273,7 +285,7 @@ describe("the body tool", () => {
     expect((await body("planner")).color).toBe("#ee7f6d");
     const look = String((await tool.execute({ action: "look" }, as("planner"))).output);
     expect(look).toMatch(/in coral, 1\.2 times your normal size\. You wear a beret and a scarf\./);
-    expect(look).toMatch(/You pass the quiet lively, stand relaxed and walk with a bouncy step\./);
+    expect(look).toMatch(/You're lively when idle, you stand relaxed and you walk with a bouncy step\./);
   });
 
   it("goes back to how it always was, and keeps no record once nothing is chosen", async () => {
@@ -330,6 +342,10 @@ describe("the body tool", () => {
     const lounge = await tool.execute({ action: "go", to: "the lounge", for: "1 hour" }, as("planner"));
     expect(lounge.output).toBe("You're in the lounge now. You go home in 60 minutes.");
     expect(went).toEqual(["the lounge"]);
+    // How to get there is left off a place's name, as it is off a spot's.
+    const headed = await tool.execute({ action: "go", to: "go to the lounge" }, as("writer"));
+    expect(headed.output).toBe("You're in the lounge now.");
+    expect(went).toEqual(["the lounge", "the lounge"]);
     // A spot belongs to the place it is in: gone somewhere else, it is let go.
     expect(await body("planner")).toEqual({ away: { place: "shared:lounge", until: "2026-10-19T13:00:00.000Z" } });
     const nowhere = await tool.execute({ action: "go", to: "the moon" }, as("planner"));
@@ -361,6 +377,35 @@ describe("the body tool", () => {
     expect(await state.get(owner, { type: WHEREABOUTS_TYPE, id: "writer" })).toBeNull();
     // A stay with no end lasts.
     expect((await body("coder")).spot?.spot).toBe("desk");
+  });
+
+  it("says when a stay can't be ended, and goes on to the others, never failing the sweep", async () => {
+    const until = "2026-10-19T12:10:00.000Z";
+    await changeBody(state, owner, "planner", { spot: { place: homeId("planner"), spot: "window", name: "w", until } });
+    await changeBody(state, owner, "writer", { spot: { place: homeId("writer"), spot: "couch", name: "c", until } });
+    // The store fails to write the first body it is asked to: the second is still let go.
+    let failed = 0;
+    const broken = Object.create(state) as StateService;
+    broken.put = (...args: Parameters<StateService["put"]>) => {
+      if (!failed++) return Promise.reject(new Error("disk full"));
+      return state.put(...args);
+    };
+    broken.delete = (...args: Parameters<StateService["delete"]>) => {
+      if (!failed++) return Promise.reject(new Error("disk full"));
+      return state.delete(...args);
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(endStays(broken, Date.parse("2026-10-19T12:11:00Z"))).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not end \w+'s stay: disk full/));
+    } finally {
+      warn.mockRestore();
+    }
+    const left = [
+      await state.get(owner, { type: BODY_TYPE, id: "planner" }),
+      await state.get(owner, { type: BODY_TYPE, id: "writer" }),
+    ];
+    expect(left.filter(Boolean)).toHaveLength(1);
   });
 
   it("leaves a body where it went since, when its time away runs out", async () => {

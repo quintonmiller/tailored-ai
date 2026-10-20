@@ -3,7 +3,7 @@
  *
  * The `body` tool lets an agent see itself and choose how it looks and
  * carries itself: its colour, the model it is drawn in, its size and what it
- * wears; how it passes the quiet (an idle style), how it stands, how it
+ * wears; how it idles (calm, lively, focused, sleepy), how it stands, how it
  * walks, and what it likes doing when it has nothing to do. It can make a
  * gesture now, once or for a while, and go somewhere: a spot in the place it
  * is in, in words ("by the window", "sit on the couch"), or another place,
@@ -40,7 +40,7 @@ export const EMOTE_TYPE = "emote";
 // What a body can be
 // --------------------------------------------------------------------------
 
-/** How a body passes the quiet: what it is drawn to, how long it stays, how much it fidgets. */
+/** How a body idles: what it is drawn to, how long it stays, how much it fidgets. */
 export const IDLES = ["calm", "lively", "focused", "sleepy"] as const;
 export type Idle = (typeof IDLES)[number];
 
@@ -246,14 +246,25 @@ function oneOf<T extends string>(v: unknown, words: readonly T[], what: string):
   return found ?? { problem: `"${String(v)}" isn't ${what}. It is one of: ${words.join(", ")}; or default.` };
 }
 
-/** A gesture by its name or another word for it ("waves", "waving", "hooray"); undefined when it is none. */
+/**
+ * A gesture by its name or another word for it ("waves", "waving",
+ * "clapping", "nodded", "hooray"); undefined when it is none.
+ */
 export function emoteFrom(v: unknown): Emote | undefined {
   const t = plain(v);
   if (!t) return undefined;
-  if ((EMOTES as readonly string[]).includes(t)) return t as Emote;
-  if (EMOTE_WORDS[t]) return EMOTE_WORDS[t];
-  for (const stem of [t.replace(/(ing|ed|es|s)$/, ""), t.replace(/(ing|ed|s)$/, ""), `${t.replace(/(ing|ed)$/, "")}e`])
+  const stems = [
+    t,
+    t.replace(/(ing|ed|es|s)$/, ""),
+    t.replace(/(ing|ed|s)$/, ""),
+    `${t.replace(/(ing|ed)$/, "")}e`,
+    // A consonant doubled before the ending: "clapping", "nodded", "hopping".
+    t.replace(/([^aeiou])\1(ing|ed)$/, "$1"),
+  ];
+  for (const stem of stems) {
     if ((EMOTES as readonly string[]).includes(stem)) return stem as Emote;
+    if (Object.hasOwn(EMOTE_WORDS, stem)) return EMOTE_WORDS[stem];
+  }
   return undefined;
 }
 
@@ -281,10 +292,19 @@ export function errandsFrom(v: unknown): string[] | { problem: string } {
 export function durationFrom(v: unknown, unit: "seconds" | "minutes"): number | { problem: string } {
   const ms = { s: 1000, m: 60_000, h: 3_600_000 };
   if (typeof v === "number") return Number.isFinite(v) && v > 0 ? v * (unit === "seconds" ? ms.s : ms.m) : bad(v);
-  const t = plain(v).replace(/^for\s+/, "");
-  if (/^(an|one) hour$/.test(t)) return ms.h;
-  if (/^half an hour$/.test(t)) return 30 * ms.m;
-  if (/^a (minute|moment)$/.test(t)) return ms.m;
+  // "an hour" and "a minute" are read before `plain` takes the article off.
+  const said =
+    typeof v === "string"
+      ? v
+          .trim()
+          .toLowerCase()
+          .replace(/[-_\s]+/g, " ")
+          .replace(/^for\s+/, "")
+      : "";
+  if (/^(an|one) hour$/.test(said)) return ms.h;
+  if (/^half an hour$/.test(said)) return 30 * ms.m;
+  if (/^(a|one) (minute|moment)$/.test(said)) return ms.m;
+  const t = plain(said);
   const m = /^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)?$/.exec(t);
   if (!m) return bad(v);
   const n = Number(m[1]);
@@ -395,14 +415,15 @@ function listWords(items: string[]): string {
 /** What each way of carrying itself is called, for the agent. */
 const CARRIAGE_WORDS = { idle: "idle style", posture: "posture", walk: "walk" } as const;
 
-/** A way of carrying itself, in words: "you pass the quiet sleepily", "you walk with a brisk step". */
+/** A way of carrying itself, in words: "you're sleepy when idle", "you stand shyly", "you walk with a brisk step". */
 function carriageWords(key: keyof typeof CARRIAGE_WORDS, value: string): string {
-  if (key === "idle")
-    return `you pass the quiet ${{ calm: "calmly", lively: "in a lively way", focused: "focused", sleepy: "sleepily" }[value] ?? value}`;
-  if (key === "posture") return value === "arms folded" ? "you stand with your arms folded" : `you stand ${value}`;
-  return value === "sneak" || value === "march" || value === "swagger"
-    ? `you ${value} when you walk`
-    : `you walk with a ${value} step`;
+  if (key === "idle") return `you're ${value} when idle`;
+  if (key === "posture")
+    return (
+      { slouched: "you slouch", shy: "you stand shyly", "arms folded": "you stand with your arms folded" }[value] ??
+      `you stand ${value}`
+    );
+  return value === "brisk" || value === "bouncy" ? `you walk with a ${value} step` : `you ${value} when you walk`;
 }
 
 /** The record with a change made: fields set, fields taken back gone. */
@@ -423,13 +444,19 @@ export function bodyWith(body: BodyData, change: BodyChange): BodyData {
 const LEADING =
   /^(?:(?:go|walk|head|move|run|wander|sit|stand|wait|stay|lie|lay|be|hang out|relax|curl up|settle)(?:\s+(?:down|over|up|out|back|around|and))*\s+)*(?:(?:in front of|next to|up to|across from|onto|into|to|by|at|on|in|near|beside|over|under|behind)\s+)*/;
 
-/** The words that name the thing in "sit on the couch", "over by the big window". */
-export function spotWords(words: string): string {
+/** The words that name a place in "go to the lounge", "head over to the den": the article kept, for its name. */
+export function placeWords(words: string): string {
   return words
     .trim()
     .toLowerCase()
     .replace(/[.!]+$/, "")
     .replace(LEADING, "")
+    .trim();
+}
+
+/** The words that name the thing in "sit on the couch", "over by the big window". */
+export function spotWords(words: string): string {
+  return placeWords(words)
     .replace(/^(the|a|an|your|my)\s+/, "")
     .trim();
 }
@@ -517,9 +544,14 @@ export function looksOf(agent: string, role: Role | undefined, chosen: Chosen) {
 export function selfWords(body: BodyData, worn: string, model: string | undefined): string {
   const colour = body.color ? `${body.colorName ?? body.color}` : "your own colour";
   const size = body.size ? `, ${body.size} times your normal size` : "";
+  const carriage = listWords([
+    body.idle ? carriageWords("idle", body.idle) : "you idle as you always have",
+    body.posture ? carriageWords("posture", body.posture) : "you stand relaxed",
+    body.walk ? carriageWords("walk", body.walk) : "you walk at your own pace",
+  ]);
   const lines = [
     `You are drawn in ${body.model ?? model ?? "your own model"}, in ${colour}${size}. ${worn}`,
-    `You pass the quiet ${body.idle ?? "as you always have"}, stand ${body.posture ?? "relaxed"} and walk ${body.walk ? `with a ${body.walk} step` : "at your own pace"}.`,
+    `${carriage[0].toUpperCase()}${carriage.slice(1)}.`,
   ];
   if (body.errands?.length) lines.push(`When idle you like ${listWords(body.errands.map(errandSaid))}.`);
   return lines.join(" ");
@@ -660,7 +692,7 @@ export class BodyTool implements Tool {
         type: "string",
         description: `change: what you wear, from: ${Object.keys(WEAR).join(", ")}; or "none", or "default".`,
       },
-      idle: { type: "string", enum: [...IDLES, "default"], description: "change: how you pass the quiet." },
+      idle: { type: "string", enum: [...IDLES, "default"], description: "change: how you spend idle time." },
       posture: { type: "string", enum: [...POSTURES, "default"], description: "change: how you stand." },
       walk: { type: "string", enum: [...WALKS, "default"], description: "change: how you walk." },
       errands: { type: "string", description: 'change: what you like doing when idle, e.g. "coffee, reading".' },
@@ -831,8 +863,10 @@ export class BodyTool implements Tool {
       await changeBody(service, caller, agent, { spot: null });
       return { success: true, output: "You're free to go where you like again." };
     }
+    // The words that name a place, without how to get there: "go to the lounge" is the lounge. The article stays.
+    const named = placeWords(to);
     // Home is a place, never a spot called that.
-    const homeward = HOME.test(to.toLowerCase());
+    const homeward = HOME.test(to.toLowerCase()) || HOME.test(named);
     const here = await this.world.here(service, caller, agent);
     const spot = homeward ? undefined : spotIn(here.place, to);
     if (spot) {
@@ -847,7 +881,9 @@ export class BodyTool implements Tool {
         output: `You go and stay ${stayWords(chosen.name)} ${lasting}. Work and conversations still come first; you come back after.`,
       };
     }
-    const went = await this.world.go(service, caller, agent, to);
+    const went =
+      (await this.world.go(service, caller, agent, to)) ??
+      (named && named !== to.toLowerCase() ? await this.world.go(service, caller, agent, named) : undefined);
     if (!went) {
       const spots = here.place.spots.map((s) => s.place).filter((p, i, all) => p && all.indexOf(p) === i);
       return fail(

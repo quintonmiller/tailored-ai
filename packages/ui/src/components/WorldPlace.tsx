@@ -1,8 +1,8 @@
 import type { Room, RoomChange } from "../avatar/scene";
+import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
 import { ago } from "../lib/tasks";
 import type { Said } from "./WorldAgent";
-import { agentColor } from "./WorldMap";
 import { WorldPanel } from "./WorldPanel";
 
 /** What a person asks an agent, so its room shows what it works on. */
@@ -95,6 +95,7 @@ export function WorldPlace({
   onAsk?: (agent: string) => void;
   onClose: () => void;
 }) {
+  const colorOf = useAgentColor();
   const owner = id.startsWith("home:") ? id.slice("home:".length) : undefined;
   const kind = owner ? "Home" : id.startsWith("room:") ? "Meeting room" : id === "lobby" ? "Lobby" : "Shared place";
   const changes = room.changes ?? [];
@@ -141,7 +142,7 @@ export function WorldPlace({
               <li key={`${c.at} ${c.who}`}>
                 <span
                   className="world-agent-dot"
-                  style={{ background: c.person ? "var(--text)" : agentColor(c.who) }}
+                  style={{ background: c.person ? "var(--text)" : colorOf(c.who) }}
                   aria-hidden="true"
                 />
                 <span className="world-change-what">

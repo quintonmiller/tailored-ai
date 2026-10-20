@@ -1,6 +1,6 @@
 /**
  * An agent's body as it chose it: its colour, its model, its size and what
- * it wears; how it passes the quiet, stands and walks; what it likes doing
+ * it wears; how it idles, stands and walks; what it likes doing
  * when idle; a gesture it is making; and a spot it chose to stay at. The
  * server keeps one `body` record per agent, written by the agent's `body`
  * tool or a person on its card, and an `emote` record for a gesture (see
@@ -18,7 +18,7 @@ import type { Room } from "./scene";
 export const BODY_TYPE = "body";
 export const EMOTE_TYPE = "emote";
 
-/** How a body passes the quiet, as the server names them. */
+/** How a body idles, as the server names them. */
 export const IDLES = ["calm", "lively", "focused", "sleepy"] as const;
 export type Idle = (typeof IDLES)[number];
 /** How a body stands when nothing else has it. */
@@ -98,6 +98,13 @@ export interface EmoteRecord {
   at: string;
   until?: string;
   target?: string;
+  /**
+   * When this page heard of it, by the page's own clock (`Date.now()`):
+   * set on a record that came in while the page was open, so a viewer whose
+   * clock is off from the server's still sees it fresh. None on one the page
+   * found when it loaded.
+   */
+  heard?: number;
 }
 
 // --------------------------------------------------------------------------
@@ -303,6 +310,12 @@ export function chosenSpotIn(room: Room, chosen: ChosenSpot): string | undefined
 /** How far from a thing the nearest spot may be, in metres, to count as by it. */
 const NEAR_ENOUGH = 2.2;
 
+/** Where a body stays, for its tag: "staying at the window", "staying in the middle of the room". */
+export function stayingWords(name: string): string {
+  if (/^(on|at|by|in|near|beside|next to|in front of|under|behind|inside)\b/i.test(name)) return `staying ${name}`;
+  return /^(the )?(middle|centre|center|corner)\b/i.test(name) ? `staying in ${name}` : `staying at ${name}`;
+}
+
 /**
  * Which rule has a body now, first to last: a conversation face to face with
  * someone here, its work (somewhere to be, something to hold), a person
@@ -318,6 +331,20 @@ export function planFor(at: { talking: boolean; working: boolean; engaged: boole
   return at.spot ? "spot" : "routine";
 }
 
+/** Each rule, last to first: the higher, the more it has a body. */
+const PLAN_ORDER: readonly Plan[] = ["routine", "spot", "you", "work", "talk"];
+
+/**
+ * Whether a body at a spot, or on its way to it, makes room there for one
+ * coming to it: only for a rule above its own. A body about its routine
+ * makes room for one that chose the spot; one that chose it too, is at work
+ * there, talking or with you, keeps it, and the other waits until it is free
+ * rather than pushing in. Two that chose the same spot don't take turns.
+ */
+export function makesRoom(holder: Plan, comer: Plan): boolean {
+  return PLAN_ORDER.indexOf(holder) < PLAN_ORDER.indexOf(comer);
+}
+
 // --------------------------------------------------------------------------
 // Gestures
 // --------------------------------------------------------------------------
@@ -329,7 +356,9 @@ export const STALE_EMOTE_MS = 15_000;
  * The gesture a record asks a body to make now, and for how many seconds it
  * keeps going (none for once): only one not made yet (`made`, the time of the
  * last one made), and only while it is fresh or still going. Undefined
- * otherwise.
+ * otherwise. One the page heard come in is timed from when it heard it, on
+ * its own clock, however far that is from the server's; only one it found on
+ * loading is timed by the server's.
  */
 export function emoteNow(
   record: EmoteRecord | undefined,
@@ -337,8 +366,9 @@ export function emoteNow(
   now: number,
 ): { name: Emote; seconds?: number; target?: string } | undefined {
   if (!record || record.at === made || !(EMOTES as readonly string[]).includes(record.name)) return undefined;
-  const at = Date.parse(record.at);
-  const until = record.until ? Date.parse(record.until) : Number.NaN;
+  const sent = Date.parse(record.at);
+  const at = record.heard ?? sent;
+  const until = record.until ? at + (Date.parse(record.until) - sent) : Number.NaN;
   const going = Number.isFinite(until) && until > now;
   if (!going && !(now - at < STALE_EMOTE_MS)) return undefined;
   return {
@@ -346,6 +376,51 @@ export function emoteNow(
     ...(going ? { seconds: (until - now) / 1000 } : {}),
     ...(record.target ? { target: record.target } : {}),
   };
+}
+
+/**
+ * Whether a body makes a gesture by itself now (a wave to someone walking
+ * up, a stretch on getting somewhere): not while one it was asked for is
+ * kept going (`keptUntil`, on the same clock), which lasts as long as it was
+ * asked to.
+ */
+export function makesOwnGesture(keptUntil: number | undefined, clock: number): boolean {
+  return keptUntil === undefined || clock >= keptUntil;
+}
+
+/** A moment after a gesture before a body turns back, so the move is over first. */
+const TURN_BACK_PAUSE = 0.4;
+
+/** Where a body turned to make a gesture goes back to facing, and when: the spot it stood at. */
+export interface TurnBack {
+  spot: string;
+  at: number;
+}
+
+/**
+ * When a body that turns to make a gesture turns back to what its spot
+ * faces: `seconds` after `clock`, once the move is over. Undefined when it
+ * stood at no spot, with nothing to turn back to. Taken before it turns,
+ * since a body turning is on the move and at no spot until it has.
+ */
+export function turnBackAfter(spot: string | undefined, clock: number, seconds: number): TurnBack | undefined {
+  return spot === undefined ? undefined : { spot, at: clock + seconds + TURN_BACK_PAUSE };
+}
+
+/**
+ * What a body due to turn back does at `t`: "wait" until its time, or
+ * while it is still turning; "turn" back once standing at the same spot; and
+ * "drop" it when it has gone somewhere else or sat down, which face their
+ * own way.
+ */
+export function turnBackNow(
+  turn: TurnBack,
+  t: number,
+  body: { current: string | undefined; moving: boolean; seated: number },
+): "wait" | "turn" | "drop" {
+  if (body.current !== turn.spot || body.seated >= 0.05) return "drop";
+  if (t < turn.at || body.moving) return "wait";
+  return "turn";
 }
 
 // --------------------------------------------------------------------------

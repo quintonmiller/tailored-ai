@@ -6,11 +6,11 @@ import {
   type ProjectTaskWithComments,
   updateProjectTask,
 } from "../api";
+import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
 import { answerable, type Need, ownFlow, questionIn } from "../lib/needs";
 import { lasting } from "../lib/tasks";
 import { ApprovalArgs } from "./ApprovalArgs";
-import { agentColor } from "./WorldMap";
 import { WorldPanel } from "./WorldPanel";
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -139,6 +139,7 @@ export function NeedCard({
   }, [needs, said]);
   const live = new Set(needs.map((n) => n.key));
   const name = nameOf(agent);
+  const color = useAgentColor()(agent);
   const done = (key: string, words: string) => setSaid((s) => ({ ...s, [key]: words }));
 
   return (
@@ -147,7 +148,7 @@ export function NeedCard({
       label={`What ${name} is waiting on you for`}
       title={
         <span className="world-agent-name">
-          <span className="world-agent-dot" style={{ background: agentColor(agent) }} aria-hidden="true" />
+          <span className="world-agent-dot" style={{ background: color }} aria-hidden="true" />
           {name}
         </span>
       }

@@ -262,8 +262,9 @@ Its voice is set by `voice.voice`, as before.
 
 Agents sharing one model are told apart first by colour: each body is the
 model turned round the colour wheel by an amount drawn from the agent's
-name, and the dot by its name on its card, in the chat and on the map is the
-same colour. The default agent keeps the model's own colours. An agent can
+name, and the dot by its name on its card, in the chat, on the map, in the
+needs list and on boards and calendars is the same colour, the one it chose
+once it chooses. The default agent keeps the model's own colours. An agent can
 choose a colour of its own, and another of the models the deployment has, as
 can you on its card (see [An agent in charge of its body](#an-agent-in-charge-of-its-body)).
 
@@ -387,14 +388,17 @@ body action="go" to="sit on the couch" for="20 min"
 - **`emote`** makes a gesture now, once, or for a while with `for` (`"20s"`,
   at most five minutes). With `at`, it turns to someone or something in the
   room first; without, to you on the agent's own view, or to whoever is next
-  to it. It turns back to what it was doing after.
+  to it. It turns back to what it was doing after. A gesture kept going
+  lasts as long as it was asked to: the wave a body gives someone walking
+  up, or the stretch it makes on getting somewhere, waits until it is over.
 - **`go`** walks to a spot in the place it is in, said in words: `"the
   couch"`, `"by the window"`, `"sit on the couch"`, `"by the plant"` (a thing
   with no spot of its own: it stands by it). It stays there until it chooses
-  otherwise (`to="anywhere"`), or for as long as `for` says. Words that name
-  no spot here are a place, as for the `place` tool's `go`: home, a shared
-  place, or the meeting room of a room it talks in; with `for`, it comes home
-  when the time runs out.
+  otherwise (`to="anywhere"`), or for as long as `for` says (`"30 min"`,
+  `"an hour"`). Words that name no spot here are a place, as for the
+  `place` tool's `go`: home, a shared place, or the meeting room of a room it
+  talks in, said plainly or as `"go to the lounge"`; with `for`, it comes
+  home when the time runs out.
 
 | choice | what it does |
 |---|---|
@@ -428,6 +432,19 @@ about its own business there. A stay with a time ends when the time runs
 out, and the plugin lets the spot go, so the agent's own `look` and its card
 never say it is staying somewhere it has left.
 
+**Staying somewhere** isn't standing still. At its spot, a body does what
+the spot offers, one thing after another: a coffee on the couch, then a
+book; a look out of the window. Each lasts as long as it would on an errand,
+longer or shorter as its idle style has it, and something else follows. A
+one-off like a stretch isn't made over and over; with nothing else to do
+there, it stands, and its tag says where it is staying ("staying in the
+middle of the room").
+
+**Two bodies, one spot.** A body about its own routine makes room for one
+that chose the spot it stands at. One that chose the same spot, works there,
+or is talking keeps it, and the other waits nearby until it is free, so a
+visitor that chose "the desk" never pulls the owner off it mid-turn.
+
 **The models to choose from** are every model the config names (the
 deployment's, and each agent's own) and every `.vrm` file in
 `<TAI_HOME>/avatars/`, by file name. Drop another model in that folder and
@@ -441,7 +458,9 @@ when there is more than one, a size slider, its idle style, posture and
 walk, what it likes doing, a gesture to make now, and, while it is staying
 somewhere, where, with **let it roam**. Each choice shows on its body the
 moment it is made, wherever it is drawn: on its own view, on your visit, in
-anyone's company.
+anyone's company. A colour from the picker is saved once, when you close
+it. A change that can't be saved shows on the card as it was before, with
+the reason.
 
 Everything chosen is one `body` world-state record per agent
 (`/api/state/body/<agent>`), in the agent's own scope, kept like any record,

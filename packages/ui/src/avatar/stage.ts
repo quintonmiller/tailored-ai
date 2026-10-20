@@ -42,8 +42,14 @@ import {
   type EmoteRecord,
   emoteNow,
   idleStyle,
+  makesRoom,
+  type Plan,
   planFor,
+  stayingWords,
+  type TurnBack,
   tintOf,
+  turnBackAfter,
+  turnBackNow,
 } from "./body";
 import { type CalendarView, drawCalendar } from "./calendar";
 import type { Cue } from "./cues";
@@ -54,7 +60,7 @@ import { type Fadeable, paintFaded } from "./fade";
 import { Figure, loadModel } from "./figure";
 import { faceToFace, sideFor } from "./greet";
 import { type Fit, Handles, type Patch } from "./handles";
-import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, likesOf, seeded } from "./idle";
+import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, likesOf, seeded, stayLength } from "./idle";
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
@@ -868,8 +874,9 @@ export async function createStage(
   const stillActivity = opts.still && !(selfie && start?.activity !== "sit") ? start?.activity : undefined;
   const self = opts.agent || "default";
 
-  // What each idle body is doing with its time, and whether it has got there yet.
-  const errands = new Map<Figure, { errand: Errand; arrived: boolean }>();
+  // What each idle body is doing with its time, whether it has got there yet, and, at a spot it chose to stay at,
+  // when it moves on to something else there (see `attend`).
+  const errands = new Map<Figure, { errand: Errand; arrived: boolean; ends?: number }>();
   // A run of chances per agent, so two in one room don't do the same thing at once, and each keeps its own day.
   const chances = new Map<string, () => number>();
   const chanceFor = (agent: string) => {
@@ -995,6 +1002,8 @@ export async function createStage(
   // Who faces whom here, talking face to face, and whether each is the one to walk over (see `talkingHere`); where
   // each that walked over stands, or is walking to stand; and when each body last looked to its company.
   let kept = new Map<string, { partner: string; goes: boolean }>();
+  // Whether you are talking to the agent shown, this frame: a person at the page comes before the spot it chose.
+  let engagedNow = false;
   const standing = new Map<Figure, [number, number]>();
   const facedAt = new Map<Figure, number>();
   const rekeep = () => {
@@ -1029,19 +1038,47 @@ export async function createStage(
     const now = spot ? chosenNow(spot, spot.place, Date.now()) : undefined;
     return now ? chosenSpotIn(room, now) : undefined;
   };
-  /** Go to the spot it chose and stay: anyone else there makes room. Already there, or on its way, nothing to do. */
+  /** Its tag at the spot it chose, with nothing else to say: "staying at the window". */
+  const stayTag = (agent: string, f: Figure): string | undefined => {
+    const name = looksOf(agent)?.spot?.name;
+    return name && f.here !== undefined && f.here === stayFor(agent) ? stayingWords(name) : undefined;
+  };
+  /**
+   * Which rule has a body this frame (see `planFor`): your own body on a
+   * visit, and a photo's, are yours. Whether you are talking to the agent
+   * shown is the frame's (`engagedNow`).
+   */
+  const planOf = (f: Figure): Plan => {
+    if (f === me && (opts.visitor || opts.still)) return "you";
+    const agent = f === me ? self : [...companions].find(([, c]) => c === f)?.[0];
+    if (!agent) return "routine";
+    return planFor({
+      talking: kept.has(agent),
+      working: !!shows.get(f)?.behavior.stays,
+      engaged: f === me && engagedNow,
+      spot: !!stayFor(agent),
+    });
+  };
+  /**
+   * Go to the spot it chose and stay. A body there about its own routine
+   * makes room; one with more reason to be there (it chose the spot too, it
+   * works there, it is talking, or with you) keeps it, and this one waits
+   * where it is until the spot is free, rather than pushing in every frame.
+   * Waiting at no spot at all, it stands at a free one meanwhile. Already
+   * there, or on its way, nothing to do.
+   */
   const keepTo = (f: Figure, id: string) => {
     if (f.current === id || f.pending === id) return;
-    if (f === me) {
-      go(id);
+    const holders = [me, ...companions.values()].filter((g) => g !== f && g.current === id);
+    if (!holders.every((g) => makesRoom(planOf(g), "spot"))) {
+      drift(f);
       return;
     }
-    for (const g of [me, ...companions.values()]) {
-      if (g === f || g.current !== id || (g === me && opts.visitor)) continue;
+    for (const g of holders) {
       const elsewhere = freeSpot(g);
       if (elsewhere && elsewhere.id !== id) g.go(room, elsewhere.id, waysFor(g));
     }
-    f.go(room, id, ways());
+    f.go(room, id, waysFor(f));
   };
   /** Where `f` stands to talk to `partner`, on the side it comes from: clear of everyone else. */
   const standFor = (f: Figure, partner: Figure) => {
@@ -2373,7 +2410,7 @@ export async function createStage(
           ? `${behavior.label} · ${behavior.detail}`
           : behavior.label
       : close
-        ? (errands.get(f)?.errand.label ?? "idle")
+        ? (errands.get(f)?.errand.label ?? stayTag(agent, f) ?? "idle")
         : undefined;
     // The agent you talk to needs no name; the others always show theirs.
     f.label(
@@ -2393,7 +2430,8 @@ export async function createStage(
     });
     f.signs.set(behavior.sign, clock);
     f.doze(!!behavior.asleep);
-    if (behavior.gesture && was?.doing !== activity?.doing) f.gesture(behavior.gesture, clock);
+    if (behavior.gesture && was?.doing !== activity?.doing)
+      f.gesture(behavior.gesture, clock, undefined, { auto: true });
   }
 
   /**
@@ -2403,27 +2441,41 @@ export async function createStage(
    * turn to whoever it is talking to when they are here. Idle and free, its
    * time is its own: whatever it is doing with it, at the spot it went to.
    */
-  const attend = (f: Figure, agent: string, t: number, free: boolean) => {
+  const attend = (f: Figure, agent: string, t: number, free: boolean, stay?: string) => {
     const s = shows.get(f);
     const b = s?.behavior;
     const spot = f.here ? spotById(room, f.here) : undefined;
     let e = errands.get(f);
-    // Sent somewhere else, or busy now: whatever it was doing with its time is over.
+    // Sent somewhere else, or busy now: whatever it was doing with its time is over. Staying at a spot it chose, or
+    // waiting at another until that is free, nothing sends it on: what it does there ends with its own time, and
+    // something else there follows.
     const own = free && !b?.stays;
-    if (e && (!own || (f.current !== e.errand.spot && f.pending !== e.errand.spot))) {
+    const staying = !!stay && f.here !== undefined;
+    const last = e?.errand.id;
+    const over = staying && e?.ends !== undefined && t >= e.ends;
+    if (e && (!own || over || (f.current !== e.errand.spot && f.pending !== e.errand.spot))) {
       stopErrand(f);
       e = undefined;
     }
-    // At a spot it went to some other way (put there, sent by a cue): something to do there.
+    // At a spot it went to some other way (put there, sent by a cue, staying there): something to do there.
     if (!e && own && f.here) {
-      const found = errandAt(room, f.here, hourNow(), chanceFor(agent), likesFor(agent));
+      const found = errandAt(
+        room,
+        f.here,
+        hourNow(),
+        chanceFor(agent),
+        likesFor(agent),
+        staying ? { last } : undefined,
+      );
       if (found) errands.set(f, (e = { errand: found, arrived: false }));
     }
     if (e && !e.arrived && f.here === e.errand.spot) {
       e.arrived = true;
-      if (e.errand.gesture) f.gesture(e.errand.gesture, t);
+      if (e.errand.gesture) f.gesture(e.errand.gesture, t, undefined, { auto: true });
       if (e.errand.doze) f.doze(true);
     }
+    if (e?.arrived && staying && e.ends === undefined)
+      e.ends = t + stayLength(e.errand, idleStyle(looksOf(agent)?.idle).stay, chanceFor(agent));
     const partner = b?.face ? figureOf(b.face) : undefined;
     const held = heldFor(b, { spotActivity: spot?.activity, partnerHere: !!partner && partner !== f });
     const errandHold = e?.arrived ? e.errand.hold : undefined;
@@ -2652,8 +2704,8 @@ export async function createStage(
   // The gesture each agent is making, and the last one each body here made, by agent.
   let emotes: Record<string, EmoteRecord> = {};
   const madeEmote = new Map<string, string>();
-  // Bodies turned to whoever they made a gesture for, and when they turn back to what their spot faces.
-  const turnedFor = new Map<Figure, number>();
+  // Bodies turned to whoever they made a gesture for: the spot each turns back to facing, and when.
+  const turnedFor = new Map<Figure, TurnBack>();
   /**
    * Who a gesture with no target is made for: you, watching, for the agent
    * this stage shows; for anyone else, the body near it (the agent shown, or
@@ -2687,21 +2739,25 @@ export async function createStage(
         : now.target
           ? undefined
           : audienceOf(f);
+    // Where it stands, taken before it turns: a body turning is on the move, and at no spot until it has. Still
+    // turning for a gesture before this one, it goes back to where that one had it.
+    const back = at ? turnBackAfter(f.here ?? turnedFor.get(f)?.spot, clock, now.seconds ?? EMOTE_SECONDS) : undefined;
     if (now.name === "point") {
       if (at) f.aim(at, true, clock);
       else f.gesture("point", clock);
-      return;
+    } else {
+      if (at) f.face(at, clock);
+      f.gesture(now.name, clock, now.seconds);
     }
-    if (at) f.face(at, clock);
-    f.gesture(now.name, clock, now.seconds);
-    if (f.here) turnedFor.set(f, clock + (now.seconds ?? EMOTE_SECONDS) + 0.4);
+    if (back) turnedFor.set(f, back);
   }
   /** Bodies done with a gesture turn back to what their spot faces, if they are still standing at it. */
   const turnBack = (t: number) => {
-    for (const [f, until] of turnedFor) {
-      if (t < until) continue;
+    for (const [f, back] of turnedFor) {
+      const next = turnBackNow(back, t, f);
+      if (next === "wait") continue;
       turnedFor.delete(f);
-      if (f.here && !f.moving && f.seated < 0.05) f.go(room, f.here, waysFor(f));
+      if (next === "turn") f.go(room, back.spot, waysFor(f));
     }
   };
   meet(opts.company ?? []);
@@ -2850,7 +2906,7 @@ export async function createStage(
         noticed.add(agent);
         if (!c.walker.busy) {
           c.aim(me.head(), false, t);
-          if (!shows.get(c)?.behavior.stays) c.gesture("wave", t);
+          if (!shows.get(c)?.behavior.stays) c.gesture("wave", t, undefined, { auto: true });
         }
       } else if (d > FORGET_AT) noticed.delete(agent);
     }
@@ -3000,6 +3056,7 @@ export async function createStage(
       if (page !== shownPage || (cards[page]?.clock && Math.floor(wall / 60_000) !== shownMinute)) drawScreens();
     }
     const { state, loudness, engaged } = input();
+    engagedNow = engaged;
     // A photo's frame is posed at the gesture's best moment exactly, however late this frame came.
     const peak = PEAK[opts.still?.gesture ?? ""] ?? 0.7;
     const shoot = !!opts.still && !readyFired && gestureAt !== undefined && t - gestureAt >= peak;
@@ -3037,7 +3094,8 @@ export async function createStage(
           me.director.sent();
         });
     }
-    if (!opts.still && !opts.visitor) attend(me, self, t, !engaged && !myCompany);
+    if (!opts.still && !opts.visitor)
+      attend(me, self, t, !engaged && !myCompany, myPlan === "spot" ? myStay : undefined);
     if (!opts.still && !opts.visitor && myPlan === "routine" && !asking) drift(me);
     // Talking with you comes first; otherwise it turns to whoever it is talking with here.
     if (myCompany && !engaged) keepCompany(me, myCompany.partner, myCompany.goes, t);
@@ -3123,7 +3181,7 @@ export async function createStage(
         if (plan === "spot" && stay) keepTo(c, stay);
         const move = plan === "routine" ? c.director.decide(t, c.here, false, taken(c)) : undefined;
         if (typeof move === "string") c.go(room, move, ways());
-        attend(c, agent, t, !company);
+        attend(c, agent, t, !company, plan === "spot" ? stay : undefined);
         if (company) keepCompany(c, company.partner, company.goes, t);
         else if (plan === "routine") drift(c);
       }

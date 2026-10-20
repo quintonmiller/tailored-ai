@@ -145,14 +145,17 @@ export function WorldAgent({
     load().catch(() => {});
   }, [load]);
 
-  const act = async (what: string, run: () => Promise<unknown>) => {
+  /** Do something, saying why when it couldn't be done: true once it was. */
+  const act = async (what: string, run: () => Promise<unknown>): Promise<boolean> => {
     setBusy(true);
     setProblem(null);
     try {
       await run();
       await load();
+      return true;
     } catch (err) {
       setProblem(`Couldn't ${what}: ${message(err)}`);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -168,7 +171,7 @@ export function WorldAgent({
         throw err;
       }
     });
-  const reshape = (change: BodyChange) => void act("change its body", async () => onBody?.(change));
+  const reshape = (change: BodyChange) => act("change its body", async () => onBody?.(change));
   const gesture = (emote: string) => void act("make the gesture", async () => onEmote?.(emote));
   const post = (path: string, body?: unknown) =>
     fetch(`/api/exploratory/agents/${encodeURIComponent(agent)}/${path}`, {

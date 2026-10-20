@@ -425,6 +425,10 @@ export function chooseErrand(
  * What an idle body does at a spot it was sent to or found itself at: a book
  * at the bookshelf, a coffee on the couch, a nap there late at night.
  * Undefined at a spot with nothing to do.
+ *
+ * `staying`, for a body that chose to stay at the spot: one thing after
+ * another, so only what lasts (no stretch, which is a one-off gesture that
+ * would be made over and over), and less likely what it did `last`.
  */
 export function errandAt(
   room: Room,
@@ -432,12 +436,27 @@ export function errandAt(
   hour: number,
   random: () => number,
   likes: Record<string, number> = {},
+  staying?: { last?: string },
 ): Errand | undefined {
   const spot = room.spots.find((s) => s.id === spotId);
   const where = spot ? whereOf(room, spot) : undefined;
   if (!spot || !where) return undefined;
+  const doings = staying ? DOINGS[where].filter((d) => !d.gesture) : DOINGS[where];
   return draw(
-    DOINGS[where].map((d) => ({ item: errand(spot, d), weight: d.weight(hour) * (likes[d.id] ?? 1) })),
+    doings.map((d) => ({
+      item: errand(spot, d),
+      weight: d.weight(hour) * (likes[d.id] ?? 1) * (staying && d.id === staying.last ? AGAIN : 1),
+    })),
     random,
   );
+}
+
+/**
+ * How long a body keeps at an errand at a spot it chose to stay at, in
+ * seconds: somewhere in the errand's own span, longer or shorter as its idle
+ * style has it (`stay`). Nothing else moves it on there, so this does.
+ */
+export function stayLength(errand: Errand, stay: number, random: () => number): number {
+  const [lo, hi] = errand.seconds;
+  return (lo + (hi - lo) * random()) * stay;
 }

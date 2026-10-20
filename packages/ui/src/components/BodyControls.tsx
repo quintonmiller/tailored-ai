@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type BodyChange,
   type BodyLooks,
@@ -40,7 +40,7 @@ export function bodyWords(looks: BodyLooks): string {
 /**
  * Choosing how an agent's body looks and carries itself, on its card: the
  * same choices its `body` tool has. Each choice is made at once, and shows as
- * made until the world says it is.
+ * made until the world says it is, or until saving it fails.
  */
 export function BodyControls({
   name,
@@ -53,7 +53,8 @@ export function BodyControls({
   name: string;
   looks: BodyLooks;
   busy: boolean;
-  onBody: (change: BodyChange) => void;
+  /** Make a change; true once it is saved, false when it couldn't be (the card says why). */
+  onBody: (change: BodyChange) => Promise<boolean>;
   onEmote?: (emote: string) => void;
 }) {
   // What was just asked for, until what the world says catches up.
@@ -79,8 +80,32 @@ export function BodyControls({
   }, []);
   const change = (next: BodyChange) => {
     setAsked((was) => ({ ...was, ...next }));
-    onBody(next);
+    void onBody(next).then((saved) => {
+      if (saved) return;
+      // Not saved, so not chosen: the card goes back to the body as it still is, unless something else was asked since.
+      setAsked((was) => {
+        const out: BodyChange = { ...was };
+        for (const key of Object.keys(next) as (keyof BodyChange)[]) if (out[key] === next[key]) delete out[key];
+        return out;
+      });
+    });
   };
+  // The free colour shows as the person drags round the picker, and is saved once, when they close it: a browser
+  // says "input" at every step of a drag (React's onChange) and "change" only at the end.
+  const [picking, setPicking] = useState<string | undefined>(undefined);
+  const picker = useRef<HTMLInputElement>(null);
+  const pickColour = useRef<(hex: string) => void>(() => {});
+  pickColour.current = (hex: string) => {
+    setPicking(undefined);
+    if (hex !== shown.color) change({ color: hex, colorName: null });
+  };
+  useEffect(() => {
+    const input = picker.current;
+    if (!input) return;
+    const picked = () => pickColour.current(input.value.toLowerCase());
+    input.addEventListener("change", picked);
+    return () => input.removeEventListener("change", picked);
+  }, []);
   // A choice of one among several, or none: pressing the one chosen takes it back.
   const pick = <K extends "idle" | "posture" | "walk">(field: K, value: NonNullable<BodyLooks[K]>) =>
     change({ [field]: shown[field] === value ? null : value } as BodyChange);
@@ -98,6 +123,7 @@ export function BodyControls({
     values: readonly T[],
     on: (v: T) => boolean,
     press: (v: T) => void,
+    word: (v: T) => string = (v) => v,
   ) => (
     <span className="world-wear" role="group" aria-label={label}>
       {values.map((v) => (
@@ -109,7 +135,7 @@ export function BodyControls({
           disabled={busy}
           onClick={() => press(v)}
         >
-          {v}
+          {word(v)}
         </button>
       ))}
     </span>
@@ -145,11 +171,12 @@ export function BodyControls({
           ))}
           <label className="body-swatch body-swatch-any" title="Any colour">
             <input
+              ref={picker}
               type="color"
               aria-label="Any colour"
-              value={shown.color ?? "#4c8c4a"}
+              value={picking ?? shown.color ?? "#4c8c4a"}
               disabled={busy}
-              onChange={(e) => change({ color: e.target.value.toLowerCase(), colorName: null })}
+              onChange={(e) => setPicking(e.target.value.toLowerCase())}
             />
           </label>
         </span>
@@ -191,7 +218,7 @@ export function BodyControls({
       <div className="body-row">
         <span className="body-label">Idles</span>
         {chips(
-          `How ${name} passes the quiet`,
+          `How ${name} idles`,
           IDLES,
           (v) => shown.idle === v,
           (v) => pick("idle", v),
@@ -222,6 +249,8 @@ export function BodyControls({
           Object.keys(ERRANDS),
           (id) => liked.includes(id),
           (id) => like(id),
+          // The words the agent is told, "plants" and "the task board", not the names they are kept by.
+          (id) => ERRANDS[id] ?? id,
         )}
       </div>
       {onEmote && (

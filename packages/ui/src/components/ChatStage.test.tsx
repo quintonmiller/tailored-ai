@@ -1919,7 +1919,13 @@ describe("the chat page's scene", () => {
       [...card.querySelectorAll(`[aria-label="${group}"] .world-wear-chip`)].find(
         (c) => c.textContent === label,
       ) as HTMLButtonElement;
-    expect(chip("How planner passes the quiet", "calm").getAttribute("aria-pressed")).toBe("true");
+    expect(chip("How planner idles", "calm").getAttribute("aria-pressed")).toBe("true");
+    // What it likes doing, in the words the agent is told, kept by their names.
+    await act(async () => chip("What planner likes doing when idle", "plants").click());
+    await settle(30);
+    expect(posts.filter((p) => p.url === "/api/state/body/planner").at(-1)?.body).toMatchObject({
+      data: { errands: ["water"] },
+    });
     await act(async () => chip("How planner walks", "sneak").click());
     await settle(30);
     expect(posts.filter((p) => p.url === "/api/state/body/planner").at(-1)?.body).toMatchObject({
@@ -1950,7 +1956,58 @@ describe("the chat page's scene", () => {
       }),
     );
     await settle(30);
-    expect(stage.emotes.at(-1)).toMatchObject({ talker: { name: "cheer" } });
+    // Heard while the page was open: timed from when the page heard it, by its own clock.
+    expect(stage.emotes.at(-1)).toMatchObject({ talker: { name: "cheer", heard: expect.any(Number) } });
+    expect(stage.emotes.at(-1)?.planner).not.toHaveProperty("heard");
+  });
+
+  it("saves a colour from the picker once, when it closes, not at every step of a drag", async () => {
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    await act(async () => (card.querySelector(".world-agent-body .world-panel-inline") as HTMLButtonElement).click());
+    await settle(30);
+    const picker = card.querySelector('input[type="color"]') as HTMLInputElement;
+    const saves = () => posts.filter((p) => p.url === "/api/state/body/planner");
+    // Dragging round the picker: each step shows, none is saved.
+    for (const hex of ["#112233", "#334455", "#556677"]) {
+      await act(async () => {
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        set?.call(picker, hex);
+        picker.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
+    await settle(30);
+    expect(picker.value).toBe("#556677");
+    expect(saves()).toHaveLength(0);
+    // Closed: saved once, as the colour it ended on.
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    await settle(30);
+    expect(saves()).toHaveLength(1);
+    expect(saves()[0].body).toMatchObject({ data: { color: "#556677" } });
+  });
+
+  it("puts the card's choice back when a change to a body couldn't be saved", async () => {
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    wearStatus = 500;
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    await act(async () => (card.querySelector(".world-agent-body .world-panel-inline") as HTMLButtonElement).click());
+    await settle(30);
+    const coral = () => card.querySelector('.body-swatch[aria-label="coral"]') as HTMLButtonElement;
+    await act(async () => coral().click());
+    await settle(30);
+    expect(posts.some((p) => p.url === "/api/state/body/planner")).toBe(true);
+    // Not saved, so not chosen: the swatch isn't pressed, and the card says why.
+    expect(coral().getAttribute("aria-pressed")).toBe("false");
+    expect(card.querySelector(".body-swatch-own")?.getAttribute("aria-pressed")).toBe("true");
+    expect(card.querySelector(".agent-menu-problem")?.textContent).toMatch(/Couldn't change its body/);
   });
 
   it("puts the card's chips back when what a body wears couldn't be saved", async () => {

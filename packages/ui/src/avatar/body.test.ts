@@ -16,9 +16,14 @@ import {
   emoteNow,
   hexToHsl,
   idleStyle,
+  makesOwnGesture,
+  makesRoom,
   planFor,
   STALE_EMOTE_MS,
+  stayingWords,
   tintOf,
+  turnBackAfter,
+  turnBackNow,
   walkStyle,
 } from "./body";
 import { hueFor } from "./doing";
@@ -161,6 +166,23 @@ describe("where it stays", () => {
     expect(planFor({ talking: false, working: false, engaged: false, spot: true })).toBe("spot");
     expect(planFor({ talking: false, working: false, engaged: false, spot: false })).toBe("routine");
   });
+
+  it("is made room for only by a body about its routine; anything with more reason keeps the spot", () => {
+    expect(makesRoom("routine", "spot")).toBe(true);
+    // One that chose the spot too keeps it: the other waits, rather than the two taking turns every frame.
+    expect(makesRoom("spot", "spot")).toBe(false);
+    // Working there, talking, or with you: the spot is theirs while they are.
+    for (const holder of ["work", "talk", "you"] as const) expect(makesRoom(holder, "spot")).toBe(false);
+    // Work comes before a chosen spot, so it may take one.
+    expect(makesRoom("spot", "work")).toBe(true);
+  });
+
+  it("says on its tag where it stays", () => {
+    expect(stayingWords("at the window")).toBe("staying at the window");
+    expect(stayingWords("on the couch")).toBe("staying on the couch");
+    expect(stayingWords("the middle of the room")).toBe("staying in the middle of the room");
+    expect(stayingWords("the bookshelf")).toBe("staying at the bookshelf");
+  });
 });
 
 describe("a gesture", () => {
@@ -183,6 +205,39 @@ describe("a gesture", () => {
       name: "point",
       target: "the window",
     });
+  });
+
+  it("heard while the page is open, is timed by the page's own clock, however far off the server's that is", () => {
+    // The viewer's clock is a minute ahead of the server's: the gesture is a minute old by it, but just heard.
+    expect(emoteNow({ name: "wave", at: at(-60_000), heard: now - 500 }, undefined, now)).toEqual({ name: "wave" });
+    // A minute behind: one heard long ago by the page isn't made again, whatever the server's time says.
+    expect(emoteNow({ name: "wave", at: at(60_000), heard: now - STALE_EMOTE_MS - 1 }, undefined, now)).toBeUndefined();
+    // Kept going for 30 seconds from when it was made, heard 10 seconds ago: 20 seconds left, by the page's clock.
+    expect(
+      emoteNow({ name: "dance", at: at(-90_000), until: at(-60_000), heard: now - 10_000 }, undefined, now),
+    ).toEqual({ name: "dance", seconds: 20 });
+  });
+
+  it("turns a body to its audience and back to what its spot faces once it is over, if it stayed there", () => {
+    const back = turnBackAfter("window", 10, 2.5);
+    expect(back).toEqual({ spot: "window", at: 12.9 });
+    // At no spot, there is nothing to turn back to.
+    expect(turnBackAfter(undefined, 10, 2.5)).toBeUndefined();
+    if (!back) return;
+    const standing = { current: "window", moving: false, seated: 0 };
+    expect(turnBackNow(back, 11, standing)).toBe("wait");
+    // Still turning (on the move at the same spot): it waits for that to finish.
+    expect(turnBackNow(back, 13, { ...standing, moving: true })).toBe("wait");
+    expect(turnBackNow(back, 13, standing)).toBe("turn");
+    // Gone somewhere else meanwhile, or sat down: nothing to turn back to.
+    expect(turnBackNow(back, 13, { ...standing, current: "couch" })).toBe("drop");
+    expect(turnBackNow(back, 13, { ...standing, seated: 1 })).toBe("drop");
+  });
+
+  it("isn't made by the body itself while one it was asked for is kept going", () => {
+    expect(makesOwnGesture(undefined, 5)).toBe(true);
+    expect(makesOwnGesture(20, 5)).toBe(false);
+    expect(makesOwnGesture(20, 20)).toBe(true);
   });
 });
 

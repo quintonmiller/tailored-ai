@@ -1358,8 +1358,10 @@ export async function endStays(service: StateService, now = Date.now()): Promise
         );
       else await service.delete(PRESENCE_CALLER, ref, fresh.version);
     } catch (err) {
-      // Changed a moment ago: looked at again next time round.
-      if (!(err instanceof StateConflictError)) throw err;
+      // Changed a moment ago: looked at again next time round. Anything else is said, and tried again then too: one
+      // record that can't be written never stops the others, nor the sweep.
+      if (!(err instanceof StateConflictError))
+        console.warn(`[places] could not end ${id}'s stay: ${(err as Error).message}`);
     }
   }
 }
@@ -2633,7 +2635,9 @@ const plugin: Plugin = (ctx) => {
     sweeps.push(() => presence.sweep());
   }
   const sweep = () => {
-    for (const s of sweeps) void s();
+    // Each keeps its own troubles; one that slips through is said, never left to end the process.
+    for (const s of sweeps)
+      s().catch((err: unknown) => console.warn(`[places] a sweep failed: ${(err as Error).message}`));
   };
   sweep();
   const timer = setInterval(sweep, SWEEP_MS);

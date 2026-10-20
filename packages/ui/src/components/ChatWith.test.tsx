@@ -15,8 +15,10 @@ import { agentColor } from "./WorldMap";
 let root: Root;
 let container: HTMLDivElement;
 let transcriptStatus = 200;
+let bodies: { id: string; data: Record<string, unknown> }[] = [];
 
 beforeEach(() => {
+  bodies = [];
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -24,6 +26,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
+      if (url === "/api/state/body?limit=500") return new Response(JSON.stringify({ records: bodies }));
       if (url === `/api/ext/builtin:places/transcript/${encodeURIComponent("room:local:trip")}`) {
         if (transcriptStatus !== 200)
           return new Response(JSON.stringify({ error: "The discord rooms aren't connected right now." }), {
@@ -88,6 +91,16 @@ describe("who you are talking to", () => {
     probe.style.background = agentColor("planner");
     expect(dot.style.background).toBe(probe.style.background);
     expect(container.querySelector(".chat-with-doing")?.textContent).toMatch(/searching the web.*hotels/);
+  });
+
+  it("colours the dot as the agent chose its body", async () => {
+    bodies = [{ id: "planner", data: { color: "#ee7f6d", colorName: "coral" } }];
+    await show(
+      <ChatWith agent="planner" agents={["planner", "writer"]} activity={undefined} next={null} onSwitch={() => {}} />,
+    );
+    const probe = document.createElement("span");
+    probe.style.background = "#ee7f6d";
+    expect((container.querySelector(".chat-with-dot") as HTMLElement).style.background).toBe(probe.style.background);
   });
 
   it("calls the default agent by name, with no dot, and nothing to say while it is idle", async () => {

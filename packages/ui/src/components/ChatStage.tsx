@@ -232,8 +232,10 @@ function resized(change: { op: string; before?: Record<string, unknown>; after?:
  * Every record of one world-state type, by id, kept current as they change:
  * what every agent is doing (`activity`) and the last thing each said
  * (`speech`), both from `builtin:activity`. Empty when the server keeps none.
+ * `stamp` marks each record that comes in while the page is open with when
+ * the page heard it, by its own clock (`heard`): a gesture is timed by it.
  */
-export function useRecords<T>(type: string, enabled: boolean): Record<string, T> {
+export function useRecords<T>(type: string, enabled: boolean, stamp = false): Record<string, T> {
   const [records, setRecords] = useState<Record<string, T>>({});
   useEffect(() => {
     if (!enabled) return;
@@ -251,7 +253,7 @@ export function useRecords<T>(type: string, enabled: boolean): Record<string, T>
       setRecords((all) => {
         const next = { ...all };
         if (change.op === "delete" || !change.after) delete next[change.id];
-        else next[change.id] = change.after as unknown as T;
+        else next[change.id] = (stamp ? { ...change.after, heard: Date.now() } : change.after) as unknown as T;
         return next;
       });
     });
@@ -259,7 +261,7 @@ export function useRecords<T>(type: string, enabled: boolean): Record<string, T>
       gone = true;
       off();
     };
-  }, [type, enabled]);
+  }, [type, enabled, stamp]);
   return records;
 }
 
@@ -1248,7 +1250,7 @@ export function useChatStage({
   const needs = useMemo(() => needsFrom(activities, approvals.list, allTasks), [activities, approvals.list, allTasks]);
   const speech = useRecords<Said>("speech", showStage);
   // The gesture each agent is making: its body here makes it.
-  const emotes = useRecords<EmoteRecord>(EMOTE_TYPE, showStage);
+  const emotes = useRecords<EmoteRecord>(EMOTE_TYPE, showStage, true);
   const { online, names: agentNames, placeless: cantPlace } = useAgentRoster(showStage);
   const canPlace = useCallback((who: string) => !cantPlace.has(who), [cantPlace]);
   // What agents just did to the room on screen shows over their heads, like something they said.

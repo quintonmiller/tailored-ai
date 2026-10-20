@@ -51,12 +51,17 @@ export interface Pose {
   /** The bob of a walking step, in metres. */
   lift: number;
   /**
-   * With animation files playing: bones an arm gesture takes over, posed in
-   * full rather than as offsets, and how far it has taken them (0–1). The
-   * stage blends from the files' pose to these, so a wave is a wave and not
-   * a wave stacked on whatever the arm was doing.
+   * With animation files playing: bones an arm gesture, a hold or folded arms
+   * take over, posed in full rather than as offsets, and how far each is
+   * taken (0–1, `weights`; `weight` is the most of them). The stage blends
+   * from the files' pose to these, so a wave is a wave and not a wave
+   * stacked on whatever the arm was doing.
    */
-  owned?: { bones: Partial<Record<PoseBone, Rotation>>; weight: number };
+  owned?: {
+    bones: Partial<Record<PoseBone, Rotation>>;
+    weights: Partial<Record<PoseBone, number>>;
+    weight: number;
+  };
 }
 
 /** What the body is doing besides talking. */
@@ -602,10 +607,8 @@ export class Motion {
     const length = (m: { name: string; at: number; until?: number }) =>
       (m.until ?? m.at + GESTURE_MOVES[m.name].seconds) - m.at;
     this.moves = this.moves.filter((m) => t - m.at <= length(m));
-    const owned: Partial<Record<PoseBone, Rotation>> = {};
-    // The bones a gesture has, as against a hold or folded arms, which are posed for the arm as made.
-    const gestured = new Set<PoseBone>();
-    let ownWeight = 0;
+    // The bones a gesture takes over, each posed in full from rest, and how far the gesture has it now.
+    const gestured: Layers = {};
     for (const m of this.moves) {
       const move = GESTURE_MOVES[m.name];
       const weight = envelope(t - m.at, length(m));
@@ -615,61 +618,60 @@ export class Motion {
       // The bones a move takes over, posed in full from rest: a wave is a wave, and a dance a dance, whatever the
       // arms were doing at a desk or holding something.
       const takes = move.owns ?? [];
-      if (takes.length) ownWeight = Math.max(ownWeight, weight);
       for (const bone of POSE_BONES) {
         const o = pose[bone];
         if (!o) continue;
         if (takes.includes(bone)) {
-          // Posed from rest in full; blended to by the weight, by the stage over the files, or below over code.
-          const full = owned[bone] ?? [...REST[bone]];
-          gestured.add(bone);
+          const full = gestured[bone]?.[0] ?? [...REST[bone]];
           for (let i = 0; i < 3; i++) full[i] += o[i];
-          owned[bone] = full;
+          gestured[bone] = [full, Math.max(gestured[bone]?.[1] ?? 0, weight)];
         } else {
           for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * weight;
         }
       }
     }
-    // What it holds, unless a gesture has the arm: posed in full over the files, as an offset over code.
+    // What the arms do when no gesture has them: hold something, or fold. Over code each is an offset, as anything
+    // else is, and a gesture blends over it; over the files each is posed in full, how far it has the arm its own.
+    const under: Layers = {};
     const hold = this.held && this.holdWeight > 0.001 ? HOLDS[this.held] : undefined;
     if (hold) {
       const arm = this.held === "ear" && this.ear ? this.fromRest(this.ear) : hold.arm;
       for (const bone of HOLD_BONES) {
         const o = arm[bone];
-        if (!o || owned[bone]) continue;
-        if (clips) {
-          owned[bone] = [REST[bone][0] + o[0], REST[bone][1] + o[1], REST[bone][2] + o[2]];
-        } else {
-          for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * this.holdWeight;
-        }
+        if (!o) continue;
+        if (clips) under[bone] = [[REST[bone][0] + o[0], REST[bone][1] + o[1], REST[bone][2] + o[2]], this.holdWeight];
+        else for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * this.holdWeight;
       }
-      if (clips) ownWeight = Math.max(ownWeight, this.holdWeight);
       for (let i = 0; i < 3; i++) bones.head[i] += hold.head[i] * this.holdWeight;
     }
-    // Arms folded, while they have nothing else to do: no walking, sitting, typing, holding or gesture.
+    // Arms folded, while they have nothing else to do: no walking, sitting, typing or holding. A gesture takes them
+    // from folded and gives them back.
     if (posture === "arms folded" && !clips?.folded) {
       const busy = Math.max(this.walking, this.holdWeight, ...ACTIVITY_NAMES.map((a) => this.doing[a]));
       const free = 1 - busy;
       if (free > 0.001) {
         for (const [bone, o] of Object.entries(FOLDED) as [PoseBone, Rotation][]) {
-          if (owned[bone]) continue;
-          if (clips) owned[bone] = [REST[bone][0] + o[0], REST[bone][1] + o[1], REST[bone][2] + o[2]];
+          if (clips)
+            under[bone] = layer(
+              [[REST[bone][0] + o[0], REST[bone][1] + o[1], REST[bone][2] + o[2]], free],
+              under[bone],
+            );
           else for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * free;
         }
-        if (clips) ownWeight = Math.max(ownWeight, free);
       }
     }
     if (this.sleep > 0.001) {
       for (const [bone, o] of Object.entries(ASLEEP) as [PoseBone, Rotation][])
         for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * this.sleep;
     }
-    if (owned.leftUpperArm) owned.leftUpperArm[2] += this.armClearance;
-    if (owned.rightUpperArm) owned.rightUpperArm[2] -= this.armClearance;
+    // The upper arms swing out for a wide body whatever has them; a gesture's arm is turned as made (see `asMade`).
+    for (const layers of [gestured, under]) {
+      if (layers.leftUpperArm) layers.leftUpperArm[0][2] += this.armClearance;
+      if (layers.rightUpperArm) layers.rightUpperArm[0][2] -= this.armClearance;
+    }
     if (this.armDroop)
-      for (const bone of gestured) {
-        const r = owned[bone];
-        if (r && /Arm$/.test(bone)) owned[bone] = asMade(r, bone, this.armDroop);
-      }
+      for (const [bone, l] of Object.entries(gestured) as [PoseBone, [Rotation, number]][])
+        if (/Arm$/.test(bone)) l[0] = asMade(l[0], bone, this.armDroop);
     if (this.gazeAt) {
       const weight = envelope(t - this.gazeAt.at, LOOK_SECONDS);
       bones.head[1] += this.gazeAt.yaw * weight;
@@ -677,10 +679,23 @@ export class Motion {
       if (t - this.gazeAt.at > LOOK_SECONDS) this.gazeAt = undefined;
     }
 
-    // Without files, a move that takes bones over is blended to here, from whatever code had them doing.
-    if (!clips && ownWeight > 0)
-      for (const [bone, r] of Object.entries(owned) as [PoseBone, Rotation][])
-        for (let i = 0; i < 3; i++) bones[bone][i] += (r[i] - bones[bone][i]) * ownWeight;
+    // Without files, a gesture's bones are blended to here, from whatever code had them doing, holding or folded
+    // included, as far as the gesture has them.
+    if (!clips)
+      for (const [bone, [r, w]] of Object.entries(gestured) as [PoseBone, [Rotation, number]][])
+        for (let i = 0; i < 3; i++) bones[bone][i] += (r[i] - bones[bone][i]) * w;
+    // With files, each bone taken over is posed as what has it: a gesture over a hold or folded arms, as far as each.
+    const owned: Partial<Record<PoseBone, Rotation>> = {};
+    const weights: Partial<Record<PoseBone, number>> = {};
+    let ownWeight = 0;
+    if (clips)
+      for (const bone of POSE_BONES) {
+        const l = layer(under[bone], gestured[bone]);
+        if (!l || l[1] <= 0) continue;
+        owned[bone] = l[0];
+        weights[bone] = l[1];
+        ownWeight = Math.max(ownWeight, l[1]);
+      }
 
     const gaze: [number, number] = [0, 0];
     for (const st of STATES) {
@@ -694,7 +709,7 @@ export class Motion {
       gaze,
       seated: this.doing.sit,
       lift,
-      ...(clips && ownWeight > 0 ? { owned: { bones: owned, weight: ownWeight } } : {}),
+      ...(clips && ownWeight > 0 ? { owned: { bones: owned, weights, weight: ownWeight } } : {}),
     };
   }
 
@@ -720,6 +735,27 @@ export class Motion {
     const phase = (t - this.blinkStart) / BLINK_SECONDS;
     return phase < 0 || phase > 1 ? 0 : 1 - Math.abs(2 * phase - 1);
   }
+}
+
+/** Bones posed in full, each with how far its pose has it (0–1). */
+type Layers = Partial<Record<PoseBone, [Rotation, number]>>;
+
+/**
+ * A pose over another, as far as the top one has the bone: what is left of
+ * the one under shows through, and the two together have the bone as far as
+ * either does. Either may be missing.
+ */
+export function layer(
+  under: [Rotation, number] | undefined,
+  over: [Rotation, number] | undefined,
+): [Rotation, number] | undefined {
+  if (!over || over[1] <= 0) return under;
+  if (!under || under[1] <= 0) return over;
+  const [u, uw] = under;
+  const [o, ow] = over;
+  const w = 1 - (1 - uw) * (1 - ow);
+  const k = ow / w;
+  return [[u[0] + (o[0] - u[0]) * k, u[1] + (o[1] - u[1]) * k, u[2] + (o[2] - u[2]) * k], w];
 }
 
 const qPose = new THREE.Quaternion();
