@@ -3,6 +3,7 @@ import {
   catalogue,
   changeWords,
   doorItemTo,
+  doorsAsSaved,
   type Edit,
   type Kinds,
   linkable,
@@ -316,7 +317,7 @@ export function useRoomEditor(
     return {
       ...data,
       ...extra,
-      ...(p?.room.doors ? { doors: p.room.doors } : {}),
+      ...(p?.room.doors ? { doors: doorsAsSaved(p.room.doors, data) } : {}),
       ...(Object.keys(models).length ? { models } : {}),
     };
   };
@@ -688,7 +689,8 @@ export function useRoomEditor(
     [kinds, here],
   );
   // A model keeps its parts' own colours: there is nothing to repaint.
-  const fixedColours = !!picked?.model;
+  // A model keeps its parts' colours, and a door put in the colours of where it leads: nothing to repaint.
+  const fixedColours = !!picked?.model || !!pickedDoor;
   const hangs = !!picked && kinds?.kinds[picked.kind]?.mount === "wall";
   // A widget that can show more than one thing: what it can be set to.
   const choices = picked ? showsChoices(picked.kind, have()) : undefined;
@@ -812,7 +814,7 @@ export function useRoomEditor(
       ) : (
         <p className="room-edit-keys">
           {pickedDoor
-            ? `Put in by ${pickedDoor.by === kinds?.person ? "you" : pickedDoor.by} · Take out removes it here and in ${named(pickedDoor.to) ?? pickedDoor.label} · Ctrl+Z undoes`
+            ? `Put in by ${pickedDoor.by === kinds?.person ? "you" : pickedDoor.by} · Drag it along the sides · Take out removes it here and in ${named(pickedDoor.to) ?? pickedDoor.label} · Ctrl+Z undoes`
             : hangs
               ? "Drag it along its wall, or onto the other wall · Delete removes it · Ctrl+Z undoes"
               : picked

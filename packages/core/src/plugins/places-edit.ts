@@ -4,13 +4,14 @@
  * checked the way the `place` tool checks its own changes. Nothing goes in
  * front of a door, through a wall or into anything else, so a person can't
  * make a room the tool would refuse. A person can put in a door to any other
- * place, and take out any door put in (`places-doors.ts`). Pure: `places.ts`
+ * place, and drag or take out any door put in (`places-doors.ts`). Pure: `places.ts`
  * answers the page with it over HTTP, and the page writes what comes back to
  * the place's record through the world-state API, as the person.
  */
-import { linkItem, townDoorsOf, withoutLink } from "./places-doors.js";
+import { linkItem, moveDoor, townDoorsOf, withoutLink } from "./places-doors.js";
 import {
   type DoorSlot,
+  doorSlotAt,
   findPlacement,
   KINDS,
   LIMITS,
@@ -169,13 +170,20 @@ function placed(place: Place, held: Place, item: PlaceItem, edit: Extract<Edit, 
   return whyNotOnFloor(held, placing, edit.at, edit.facing) ?? { at: edit.at, facing: edit.facing };
 }
 
+/** What the doors in a place are called, for saying which one is in the way: its way out, and where each door put in goes. */
+export interface DoorNames {
+  out: string;
+  nameOf: (id: string) => string | undefined;
+}
+
 /**
  * What a place becomes with a person's change, or why it can't have it, in
  * a sentence for the page to show. `id` says which place it is: the lobby
  * keeps its way out clear, and the town and the office's floors, which are
- * laid out from what there is, can't be changed at all.
+ * laid out from what there is, can't be changed at all. `names` names the
+ * doors, for saying which is in the way of a door dragged somewhere.
  */
-export function applyEdit(id: string, place: Place, edit: Edit): Edited | string {
+export function applyEdit(id: string, place: Place, edit: Edit, names?: DoorNames): Edited | string {
   if (id === TOWN) return "The town is laid out from who and what is in it, so it can't be changed.";
   if (id === OFFICE || id.startsWith(`${OFFICE}:`))
     return "The office is laid out from the meeting rooms in it, so it can't be changed.";
@@ -235,13 +243,20 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
     return sound(next) ?? { place: next, item: added.id };
   }
 
-  // A door put in: it can be taken out, which takes its way back with it, but it isn't a thing to move or repaint.
+  // A door put in: it can be taken out, which takes its way back with it, or dragged along the sides of the room to
+  // where there is room for it, its way back staying where it is; but it keeps the colours of the place it leads to.
   const link = place.links?.find((l) => linkItem(l.to) === edit.item);
   if (link) {
     if (edit.op === "remove") return { place: withoutLink(place, link.to), item: edit.item };
-    return edit.op === "color"
-      ? "A door keeps the colours of the place it leads to."
-      : "A door stays where it was put in. Take it out and put it in again to have it somewhere else.";
+    if (edit.op === "color") return "A door keeps the colours of the place it leads to.";
+    if (edit.op === "shows") return "A door shows where it leads: there's nothing to choose.";
+    const moved = moveDoor(
+      { id, place, name: place.name, out: names?.out ?? "the way out" },
+      link.to,
+      doorSlotAt(place, edit.at),
+      names?.nameOf ?? (() => undefined),
+    );
+    return typeof moved === "string" ? moved : { place: moved.place, item: edit.item };
   }
   const item = place.props.find((p) => p.id === edit.item);
   if (!item) return "That isn't in the room any more: someone may have just changed it.";

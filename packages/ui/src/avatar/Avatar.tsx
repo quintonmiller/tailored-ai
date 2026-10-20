@@ -13,7 +13,18 @@ import type { BodyState } from "./motion";
 import { type Notes, talkedWords } from "./routines";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
 import type { ScreenCard } from "./screens";
-import type { Companion, Line, PanelOptions, Stage, StageEdit, StageView, SurfaceView, Travel, UseSpot } from "./stage";
+import type {
+  BodyMove,
+  Companion,
+  Line,
+  PanelOptions,
+  Stage,
+  StageEdit,
+  StageView,
+  SurfaceView,
+  Travel,
+  UseSpot,
+} from "./stage";
 import { faceOf, glanceFor, type WorldData } from "./widgets";
 
 const VIEW_KEY = "tai.talk.avatarView";
@@ -87,6 +98,7 @@ export function Avatar({
   chooseIdle,
   room,
   company,
+  moves,
   still,
   onReady,
   onProblem,
@@ -150,6 +162,8 @@ export function Avatar({
   room?: Room;
   /** Others in the room, each with a body of their own. */
   company?: Companion[];
+  /** Where each agent's body last went, and came from: in and out by the door to there, when the room has one. */
+  moves?: Record<string, BodyMove>;
   /** Hold still for a photo, at a spot, striking a gesture; the view toggle is hidden. */
   still?: { spot?: string; gesture?: string };
   /** A still avatar is ready to photograph. */
@@ -296,6 +310,8 @@ export function Avatar({
   stillRef.current = { still, onReady, onProblem };
   const companyRef = useRef(company);
   companyRef.current = company;
+  const movesRef = useRef(moves);
+  movesRef.current = moves;
   const companyKey = JSON.stringify(company ?? []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when the company changed; the ref holds it.
   useEffect(() => {
@@ -503,6 +519,7 @@ export function Avatar({
           animations: animationsRef.current,
           ...(roomRef.current ? { room: roomRef.current } : {}),
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
+          wentBy: (agent: string) => movesRef.current?.[agent],
           ...(agentRef.current ? { agent: agentRef.current } : {}),
           ...(wearRef.current?.length ? { wear: wearRef.current } : {}),
           ...(looksRef.current ? { looks: looksRef.current } : {}),

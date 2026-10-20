@@ -527,10 +527,30 @@ describe("rearranging a room", () => {
     expect(text()).toMatch(/the door to the reading room/);
     expect(text()).toMatch(/Put in by you/);
     expect(button("Copy")).toBeUndefined();
+    // It keeps the colours of where it leads: nothing to repaint.
+    expect((document.querySelector(".room-edit-swatches") as HTMLFieldSetElement).disabled).toBe(true);
     await act(async () => button("Take out").click());
     await settle();
     expect(server.edits.at(-1)?.edit).toEqual({ op: "remove", item: "door:shared:reading-room" });
     expect(server.writes.at(-1)?.data.changes?.[0]).toMatchObject({ what: "took out the door to the reading room" });
+  });
+
+  it("drags a door put in along the sides, saves where it went, and shows it there at once", async () => {
+    mapPlaces = [{ id: "shared:reading-room", name: "the reading room", kind: "shared", agents: [] }];
+    const link = { to: "shared:reading-room", wall: "front", along: 0, by: "sam" };
+    const door = { ...link, wall: "front" as const, label: "Reading room", kind: "shared" as const };
+    server.answer = (edit, place) => ({
+      place: { ...place, links: [{ ...link, wall: "left", along: 1 }] } as Room,
+      item: String(edit.item),
+    });
+    await render(home(3, { ...DEFAULT_ROOM, links: [link], doors: [door] } as Room));
+    const dragged: Move = { item: "door:shared:reading-room", at: [-2, 1], facing: 0 };
+    await act(async () => editor.stage?.onDrop(dragged));
+    await settle();
+    expect(server.edits.at(-1)?.edit).toEqual({ op: "move", ...dragged });
+    expect(server.writes.at(-1)?.data.changes?.[0]).toMatchObject({ what: "moved the door to the reading room" });
+    // Shown where it went, before the server sends the room's doors again; its plate is still the server's.
+    expect(editor.room?.doors).toEqual([{ ...door, wall: "left", along: 1 }]);
   });
 
   it("says why when there is no room for a door, and writes nothing", async () => {

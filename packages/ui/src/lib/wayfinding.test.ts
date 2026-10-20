@@ -11,6 +11,7 @@ import {
   type MapArea,
   type MapPlace,
   mapIndex,
+  moveOf,
   placeTitle,
   plaqueWords,
   trailThrough,
@@ -281,5 +282,27 @@ describe("the trail through doors put in", () => {
     expect(trailThrough("shared:lounge", ["home:gone"], places, areas)).toEqual(
       trailTo("shared:lounge", places, areas),
     );
+  });
+});
+
+describe("where a body went", () => {
+  it("reads it from a change to its whereabouts, no record being home, or to a visit, which knows one end", () => {
+    expect(moveOf({ type: "whereabouts", id: "planner", after: { place: "shared:lounge" } })).toEqual({
+      from: "home:planner",
+      to: "shared:lounge",
+    });
+    expect(moveOf({ type: "whereabouts", id: "planner", before: { place: "shared:lounge" } })).toEqual({
+      from: "shared:lounge",
+      to: "home:planner",
+    });
+    expect(moveOf({ type: "visit", id: "planner", after: { place: "room:local:trip", until: "x" } })).toEqual({
+      to: "room:local:trip",
+    });
+    expect(moveOf({ type: "visit", id: "planner", before: { place: "room:local:trip" } })).toEqual({
+      from: "room:local:trip",
+    });
+    // A visit made longer goes nowhere, and other records say nothing of where a body went.
+    expect(moveOf({ type: "visit", id: "planner", before: { place: "a" }, after: { place: "a" } })).toBeUndefined();
+    expect(moveOf({ type: "place", id: "shared:lounge", after: { place: "x" } })).toBeUndefined();
   });
 });

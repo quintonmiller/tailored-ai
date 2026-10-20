@@ -5,6 +5,10 @@ import {
   changeWords,
   doorItem,
   doorItemTo,
+  doorPatch,
+  doorPoint,
+  doorSlotAt,
+  doorsAsSaved,
   footprint,
   GROUPS,
   type Kinds,
@@ -421,5 +425,36 @@ describe("doors put in", () => {
     expect(changeWords({ op: "remove", item: "door:shared:attic" }, DEFAULT_ROOM, DEFAULT_ROOM, named)).toBe(
       "took out the door to the attic",
     );
+    expect(
+      changeWords({ op: "move", item: "door:shared:attic", at: [0, 3], facing: 0 }, DEFAULT_ROOM, DEFAULT_ROOM, named),
+    ).toBe("moved the door to the attic");
+  });
+
+  it("slides a dragged door to the side nearest the pointer, short of the corners, as the server reads it back", () => {
+    const size = { width: 7, depth: 6 };
+    expect(doorSlotAt(size, [1.23, 3.4])).toEqual({ wall: "front", along: 1.25 });
+    expect(doorSlotAt(size, [-3.2, 0.4])).toEqual({ wall: "left", along: 0.4 });
+    expect(doorSlotAt(size, [3.6, -9])).toEqual({ wall: "back", along: 2.4 });
+    expect(doorSlotAt(size, [3.4, -2.6])).toEqual({ wall: "right", along: -1.9 });
+    // Let go there, it says the point on its side, which is that slot again.
+    for (const slot of [
+      { wall: "back", along: -1 },
+      { wall: "left", along: 1.5 },
+      { wall: "front", along: 2 },
+      { wall: "right", along: 0 },
+    ] as const)
+      expect(doorSlotAt(size, doorPoint(size, slot))).toEqual(slot);
+    // The floor in front of it, square to its side and a metre in.
+    expect(doorPatch(size, { wall: "left", along: 1 })).toEqual({ at: [-3, 1], width: 1.6, depth: 1, facing: 90 });
+    expect(doorPatch(size, { wall: "front", along: 2 })).toEqual({ at: [2, 2.5], width: 1.6, depth: 1, facing: 0 });
+  });
+
+  it("shows a door put in where its record now has it, and none it took out, leaving the town's alone", () => {
+    expect(doorsAsSaved(room.doors, { links: [{ to: "shared:attic", wall: "front", along: 1.5 }] })).toEqual([
+      room.doors?.[0],
+      { ...room.doors?.[1], wall: "front", along: 1.5 },
+    ]);
+    expect(doorsAsSaved(room.doors, {})).toEqual([room.doors?.[0]]);
+    expect(doorsAsSaved(undefined, {})).toBeUndefined();
   });
 });

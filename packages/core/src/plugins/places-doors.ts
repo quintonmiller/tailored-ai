@@ -24,6 +24,7 @@ import {
   type Place,
   type PlaceLink,
   type Where,
+  whyNoDoor,
 } from "./places-layout.js";
 import { LOBBY, LOBBY_DOORS } from "./places-rooms.js";
 
@@ -87,7 +88,9 @@ const plain = (words: string) =>
     .trim()
     .replace(/^#/, "")
     .replace(/^(the|a|an)\s+/, "")
-    .replace(/\s+meeting room$/, "")
+    // A meeting room's own name, "#budget's meeting room", is the room's: "budget", as "#budget" and "the budget meeting room" are.
+    .replace(/^#/, "")
+    .replace(/([’']s)?\s+meeting room$/, "")
     .replace(/[’']s\s+(home|room|house|place)$/, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
@@ -99,8 +102,10 @@ const OWN_HOME = /^(home|my (home|room|house)|your (home|room|house)|back home)$
 /**
  * The place words name, among `ends`: "home" for the agent's own; a place's
  * id or name, "the lounge", "#budget"; an agent's name for its home, or
- * "planner's home"; "the town hall"; "the town" or "the street". Undefined
- * when none is called that.
+ * "planner's home"; "the town hall"; "the town" or "the street". A home,
+ * shared place or meeting room called that comes first, so a shared place
+ * someone named "the hall" is that place, not the town hall. Undefined when
+ * none is called that.
  */
 export function placeNamed(words: string, ends: LinkEnd[], agent?: string): LinkEnd | undefined {
   const said = words.trim();
@@ -110,10 +115,13 @@ export function placeNamed(words: string, ends: LinkEnd[], agent?: string): Link
   const t = plain(said);
   if (!t) return undefined;
   const of = (kind: LinkEnd["kind"]) => ends.filter((e) => e.kind === kind);
+  const named =
+    of("home").find((e) => plain(e.owner ?? "") === t || plain(e.name) === t) ??
+    ends.find((e) => (e.kind === "shared" || e.kind === "room") && plain(e.name) === t);
+  if (named) return named;
   if (TOWN_WORDS.has(t)) return of("town")[0];
   if (LOBBY_WORDS.has(t)) return of("lobby")[0];
   return (
-    of("home").find((e) => plain(e.owner ?? "") === t || plain(e.name) === t) ??
     ends.find((e) => e.kind !== "home" && plain(e.name) === t) ??
     ends.find((e) => e.kind !== "home" && e.id.endsWith(`:${t}`))
   );
@@ -177,10 +185,33 @@ export function withoutLink(place: Place, to: string): Place {
 /** The id the page picks a door put in by, as it picks a thing by its id. */
 export const linkItem = (to: string) => `door:${to}`;
 
+/** Whether words say "door": "the door to the lounge", "the lounge door". */
+export const saysDoor = (words: string) => /\bdoors?\b/i.test(words);
+
+/**
+ * The place words for a door are about, without the door: "the door to the
+ * lounge" and "the lounge door" are "lounge", "the door out to Maple Lane"
+ * is "maple-lane", and "the door" alone is "".
+ */
+export function doorMeans(words: string): string {
+  return plain(
+    words
+      .toLowerCase()
+      .trim()
+      .replace(/^(the|a|an|my|your)\s+/, "")
+      .replace(/\bdoors?\b/g, " ")
+      .replace(/^\s*(out to|out|to|into|through|for|that goes to|that leads to|leading to)(\s+|$)/, "")
+      .trim(),
+  );
+}
+
 /**
  * The door put in that words mean, among a place's own: "the door to the
  * lounge", "the lounge door", "door:shared:lounge", or just "the door" when
- * it has only one. `nameOf` says what the place each leads to is called.
+ * it has only one. Words that say "door" may name its place by a whole word
+ * of it ("the reading door"); any other words must be its place's name or id,
+ * so a thing misnamed, or taken out already, is never taken for a door.
+ * `nameOf` says what the place each leads to is called.
  */
 export function findLink(
   place: Pick<Place, "links">,
@@ -191,23 +222,16 @@ export function findLink(
   const said = words.trim();
   const byId = links.find((l) => linkItem(l.to) === said || l.to === said);
   if (byId) return byId;
-  const t = plain(
-    said
-      .toLowerCase()
-      .replace(/^(the|a|an|my|your)\s+/, "")
-      .replace(/\bdoors?\b/g, " ")
-      .replace(/^\s*(to|into|through|for|that goes to|that leads to|leading to)\s+/, "")
-      .trim(),
-  );
-  if (!t) return links.length === 1 ? links[0] : undefined;
-  return (
-    links.find((l) => plain(nameOf(l.to) ?? "") === t) ??
-    links.find((l) => l.to.endsWith(`:${t}`)) ??
-    links.find((l) => {
-      const name = plain(nameOf(l.to) ?? "");
-      return !!name && (name.includes(t) || t.includes(name));
-    })
-  );
+  const door = saysDoor(said);
+  const t = doorMeans(said);
+  if (!t) return door && links.length === 1 ? links[0] : undefined;
+  const exact = links.find((l) => plain(nameOf(l.to) ?? "") === t) ?? links.find((l) => l.to.endsWith(`:${t}`));
+  if (exact || !door) return exact;
+  const whole = (s: string) => `-${s}-`;
+  return links.find((l) => {
+    const name = plain(nameOf(l.to) ?? "");
+    return !!name && (whole(name).includes(whole(t)) || whole(t).includes(whole(name)));
+  });
 }
 
 /** One of the two places a door joins, as {@link joinPlaces} needs it. */
@@ -229,6 +253,45 @@ export function townDoorsOf(id: string, place: Place): DoorSlot[] {
 
 const sameSlot = (a: DoorSlot | undefined, b: DoorSlot | undefined) =>
   a?.wall === b?.wall && Math.abs((a?.along ?? 0) - (b?.along ?? 0)) < 1e-6;
+
+/**
+ * The doors in a place that a door put in or moved there keeps clear of: the
+ * town's own, where it is now, and every other door put in but the one to
+ * `except`. `nameOf` names the places they lead to.
+ */
+export function doorsToKeep(end: Joining, except: string, nameOf: (id: string) => string | undefined): NamedDoor[] {
+  return [
+    ...townDoorsOf(end.id, end.place).map((slot) => ({ slot, name: end.out })),
+    ...(end.place.links ?? [])
+      .filter((l) => l.to !== except)
+      .map((l) => ({ slot: { wall: l.wall, along: l.along }, name: `the door to ${nameOf(l.to) ?? "another place"}` })),
+  ];
+}
+
+/**
+ * A place with its door to `to` moved: where the words say (`where`, as
+ * {@link findDoorSlot} reads them), or to just this slot, where a person
+ * dragged it. Clear of the town's door and the other doors put in, and never
+ * moving the town's door. Its way back stays where it is. A sentence saying
+ * why not when it can't go there.
+ */
+export function moveDoor(
+  end: Joining,
+  to: string,
+  where: Where | DoorSlot,
+  nameOf: (id: string) => string | undefined,
+): { place: Place; slot: DoorSlot } | string {
+  const link = end.place.links?.find((l) => l.to === to);
+  if (!link) return "That door isn't there any more: someone may have just taken it out.";
+  const base = withoutLink(end.place, to);
+  const keep = doorsToKeep(end, to, nameOf);
+  const slot = "along" in where ? (whyNoDoor(base, where, keep) ?? where) : findDoorSlot(base, where, keep);
+  if (typeof slot === "string") return slot;
+  const place = withLink(base, { ...link, wall: slot.wall, along: slot.along });
+  if (!sameSlot(townDoorsOf(end.id, place)[0], townDoorsOf(end.id, end.place)[0]))
+    return `It would be in the way of ${end.out}. Try another wall.`;
+  return { place, slot };
+}
 
 /**
  * Two places joined by a door: `near`, the place it is put in, has it where
@@ -254,12 +317,7 @@ export function joinPlaces(
   ] as const)
     if ((end.place.links ?? []).filter((l) => l.to !== other.id).length >= LIMITS.links)
       return `${end === near ? "This place" : capital(far.name)} has all the doors put in it can have (${LIMITS.links}). Take one out first.`;
-  const keep = (end: Joining, other: Joining): NamedDoor[] => [
-    ...townDoorsOf(end.id, end.place).map((slot) => ({ slot, name: end.out })),
-    ...(end.place.links ?? [])
-      .filter((l) => l.to !== other.id)
-      .map((l) => ({ slot: { wall: l.wall, along: l.along }, name: `the door to ${nameOf(l.to) ?? "another place"}` })),
-  ];
+  const keep = (end: Joining, other: Joining) => doorsToKeep(end, other.id, nameOf);
   // What there is either side without any door between the two already: a way back left from before is put again.
   const nearBase = withoutLink(near.place, far.id);
   const farBase = withoutLink(far.place, near.id);

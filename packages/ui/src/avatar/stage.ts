@@ -84,6 +84,9 @@ import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from 
 import {
   doorItem,
   doorItemTo,
+  doorPatch,
+  doorPoint,
+  doorSlotAt,
   footprint,
   heightOf,
   type Kinds,
@@ -225,6 +228,12 @@ export interface Companion {
   looks?: BodyLooks;
   /** Outdoors, where it comes from when it turns up: the door of the place it was in. */
   from?: [number, number];
+}
+
+/** Where an agent's body went just now, and where it came from, as places by id: either may not be known. */
+export interface BodyMove {
+  from?: string;
+  to?: string;
 }
 
 export interface Stage {
@@ -555,6 +564,12 @@ export async function createStage(
     onReady?: () => void;
     /** Who else is in the room from the start. */
     company?: Companion[];
+    /**
+     * Where an agent's body last went, and came from: one leaving walks out
+     * by the door to where it went, and one arriving comes in by the door
+     * from where it was, when the room has that door, rather than its first.
+     */
+    wentBy?: (agent: string) => BodyMove | undefined;
     /** The agent this stage shows, for its activity and its colour. */
     agent?: string;
     /** What that body wears, by name (see `wear.ts`). */
@@ -678,6 +693,8 @@ export async function createStage(
   let editZoom = 1;
   // Things drawn somewhere other than where the room has them: what is being moved, and what stands on it.
   const shifted = new Set<string>();
+  // A door put in drawn somewhere other than where the room has it, while it is dragged.
+  let shiftedDoor: { group: THREE.Object3D; door: RoomDoor } | undefined;
   // What stands on the floor in the way: walks go round these.
   let obstacles: Obstacle[] = [];
   /** What an agent walks round: the furniture, and you, standing here in your own body, with room to pass. */
@@ -2103,6 +2120,12 @@ export async function createStage(
   };
   /** Where the thing being dragged would go, for the pointer here: on the floor, along a wall, or on a top. */
   const moveFor = (e: PointerEvent): Move | undefined => {
+    // A door put in slides along the sides of the room: to the side nearest the pointer, as far along it as it goes.
+    if (drag && editing && doorItemTo(drag.item)) {
+      aim(e);
+      const floor = crossing(0);
+      return floor ? { item: drag.item, at: doorPoint(room, doorSlotAt(room, floor)), facing: 0 } : undefined;
+    }
     const prop = drag && editing ? room.props.find((p) => p.id === drag?.item) : undefined;
     if (!drag || !editing || !prop) return undefined;
     aim(e);
@@ -2133,6 +2156,12 @@ export async function createStage(
 
   /** Everything shown somewhere else, back where the room has it. */
   const putBack = () => {
+    if (shiftedDoor) {
+      const { at, facing } = doorFrame(room, shiftedDoor.door);
+      shiftedDoor.group.position.set(at[0], 0, at[1]);
+      shiftedDoor.group.rotation.y = rad(facing);
+      shiftedDoor = undefined;
+    }
     for (const id of shifted) {
       const prop = room.props.find((p) => p.id === id);
       const g = things.get(id);
@@ -2195,6 +2224,29 @@ export async function createStage(
     const prop = editing?.selected ? room.props.find((p) => p.id === editing?.selected) : undefined;
     // For anyone inspecting the page, like `data-motion`: what is picked, and whether it fits where it is going.
     host.dataset.picked = prop?.id ?? (door ? doorItem(door.to) : "");
+    if (editing && door) {
+      // A door put in, being dragged: drawn where it is going, the floor in front of it coloured by whether it fits.
+      const id = doorItem(door.to);
+      const group = clickable.find((o) => o.userData.door === door);
+      const pending = editing.pending?.item === id ? editing.pending : undefined;
+      const held = drag?.moving && drag.item === id ? drag.last : dropped?.item === id ? dropped : undefined;
+      const shown = held ?? pending;
+      if (!shown || !group) {
+        host.dataset.fit = "";
+        handles.show(undefined, undefined, "picked");
+        return;
+      }
+      const slot = doorSlotAt(room, shown.at);
+      const { at, facing } = doorFrame(room, { ...door, ...slot });
+      group.position.set(at[0], 0, at[1]);
+      group.rotation.y = rad(facing);
+      shiftedDoor = { group, door };
+      const fit: Fit =
+        moveKey(shown) !== moveKey(pending) || pending?.fits === undefined ? "asking" : pending.fits ? "fits" : "no";
+      host.dataset.fit = fit;
+      handles.show(group, { on: "floor", y: 0, ...doorPatch(room, slot) }, fit);
+      return;
+    }
     if (!editing || !prop) {
       host.dataset.fit = "";
       handles.show(undefined, undefined, "picked");
@@ -2837,8 +2889,15 @@ export async function createStage(
     }
   };
 
-  /** The way in and out for agents coming and going: the threshold of the room's first door, when it has one. */
-  const doorway = () => (room.doors?.[0] ? threshold(room, room.doors[0]) : undefined);
+  /**
+   * The way in and out for an agent coming from or going to `via`: the
+   * threshold of the door to there when the room has one, a door someone put
+   * in perhaps; else of the room's first door, when it has one.
+   */
+  const doorway = (via?: string) => {
+    const door = doorTo(room, via) ?? room.doors?.[0];
+    return door ? threshold(room, door) : undefined;
+  };
 
   /**
    * Bring the company in line with who should be here. Whoever is here when
@@ -2851,9 +2910,9 @@ export async function createStage(
     // The agent you came to see has gone before its body got here: you aren't sent to it if it comes back later.
     if (greeting && !ids.has(greeting)) greeting = undefined;
     const outdoors = isOutdoors(room);
-    const way = opts.still || outdoors ? undefined : doorway();
     for (const [agent, fig] of companions) {
       if (ids.has(agent)) continue;
+      const way = opts.still || outdoors ? undefined : doorway(opts.wentBy?.(agent)?.to);
       turnedFor.delete(fig);
       errands.delete(fig);
       shows.delete(fig);
@@ -2914,7 +2973,8 @@ export async function createStage(
           const own = behaviorFor(activities[c.agent]).spot;
           const kept = own && !taken().has(own) ? spotById(room, own) : undefined;
           const seat = kept ?? arrivalSpot();
-          // Outdoors it comes from the door of where it was, when the page knows; indoors, through the door.
+          // Outdoors it comes from the door of where it was, when the page knows; indoors, through the door from
+          // where it was when the room has one (a door someone put in, perhaps), else the room's first.
           const from = isOutdoors(room) ? still.from : undefined;
           const entrance =
             coming && gen === placeGen
@@ -2922,7 +2982,7 @@ export async function createStage(
                 ? { at: from, facing: seat ? Math.atan2(seat.at[0] - from[0], seat.at[1] - from[1]) : 0 }
                 : isOutdoors(room)
                   ? undefined
-                  : doorway()
+                  : doorway(opts.wentBy?.(c.agent)?.from)
               : undefined;
           const start = entrance
             ? { id: "", name: "", place: "", at: entrance.at, facing: (entrance.facing * 180) / Math.PI }

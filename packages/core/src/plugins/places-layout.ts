@@ -1202,8 +1202,11 @@ export function newName(place: Place, kind: string, colorWord?: string, asked?: 
 
 /**
  * The room at a new size, its contents moved with it: what stood against a
- * wall stays against it, the rest keeps its place in proportion. Undefined
- * with a reason when something would end up outside or on top of another.
+ * wall stays against it, the rest keeps its place in proportion. A door put
+ * in moves along its side the same way, near an end staying that far from
+ * it. Undefined with a reason when something would end up outside or on top
+ * of another, or a door put in would no longer fit where it is, or leave the
+ * room without its way out.
  */
 export function resize(place: Place, size: { width?: number; depth?: number; height?: number }): Place | string {
   const width = size.width ?? place.width;
@@ -1243,9 +1246,32 @@ export function resize(place: Place, size: { width?: number; depth?: number; hei
           at: [round((s.at[0] * width) / place.width), round((s.at[1] * depth) / place.depth)] as [number, number],
         },
   );
-  const next = withSpots({ ...place, width, depth, height, props, spots });
+  const links = place.links?.map((l) => {
+    const half = DOORWAY.width / 2;
+    return {
+      ...l,
+      along: round(l.wall === "back" || l.wall === "front" ? shiftX(l.along, half) : shiftZ(l.along, half)),
+    };
+  });
+  const next = withSpots({ ...place, width, depth, height, props, spots, ...(links ? { links } : {}) });
   const problems = placeProblems(next);
-  return problems.length ? `That size doesn't work: ${problems[0]}` : next;
+  if (problems.length) return `That size doesn't work: ${problems[0]}`;
+  if (!links?.length) return next;
+  // Each door put in still fits where it now is: clear of the corners, of what hangs or stands there, of the room's
+  // way out and of each other. The way out is found round them, so it is never where one is, but there may be none.
+  const out = doorOf(next);
+  if (doorOf(place) && !out)
+    return "That size doesn't work: with the doors put in, there'd be no room for the way out.";
+  const slots = linkSlots(next);
+  for (const [i, slot] of slots.entries()) {
+    const others: NamedDoor[] = [
+      ...(out ? [{ slot: out, name: "the way out" }] : []),
+      ...slots.filter((_, j) => j !== i).map((o) => ({ slot: o, name: "another door put in" })),
+    ];
+    const why = whyNoDoor(next, slot, others);
+    if (why) return `That size doesn't work for the door put in ${doorWords(next, slot)}. ${why}`;
+  }
+  return next;
 }
 
 /** Problems with a place's layout, as sentences; empty when it is sound. */
@@ -1749,6 +1775,24 @@ export function findDoorSlot(place: Place, where: Where, doors: NamedDoor[]): Do
       : "any side of the room";
   const by = sideways && near ? `on the ${sideways} of ${"kind" in near ? near.name : near.place} ` : "";
   return `There's no room for a door ${by}on ${sides}: ${DOOR_NEEDS}. Move something away, or try another side.`;
+}
+
+/**
+ * The door slot nearest a point on the floor plan: on the side of the room
+ * the point is closest to, as far along it as a door can go short of the
+ * corners, to the nearest 5 cm. Where a person drags a door put in to.
+ */
+export function doorSlotAt(place: Place, [x, z]: [number, number]): DoorSlot {
+  const away: [Wall, number][] = [
+    ["back", z + place.depth / 2],
+    ["left", x + place.width / 2],
+    ["front", place.depth / 2 - z],
+    ["right", place.width / 2 - x],
+  ];
+  const [wall] = away.reduce((a, b) => (b[1] < a[1] ? b : a));
+  const most = sideSpan(place, wall) / 2 - DOOR_END - DOORWAY.width / 2;
+  const along = Math.round(alongOf(wall, [x, z]) / 0.05) * 0.05;
+  return { wall, along: round(Math.max(-most, Math.min(most, along))) };
 }
 
 /** Where a door someone put in is, in words, with what it is by: "on the left wall, toward the back, by the window". */

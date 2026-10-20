@@ -94,6 +94,17 @@ describe("the build tool", () => {
     expect(String((await build.execute({ action: "list" }, as("writer"))).output)).toMatch(/no models yet/);
   });
 
+  it("adds a model it called door by that name, when it says nowhere for a door to lead", async () => {
+    expect((await build.execute({ action: "make", name: "door", parts: bookcase }, as("planner"))).success).toBe(true);
+    const added = await place.execute({ action: "add", kind: "door" }, as("planner"));
+    expect(added.success, added.error).toBe(true);
+    expect(thing(await home("planner"), "model")).toMatchObject({ model: "planner:door" });
+    // Anyone without one is asked where a door should lead.
+    expect((await place.execute({ action: "add", kind: "door" }, as("writer"))).error).toMatch(
+      /Say where the door leads/,
+    );
+  });
+
   it("refuses a bad model with a sentence it can act on, and saves nothing", async () => {
     const bad = await build.execute(
       { action: "make", name: "lamp_post", parts: [{ shape: "box", size: [0.2, "tall", 0.2] }] },

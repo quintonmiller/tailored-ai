@@ -171,6 +171,26 @@ export function trailThrough(
   return trail;
 }
 
+/**
+ * Where a body went, from a change to a record of where it is: its
+ * whereabouts, where no record kept means it is at home, or a visit. Either
+ * end may be unknown: a visit says only where the body is visiting, and its
+ * end only where it was. Undefined for any other change, or none at all.
+ */
+export function moveOf(change: {
+  type: string;
+  id: string;
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+}): { from?: string; to?: string } | undefined {
+  const at = (data?: Record<string, unknown>) => (typeof data?.place === "string" ? data.place : undefined);
+  const home = `home:${change.id}`;
+  const from = change.type === "whereabouts" ? (at(change.before) ?? home) : at(change.before);
+  const to = change.type === "whereabouts" ? (at(change.after) ?? home) : at(change.after);
+  if ((change.type !== "whereabouts" && change.type !== "visit") || from === to) return undefined;
+  return { ...(from ? { from } : {}), ...(to ? { to } : {}) };
+}
+
 /** An agent on the map: its home, which a click goes to, and where its body is when that is somewhere else. */
 export interface MapAgent {
   agent: string;

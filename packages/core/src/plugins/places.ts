@@ -84,15 +84,17 @@ import {
 import { BuildTool, ModelShelf, modelsIn, turnHabits } from "./places-build.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
 import {
+  doorMeans,
   findLink,
   type Joining,
   joinPlaces,
   type LinkEnd,
   linkItem,
+  moveDoor,
   placeNamed,
+  saysDoor,
   tidyLinks,
   whyNoLink,
-  withLink,
   withoutLink,
 } from "./places-doors.js";
 import { applyEdit, editFrom } from "./places-edit.js";
@@ -100,14 +102,12 @@ import {
   CHANGE_LENGTH,
   CHANGES_KEPT,
   colorWord,
-  type DoorSlot,
   describe,
   doorOf,
   doorPlaceWords,
   doorWords,
   FLOORS,
   type Floor,
-  findDoorSlot,
   findItem,
   findPlacement,
   findSpot,
@@ -739,6 +739,34 @@ function linksOf(place: Place): PlaceLink[] {
       ["back", "left", "front", "right"].includes(l.wall) &&
       typeof l.along === "number" &&
       Number.isFinite(l.along),
+  );
+}
+
+/**
+ * A place with the doors that are no longer there taken out of its record:
+ * each whose far side was read and has no way back here, or no record at
+ * all. Each far side is read on its own, so a read that fails keeps the door
+ * rather than taking it for gone, and a home whose agent has no body just
+ * now keeps its doors for when it has one again. A door put in a moment ago
+ * keeps waiting for its way back (see `tidyLinks`).
+ */
+export async function tidyByReading(service: StateService, id: string, place: Place, now: number): Promise<Place> {
+  const links = place.links ?? [];
+  if (!links.length) return place;
+  const there = await Promise.all(
+    links.map(async (l) => {
+      try {
+        const far = await service.get(PLUGIN_CALLER, { type: PLACE_TYPE, id: l.to });
+        return !!far && linksOf(far.data as unknown as Place).some((back) => back.to === id);
+      } catch {
+        return true;
+      }
+    }),
+  );
+  return tidyLinks(
+    place,
+    links.filter((_, i) => there[i]),
+    now,
   );
 }
 
@@ -2613,11 +2641,16 @@ const fail = (error: string): ToolResult => ({ success: false, output: "", error
 /** Whether `add` was asked for a door, rather than a thing. */
 const isDoor = (kind: unknown) => /^(a |the )?(door|doorway|doors)$/i.test(text(kind) ?? "");
 
-/** The world as doors see it: the places there are, each as one end of a door, and what each is called. */
+/**
+ * The world as doors see it: the places there are, each as one end of a
+ * door, and what each is called, to the agent ("your home") and in a place's
+ * recent changes, which everyone reads ("planner's home").
+ */
 interface DoorWorld {
   world: World;
   ends: LinkEnd[];
   nameOf: (id: string) => string | undefined;
+  recordName: (id: string) => string | undefined;
 }
 
 export class PlaceTool implements Tool {
@@ -2715,8 +2748,7 @@ export class PlaceTool implements Tool {
     /**
      * The agents there are, so doors can lead to their homes. Without it, a
      * door can lead only to the agent's own home, shared places and meeting
-     * rooms, and doors put in are never tidied away, since a home it can't
-     * see may still be there.
+     * rooms.
      */
     private readonly agents?: () => string[],
   ) {}
@@ -2775,7 +2807,12 @@ export class PlaceTool implements Tool {
       if (action === "places") return { success: true, output: await this.places(service, caller, agent, meetings) };
       if (action === "go") return await this.go(service, caller, agent, text(args.to) ?? text(args.name), meetings);
       if (action === "new") return await this.open(service, caller, agent, text(args.name), text(args.area));
-      if (action === "add" && isDoor(args.kind)) return await this.putDoor(service, caller, agent, args, meetings);
+      // A door, unless the agent made a model called that and says nowhere for it to lead.
+      if (action === "add" && isDoor(args.kind)) {
+        const name = text(args.to) ? undefined : modelName(args.kind);
+        const shelved = name && this.models ? await this.models.forPlacing(context, agent, name) : undefined;
+        if (!shelved) return await this.putDoor(service, caller, agent, args, meetings);
+      }
       if ((action === "remove" || action === "move") && text(args.item)) {
         const door = await this.door(service, caller, agent, args, meetings);
         if (door) return door;
@@ -2827,12 +2864,33 @@ export class PlaceTool implements Tool {
         // The system giving an untouched home a newer room is not a change of anyone's to take back.
         if (!last?.before || last.op !== "update" || byPlugin(last.actor)) return fail("There's nothing to undo.");
         const before = last.before as unknown as Place;
+        // Doors the change put in or took out: each has its way back in another place, which taking it back here
+        // doesn't reach on its own.
+        const was = new Set(linksOf(before).map((l) => l.to));
+        const then = new Set(linksOf((last.after ?? {}) as unknown as Place).map((l) => l.to));
+        const takenOut = [...was].filter((to) => !then.has(to));
+        const putIn = [...then].filter((to) => !was.has(to));
+        const dw = takenOut.length || putIn.length ? await this.doorWorld(service, agent, meetings) : undefined;
+        for (const to of takenOut) {
+          // Its way back went with it, so back on this side alone it would never show: put it in again instead.
+          const far = await service.get(PLUGIN_CALLER, { type: PLACE_TYPE, id: to }).catch(() => undefined);
+          if (far !== undefined && !(far && linksOf(far.data as unknown as Place).some((l) => l.to === id)))
+            return fail(
+              `That took out the door to ${dw?.nameOf(to) ?? to}, and its way back went with it, so undo can't bring it back. Put it in again with add, kind "door".`,
+            );
+        }
         const undone = (last.after as unknown as Place | undefined)?.changes?.[0];
         const what = undone && undone.at !== before.changes?.[0]?.at ? `took back "${undone.what}"` : "undid a change";
         const data = withChange(before, { who: agent, what, at: this.now().toISOString() });
         // Written over the record as it is now, which is as that change left it: a person's taken-back changes since
         // moved its version on, not what is in it.
         await service.put(caller, { ...ref, data: data as unknown as Record<string, unknown> }, newest?.version);
+        // A door it put in goes from both sides, as one taken out does: its way back too, where the agent may change that.
+        for (const to of putIn) {
+          const farEnd = dw?.ends.find((e) => e.id === to);
+          if (farEnd && !whyNoLink({ agent }, farEnd, { id, kind: "shared", name: "" }))
+            await this.dropWayBack(service, caller, to, id, meetings).catch(() => {});
+        }
         return {
           success: true,
           output: `Undone: the room is back as it was before the last change by ${last.actor.name}.`,
@@ -2862,7 +2920,7 @@ export class PlaceTool implements Tool {
         const { id, version, scope } = current;
         // Doors whose way back was taken out, or that lead to a place that's gone, go with any change made here.
         const place = current.place.links?.length
-          ? await this.tidied(service, agent, id, current.place, meetings)
+          ? await tidyByReading(service, id, current.place, this.now().getTime())
           : current.place;
         const talk = talkRoomOf(meetings.rooms, id);
         if (talk && text(args.action)?.toLowerCase() === "room" && text(args.area))
@@ -2913,25 +2971,13 @@ export class PlaceTool implements Tool {
     const world = await buildWorld(service, PLUGIN_CALLER, agents, meetings.rooms, this.hasBody);
     const shared = await sharedPlaces(service, PLUGIN_CALLER).catch(() => []);
     const ends = linkEnds(world, meetings.rooms, shared);
-    const names = new Map(ends.map((e) => [e.id, e.id === homeId(agent) ? "your home" : e.name]));
-    return { world, ends, nameOf: (id) => names.get(id) };
-  }
-
-  /**
-   * A place with the doors that are no longer there taken out of its record:
-   * those whose way back was taken out, or that lead to a place that's gone.
-   * Only when every agent is known, or a home it can't see would look gone.
-   */
-  private async tidied(
-    service: StateService,
-    agent: string,
-    id: string,
-    place: Place,
-    meetings: Meetings,
-  ): Promise<Place> {
-    if (!this.agents) return place;
-    const { world } = await this.doorWorld(service, agent, meetings);
-    return tidyLinks(place, world.made.get(id), this.now().getTime());
+    const names = new Map(ends.map((e) => [e.id, e.name]));
+    return {
+      world,
+      ends,
+      nameOf: (id) => (id === homeId(agent) ? "your home" : names.get(id)),
+      recordName: (id) => names.get(id),
+    };
   }
 
   /** The doors put in here that are there, for `look`: where each is, where it goes, and who put it in. */
@@ -2992,12 +3038,17 @@ export class PlaceTool implements Tool {
       const far = await readPlace(service, caller, target.id, meetings, this.homes);
       if (!far) return fail(`There's no place called "${to}".`);
       const now = this.now();
-      const near = this.joining(dw, here.id, tidyLinks(here.place, dw.world.made.get(here.id), now.getTime()));
-      const farEnd = this.joining(dw, target.id, tidyLinks(far.place, dw.world.made.get(target.id), now.getTime()));
+      const near = this.joining(dw, here.id, await tidyByReading(service, here.id, here.place, now.getTime()));
+      const farEnd = this.joining(dw, target.id, await tidyByReading(service, target.id, far.place, now.getTime()));
       const at = now.toISOString();
       const joined = joinPlaces(near, farEnd, where, { by: agent, since: at }, dw.nameOf);
       if (typeof joined === "string") return fail(joined);
-      const said = (other: Joining) => ({ who: agent, what: `put in a door to ${other.name}`, at });
+      // Said in each place's recent changes as anyone reading them calls the other place, not as the agent does.
+      const said = (other: Joining) => ({
+        who: agent,
+        what: `put in a door to ${dw.recordName(other.id) ?? other.name}`,
+        at,
+      });
       try {
         await service.put(
           caller,
@@ -3042,46 +3093,44 @@ export class PlaceTool implements Tool {
       const dw = here.place.links?.length ? await this.doorWorld(service, agent, meetings) : undefined;
       const link = dw ? findLink(here.place, words, dw.nameOf) : undefined;
       // Words that say "door" mean one put in, if one is called that; any other words, a thing called that first.
-      const saysDoor = /\bdoor/i.test(words);
-      if (!(link && saysDoor) && findItem(here.place, words)) return undefined;
+      const door = saysDoor(words);
+      if (!(link && door) && findItem(here.place, words)) return undefined;
       if (!dw || !link) {
-        if (!saysDoor) return undefined;
+        if (!door) return undefined;
         const town = dw ?? (await this.doorWorld(service, agent, meetings));
         const out = outWords(town.world, here.id);
         const others = (here.place.links ?? []).map((l) => town.nameOf(l.to) ?? l.to);
+        const lead = others.length
+          ? ` The doors put in here lead to: ${others.join(", ")}.`
+          : " There are no doors put in here to take out or move.";
+        // The town's door is the one meant only when the words name no other place: "the door", "the front door".
+        const meant = doorMeans(words);
+        const theTowns =
+          !meant || /^(out|outside|front|street|main|exit|way-out)$/.test(meant) || meant === doorMeans(out);
         return fail(
-          `${out.charAt(0).toUpperCase()}${out.slice(1)} is the town's, so it stays where it is.${others.length ? ` The doors put in here lead to: ${others.join(", ")}.` : " There are no doors put in here to take out or move."}`,
+          theTowns
+            ? `${out.charAt(0).toUpperCase()}${out.slice(1)} is the town's, so it stays where it is.${lead}`
+            : `There's no door put in here called "${words}".${lead}`,
         );
       }
       const name = dw.nameOf(link.to) ?? link.to;
+      // A place's recent changes are read by everyone: there, the place is called what anyone calls it.
+      const named = dw.recordName(link.to) ?? name;
       const at = this.now().toISOString();
       let next: Place;
       let output: string;
       if (remove) {
-        next = withChange(withoutLink(here.place, link.to), { who: agent, what: `took out the door to ${name}`, at });
+        next = withChange(withoutLink(here.place, link.to), { who: agent, what: `took out the door to ${named}`, at });
         output = `Took out the door to ${name}, and its way back with it.`;
       } else {
         const where = whereFrom(args);
         if (typeof where === "string") return fail(where);
         if (!where.wall && !where.near && !where.corner)
           return fail("Say where to move the door: a wall or side, a corner, or a thing to put it by.");
-        const base = withoutLink(here.place, link.to);
-        const keep = [
-          ...(doorOf(base) ? [{ slot: doorOf(base) as DoorSlot, name: outWords(dw.world, here.id) }] : []),
-          ...(base.links ?? []).map((l) => ({
-            slot: { wall: l.wall, along: l.along },
-            name: `the door to ${dw.nameOf(l.to) ?? l.to}`,
-          })),
-        ];
-        const slot = findDoorSlot(base, where, keep);
-        if (typeof slot === "string") return fail(slot);
-        const moved = withLink(base, { ...link, wall: slot.wall, along: slot.along });
-        const street = doorOf(here.place);
-        const after = doorOf(moved);
-        if (street && (after?.wall !== street.wall || after.along !== street.along))
-          return fail(`It would be in the way of ${outWords(dw.world, here.id)}. Try another wall.`);
-        next = withChange(moved, { who: agent, what: `moved the door to ${name}`, at });
-        output = `Moved the door to ${name}: it is ${doorPlaceWords(moved, slot)} now.`;
+        const moved = moveDoor(this.joining(dw, here.id, here.place), link.to, where, dw.nameOf);
+        if (typeof moved === "string") return fail(moved);
+        next = withChange(moved.place, { who: agent, what: `moved the door to ${named}`, at });
+        output = `Moved the door to ${name}: it is ${doorPlaceWords(moved.place, moved.slot)} now.`;
       }
       try {
         await service.put(
@@ -3613,20 +3662,20 @@ const plugin: Plugin = (ctx) => {
       let edit = editFrom(body.edit);
       if (typeof edit === "string") return { status: 400, json: { error: edit } };
       const id = body.id;
-      // Doors whose way back was taken out, or that lead somewhere gone, go with the person's change, as with an agent's.
       const service = runtime.getStateService();
       const rooms = talkRooms();
-      const world =
-        place.links?.length || edit.op === "door"
-          ? await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody)
-          : undefined;
       const now = Date.now();
-      const tidy = world ? tidyLinks(place, world.made.get(id), now) : place;
+      // Doors whose way back was taken out, or that lead somewhere gone, go with the person's change, as with an agent's.
+      const tidy = await tidyByReading(service, id, place, now);
+      // Putting a door in, or dragging one, needs the world: where it can lead, and what the doors in the way are called.
+      const dragged = edit.op === "move" ? edit.item : undefined;
+      const doors = edit.op === "door" || !!(dragged && place.links?.some((l) => linkItem(l.to) === dragged));
+      const world = doors ? await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody) : undefined;
+      const shared = world ? await sharedPlaces(service, PLUGIN_CALLER).catch(() => []) : [];
+      const ends = world ? linkEnds(world, rooms, shared) : [];
+      const names = new Map(ends.map((e) => [e.id, e.name]));
       if (edit.op === "door" && world) {
         // A door the person puts in, and its way back, which the page writes first: one place's record each.
-        const shared = await sharedPlaces(service, PLUGIN_CALLER).catch(() => []);
-        const ends = linkEnds(world, rooms, shared);
-        const names = new Map(ends.map((e) => [e.id, e.name]));
         const from = ends.find((e) => e.id === id);
         const wanted = edit.to;
         const to = ends.find((e) => e.id === wanted);
@@ -3644,7 +3693,7 @@ const plugin: Plugin = (ctx) => {
         });
         const joined = joinPlaces(
           end(id, tidy),
-          end(to.id, tidyLinks(far.place, world.made.get(to.id), now)),
+          end(to.id, await tidyByReading(service, to.id, far.place, now)),
           {},
           { by: person, since: new Date(now).toISOString() },
           (at) => names.get(at),
@@ -3669,7 +3718,12 @@ const plugin: Plugin = (ctx) => {
         edit = { ...edit, kind: MOUNT_KIND[m.mount], size: m.size, name: m.name.replace(/_/g, " ") };
       }
       // A change that can't be made is an answer, not a failure: the page shows why, in the tool's own words.
-      const done = applyEdit(id, tidy, edit);
+      const done = applyEdit(
+        id,
+        tidy,
+        edit,
+        world ? { out: outWords(world, id), nameOf: (at) => names.get(at) } : undefined,
+      );
       if (typeof done === "string") return { json: { why: done } };
       // A model added comes with what it is made of, so the page draws it at once.
       const added =

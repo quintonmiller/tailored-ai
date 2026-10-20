@@ -17,6 +17,7 @@ import {
   PlaceTool,
   roomPlaceId,
   scene,
+  tidyByReading,
   WHEREABOUTS_TYPE,
 } from "../plugins/places.js";
 import {
@@ -36,15 +37,18 @@ import {
 import { applyEdit, doorsFor, editFrom } from "../plugins/places-edit.js";
 import {
   DOORWAY,
+  type DoorSlot,
   doorOf,
   doorPlaceWords,
   doorProblems,
+  doorSlotAt,
   findDoorSlot,
   findPlacement,
   type Place,
   type PlaceItem,
   type PlaceLink,
   placeProblems,
+  resize,
   whyNoDoor,
   withDoorwayHeld,
   withSpots,
@@ -111,6 +115,27 @@ describe("the place words name", () => {
     expect(placeNamed("the attic", ENDS)).toBeUndefined();
   });
 
+  it("finds a meeting room by its room's name whatever its ref, and a shared place before the town's words", () => {
+    // A room on a backend whose refs aren't words: only its name can find it.
+    const team: LinkEnd = { id: "room:discord:123456", kind: "room", name: "#budget's meeting room", members: [] };
+    const ends = [mine, lounge, team, hall, town];
+    for (const words of [
+      "#budget",
+      "budget",
+      "the budget meeting room",
+      "budget meeting room",
+      "#budget's meeting room",
+    ])
+      expect(placeNamed(words, ends), words).toBe(team);
+    // A shared place someone named after one of the town's words is that place.
+    const theHall: LinkEnd = { id: "shared:the-hall", kind: "shared", name: "the hall" };
+    const square: LinkEnd = { id: "shared:square", kind: "shared", name: "the square" };
+    expect(placeNamed("the hall", [...ends, theHall, square])).toBe(theHall);
+    expect(placeNamed("the square", [...ends, theHall, square])).toBe(square);
+    expect(placeNamed("the town hall", [...ends, theHall])).toBe(hall);
+    expect(placeNamed("the hall", ends)).toBe(hall);
+  });
+
   it("finds a door put in by where it goes, or the only one by itself", () => {
     const names = new Map([
       ["shared:lounge", "the lounge"],
@@ -131,6 +156,28 @@ describe("the place words name", () => {
     expect(findLink(place, "the door", nameOf)).toBeUndefined();
     expect(findLink({ links: place.links.slice(0, 1) }, "the door", nameOf)?.to).toBe("shared:lounge");
     expect(findLink(place, "the couch", nameOf)).toBeUndefined();
+  });
+
+  it("never takes a thing's name for a door's, though the words share some letters", () => {
+    const names = new Map([
+      ["shared:den", "the den"],
+      ["shared:bar", "the bar"],
+      ["shared:reading-room", "the reading room"],
+    ]);
+    const nameOf = (id: string) => names.get(id);
+    const place = {
+      links: [
+        { to: "shared:den", wall: "left", along: 0 },
+        { to: "shared:bar", wall: "back", along: 1 },
+        { to: "shared:reading-room", wall: "front", along: 1 },
+      ] as PlaceLink[],
+    };
+    for (const thing of ["golden lamp", "the garden bench", "the bar stool", "the barbecue", "the", "reading"])
+      expect(findLink(place, thing, nameOf), thing).toBeUndefined();
+    // Words that say "door" may name its place by a whole word of it; any other words, by its name.
+    expect(findLink(place, "the reading door", nameOf)?.to).toBe("shared:reading-room");
+    expect(findLink(place, "the bar", nameOf)?.to).toBe("shared:bar");
+    expect(findLink(place, "the golden door", nameOf)).toBeUndefined();
   });
 });
 
@@ -181,6 +228,28 @@ describe("which doors put in are there", () => {
     });
     expect(place.links).toEqual([{ to: "shared:lounge", wall: "left", along: 1 }]);
     expect(withoutLink(place, "shared:lounge").links).toBeUndefined();
+  });
+
+  it("takes a door for gone only when its far side was read: no record, or no way back there", async () => {
+    const records = new Map<string, Partial<Place>>([
+      ["shared:lounge", { links: [link("home:planner")] }],
+      ["shared:attic", { links: [link("shared:elsewhere")] }],
+    ]);
+    // A store that can't say, just now, what the cellar is: its door stays.
+    const service = {
+      get: async (_caller: StateCaller, ref: { id: string }) => {
+        if (ref.id === "shared:cellar") throw new Error("the store is busy");
+        const data = records.get(ref.id);
+        return data ? { data } : null;
+      },
+    } as unknown as StateService;
+    const old = "2026-10-20T09:00:00Z";
+    const place = {
+      ...homePlace("home:planner", "x"),
+      links: ["shared:lounge", "shared:attic", "shared:gone", "shared:cellar"].map((to) => link(to, old)),
+    };
+    const tidied = await tidyByReading(service, "home:planner", place, Date.parse("2026-10-20T10:00:00Z"));
+    expect(tidied.links?.map((l) => l.to)).toEqual(["shared:lounge", "shared:cellar"]);
   });
 });
 
@@ -297,6 +366,43 @@ describe("where a door goes on a wall", () => {
     );
     expect(findDoorSlot(full, { wall: "right" }, [])).toMatch(/on the open right side:/);
     expect(findDoorSlot(full, {}, [])).toMatch(/on any side of the room:/);
+  });
+});
+
+describe("a room with a door put in, made another size", () => {
+  it("moves the door along its side with the room, one near an end keeping its distance from it", () => {
+    const room: Place = {
+      ...roomy(),
+      links: [
+        { to: "shared:lounge", wall: "back", along: 0.5 },
+        // As far toward the right as a door goes on a side 7 m long.
+        { to: "shared:attic", wall: "front", along: 2.4 },
+      ],
+    };
+    const wider = resize(room, { width: 9 });
+    if (typeof wider === "string") throw new Error(wider);
+    expect(wider.links?.map((l) => [l.wall, l.along])).toEqual([
+      ["back", 0.64],
+      ["front", 3.4],
+    ]);
+    const narrower = resize(room, { width: 6 });
+    if (typeof narrower === "string") throw new Error(narrower);
+    expect(narrower.links?.map((l) => [l.wall, l.along])).toEqual([
+      ["back", 0.43],
+      ["front", 1.9],
+    ]);
+    for (const l of narrower.links ?? []) expect(whyNoDoor(narrower, l, [])).toBeUndefined();
+  });
+
+  it("refuses a size a door put in would no longer fit in, saying which door and why", () => {
+    const slot: DoorSlot = { wall: "left", along: -1.7 };
+    const room: Place = { ...roomy(), links: [{ to: "shared:lounge", ...slot }] };
+    expect(whyNoDoor(room, slot, [])).toBeUndefined();
+    expect(resize(room, { depth: 4.5 })).toMatch(
+      /^That size doesn't work for the door put in on the left wall, .*\. It would run into the corner/,
+    );
+    // Without the door, the same size is fine.
+    expect(typeof resize(roomy(), { depth: 4.5 })).toBe("object");
   });
 });
 
@@ -495,7 +601,7 @@ describe("the doors in a place", () => {
 });
 
 describe("people putting doors in and taking them out on the page", () => {
-  it("takes out a door put in, but neither moves it nor repaints it, and keeps clear of it while rearranging", () => {
+  it("takes out a door put in, but doesn't repaint it, and keeps clear of it while rearranging", () => {
     const room: Place = { ...roomy(), links: [{ to: "shared:lounge", wall: "left", along: 1.8 }] };
     expect(editFrom({ op: "door", to: "shared:lounge" })).toEqual({ op: "door", to: "shared:lounge" });
     expect(editFrom({ op: "door" })).toMatch(/needs `to`/);
@@ -510,6 +616,40 @@ describe("people putting doors in and taking them out on the page", () => {
     if (typeof added === "string") throw new Error(added);
     expect(doorProblems(added.place, [{ wall: "left", along: 1.8 }])).toEqual([]);
   });
+
+  it("drags a door put in along the sides to where there's room, never over the window or the town's door", () => {
+    const room: Place = { ...roomy(), links: [{ to: "shared:lounge", wall: "left", along: -1.7 }] };
+    const street = doorOf(room) as DoorSlot;
+    // Taking the door away from where it is doesn't move the town's: it was put in clear of it.
+    expect(doorOf(withoutLink(room, "shared:lounge"))).toEqual(street);
+    expect(doorSlotAt(room, [1.23, 3.4])).toEqual({ wall: "front", along: 1.25 });
+    // Nearest the left wall, but further toward the back than a door can go short of the corner.
+    expect(doorSlotAt(room, [-3.4, -2.6])).toEqual({ wall: "left", along: -1.9 });
+    const move = (at: [number, number]) =>
+      applyEdit(
+        "home:planner",
+        room,
+        { op: "move", item: "door:shared:lounge", at, facing: 0 },
+        {
+          out: "the door out to Maple Lane",
+          nameOf: () => "the lounge",
+        },
+      );
+    const moved = move([1.23, 3.4]);
+    expect(typeof moved === "string" ? moved : moved.place.links).toEqual([
+      { to: "shared:lounge", wall: "front", along: 1.25 },
+    ]);
+    expect(move([-3.6, -0.2])).toBe("The window hangs where it would be.");
+    const onStreet: [number, number] =
+      street.wall === "back"
+        ? [street.along, -3.1]
+        : street.wall === "left"
+          ? [-3.6, street.along]
+          : street.wall === "front"
+            ? [street.along, 3.1]
+            : [3.6, street.along];
+    expect(move(onStreet)).toBe("It would be in the way of the door out to Maple Lane.");
+  });
 });
 
 describe("the place tool's doors", () => {
@@ -519,7 +659,9 @@ describe("the place tool's doors", () => {
   ];
   const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
   const agents = ["planner", "writer"];
-  const hasBody = (agent: string | undefined) => agents.includes(agent ?? "default");
+  // Agents whose bodies are turned off just now.
+  const away = new Set<string>();
+  const hasBody = (agent: string | undefined) => agents.includes(agent ?? "default") && !away.has(agent ?? "");
   const rooms = [{ ref: "local:trip", name: "trip", members: ["planner"] }];
   let state: StateService;
   let clock: number;
@@ -541,6 +683,7 @@ describe("the place tool's doors", () => {
     return (await scene(state, owner, id, rooms, hasBody, world))?.doors ?? [];
   };
   beforeEach(async () => {
+    away.clear();
     clock = Date.parse("2026-10-20T10:00:00Z");
     state = new StateService({
       getConfig: () => ({ state: { backend: "sqlite", types } }),
@@ -564,7 +707,8 @@ describe("the place tool's doors", () => {
     expect(home.links).toMatchObject([{ to: "shared:lounge", wall: "right", by: "planner" }]);
     expect(lounge.links).toMatchObject([{ to: homeId("planner"), by: "planner" }]);
     expect(home.changes?.[0]).toMatchObject({ who: "planner", what: "put in a door to the lounge" });
-    expect(lounge.changes?.[0]).toMatchObject({ who: "planner", what: "put in a door to your home" });
+    // Everyone reads a place's recent changes: the planner's home is the planner's there, not "your home".
+    expect(lounge.changes?.[0]).toMatchObject({ who: "planner", what: "put in a door to planner's home" });
     // Each side's door leads to the other, beside its way out to the street.
     expect((await doorsOf(homeId("planner"))).map((d) => [d.to, d.label])).toEqual([
       ["town", expect.any(String)],
@@ -607,6 +751,10 @@ describe("the place tool's doors", () => {
     const out = await t.execute({ action: "remove", item: "the door to planner's home" }, as("writer"));
     expect(out.success, out.error).toBe(true);
     expect((await read("shared:lounge")).links).toBeUndefined();
+    expect((await read("shared:lounge")).changes?.[0]).toMatchObject({
+      who: "writer",
+      what: "took out the door to planner's home",
+    });
     expect((await read(homeId("planner"))).links).toHaveLength(1);
     expect((await doorsOf(homeId("planner"))).map((d) => d.to)).toEqual(["town"]);
     // The planner's side goes from its record the next time its home changes.
@@ -633,6 +781,51 @@ describe("the place tool's doors", () => {
     expect((await t.execute({ action: "remove", item: "the door" }, as("planner"))).error).toMatch(
       /is the town's, so it stays/,
     );
+  });
+
+  it("says there's no such door, not that the town's stays, for a door put in that isn't here", async () => {
+    const t = tool();
+    await t.execute({ action: "add", kind: "door", to: "the lounge" }, as("planner"));
+    const out = await t.execute({ action: "remove", item: "the door to the attic" }, as("planner"));
+    expect(out.error).toBe(
+      'There\'s no door put in here called "the door to the attic". The doors put in here lead to: the lounge.',
+    );
+    expect((await t.execute({ action: "move", item: "the front door", wall: "left" }, as("planner"))).error).toMatch(
+      /is the town's, so it stays/,
+    );
+    // A thing that isn't here, whose name has the lounge's in it, is the usual answer, and the door stays.
+    expect((await t.execute({ action: "remove", item: "the lounger" }, as("planner"))).error).toMatch(/lounger/);
+    expect((await read(homeId("planner"))).links).toHaveLength(1);
+  });
+
+  it("keeps a door to a home whose agent has no body just now, for when it has one again", async () => {
+    const t = tool();
+    await t.execute({ action: "add", kind: "door", to: "the lounge" }, as("planner"));
+    away.add("planner");
+    clock += LINK_GRACE_MS;
+    await t.execute({ action: "go", to: "the lounge" }, as("writer"));
+    const added = await t.execute({ action: "add", kind: "plant" }, as("writer"));
+    expect(added.success, added.error).toBe(true);
+    expect((await read("shared:lounge")).links).toMatchObject([{ to: homeId("planner") }]);
+    away.delete("planner");
+    expect((await doorsOf("shared:lounge")).map((d) => d.to)).toContain(homeId("planner"));
+  });
+
+  it("undoes a door it put in from both sides, but can't undo taking one out, whose way back went with it", async () => {
+    const t = tool();
+    await t.execute({ action: "add", kind: "plant" }, as("planner"));
+    await t.execute({ action: "add", kind: "door", to: "the lounge" }, as("planner"));
+    const undone = await t.execute({ action: "undo" }, as("planner"));
+    expect(undone.success, undone.error).toBe(true);
+    expect((await read(homeId("planner"))).links).toBeUndefined();
+    expect((await read("shared:lounge")).links).toBeUndefined();
+    await t.execute({ action: "add", kind: "door", to: "the lounge" }, as("planner"));
+    await t.execute({ action: "remove", item: "the door to the lounge" }, as("planner"));
+    const back = await t.execute({ action: "undo" }, as("planner"));
+    expect(back.error).toBe(
+      'That took out the door to the lounge, and its way back went with it, so undo can\'t bring it back. Put it in again with add, kind "door".',
+    );
+    expect((await read(homeId("planner"))).links).toBeUndefined();
   });
 
   it("joins a meeting room of a room it talks in, which is kept from then on", async () => {

@@ -858,8 +858,9 @@ It refuses, saying why, a door it can't put in:
 - a door into **someone else's home** ("That's writer's home: only writer can
   put a door into it."), or a meeting room of a room it isn't a member of;
 - a door to a place that **isn't there** (it lists those it could lead to);
-- a door into the town, the town hall or the office, which are laid out from
-  what there is;
+- a door into the town or the office, which are laid out from what there is;
+  or into the town hall, which is the town's (you can put one in there from
+  Edit room);
 - a door with **no room** for it: a door needs 1.6 m with nothing hanging
   there and the floor in front of it clear, on its side of the room and on
   the way back's. The rooms the world draws keep their walls for furniture and
@@ -873,13 +874,26 @@ afterwards, by the agent or by you rearranging the room. `look` lists them
 ("Doors put in: to the reading room, at the open front side, by the dining
 chair (you put it in)"). `move` with `item` "the door to the reading room"
 and new words moves it along the sides of the room, and `remove` takes it out.
+Words that don't say "door" have to name its place exactly, so a thing the
+agent misnames is never taken for a door. Making the room another size with
+`room` moves each door along its side as it moves the furniture, and refuses a
+size one of them wouldn't fit, saying which. `undo` straight after putting a
+door in takes out both sides; straight after taking one out, it says it can't
+bring it back, since its way back went too, and to put it in again.
 
 **A door is there only while both its sides are.** Taking it out on either
 side takes it out on both: an agent can take out a door into a shared place
 from the shared place's side even when the other side is someone's home.
 When the place a door leads to is gone (a shared place deleted, a room
-closed, an agent without a body any more), the door goes with it. The side
-left behind is tidied out of the record the next time that place changes.
+closed), the door goes with it. A door to the home of an agent whose body is
+turned off is hidden, and back when the body is. The side left behind is
+tidied out of its record the next time that place changes, and only once the
+other place's record has been read and has no way back: a read that fails
+leaves the door be.
+
+Agents' bodies use these doors too. One going to a place its room has a door
+to walks out through that door, not the town's, and comes in at the way back
+on the other side.
 
 Inside, a door put in looks like the town's: a door in the back or left wall
 with its plate over it, or a gate at the open front or right, in the look of
@@ -1251,10 +1265,12 @@ where you were.
   picked. You can join any two places, someone's home too; only the town and
   the office are laid out from what there is. If there is no room on one
   side or the other, the bar says so.
-- **Take out a door** anyone put in by picking it: it lights up, and the bar
-  names where it goes and who put it in, with **Take out** (or Delete). Its
-  way back goes too. A door can't be dragged; take it out and put it in
-  again to have it somewhere else.
+- **Take out or move a door** anyone put in by picking it: it lights up, and
+  the bar names where it goes and who put it in, with **Take out** (or
+  Delete). Its way back goes too. Drag it to move it: it slides along the side
+  of the room nearest the pointer, the floor in front of it green where it
+  fits and red where it doesn't (a window over it, a thing in front of it,
+  the town's door), and its way back stays where it is.
 
 Whether a thing fits is the server's to say, by the checks the agents'
 `place` tool uses for its own changes: inside the room, clear of the rest,
@@ -2278,7 +2294,7 @@ cues, and its text passes through untouched.
 | `GET /api/state/visit` | where bodies are away from where they live, one record per agent (it is a world-state type like any other): `{place, until}` for a body gone somewhere to talk, and for an outing on its day also `errand` (`cafe`, `bench`, `park`, `read`, `meeting`, `friend`, or `sleep` for a night at home), `spot` (its seat in `place`), `with` (who it keeps company with) and `what` ("having a coffee at the café"). Kept in memory; people can end one with `DELETE` |
 | `GET /api/state/chatter` | what each room agents talk in said last, one record per room (`room:<backend>:<id>`): `{room, last, lines: [{id, who, agent?, words, at}]}`, its latest four lines' first words and who said them, and when it last talked. Kept in memory from what the rooms hear; people only |
 | `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, models, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for; the models agents made, `{id, name, owner, kind, size, faces, about?}`, newest first, at most 200; and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
-| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "add", model}` (a model an agent made, by its record id; the answer carries it in `models`, to draw at once), `{op: "remove", item}`, `{op: "color", item, color}`, or `{op: "door", to}`, a door to the place `to` with its way back there, which answers `{place, item, far: {id, name, place, version, scope}}`: the page writes `far.place` to `far.id` first, then this place. A door put in is the `item` `door:<to>`, which `remove` takes out. A `remove` of one of the lobby's kiosks or its task board is a `why`, and so is a `color` for a model; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
+| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "add", model}` (a model an agent made, by its record id; the answer carries it in `models`, to draw at once), `{op: "remove", item}`, `{op: "color", item, color}`, or `{op: "door", to}`, a door to the place `to` with its way back there, which answers `{place, item, far: {id, name, place, version, scope}}`: the page writes `far.place` to `far.id` first, then this place. A door put in is the `item` `door:<to>`, which `remove` takes out and `move` slides to the side of the room nearest `at`. A `remove` of one of the lobby's kiosks or its task board is a `why`, and so is a `color` for a model; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |
