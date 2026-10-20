@@ -145,11 +145,17 @@ page keeps that while it is open. Drag to look around the room, or press
 **Close up** to frame the head and torso. The page remembers the choice. The
 furniture is built from simple shapes, so there are no files to download.
 
-Something tall standing between the camera and anyone in the room, a palm at
-the front of a meeting room or a bookshelf you walked behind, fades to a
-ghost of itself until the view is clear again. On a visit you can turn the
-view all the way round; a wall the camera goes behind fades the same way,
-with whatever hangs on it, so you see into the room rather than its back.
+Something tall standing between the camera and you (or, in an agent's own
+view, the agent) fades to a ghost of itself until the view is clear again: a
+bookshelf you walked behind, say. So does one hiding whoever you are with,
+the agent you stand by or one you have a card open beside, like a palm in
+front of the seat of the agent you came to see. Only its parts count, not
+the air round them: a café cart you see past under its awning stays as it
+is, and so does one that hides someone else across the café. A faded thing
+casts no shadow, so its ghost doesn't darken the floor. On a visit you can
+turn the view all the way round; a wall the camera goes behind fades the
+same way, with whatever hangs on it, so you see into the room rather than
+its back.
 
 The avatar moves around the room on its own. Between sessions it wanders:
 it sits on the couch, types at the desk, looks out of the window, browses
@@ -706,20 +712,28 @@ picture over rather than jumping.
 **Coming into a room**, through a door or by the map, the camera shows what
 the room is gathered round as well as you: its table and its task board, and
 everyone sat at the table, however tall their bodies, rather than you alone at
-the door. It frames them in what you can see, beside the chat or a panel if
-one is open and above the keys hint, and frames them again if one opens while
-you stand there. In the short strip over a phone's chat it comes in closer as
+the door. It takes in what hangs on the walls to be read as well (the
+calendar, the screens, the boards), and frames it all in what you can see:
+beside the chat or a panel if one is open, above the keys hint and below the
+rows of buttons along the top, so nothing on the far wall is under a button.
+It frames them again if one opens while you stand there. In the short strip over a phone's chat it comes in closer as
 well, so the room fills the strip rather than drawing as a sliver in the
 middle of it. Walk a step or two, or zoom, and that shot is over: the camera
 comes round to you, as it always follows you, at the reach you zoomed to, and
 a panel opening or someone coming in afterwards leaves it there.
 
-**Fly** puts your body away and lets the camera go
-anywhere, faster again (6 metres a second, twice that with Shift): WASD to
-move, `E` up, `Q` down, drag to turn, and the wheel flies you the way you
-look, on as you roll it away from you and back as you roll it toward you, a
-couple of metres a notch (`flyWheelStep`). On a phone, a pinch does the same:
-spread your fingers to fly on, close them to fly back (`flyPinchStep`).
+**Fly** puts your body away and lets the camera go where you like, faster
+again (6 metres a second, twice that with Shift): WASD to move, `E` up, `Q`
+down, drag to turn, and the wheel flies you the way you look, on as you roll
+it away from you and back as you roll it toward you, a couple of metres a
+notch (`flyWheelStep`). On a phone, a pinch does the same: spread your
+fingers to fly on, close them to fly back (`flyPinchStep`). In a room you fly
+inside it: the camera comes down from the view that followed you to take off
+from your head, and stays between the floor and the ceiling and within the
+walls, so holding `Q` stops just over the floor, holding `E` stops under the
+ceiling, and the wheel or a turn never takes you out of the room.
+Outdoors you fly over the town, from just over the ground up to 60 metres
+(`flyBounds`). Walk brings the camera back round to you.
 Agents keep their own calmer pace in
 their rooms. Every speed is named in one place,
 `packages/ui/src/avatar/travel.ts`, with how far the camera can zoom (`REACH`).
@@ -823,7 +837,9 @@ floor has, with a plant beside it, and the meeting rooms' doors round its walls 
 14 to a floor. More rooms take more floors, with stairs between them, cut by
 first letter as lanes are. A meeting room dressed as a tavern, a studio, a
 workshop or a library has **a building of its own on Main Street**, which
-runs south from the square past the **shared places**. A beach room is **a
+runs south from the square past the **shared places**. A studio is a dusky
+plum with a pale band under its roof, high windows and its red light on, so
+it reads from across the street by day as well as by night. A beach room is **a
 hut on the sand** at the end of Main Street, where the town meets the sea.
 Behind the office is a park with a pond, a stream comes down the west side
 of town to the sea under a bridge where the avenue crosses it, and woods
@@ -1374,9 +1390,16 @@ where you were.
   through the door.", "It would be where someone stands to use the couch."
   Let go somewhere red and it goes back.
 - **What goes with it comes too.** Drag a table, a café table or a desk and
-  the chairs, stools and benches drawn up to it come along, each keeping its place round
-  it (a seat between two tables goes with the nearer); drag a rug and
-  everything standing on it comes, with the chairs at any table on it. Their
+  the chairs, stools and benches drawn up to it come along, each keeping its
+  place round it (a seat between two tables goes with the nearer). A table
+  people meet round, as a meeting room has, takes the armchairs turned to
+  face it too, counted from further off, since a meeting room sets them back
+  for someone to walk between; a coffee table goes without the armchairs
+  either side of it, which belong to the lounge, couch and all. Tables pushed
+  together, end to end or nearly, are one table: drag any piece of a meeting
+  room's long table and the whole of it comes, with every seat round it. Drag
+  a rug and everything standing on it comes, with the chairs at any table on
+  it. Their
   footprints are outlined with it while you drag, the line under the bar says
   what comes ("Drag it to move it with its 3 chairs"), and the whole group is
   checked where it lands, together, so the bar names the piece that doesn't
@@ -1402,9 +1425,15 @@ where you were.
   everything an
   agent can place, grouped as seating, tables, storage, lights, plants,
   decor, things for the walls, and boards and screens, but a kiosk, which
-  only does something as one of the lobby's. Pick one and it goes somewhere
-  free near the middle, never where you or an agent is standing, picked,
-  ready to drag where you want it. A task
+  only does something as one of the lobby's. Pick one and it goes on open
+  floor, where it has a metre clear round it, nearest the middle of the room
+  of the places that do, rather than in among the furniture there; never on
+  you or an agent, and a metre clear of you both where the room has the floor
+  for it (less, in a room too full). Something tall, a bookshelf or a palm,
+  goes up by the back or the left wall, where it hides little of the room,
+  and goes across the open front or in front of anyone standing only when
+  there is nowhere else. It comes picked, ready to drag where you want it. A
+  task
   board you add shows the tasks and opens them, like the ones rooms come
   with. Above them all, **Made by agents** lists the models agents have made,
   newest first, by name and whose each is (see
@@ -1539,6 +1568,16 @@ reader reads a reply out once, when it has all come in, rather than again
 with every few words, and reads what the agent is doing when that changes,
 not each second it has been at it.
 
+At rest (no reply coming in, nothing typed or attached, nothing waiting on
+your OK), it shows only the last thing said, its first three lines, and the
+box: it covers as little as it can of who you walked up to. Click into it, or
+start typing, and the last four turns come back. It sits beside the agent and
+whatever the agent is with rather than on them: whoever is gathered round it,
+the seat or board it is at, and anything tall it stands right by, like the
+café's cart; and it keeps off the calendar, the screens and the boards on the
+walls where there is anywhere else to go. The phone in your hand keeps off
+what you walked up to in the same way.
+
 What you type, and the files you attach, belong to the conversation you
 wrote them in. When the chat moves on to someone else, by a door, the map,
 **Talk to**, a card's button or the agent picker, the box is empty for them,
@@ -1582,7 +1621,11 @@ const off = stage.anchorPanel(el, { thing: "board-2" }, { rank: 2, onAway: close
 
 What it is beside is worked out on the stage each frame: a body's box from
 its crown to its feet, and its head with what floats over it as the part
-never to cover; a thing's box from what was built. Where each panel goes is
+never to cover; a thing's box from what was built. With `gathered: true`
+(your conversation) a body's box takes in whoever is within two metres of it,
+the thing at its spot and anything tall it stands by, so the panel goes
+beside all of them; on a visit every panel keeps off what hangs on the walls
+to be read where it can. Where each panel goes is
 pure and tested (`avatar/anchors.ts`): `layoutPanels` tries each side of its
 thing, slid along that side past whatever must stay clear, and the screen's
 edges, scores what each would cover (a face, the controls, the keys hint,
@@ -2192,6 +2235,10 @@ The chat page draws it on every body in the room:
   to type. A photo, a recording or a call is made where it stands.
 - **Thinking**, a thought cloud floats over it and it looks up and away, at
   its desk if it has one. In a meeting room it keeps its seat at the table.
+  Three or more thinking together, round a table or close by, share one
+  tag over the middle of them, a thought cloud and "4 thinking", in place of
+  a cloud and "thinking" over each; their tags keep their names. Point at
+  one, or stand by it, and its own sign and words are back.
 - **Talking** to an agent in the same place, the two turn to face each other
   under speech bubbles; to one anywhere else, it holds a phone to its ear (see
   [Near and far](#near-and-far)). Thinking or working through a call, it keeps
@@ -2216,7 +2263,14 @@ would meet, round a meeting table say, they are a crowd: everyone's but the
 one you are pointing at or standing by, and whoever is talking, is drawn
 faint, so the speaker's name stands out; and a faint one that would have to
 go up past a couple of others is put away rather than stacked a column high
-over the table. Point at that body and its tag is back.
+over the table. A tag that would sit over the room's whiteboard or task
+board goes across or up past it, if that isn't far, so what is there to
+read stays clear; a faint one that can't is put away, and one to read, like
+the shared "thinking" tag, stays where you can read it. Point at a body
+whose tag was put away and the tag is back. A tag
+whose head is under the keys hint along the foot of the stage, as one at the
+foot of the view can be when you fly up high, is put away rather than drawn
+behind the hint.
 Point at a body, or walk up to it on a visit, and the tag says more. An idle
 agent's says what it is up to ("watering the plant"), what it did last and
 how long ago ("last: searched the web, 40 min ago"), and when it next wakes

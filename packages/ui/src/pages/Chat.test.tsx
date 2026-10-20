@@ -966,7 +966,8 @@ describe("your conversation in the world", () => {
     fakeScene = () => sceneTalking();
     await render();
     expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(true);
-    expect(lines()).toEqual(["Earlier question", "Earlier answer"]);
+    // At rest, only the last thing said, so it covers little of who you walked up to.
+    expect(lines()).toEqual(["Earlier answer"]);
     let release = () => {};
     held = new Promise<void>((r) => {
       release = r;
@@ -975,9 +976,14 @@ describe("your conversation in the world", () => {
     expect(chatPosts.map((p) => p.sessionKey)).toEqual(["web:kitchen"]);
     // The reply comes in beside the agent as it arrives, and the box is the chat's own: empty again for both.
     expect(world().querySelector(".world-talk-live")?.textContent).toBe("Hello!");
+    // Not at rest while it answers: the turns before show too.
+    expect(lines()).toEqual(["Earlier question", "Earlier answer", "Hey!", "Hello!"]);
     expect((container.querySelector(".chat-input-bar input[type=text]") as HTMLInputElement).value).toBe("");
     await act(async () => release());
     await settle();
+    // Answered, it is at rest again; into the box to type, and the conversation so far is there to answer from.
+    expect(lines()).toEqual(["Hello!"]);
+    await act(async () => (world().querySelector(".world-talk-input") as HTMLInputElement).focus());
     expect(lines()).toEqual(["Earlier question", "Earlier answer", "Hey!", "Hello!"]);
     expect(world().querySelector(".world-talk-live")).toBeNull();
     // The whole conversation is a click away, beside the world.

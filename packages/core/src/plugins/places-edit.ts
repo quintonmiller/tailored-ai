@@ -51,9 +51,11 @@ export type Edit =
    */
   | { op: "move"; item: string; at: [number, number]; facing: number; on?: string; with?: string[] }
   /**
-   * A new thing of a kind, somewhere free near the middle; `like`, a copy of that thing, beside it. A model an agent
-   * made is added by its record's id, `model`; the server fills in its kind, the box it fills and its name. `avoid`
-   * is where people and agents stand on the page, [x, z] each: nothing new lands on anyone.
+   * A new thing of a kind, somewhere on open floor, where it has the most room round it; `like`, a copy of that
+   * thing, beside it. A model an agent made is added by its record's id, `model`; the server fills in its kind, the
+   * box it fills and its name. `avoid` is where people and agents stand on the page, [x, z] each: nothing new lands
+   * on anyone, or within a metre of them where the room has the floor for it, and nothing tall stands between them
+   * and the view in.
    */
   | {
       op: "add";
@@ -83,8 +85,13 @@ export interface Edited {
 const ON_WALL = 0.06;
 /** The most things a person moves along with another at once, and the most places where someone stands to keep clear. */
 const MOST_WITH = 24;
-/** How much floor someone standing takes, across, kept clear of anything new. */
-const STANDING = 0.6;
+/**
+ * How much floor someone standing takes, across, kept clear of anything new:
+ * a metre either side of them, so a new thing is put down well clear rather
+ * than wrapped round them; in a room without the floor for that, less, down
+ * to what they stand on.
+ */
+const STANDING = [2, 1.4, 0.6];
 
 /** What each of the lobby's working pieces lets you do from it, for saying why it stays. */
 const DOES: Record<PlaceAction, string> = {
@@ -188,7 +195,7 @@ const STANDING_HOLD = "someone-standing";
  * something new goes: a block as tall as the room at each, so nothing is put
  * down on anyone. What is found is put in the room as it is, without them.
  */
-function withStandingHeld(place: Place, at: [number, number][]): Place {
+function withStandingHeld(place: Place, at: [number, number][], across: number): Place {
   const holds = at.map(
     (point, i): PlaceItem => ({
       id: `${STANDING_HOLD}-${i + 1}`,
@@ -196,7 +203,7 @@ function withStandingHeld(place: Place, at: [number, number][]): Place {
       kind: "ball",
       at: point,
       facing: 0,
-      size: [STANDING, 9, STANDING],
+      size: [across, 9, across],
     }),
   );
   return holds.length ? { ...place, props: [...place.props, ...holds] } : place;
@@ -330,11 +337,16 @@ export function applyEdit(id: string, place: Place, edit: Edit, names?: DoorName
             ? { label: "Tasks", action: "tasks" as const }
             : {};
     const placing: Placing = { kind: edit.kind, ...copied };
-    // A copy goes beside what it copies; anything new near the middle, or else wherever it fits; never on anyone.
-    const where: Where = like ? { near: like.id } : kind.mount === "floor" ? { middle: true } : {};
-    const clear = kind.mount === "floor" ? withStandingHeld(held, edit.avoid ?? []) : held;
-    let spot = findPlacement(clear, placing, where);
-    if (typeof spot === "string" && where.middle) spot = findPlacement(clear, placing, {});
+    // A copy goes beside what it copies; anything new on open floor, out of the furnished middle, or else wherever
+    // it fits; never on anyone, and a metre clear of them where the room has the floor for it. Something tall keeps
+    // out of the view in where it can: by the back or left wall, not across the open front or in front of anyone.
+    const standing = kind.mount === "floor" ? (edit.avoid ?? []) : [];
+    const where: Where = like ? { near: like.id } : kind.mount === "floor" ? { open: true, seen: standing } : {};
+    let spot: ReturnType<typeof findPlacement> = "";
+    for (const across of standing.length ? STANDING : [0]) {
+      spot = findPlacement(withStandingHeld(held, standing, across), placing, where);
+      if (typeof spot !== "string") break;
+    }
     if (typeof spot === "string") return spot;
     const added: PlaceItem = {
       id: newId(place, edit.kind),

@@ -155,25 +155,78 @@ function world([lx, lz]: [number, number], [cx, cz]: [number, number], facing: n
 export const DRAWN_UP_KINDS = new Set(["chair", "stool", "bench", "cafe_chair"]);
 /** What seats are drawn up to. */
 export const TABLE_KINDS = new Set(["table", "round_table", "desk", "coffee_table", "cafe_table"]);
+/**
+ * The tables people meet round, as a meeting room seats them: armchairs set
+ * back from one and turned to it are drawn up to it too. Not a coffee table,
+ * whose armchairs belong to the lounge round it, couch and all.
+ */
+export const MEETING_KINDS = new Set(["table", "round_table"]);
+/** The armchairs a meeting table has drawn up to it. */
+const MEETING_SEATS = new Set([...DRAWN_UP_KINDS, "armchair"]);
 /** What things stand on, on the floor, and are carried along with it. */
 export const RUG_KINDS = new Set(["rug", "round_rug"]);
 /** How near a seat comes to a table, edge to edge, to be drawn up to it, in metres. */
 export const DRAWN_UP = 0.35;
+/**
+ * How near a seat turned to face a meeting table comes to it to be drawn up
+ * to it: further, since a meeting room sets its armchairs back far enough
+ * for someone to walk between them and the table.
+ */
+export const DRAWN_UP_FACING = 0.8;
+/**
+ * Tables this near, edge to edge, are pushed together: one long table, which
+ * goes where any of it goes, though a nudge left a hand's width between them.
+ */
+export const JOINED = 0.15;
 
-/** How far a point is outside a thing's footprint, in metres along the nearer of its sides; below 0 inside it. */
+/**
+ * How far a point is outside a thing's footprint, in metres along the nearer
+ * of its sides, or from its rim for a round thing; below 0 inside it.
+ */
 function outside(point: [number, number], thing: Prop, kinds: Kinds): number {
   const [w, d] = footprint(thing, kinds);
-  const [lx, lz] = local(point, thing.at, kinds[thing.kind]?.round ? 0 : thing.facing);
+  if (kinds[thing.kind]?.round) return Math.hypot(point[0] - thing.at[0], point[1] - thing.at[1]) - Math.max(w, d) / 2;
+  const [lx, lz] = local(point, thing.at, thing.facing);
   return Math.max(Math.abs(lx) - w / 2, Math.abs(lz) - d / 2);
+}
+
+/** The corners of a thing's footprint on the floor plan. */
+function cornersOf(thing: Prop, kinds: Kinds): [number, number][] {
+  const [w, d] = footprint(thing, kinds);
+  const turn = kinds[thing.kind]?.round ? 0 : thing.facing;
+  return [
+    [-w / 2, -d / 2],
+    [w / 2, -d / 2],
+    [w / 2, d / 2],
+    [-w / 2, d / 2],
+  ].map(([x, z]) => world([x, z], thing.at, turn));
+}
+
+/** Whether two tables are pushed together: a corner of one on, or all but on, the edge of the other. */
+function joined(a: Prop, b: Prop, kinds: Kinds): boolean {
+  return (
+    cornersOf(a, kinds).some((c) => outside(c, b, kinds) <= JOINED) ||
+    cornersOf(b, kinds).some((c) => outside(c, a, kinds) <= JOINED)
+  );
+}
+
+/** Whether a seat is turned to face a point, near enough: within 60 degrees of it. */
+function faces(seat: Prop, [x, z]: [number, number]): boolean {
+  const f = (seat.facing * Math.PI) / 180;
+  const [dx, dz] = [x - seat.at[0], z - seat.at[1]];
+  const length = Math.hypot(dx, dz);
+  return length < 1e-6 || (Math.sin(f) * dx + Math.cos(f) * dz) / length >= 0.5;
 }
 
 /**
  * What goes with a thing when you move or turn it, by id: the seats drawn up
- * to a table or a desk (each to the nearest one it is drawn up to), and
- * everything standing on a rug, with the seats drawn up to any table on it.
- * Things on a wall, things standing on top of something (they go with what
- * they stand on anyway) and other rugs go only by themselves. Nothing goes
- * with a thing that isn't on the floor.
+ * to a table or a desk (each to the nearest one it is drawn up to; further
+ * off for a seat turned to face it, like the armchairs round a meeting
+ * table), with the tables pushed together with it into one long one and the
+ * seats drawn up to those; and everything standing on a rug, with the seats
+ * drawn up to any table on it. Things on a wall, things standing on top of
+ * something (they go with what they stand on anyway) and other rugs go only
+ * by themselves. Nothing goes with a thing that isn't on the floor.
  */
 export function groupOf(room: Pick<Room, "props">, kinds: Kinds, id: string): string[] {
   const prop = room.props.find((p) => p.id === id);
@@ -181,23 +234,40 @@ export function groupOf(room: Pick<Room, "props">, kinds: Kinds, id: string): st
   if (!prop || !floor(prop)) return [];
   const tables = room.props.filter((p) => floor(p) && TABLE_KINDS.has(p.kind));
   /** The seats drawn up to a table: near enough, and no nearer another. */
-  const seatsAt = (table: Prop) =>
-    room.props
-      .filter((p) => floor(p) && DRAWN_UP_KINDS.has(p.kind))
+  const seatsAt = (table: Prop) => {
+    const meeting = MEETING_KINDS.has(table.kind);
+    return room.props
+      .filter((p) => floor(p) && (meeting ? MEETING_SEATS : DRAWN_UP_KINDS).has(p.kind))
       .filter((seat) => {
         const [w, d] = footprint(seat, kinds);
-        const reach = DRAWN_UP + Math.max(w, d) / 2;
+        const reach = (meeting && faces(seat, table.at) ? DRAWN_UP_FACING : DRAWN_UP) + Math.max(w, d) / 2;
         const gap = outside(seat.at, table, kinds);
         return gap <= reach && tables.every((t) => t === table || outside(seat.at, t, kinds) >= gap);
       })
       .map((p) => p.id);
+  };
+  /** A table and every table pushed together with it, and with those, end to end. */
+  const tableOf = (first: Prop) => {
+    const all = new Set([first]);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const t of tables)
+        if (!all.has(t) && [...all].some((a) => joined(a, t, kinds))) {
+          all.add(t);
+          grew = true;
+        }
+    }
+    return [...all];
+  };
+  /** A table, with the rest of it and the seats drawn up to any of it. */
+  const withSeats = (table: Prop) => tableOf(table).flatMap((t) => [t.id, ...seatsAt(t)]);
   const out = new Set<string>();
-  if (TABLE_KINDS.has(prop.kind)) for (const seat of seatsAt(prop)) out.add(seat);
+  if (TABLE_KINDS.has(prop.kind)) for (const p of withSeats(prop)) out.add(p);
   if (RUG_KINDS.has(prop.kind))
     for (const p of room.props) {
       if (p === prop || !floor(p) || RUG_KINDS.has(p.kind) || outside(p.at, prop, kinds) > 0) continue;
       out.add(p.id);
-      if (TABLE_KINDS.has(p.kind)) for (const seat of seatsAt(p)) out.add(seat);
+      if (TABLE_KINDS.has(p.kind)) for (const q of withSeats(p)) out.add(q);
     }
   out.delete(id);
   return [...out].sort();

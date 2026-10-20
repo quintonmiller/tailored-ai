@@ -2533,6 +2533,8 @@ export function useChatStage({
       rank: 1,
       optional: true,
       fallback: "dock",
+      // Beside whoever you talk to and what they are with, not over the group you walked up to.
+      gathered: true,
       color: talkColor,
     });
   // A card beside something, or docked at the side, has a strip on the right kept for it, which the stage takes from

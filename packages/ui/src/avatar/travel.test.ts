@@ -8,20 +8,27 @@ import {
   Arrival,
   clampReach,
   ease,
+  FLY_BEYOND,
+  FLY_FLOOR,
+  FLY_INSET,
   FLY_NOTCH_SECONDS,
+  FLY_SKY,
   FLY_SPEED,
+  flyBounds,
   flyPinchStep,
   flyWheelStep,
   followDistance,
   gait,
   heldMove,
   keepUp,
+  keptIn,
   OUTDOOR_PACE,
   pinchReach,
   REACH,
   RUN_FACTOR,
   reachAt,
   SHORT_STRIP,
+  takeOff,
   travelSpeed,
   WALK_SPEED,
   wheelPixels,
@@ -82,6 +89,43 @@ describe("flyPinchStep", () => {
     expect(flyPinchStep(200, 100)).toBeCloseTo(flyWheelStep(100));
     expect(flyPinchStep(100, 200)).toBeGreaterThan(0);
     expect(flyPinchStep(150, 150)).toBeCloseTo(0);
+  });
+});
+
+describe("where you can fly", () => {
+  const home = { width: 6, depth: 5, height: 3 };
+  it("keeps you inside a room: over the floor, under the ceiling, within its walls", () => {
+    const b = flyBounds(home);
+    expect(b.min).toEqual([-3 + FLY_INSET, FLY_FLOOR, -2.5 + FLY_INSET]);
+    expect(b.max).toEqual([3 - FLY_INSET, 3 - FLY_INSET, 2.5 - FLY_INSET]);
+    // Held Q for a while: as low as the floor lets you, and no lower.
+    expect(keptIn([0, -6, 0], b)).toEqual([0, FLY_FLOOR, 0]);
+    // Held E: up to the ceiling. Flown out of the open front, or the wheel run on: back at the edge of the room.
+    expect(keptIn([1, 15, 0], b)[1]).toBe(3 - FLY_INSET);
+    expect(keptIn([9, 2, 12], b)).toEqual([3 - FLY_INSET, 2, 2.5 - FLY_INSET]);
+    // Anywhere inside is yours.
+    expect(keptIn([1, 1.5, -1], b)).toEqual([1, 1.5, -1]);
+  });
+
+  it("keeps you over the town outdoors, from just above the ground to the sky, a little past its edges", () => {
+    const b = flyBounds({ width: 200, depth: 160, height: 3, town: {} });
+    expect(b.min).toEqual([-100 - FLY_BEYOND, FLY_FLOOR, -80 - FLY_BEYOND]);
+    expect(b.max).toEqual([100 + FLY_BEYOND, FLY_SKY, 80 + FLY_BEYOND]);
+    expect(keptIn([0, 400, 0], b)[1]).toBe(FLY_SKY);
+    expect(keptIn([0, -1, 0], b)[1]).toBe(FLY_FLOOR);
+  });
+
+  it("never gives a room so small it has no inside", () => {
+    const b = flyBounds({ width: 0.2, depth: 0.2, height: 0.2 });
+    for (const i of [0, 1, 2]) expect(b.max[i]).toBeGreaterThanOrEqual(b.min[i]);
+  });
+
+  it("takes off from your head a step back, inside the room, whichever way you look", () => {
+    const b = flyBounds(home);
+    // Facing into the room from its middle: a step behind your head, a little higher.
+    expect(takeOff([0, 1.5, 0], [0, -1], b)).toEqual([0, 1.8, 1.2]);
+    // Standing at the front with the camera behind you: the step back stops at the room's edge.
+    expect(takeOff([0, 1.5, 2], [0, -1], b)).toEqual([0, 1.8, 2.5 - FLY_INSET]);
   });
 });
 

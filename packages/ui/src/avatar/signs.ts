@@ -171,6 +171,40 @@ export function tag(lines: {
   return sprite(canvas, 0.16 * (canvas.height / 72));
 }
 
+/** A thought cloud before the words of a shared thinking cue: its size, and the gap after it. */
+const CUE_CLOUD = 58;
+const CUE_CLOUD_GAP = 8;
+
+/**
+ * One cue over several agents thinking together (`together.ts`), in place of
+ * a thought cloud over each: a tag like theirs, with a thought cloud before
+ * the words saying how many are thinking.
+ */
+export function thinkingCue(words: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const font = "600 40px system-ui, sans-serif";
+  if (ctx) ctx.font = font;
+  const text = clip(words);
+  const textW = ctx?.measureText(text).width ?? text.length * 20;
+  canvas.width = Math.ceil(textW + CUE_CLOUD + CUE_CLOUD_GAP + 52);
+  canvas.height = 74;
+  if (ctx) {
+    ctx.fillStyle = "rgba(20, 22, 32, 0.74)";
+    ctx.beginPath();
+    ctx.roundRect(0, 0, canvas.width, canvas.height, 34);
+    ctx.fill();
+    const left = (canvas.width - textW - CUE_CLOUD - CUE_CLOUD_GAP) / 2;
+    ctx.drawImage(drawSign("think"), left, (canvas.height - CUE_CLOUD) / 2 - 2, CUE_CLOUD, CUE_CLOUD);
+    ctx.font = font;
+    ctx.fillStyle = "#f2f4fa";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, left + CUE_CLOUD + CUE_CLOUD_GAP, canvas.height / 2 + 2);
+  }
+  return sprite(canvas, 0.16 * (canvas.height / 72));
+}
+
 /** The white of a bubble, and of its tail. */
 const BUBBLE_FILL = "rgba(252, 252, 255, 0.96)";
 /** A bubble for the far side of a call, heard out of a phone here: a cooler white, edged in dashes. */
@@ -408,6 +442,8 @@ export class SignPost {
   readonly group = new THREE.Group();
   private current: Sign | undefined;
   private shown: THREE.Sprite | undefined;
+  /** Said once over a group instead, thinking together (`thinkingCue`): not drawn here, and keeping no room. */
+  private pooled = false;
   private since = 0;
   /** Metres a screen pixel covers where it stands, as last laid out: its bob is in screen pixels, like the rest. */
   private perPixel = 0.005;
@@ -419,13 +455,22 @@ export class SignPost {
     this.since = clock;
     if (this.shown) disposeSprite(this.shown);
     this.shown = sign ? sprite(drawSign(sign), sign === "sleep" ? 0.3 : 0.24) : undefined;
-    if (this.shown) this.group.add(this.shown);
+    if (this.shown) {
+      this.shown.visible = !this.pooled;
+      this.group.add(this.shown);
+    }
+  }
+
+  /** Its sign said by a cue over the group it thinks with, or by itself again. */
+  pool(on: boolean) {
+    this.pooled = on;
+    if (this.shown) this.shown.visible = !on;
   }
 
   /** Size the sign for the screen; its height there in pixels, or undefined with no sign showing. */
   fit(perPixel: number, limits: [number, number]): number | undefined {
     this.perPixel = perPixel;
-    return this.shown && this.group.visible ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
+    return this.shown && this.group.visible && !this.pooled ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
   }
 
   /** Stand it `lift` screen pixels up from the top of the head, and `across` to the right, over its tag. */

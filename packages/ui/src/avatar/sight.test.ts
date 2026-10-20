@@ -40,6 +40,26 @@ describe("blocks", () => {
   });
 });
 
+describe("blocks, by a thing's parts", () => {
+  // A coffee cart at the origin: a counter a metre high, an awning on posts from 2.2 m to 2.4 m, open between.
+  const counter: Solid = { min: [-0.9, 0, -0.4], max: [0.9, 1.05, 0.4] };
+  const awning: Solid = { min: [-0.95, 2.2, -0.5], max: [0.95, 2.4, 0.55] };
+  const cart: Solid = { min: [-0.95, 0, -0.5], max: [0.95, 2.4, 0.55], parts: [counter, awning] };
+  const camera: Vec3 = [0, 1.6, 8];
+
+  it("leaves a cart alone when you are seen through the open space under its awning", () => {
+    // Your head just behind the cart, at the height you see over its counter and under its awning.
+    const head: Vec3 = [0, 1.6, -1.2];
+    expect(blocks(cart, camera, head)).toBe(false);
+    // The box round all of it would have said otherwise.
+    expect(blocks({ min: cart.min, max: cart.max }, camera, head)).toBe(true);
+  });
+
+  it("names the cart once its counter is between the camera and you", () => {
+    expect(blocks(cart, [0, 2, 8], [0, 0.6, -1.2])).toBe(true);
+  });
+});
+
 describe("blockers", () => {
   it("names each thing in the way of any of the targets, once", () => {
     const lamp: Solid = { min: [-2.2, 0, 2], max: [-1.8, 1.7, 2.4] };

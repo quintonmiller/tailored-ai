@@ -36,6 +36,26 @@ describe("paintFaded", () => {
     expect(f.own).toBeUndefined();
   });
 
+  it("casts no shadow while a thing is faded, and its own shadows again once it is clear", () => {
+    const d = door();
+    d.plateMesh.castShadow = true;
+    d.lightMesh.castShadow = false;
+    const f: Fadeable = { group: d.group, level: 0.3, shadeless: true };
+    paintFaded(f);
+    expect([d.plateMesh.castShadow, d.lightMesh.castShadow]).toEqual([false, false]);
+    // Faded further, frame after frame: still none, and what it had is kept for when it comes back.
+    f.level = 0.22;
+    paintFaded(f);
+    expect(d.plateMesh.castShadow).toBe(false);
+    f.level = 1;
+    paintFaded(f);
+    expect([d.plateMesh.castShadow, d.lightMesh.castShadow]).toEqual([true, false]);
+    // Something that keeps its shadow while faded, like a building in the town, keeps it.
+    const kept: Fadeable = { group: d.group, level: 0.3 };
+    paintFaded(kept);
+    expect(d.plateMesh.castShadow).toBe(true);
+  });
+
   it("keeps up with a door's light changing colour and its plate lighting up while it is faded", () => {
     const d = door();
     const f: Fadeable = { group: d.group, level: 0.22 };

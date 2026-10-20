@@ -807,7 +807,7 @@ function Anchored({ panel, stage }: { panel: WorldPanelSpec; stage: Stage }) {
   const el = useRef<HTMLDivElement>(null);
   const awayRef = useRef(panel.onAway);
   awayRef.current = panel.onAway;
-  const { anchor, rank, optional, fallback, look, color } = panel;
+  const { anchor, rank, optional, fallback, gathered, look, color } = panel;
   const key = JSON.stringify(anchor);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when the anchor changed; the anchor is read with it.
   useEffect(() => {
@@ -816,9 +816,10 @@ function Anchored({ panel, stage }: { panel: WorldPanelSpec; stage: Stage }) {
       ...(rank !== undefined ? { rank } : {}),
       ...(optional ? { optional } : {}),
       ...(fallback ? { fallback } : {}),
+      ...(gathered ? { gathered } : {}),
       onAway: () => awayRef.current?.(),
     });
-  }, [stage, key, rank, optional, fallback]);
+  }, [stage, key, rank, optional, fallback, gathered]);
   return (
     <div
       ref={el}

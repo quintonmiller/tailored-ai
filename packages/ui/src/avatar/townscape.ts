@@ -415,7 +415,8 @@ function onStreet(body: Parts, glass: Parts, lights: Parts, b: TownBuilding) {
   const [w, d, h] = b.size;
   const looks: Record<string, { walls: number; roof: number; trim: number }> = {
     tavern: { walls: 0xe9dcc0, roof: 0x5a3a2a, trim: 0x4a3020 },
-    studio: { walls: 0x3a3646, roof: 0x2a2833, trim: 0x8a7aa8 },
+    // A studio is moody, not a black box: a dusky plum that reads in daylight, under a darker roof.
+    studio: { walls: 0x8c82a6, roof: 0x5c566f, trim: 0xdcd2ee },
     workshop: { walls: 0xa0503c, roof: 0x4a4f58, trim: 0x6a6a6a },
     library: { walls: 0xd8d0be, roof: 0x4f5a6a, trim: 0xb8ae98 },
     hut: { walls: 0xf4f0e4, roof: 0x3f8fd2, trim: 0x3f8fd2 },
@@ -439,6 +440,11 @@ function onStreet(body: Parts, glass: Parts, lights: Parts, b: TownBuilding) {
     lights.box(0.2, 0.3, 0.2, 0xffb04a, [-w / 2 + 0.6, 2.4, d / 2 + 0.3]);
   } else if (b.kind === "studio") {
     body.box(w + 0.3, 0.3, d + 0.3, look.roof, [0, h + 0.15, 0]);
+    // A pale band under its roof, a canopy over its door and a slit of high windows either side, so its shape reads
+    // from across the street.
+    body.box(w + 0.12, 0.28, d + 0.12, look.trim, [0, h - 0.14, 0]);
+    body.box(2.4, 0.1, 1.1, look.trim, [0, 2.75, d / 2 + 0.55]);
+    for (const x of [-(w / 2 - 1.2), w / 2 - 1.2]) windowAt(body, glass, [x, 2.5, d / 2], 0, 1.2, 0.4);
     lights.box(1.3, 0.38, 0.06, 0xff3b30, [0, 3.05, d / 2 + 0.05]);
     body.box(0.06, 2.4, 0.06, 0x9aa0a8, [w / 3, h + 1.3, -d / 4]);
     lights.add(new THREE.SphereGeometry(0.08, 8, 6), 0xff3b30, [w / 3, h + 2.55, -d / 4]);

@@ -21,6 +21,8 @@ export interface Fadeable {
   level: number;
   /** How much of it shows while it hides a body, when that isn't the usual: a gate all but goes. */
   faint?: number;
+  /** Casts no shadow while it is faded: a ghost of a thing that still darkens the floor reads as a box of glass. */
+  shadeless?: boolean;
   own?: Map<THREE.Mesh, THREE.Material | THREE.Material[]>;
   /**
    * Fades to a pale ghost of one colour, lit from within, rather than to a
@@ -96,6 +98,10 @@ export function paintFaded(f: Fadeable) {
       if (isHole(mesh)) continue;
       for (const m of [mesh.material].flat()) m.dispose();
       mesh.material = was;
+      if (mesh.userData.shadowWas !== undefined) {
+        mesh.castShadow = mesh.userData.shadowWas;
+        delete mesh.userData.shadowWas;
+      }
     }
     f.own = undefined;
     return;
@@ -116,6 +122,10 @@ export function paintFaded(f: Fadeable) {
     if (!own.has(mesh)) {
       own.set(mesh, mesh.material);
       mesh.material = Array.isArray(mesh.material) ? mesh.material.map(seeThroughCopy) : seeThroughCopy(mesh.material);
+      if (f.shadeless) {
+        mesh.userData.shadowWas = mesh.castShadow;
+        mesh.castShadow = false;
+      }
     }
     const was = [own.get(mesh)].flat();
     const by = f.ghost ? fadedBy(f.level, f.ghost.faded) : 0;

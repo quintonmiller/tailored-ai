@@ -643,14 +643,16 @@ function viewAxes(): { back: V3; right: V3; up: V3 } {
  * edge, a point nearer the camera needing more room by as much as it is
  * nearer. `aspect` and `tall` are the shape of what can be seen, as for
  * `roomDistance`; `foot` is the share of its height along the bottom that is
- * covered (the keys hint), which the points are kept above.
+ * covered (the keys hint), which the points are kept above, and `head` the
+ * share along the top (the rows of tools), which they are kept below.
  */
-export function fitView(points: V3[], aspect: number, tall = 1, foot = 0): { target: V3; distance: number } {
-  // Half of what can be seen, each way, as the tangent of the angle out to its edge; up and down, what is left over
-  // the foot.
+export function fitView(points: V3[], aspect: number, tall = 1, foot = 0, head = 0): { target: V3; distance: number } {
+  // Half of what can be seen, each way, as the tangent of the angle out to its edge; up and down, what is left
+  // between the head and the foot, whose middle is `lift` of the half-height above the middle of what can be seen.
   const half = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * tall;
   const tanH = half * aspect * FRAME_FILL;
-  const tanV = half * (1 - foot) * FRAME_FILL;
+  const tanV = half * Math.max(0.05, 1 - foot - head) * FRAME_FILL;
+  const lift = foot - head;
   const { back, right, up } = viewAxes();
   const dot = (p: V3, q: V3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
   if (!points.length) return { target: [...ROOM_TARGET], distance: 0 };
@@ -664,17 +666,17 @@ export function fitView(points: V3[], aspect: number, tall = 1, foot = 0): { tar
   for (const p of points) {
     const d: V3 = [p[0] - middle[0], p[1] - middle[1], p[2] - middle[2]];
     const toward = dot(d, back);
-    // Up and down it is measured from the middle of what is left over the foot, where the points are put (below):
-    // a point nearer the camera sits that much higher in it.
+    // Up and down it is measured from the middle of what is left between the head and the foot, where the points are
+    // put (below): a point nearer the camera sits that much further from the middle of what can be seen.
     distance = Math.max(
       distance,
       Math.abs(dot(d, right)) / tanH + toward,
-      Math.abs(dot(d, up) + half * foot * toward) / tanV + toward,
+      Math.abs(dot(d, up) + half * lift * toward) / tanV + toward,
     );
   }
-  // The middle of what is left over the foot is above the middle of what can be seen, by the foot's share of its
-  // half-height: the camera looks that much below the middle of the points, so they sit up there.
-  const drop = distance * half * foot;
+  // The middle of what is left is above the middle of what can be seen by `lift` of its half-height (below it, with
+  // more covered along the top than the foot): the camera looks that much below the middle of the points, or above.
+  const drop = distance * half * lift;
   return { target: [0, 1, 2].map((i) => middle[i] - up[i] * drop) as V3, distance };
 }
 

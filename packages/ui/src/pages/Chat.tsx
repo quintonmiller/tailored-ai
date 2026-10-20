@@ -415,6 +415,16 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       {...(doing ? { status: doing } : {})}
       {...(working && store.elapsed > 0 ? { elapsed: store.elapsed } : {})}
       voice={scene.voiceEnabled}
+      // At rest it shows only the last thing said, so it covers little of who you walked up to and what they're at.
+      idle={
+        !store.sending &&
+        !scene.spoken &&
+        !doing &&
+        !input.trim() &&
+        attachments.length === 0 &&
+        store.approvals.length === 0 &&
+        !scene.voice.error
+      }
       approvals={approvalPanel}
       {...(scene.voice.error ? { problem: scene.voice.error } : {})}
       onFull={() => choosePanel(true)}

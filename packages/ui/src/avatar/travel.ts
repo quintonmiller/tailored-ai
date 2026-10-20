@@ -82,6 +82,61 @@ export function flyPinchStep(apart: number, now: number): number {
   return flyWheelStep(apart - now);
 }
 
+/**
+ * The lowest the flying camera goes, in metres over the floor or the ground:
+ * low enough to look under a table, never down through the floor.
+ */
+export const FLY_FLOOR = 0.4;
+/** Indoors the flying camera keeps this far in from the walls and down from the ceiling, so it never looks through one. */
+export const FLY_INSET = 0.25;
+/** Outdoors it flies no higher than this, in metres: the whole town below, never lost in the sky. */
+export const FLY_SKY = 60;
+/** Outdoors it flies no further than this past the town's edges, in metres. */
+export const FLY_BEYOND = 10;
+
+/** The box the flying camera stays in: its least and most x, y and z, in metres. */
+export interface FlyBounds {
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
+/**
+ * Where you can fly. In a room, inside it: between the floor and the ceiling
+ * and within its walls, open sides and all, so you look round the room from
+ * anywhere in it and never lose it. Outdoors, over the town, from just above
+ * the ground to `FLY_SKY`, a little past its edges.
+ */
+export function flyBounds(room: { width: number; depth: number; height: number; town?: unknown }): FlyBounds {
+  if (room.town) {
+    const [x, z] = [room.width / 2 + FLY_BEYOND, room.depth / 2 + FLY_BEYOND];
+    return { min: [-x, FLY_FLOOR, -z], max: [x, FLY_SKY, z] };
+  }
+  const x = Math.max(0, room.width / 2 - FLY_INSET);
+  const z = Math.max(0, room.depth / 2 - FLY_INSET);
+  const top = Math.max(FLY_FLOOR, room.height - FLY_INSET);
+  return { min: [-x, FLY_FLOOR, -z], max: [x, top, z] };
+}
+
+/** A point brought into the bounds the shortest way: each of x, y and z kept between its least and most. */
+export function keptIn(p: [number, number, number], b: FlyBounds): [number, number, number] {
+  return [0, 1, 2].map((i) => Math.min(b.max[i], Math.max(b.min[i], p[i]))) as [number, number, number];
+}
+
+/**
+ * Where the camera takes off from, indoors, when you start flying: at your
+ * head, a step back along the way the camera looks (`heading`, on the floor),
+ * inside the room. From there it looks the same way, a little down, so the
+ * room is in front of you as it was.
+ */
+export function takeOff(
+  head: [number, number, number],
+  heading: [number, number],
+  b: FlyBounds,
+): [number, number, number] {
+  const back = 1.2;
+  return keptIn([head[0] - heading[0] * back, head[1] + 0.3, head[2] - heading[1] * back], b);
+}
+
 /** A pace this many times a body's own walking speed is a run. Halfway between a walk and a Shift run. */
 const RUN_ABOVE = (1 + RUN_FACTOR) / 2;
 /** The walk cycle plays no slower or faster than this, so a stumble or a sprint never smears it. */
