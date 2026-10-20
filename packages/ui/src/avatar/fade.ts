@@ -19,6 +19,8 @@ export interface Fadeable {
   solid?: Solid;
   wall?: Wall;
   level: number;
+  /** How much of it shows while it hides a body, when that isn't the usual: a gate all but goes. */
+  faint?: number;
   own?: Map<THREE.Mesh, THREE.Material | THREE.Material[]>;
 }
 
@@ -75,6 +77,8 @@ export function paintFaded(f: Fadeable) {
       own.delete(mesh);
       return;
     }
+    // What is there to be found by, like the mat a gate says where it goes on, stays as it is.
+    if (mesh.userData.keep) return;
     // A photo hung after it faded is put in see-through copies when it comes.
     if (!own.has(mesh)) {
       own.set(mesh, mesh.material);

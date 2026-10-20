@@ -200,6 +200,23 @@ export function moveOf(
   return { ...(from ? { from } : {}), ...(to ? { to } : {}) };
 }
 
+/** How many characters the trail over the stage shows on one line before it folds its middle: wide, then on a phone. */
+export const TRAIL_CHARS = { wide: 44, narrow: 20 };
+
+/**
+ * Which steps of a trail to fold away so it fits one short line of `chars`
+ * characters: none while every step fits; otherwise the steps between the
+ * first and the last, shown as "…" and opened out again by pointing at the
+ * trail or tabbing into it. The first ("Town") and where you are always show.
+ * By index into the trail.
+ */
+export function foldedSteps(trail: Crumb[], chars: number): Set<number> {
+  // Each step's words, and the " › " before every one after the first.
+  const long = (steps: Crumb[]) => steps.reduce((n, c, i) => n + c.label.length + (i ? 3 : 0), 0);
+  if (trail.length <= 2 || long(trail) <= chars) return new Set();
+  return new Set(trail.map((_, i) => i).slice(1, -1));
+}
+
 /** An agent on the map: its home, which a click goes to, and where its body is when that is somewhere else. */
 export interface MapAgent {
   agent: string;

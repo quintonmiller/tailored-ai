@@ -1182,6 +1182,11 @@ const DOOR_LOOKS: Record<RoomDoor["kind"], { panel?: number; plate: string; ink:
   office: { plate: "#24303f", ink: "#eef1fa" },
 };
 
+/** How tall a gate's posts are, at an open side of a room: about a hand above the waist. */
+const GATE_POST = 1.12;
+/** How thick a gate's mat is: more than a rug, so one laid across the open side doesn't hide it. */
+const GATE_MAT = 0.05;
+
 /** One shared see-through pane for glass doors: out to the street, into the town hall and the office. */
 let glass: THREE.MeshStandardMaterial | undefined;
 
@@ -1189,9 +1194,11 @@ let glass: THREE.MeshStandardMaterial | undefined;
  * A door, standing at its own origin with its back to the wall and its front
  * toward +Z. On a wall: a frame, a panel (glass out to the street and into the
  * town hall and the office), a name plate over it and a mat in front. At an open side of the room the wall
- * is cut away, so the door is too: a low gate of two posts with the plate
- * across them, readable from either side, that never stands between the
- * camera and the room. A gate at the open right side is seen almost edge on
+ * is cut away, so the door is too: a low gateway, two capped posts and a
+ * rail across their tops with the plate hanging from it, readable from
+ * either side, open to see through below it, and its name again on the
+ * mat at its foot, which stays while the rest of it fades for someone behind
+ * it. A gate at the open right side is seen almost edge on
  * from where the room is looked at, so it has a signpost too (`signpost`): its
  * nearer post goes up, with the plate again on top of it, turned to face the
  * front. A home's door has a light by its plate, and a lit strip along it,
@@ -1215,10 +1222,20 @@ export function buildDoor(
   const tall = Math.min(2.25, opts.height - 0.46);
   const k = tall / 2.25;
   // How high the plate is, and which faces of it can be seen.
-  const plateY = opts.freestanding ? 0.9 : Math.min(2.5, opts.height - 0.2);
+  const plateY = opts.freestanding ? 0.82 : Math.min(2.5, opts.height - 0.2);
   const faces = opts.freestanding ? [1, -1] : [1];
   if (opts.freestanding) {
-    for (const x of [-0.66, 0.66]) box(g, 0.1, 1.06, 0.12, trim, x, 0.53, 0.06);
+    // A gateway, open to walk through: two posts with caps, a rail across their tops, and the plate hanging from
+    // the rail, so nothing but the plate is solid and below it you see straight through.
+    for (const x of [-0.66, 0.66]) {
+      box(g, 0.1, GATE_POST, 0.12, trim, x, GATE_POST / 2, 0.06);
+      box(g, 0.15, 0.04, 0.17, tint(trim, -0.14), x, GATE_POST + 0.02, 0.06);
+    }
+    box(g, 1.22, 0.05, 0.07, trim, 0, GATE_POST - 0.045, 0.06);
+    // What the plate hangs by.
+    const rod = GATE_POST - 0.07 - (plateY + 0.16);
+    for (const x of [-0.42, 0.42])
+      box(g, 0.02, rod, 0.02, tint(trim, -0.3), x, plateY + 0.16 + rod / 2, 0.06).castShadow = false;
     // A sill across the opening, where the cut-away wall would meet the floor.
     box(g, 1.22, 0.03, 0.12, tint(trim, -0.2), 0, 0.015, 0.06).castShadow = false;
   } else {
@@ -1246,18 +1263,12 @@ export function buildDoor(
     }
   }
   // The plate: a backing, and the words on each face that can be seen. A long name gets a wider plate, up to
-  // what fits over the door, so it stays as easy to read as a short one.
-  const wide = Math.min(opts.freestanding ? 1.36 : 1.8, Math.max(1.1, 0.35 + 0.075 * door.label.length));
-  box(
-    g,
-    opts.freestanding ? Math.max(1.42, wide + 0.06) : wide + 0.06,
-    0.32,
-    0.04,
-    0x2a2e38,
-    0,
-    plateY,
-    0.06,
-  ).castShadow = false;
+  // what fits over the door, so it stays as easy to read as a short one; on a gate, what fits between its posts.
+  const wide = Math.min(
+    opts.freestanding ? 1.12 : 1.8,
+    Math.max(opts.freestanding ? 0.9 : 1.1, 0.35 + 0.075 * door.label.length),
+  );
+  box(g, wide + 0.06, 0.32, 0.04, 0x2a2e38, 0, plateY, 0.06).castShadow = false;
   const face = canvasFace(wide, 0.27, 440);
   drawPlate(face.canvas, door.label, look.plate, look.ink);
   for (const side of faces) {
@@ -1270,7 +1281,9 @@ export function buildDoor(
     // The post on the gate's left (the front of the room, for a gate at the right side) goes up past the gate, and
     // the plate stands on it again, out into the room, facing the front and the back so it reads from the view in.
     const top = Math.min(1.95, opts.height - 0.25);
-    box(g, 0.08, top - 1.06, 0.08, trim, 0.66, 1.06 + (top - 1.06) / 2, 0.06);
+    // On up from the post's cap.
+    const from = GATE_POST + 0.04;
+    box(g, 0.08, top - from, 0.08, trim, 0.66, from + (top - from) / 2, 0.06);
     const sign = Math.min(1.1, wide);
     const at = 0.06 + 0.05 + sign / 2;
     box(g, 0.035, 0.31, sign + 0.04, 0x2a2e38, 0.66, top - 0.2, at).castShadow = false;
@@ -1283,8 +1296,21 @@ export function buildDoor(
       g.add(plate);
     }
   }
-  // A mat in front, so a door is found by where it meets the floor as well.
-  box(g, 1.3, 0.014, 0.55, 0x4a4038, 0, 0.007, 0.45).castShadow = false;
+  // A mat in front, so a door is found by where it meets the floor as well. A gate's is thick enough to lie on a rug
+  // rather than under it.
+  const matTop = opts.freestanding ? GATE_MAT : 0.014;
+  const mat = box(g, 1.3, matTop, 0.55, 0x4a4038, 0, matTop / 2, 0.45);
+  mat.castShadow = false;
+  if (opts.freestanding) {
+    // A gate says where it goes on its mat too, read from the view in, and the mat stays while the gate all but goes
+    // for someone behind it (`keep`, see `fade.ts`): on the floor, where it hides nobody, the way out is still there.
+    const words = new THREE.Mesh(new THREE.PlaneGeometry(wide, 0.27), face.material);
+    words.position.set(0, matTop + 0.002, 0.45);
+    words.rotation.set(-Math.PI / 2, 0, Math.PI);
+    g.add(words);
+    mat.userData.keep = true;
+    words.userData.keep = true;
+  }
   // Lit up while the pointer is on it: a bright edge round the doorway and the mat, and the plate brighter.
   const edge = new THREE.MeshBasicMaterial({ color: 0xffd98a, toneMapped: false, transparent: true, opacity: 0.9 });
   const glow = new THREE.Group();
@@ -1292,14 +1318,18 @@ export function buildDoor(
     const mesh = solid(new THREE.BoxGeometry(w, h, d), edge, x, y, z);
     mesh.castShadow = false;
     glow.add(mesh);
+    return mesh;
   };
-  const up = opts.freestanding ? 1.08 : tall;
+  const up = opts.freestanding ? GATE_POST : tall;
   const front = opts.freestanding ? 0.13 : 0.15;
   for (const x of [-0.6, 0.6]) bar(0.035, up, 0.02, x, up / 2, front);
   bar(1.235, 0.035, 0.02, 0, up, front);
-  // The mat's outline, just above it.
-  for (const z of [0.18, 0.72]) bar(1.3, 0.008, 0.03, 0, 0.018, z);
-  for (const x of [-0.65, 0.65]) bar(0.03, 0.008, 0.57, x, 0.018, 0.45);
+  // The mat's outline, just above it: kept with the mat while a gate fades, so pointing at it still lights it.
+  const kept = (mesh: THREE.Mesh) => {
+    if (opts.freestanding) mesh.userData.keep = true;
+  };
+  for (const z of [0.18, 0.72]) kept(bar(1.3, 0.008, 0.03, 0, matTop + 0.004, z));
+  for (const x of [-0.65, 0.65]) kept(bar(0.03, 0.008, 0.57, x, matTop + 0.004, 0.45));
   glow.visible = false;
   g.add(glow);
   const highlight = (on: boolean) => {
@@ -1323,14 +1353,14 @@ export function buildDoor(
       new THREE.SphereGeometry(0.08, 14, 10),
       light,
       opts.freestanding ? -0.66 : -wide / 2 - 0.14,
-      opts.freestanding ? plateY + 0.26 : plateY,
+      opts.freestanding ? GATE_POST + 0.12 : plateY,
       opts.freestanding ? 0.06 : 0.11,
     ),
     solid(
-      new THREE.BoxGeometry(opts.freestanding ? Math.max(1.42, wide + 0.06) : wide + 0.06, 0.04, 0.05),
+      new THREE.BoxGeometry(opts.freestanding ? 1.22 : wide + 0.06, 0.04, 0.05),
       light,
       0,
-      opts.freestanding ? plateY + 0.18 : plateY - 0.18,
+      opts.freestanding ? GATE_POST + 0.005 : plateY - 0.18,
       0.07,
     ),
   ];

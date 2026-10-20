@@ -5,6 +5,7 @@ import {
   doorItemTo,
   doorsAsSaved,
   type Edit,
+  groupOf,
   type Kinds,
   linkable,
   type MadeModel,
@@ -229,13 +230,15 @@ export interface RoomEditor {
 /**
  * Rearranging the place on screen: `place` is it as the page last heard,
  * undefined when it can't be rearranged; `places`, every place there is, as
- * the map has them, for where a door can lead.
+ * the map has them, for where a door can lead; `standing`, where you and the
+ * agents stand in it now, which nothing you add is put down on.
  */
 export function useRoomEditor(
   place: EditablePlace | undefined,
   /** What a widget can be set to show beyond its own choices, as of now: the rooms there are, the Board's widgets. */
   have: () => { rooms?: string[]; widgets?: { id: string; title?: string }[] } = () => ({}),
   places: MapPlace[] = [],
+  standing?: () => [number, number][],
 ): RoomEditor {
   const [editing, setEditing] = useState(false);
   // The catalogue's list of places to put a door in to, while it is open, and what is typed to find one.
@@ -518,22 +521,29 @@ export function useRoomEditor(
     return id ? c?.record.props.find((p) => p.id === id) : undefined;
   };
 
-  /** Turn what is picked by `by` degrees: saved if it fits turned there, otherwise shown turned in red, to drag on. */
-  const turn = (by: number) => {
+  /**
+   * Turn what is picked by `by` degrees, with what goes with it unless `alone` (Alt): saved if it fits turned there,
+   * otherwise shown turned in red, to drag on.
+   */
+  const turn = (by: number, alone = false) => {
     const n = now.current;
     const prop = thing(n.selected);
-    if (!prop || !n.kinds) return;
+    const c = current();
+    if (!prop || !n.kinds || !c) return;
     if (n.kinds.kinds[prop.kind]?.mount === "wall") {
       setNotice(`${prop.name.charAt(0).toUpperCase()}${prop.name.slice(1)} hangs flat on its wall.`);
       return;
     }
     const from = n.pending?.item === prop.id ? n.pending : undefined;
     const on = from?.on ?? prop.on;
+    // A move not saved yet keeps what it was moving: one dragged alone stays alone, turned.
+    const along = alone ? [] : from ? (from.with ?? []) : groupOf(c.record, n.kinds.kinds, prop.id);
     const move: Move = {
       item: prop.id,
       at: from?.at ?? prop.at,
       facing: turned(from?.facing ?? prop.facing, by),
       ...(on ? { on } : {}),
+      ...(along.length ? { with: along } : {}),
       ...(from?.elevation !== undefined ? { elevation: from.elevation } : {}),
     };
     setPending({ ...move });
@@ -554,16 +564,21 @@ export function useRoomEditor(
   };
   /** Put in a door from here to another place, with its way back there; the door is picked once it is in. */
   const putDoor = (to: string) => void change({ op: "door", to }, (made) => made.item);
+  // Never put down on anyone: where you and the agents stand goes with the ask.
+  const clear = () => {
+    const at = standing?.() ?? [];
+    return at.length ? { avoid: at } : {};
+  };
   const copy = () => {
     const prop = thing(now.current.selected);
-    if (prop) void change({ op: "add", kind: prop.kind, like: prop.id }, (made) => made.item);
+    if (prop) void change({ op: "add", kind: prop.kind, like: prop.id, ...clear() }, (made) => made.item);
   };
   const paint = (color: string) => {
     const prop = thing(now.current.selected);
     if (prop) void change({ op: "color", item: prop.id, color });
   };
-  const add = (kind: string) => void change({ op: "add", kind }, (made) => made.item);
-  const addModel = (model: string) => void change({ op: "add", kind: "model", model }, (made) => made.item);
+  const add = (kind: string) => void change({ op: "add", kind, ...clear() }, (made) => made.item);
+  const addModel = (model: string) => void change({ op: "add", kind: "model", model, ...clear() }, (made) => made.item);
   const show = (shows: string) => {
     const prop = thing(now.current.selected);
     if (prop && (prop.shows ?? "") !== shows) void change({ op: "shows", item: prop.id, shows: shows || null });
@@ -638,9 +653,10 @@ export function useRoomEditor(
       } else if (mod && e.code === "KeyY") {
         e.preventDefault();
         void a.redo();
-      } else if (!mod && !e.altKey && e.code === "KeyR" && now.current.selected) {
+      } else if (!mod && e.code === "KeyR" && now.current.selected) {
         e.preventDefault();
-        a.turn(e.shiftKey ? TURNS.big : -TURNS.big);
+        // Alt turns it by itself, as Alt drags it by itself.
+        a.turn(e.shiftKey ? TURNS.big : -TURNS.big, e.altKey);
       } else if ((e.key === "Delete" || e.key === "Backspace") && now.current.selected) {
         e.preventDefault();
         a.remove();
@@ -681,6 +697,8 @@ export function useRoomEditor(
     : pickedDoor
       ? `the door to ${named(pickedDoor.to) ?? pickedDoor.label}`
       : undefined;
+  // What goes with what is picked, for the words under the bar.
+  const along = picked && kinds && shown ? groupOf(shown, kinds.kinds, picked.id) : [];
   const swatches = useMemo(() => (shown ? palette(shown) : []), [shown]);
   const doorPlaces = useMemo(
     () => (id && shown && doorsOpen ? linkable(places, id, shown, doorQuery) : []),
@@ -822,7 +840,9 @@ export function useRoomEditor(
             : hangs
               ? "Drag it along its wall, or onto the other wall · Delete removes it · Ctrl+Z undoes"
               : picked
-                ? "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
+                ? along.length
+                  ? `Drag it to move it with ${alongWords(along.length, shown?.props.filter((p) => along.includes(p.id)) ?? [])}, Shift for no grid, Alt for it alone · R turns them, Alt+R it alone · Delete removes it · Ctrl+Z undoes`
+                  : "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
                 : "Pick something to move it, or add things · drag the floor to look round, the wheel to zoom · Esc when done"}
         </p>
       )}
@@ -947,4 +967,15 @@ export function useRoomEditor(
     bar,
     shelf,
   };
+}
+
+/** What goes with a thing, in words for the line under the bar: "its 3 chairs", "the beanbag and the beanbag 2". */
+function alongWords(count: number, things: { kind: string; name: string }[]): string {
+  const kinds = new Set(things.map((t) => t.kind));
+  if (count === 1) return things[0]?.name ?? "what goes with it";
+  if (kinds.size === 1) {
+    const noun = (things[0]?.kind ?? "thing").replace(/_/g, " ");
+    return `its ${count} ${/(s|x|ch|sh)$/.test(noun) ? `${noun}es` : `${noun}s`}`;
+  }
+  return `the ${count} things that go with it`;
 }

@@ -316,6 +316,41 @@ describe("WorldMap", () => {
     ]);
     act(() => busy[0].click());
     expect(onGo).toHaveBeenCalledWith("room:local:trip");
+    // All of what each is doing is there to point at, however narrow the list cuts it.
+    expect(busy[1].title).toBe("planner: searching the web · ferries");
+  });
+
+  it("says, while you visit, which place takes you back to the agent's own view rather than in as you", () => {
+    render({ here: "room:local:trip", back: { place: "home:planner", agent: "planner" } });
+    expect(container.querySelector(".world-map-rule")?.textContent).toBe(
+      "Anywhere you pick, you walk in as you, except planner's home: that takes you back to planner's own view.",
+    );
+    // An agent's home is by its name in the list of agents.
+    const planner = people().find((b) => b.textContent?.startsWith("planner")) as HTMLButtonElement;
+    expect(planner.querySelector(".world-map-back")?.textContent).toBe("back to its view");
+    expect(planner.title).toMatch(/back to planner's view$/);
+    // A shared place that is the agent's own, like the default agent's lounge, says so on its card.
+    render({ here: "room:local:trip", back: { place: "shared:lounge", agent: "the default agent" } });
+    const lounge = tiles().find((t) => t.textContent?.startsWith("the lounge")) as HTMLButtonElement;
+    expect(lounge.querySelector(".world-map-back")?.textContent).toBe("back to the default agent's view");
+    // So does the link to it by the name of anyone who is in it now.
+    render({
+      here: "room:local:trip",
+      back: { place: "shared:lounge", agent: "the default agent" },
+      places: [
+        { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: [] },
+        { id: "shared:lounge", name: "the lounge", kind: "shared", agents: ["planner"] },
+        { id: "room:local:trip", name: "trip", kind: "room", agents: [] },
+      ],
+    });
+    const away = container.querySelector(".world-map-away") as HTMLButtonElement;
+    expect(away.textContent).toBe("in the loungeback to the default agent's view");
+    expect(away.querySelector(".world-map-back")?.textContent).toBe("back to the default agent's view");
+    expect(away.title).toBe("planner is in the lounge: back to the default agent's view");
+    // Not visiting, there is nothing to say.
+    render({ here: "room:local:trip" });
+    expect(container.querySelector(".world-map-rule")).toBeNull();
+    expect(container.querySelector(".world-map-back")).toBeNull();
   });
 
   it("says who is on the phone with whom, and who is talking face to face, in Busy now and the list of agents", () => {

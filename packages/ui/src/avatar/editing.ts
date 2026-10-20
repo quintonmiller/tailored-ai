@@ -42,13 +42,19 @@ export interface Move {
   at: [number, number];
   facing: number;
   on?: string;
+  /**
+   * What goes with it (`groupOf`): the chairs at a table, what stands on a rug. Each keeps its place round it,
+   * moved as far and turned as much about it. What stands on top of any of them goes too, as it always does.
+   */
+  with?: string[];
   elevation?: number;
   /** Dragged over nothing it could stand on: shown there, but it can't stay. */
   loose?: boolean;
 }
 
 /** A place to put a thing, as a key: the same place twice is asked about once. */
-export const moveKey = (m: Move | undefined) => (m ? `${m.at[0]},${m.at[1]},${m.facing},${m.on ?? ""}` : "");
+export const moveKey = (m: Move | undefined) =>
+  m ? `${m.at[0]},${m.at[1]},${m.facing},${m.on ?? ""},${(m.with ?? []).join("+")}` : "";
 
 const cm = (n: number) => Math.round(n * 100) / 100;
 
@@ -143,6 +149,79 @@ function local([x, z]: [number, number], [cx, cz]: [number, number], facing: num
 function world([lx, lz]: [number, number], [cx, cz]: [number, number], facing: number): [number, number] {
   const f = (facing * Math.PI) / 180;
   return [cx + lx * Math.cos(f) + lz * Math.sin(f), cz - lx * Math.sin(f) + lz * Math.cos(f)];
+}
+
+/** Seats drawn up to a table or a desk to sit at it, which go where it goes. */
+export const DRAWN_UP_KINDS = new Set(["chair", "stool", "bench", "cafe_chair"]);
+/** What seats are drawn up to. */
+export const TABLE_KINDS = new Set(["table", "round_table", "desk", "coffee_table", "cafe_table"]);
+/** What things stand on, on the floor, and are carried along with it. */
+export const RUG_KINDS = new Set(["rug", "round_rug"]);
+/** How near a seat comes to a table, edge to edge, to be drawn up to it, in metres. */
+export const DRAWN_UP = 0.35;
+
+/** How far a point is outside a thing's footprint, in metres along the nearer of its sides; below 0 inside it. */
+function outside(point: [number, number], thing: Prop, kinds: Kinds): number {
+  const [w, d] = footprint(thing, kinds);
+  const [lx, lz] = local(point, thing.at, kinds[thing.kind]?.round ? 0 : thing.facing);
+  return Math.max(Math.abs(lx) - w / 2, Math.abs(lz) - d / 2);
+}
+
+/**
+ * What goes with a thing when you move or turn it, by id: the seats drawn up
+ * to a table or a desk (each to the nearest one it is drawn up to), and
+ * everything standing on a rug, with the seats drawn up to any table on it.
+ * Things on a wall, things standing on top of something (they go with what
+ * they stand on anyway) and other rugs go only by themselves. Nothing goes
+ * with a thing that isn't on the floor.
+ */
+export function groupOf(room: Pick<Room, "props">, kinds: Kinds, id: string): string[] {
+  const prop = room.props.find((p) => p.id === id);
+  const floor = (p: Prop) => !p.on && kinds[p.kind]?.mount === "floor";
+  if (!prop || !floor(prop)) return [];
+  const tables = room.props.filter((p) => floor(p) && TABLE_KINDS.has(p.kind));
+  /** The seats drawn up to a table: near enough, and no nearer another. */
+  const seatsAt = (table: Prop) =>
+    room.props
+      .filter((p) => floor(p) && DRAWN_UP_KINDS.has(p.kind))
+      .filter((seat) => {
+        const [w, d] = footprint(seat, kinds);
+        const reach = DRAWN_UP + Math.max(w, d) / 2;
+        const gap = outside(seat.at, table, kinds);
+        return gap <= reach && tables.every((t) => t === table || outside(seat.at, t, kinds) >= gap);
+      })
+      .map((p) => p.id);
+  const out = new Set<string>();
+  if (TABLE_KINDS.has(prop.kind)) for (const seat of seatsAt(prop)) out.add(seat);
+  if (RUG_KINDS.has(prop.kind))
+    for (const p of room.props) {
+      if (p === prop || !floor(p) || RUG_KINDS.has(p.kind) || outside(p.at, prop, kinds) > 0) continue;
+      out.add(p.id);
+      if (TABLE_KINDS.has(p.kind)) for (const seat of seatsAt(p)) out.add(seat);
+    }
+  out.delete(id);
+  return [...out].sort();
+}
+
+/**
+ * Where each thing in a group is once the one it goes with is put `to`,
+ * turned to `facing`: each keeps its place round it, moved as far and
+ * turned as much about its middle.
+ */
+export function carriedTo(
+  room: Pick<Room, "props">,
+  move: Pick<Move, "item" | "at" | "facing" | "with">,
+): { id: string; at: [number, number]; facing: number }[] {
+  const lead = room.props.find((p) => p.id === move.item);
+  if (!lead) return [];
+  const turn = move.facing - lead.facing;
+  return (move.with ?? []).flatMap((id) => {
+    const p = room.props.find((q) => q.id === id);
+    if (!p) return [];
+    const [lx, lz] = local(p.at, lead.at, lead.facing);
+    const [x, z] = world([lx, lz], move.at, lead.facing + turn);
+    return [{ id, at: [cm(x), cm(z)] as [number, number], facing: turned(p.facing, turn) }];
+  });
 }
 
 /** Everything standing on a thing, and on those, and so on up: what moves with it. */
@@ -440,7 +519,7 @@ export function palette(room: Pick<Room, "walls" | "floorColor" | "props">, more
 /** A change you made, as the page tells the server. */
 export type Edit =
   | ({ op: "move" } & Move)
-  | { op: "add"; kind: string; like?: string; model?: string }
+  | { op: "add"; kind: string; like?: string; model?: string; avoid?: [number, number][] }
   | { op: "remove"; item: string }
   | { op: "color"; item: string; color: string }
   /** What a widget shows (`Prop.shows`); null, what its kind shows by itself. */
@@ -520,12 +599,20 @@ export function changeWords(
   }
   if (edit.op === "shows") return edit.shows ? `set ${name} to show ${edit.shows}` : `set ${name} back to its own`;
   const moved = thing && (Math.abs(thing.at[0] - edit.at[0]) > 0.005 || Math.abs(thing.at[1] - edit.at[1]) > 0.005);
-  if (thing && !moved) return `turned ${name}`;
+  // What went with it: by name while there are a couple, then how many.
+  const along = (edit.with ?? []).flatMap((id) => was(id)?.name ?? []);
+  const also =
+    along.length === 0
+      ? ""
+      : along.length <= 2
+        ? ` with ${along.join(" and ")}`
+        : `, and the ${along.length} things with it`;
+  if (thing && !moved) return `turned ${name}${also}`;
   if (edit.on && edit.on !== thing?.on) {
     const base = after.props.find((p) => p.id === edit.on);
     if (base) return `moved ${name} onto ${changeName(after, base.name)}`;
   }
-  return `moved ${name}`;
+  return `moved ${name}${also}`;
 }
 
 /** How long the same change again counts as carrying on with it, rather than a new one, in milliseconds. */

@@ -19,6 +19,7 @@ import {
   moveItem,
   newId,
   newName,
+  normalizeFacing,
   type Place,
   type PlaceAction,
   type PlaceItem,
@@ -43,13 +44,26 @@ import { OFFICE } from "./places-world.js";
 
 /** One change a person makes on the page. */
 export type Edit =
-  /** Put a thing here, turned this way: on the floor, along the back or left wall, or on top of `on`. */
-  | { op: "move"; item: string; at: [number, number]; facing: number; on?: string }
+  /**
+   * Put a thing here, turned this way: on the floor, along the back or left wall, or on top of `on`. `with` names
+   * floor things that go with it, like the chairs at a table: each keeps its place round it, moved as far and turned
+   * as much about it, and the lot is checked where it ends up, together.
+   */
+  | { op: "move"; item: string; at: [number, number]; facing: number; on?: string; with?: string[] }
   /**
    * A new thing of a kind, somewhere free near the middle; `like`, a copy of that thing, beside it. A model an agent
-   * made is added by its record's id, `model`; the server fills in its kind, the box it fills and its name.
+   * made is added by its record's id, `model`; the server fills in its kind, the box it fills and its name. `avoid`
+   * is where people and agents stand on the page, [x, z] each: nothing new lands on anyone.
    */
-  | { op: "add"; kind: string; like?: string; model?: string; size?: [number, number, number]; name?: string }
+  | {
+      op: "add";
+      kind: string;
+      like?: string;
+      model?: string;
+      size?: [number, number, number];
+      name?: string;
+      avoid?: [number, number][];
+    }
   | { op: "remove"; item: string }
   | { op: "color"; item: string; color: string }
   /** What a widget shows (`PlaceItem.shows`); null, back to what its kind shows by itself. */
@@ -67,6 +81,10 @@ export interface Edited {
 
 /** How near the line of a wall a thing hanging on it must be: the page puts it on the line, to the centimetre. */
 const ON_WALL = 0.06;
+/** The most things a person moves along with another at once, and the most places where someone stands to keep clear. */
+const MOST_WITH = 24;
+/** How much floor someone standing takes, across, kept clear of anything new. */
+const STANDING = 0.6;
 
 /** What each of the lobby's working pieces lets you do from it, for saying why it stays. */
 const DOES: Record<PlaceAction, string> = {
@@ -89,6 +107,8 @@ export function doorsFor(id: string, place: Place): DoorSlot[] {
 const isPoint = (v: unknown): v is [number, number] =>
   Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === "number" && Number.isFinite(n));
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+/** A list of ids as the page sent it: the ones that are ids, each once. */
+const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(text).filter((id): id is string => !!id))] : []);
 /** A thing's name at the start of a sentence: "The picture". */
 const named = (item: PlaceItem) => item.name.charAt(0).toUpperCase() + item.name.slice(1);
 
@@ -97,19 +117,33 @@ export function editFrom(body: unknown): Edit | string {
   const e = (body ?? {}) as Record<string, unknown>;
   const item = text(e.item);
   switch (e.op) {
-    case "move":
+    case "move": {
       if (!item || !isPoint(e.at) || typeof e.facing !== "number" || !Number.isFinite(e.facing))
         return "A move needs `item`, `at` ([x, z]) and `facing`.";
-      return { op: "move", item, at: e.at, facing: e.facing, ...(text(e.on) ? { on: text(e.on) } : {}) };
+      const along = ids(e.with);
+      // Said, rather than some of them moved and the rest left behind with no word.
+      if (along.length > MOST_WITH)
+        return `That's more than ${MOST_WITH} things to move at once. Move it on its own (Alt-drag), then the rest.`;
+      return {
+        op: "move",
+        item,
+        at: e.at,
+        facing: e.facing,
+        ...(text(e.on) ? { on: text(e.on) } : {}),
+        ...(along.length ? { with: along } : {}),
+      };
+    }
     case "add": {
       const kind = text(e.kind);
       const model = text(e.model);
       if (!kind && !model) return "Adding needs `kind`, or a `model`.";
+      const avoid = Array.isArray(e.avoid) ? e.avoid.filter(isPoint).slice(0, MOST_WITH) : [];
       return {
         op: "add",
         kind: kind ?? "model",
         ...(text(e.like) ? { like: text(e.like) } : {}),
         ...(model ? { model } : {}),
+        ...(avoid.length ? { avoid } : {}),
       };
     }
     case "remove":
@@ -145,6 +179,82 @@ const placingOf = (item: PlaceItem): Placing => ({
 
 /** A thing that stands on others rather than the floor: one made to, or one an agent put on something. */
 const rides = (item: PlaceItem) => KINDS[item.kind]?.mount === "on" || !!item.on;
+
+/** The id of a block held where someone stands while something new is put down: never kept in the room. */
+const STANDING_HOLD = "someone-standing";
+
+/**
+ * The room with where people and agents stand held, for finding where
+ * something new goes: a block as tall as the room at each, so nothing is put
+ * down on anyone. What is found is put in the room as it is, without them.
+ */
+function withStandingHeld(place: Place, at: [number, number][]): Place {
+  const holds = at.map(
+    (point, i): PlaceItem => ({
+      id: `${STANDING_HOLD}-${i + 1}`,
+      name: "someone standing there",
+      kind: "ball",
+      at: point,
+      facing: 0,
+      size: [STANDING, 9, STANDING],
+    }),
+  );
+  return holds.length ? { ...place, props: [...place.props, ...holds] } : place;
+}
+
+/** Where a thing that goes with another ends up once that is put `to`, turned `turn` degrees: its place round it kept. */
+function carriedAlong(thing: PlaceItem, lead: PlaceItem, to: [number, number], turn: number): [number, number] {
+  const r = (lead.facing * Math.PI) / 180;
+  const dx = thing.at[0] - lead.at[0];
+  const dz = thing.at[1] - lead.at[1];
+  // In the lead's own frame, then back out of it turned as it is turned.
+  const lx = dx * Math.cos(r) - dz * Math.sin(r);
+  const lz = dx * Math.sin(r) + dz * Math.cos(r);
+  const f = ((lead.facing + turn) * Math.PI) / 180;
+  const cm = (n: number) => Math.round(n * 100) / 100;
+  return [cm(to[0] + lx * Math.cos(f) + lz * Math.sin(f)), cm(to[1] - lx * Math.sin(f) + lz * Math.cos(f))];
+}
+
+/**
+ * A thing moved with others that go with it (`with`): all of them moved and
+ * turned together, each keeping its place round the first, then each checked
+ * where it now stands against the room as it now is, so they never get in
+ * each other's way on the way there. Only floor things go along: what stands
+ * on top of one goes with it anyway. Why not, in a sentence naming the piece
+ * that doesn't fit, when one doesn't.
+ */
+function movedTogether(
+  id: string,
+  place: Place,
+  item: PlaceItem,
+  edit: Extract<Edit, { op: "move" }>,
+  group: PlaceItem[],
+): Place | string {
+  if (KINDS[item.kind]?.mount !== "floor" || item.on || edit.on)
+    return `${named(item)} doesn't take anything with it: move it by itself.`;
+  const turn = edit.facing - item.facing;
+  let next = moveItem(place, item.id, { at: edit.at, facing: edit.facing });
+  for (const other of group)
+    next = moveItem(next, other.id, {
+      at: carriedAlong(other, item, edit.at, turn),
+      facing: normalizeFacing(other.facing + turn),
+    });
+  const held = withDoorsHeld(next, doorsFor(id, next));
+  const moved = [item, ...group];
+  for (const piece of moved) {
+    const now = next.props.find((p) => p.id === piece.id) as PlaceItem;
+    // Against everything but the rest of the group, which stands round it as it did before.
+    const rest = new Set(moved.map((m) => m.id).filter((m) => m !== piece.id));
+    const others: Place = {
+      ...held,
+      props: held.props.filter((p) => !rest.has(p.id)),
+      spots: held.spots.filter((sp) => !sp.item || !rest.has(sp.item)),
+    };
+    const why = whyNotOnFloor(others, placingOf(now), now.at, now.facing);
+    if (why) return why.replace(/^It /, `${named(now)} `);
+  }
+  return next;
+}
 
 /** Where a person put a thing, checked: where it goes, or why it can't go there. */
 function placed(place: Place, held: Place, item: PlaceItem, edit: Extract<Edit, { op: "move" }>): Placement | string {
@@ -220,10 +330,11 @@ export function applyEdit(id: string, place: Place, edit: Edit, names?: DoorName
             ? { label: "Tasks", action: "tasks" as const }
             : {};
     const placing: Placing = { kind: edit.kind, ...copied };
-    // A copy goes beside what it copies; anything new near the middle, or else wherever it fits.
+    // A copy goes beside what it copies; anything new near the middle, or else wherever it fits; never on anyone.
     const where: Where = like ? { near: like.id } : kind.mount === "floor" ? { middle: true } : {};
-    let spot = findPlacement(held, placing, where);
-    if (typeof spot === "string" && where.middle) spot = findPlacement(held, placing, {});
+    const clear = kind.mount === "floor" ? withStandingHeld(held, edit.avoid ?? []) : held;
+    let spot = findPlacement(clear, placing, where);
+    if (typeof spot === "string" && where.middle) spot = findPlacement(clear, placing, {});
     if (typeof spot === "string") return spot;
     const added: PlaceItem = {
       id: newId(place, edit.kind),
@@ -283,6 +394,15 @@ export function applyEdit(id: string, place: Place, edit: Edit, names?: DoorName
     return { place: next, item: item.id };
   }
 
+  // With what goes with it: moved and checked together.
+  const group = (edit.with ?? [])
+    .map((w) => place.props.find((p) => p.id === w))
+    .filter((p): p is PlaceItem => !!p && p.id !== item.id && KINDS[p.kind]?.mount === "floor" && !p.on);
+  if (group.length) {
+    const together = movedTogether(id, place, item, edit, group);
+    if (typeof together === "string") return together;
+    return sound(together) ?? { place: together, item: item.id };
+  }
   const to = placed(place, held, item, edit);
   if (typeof to === "string") return to;
   const next = moveItem(place, item.id, to);

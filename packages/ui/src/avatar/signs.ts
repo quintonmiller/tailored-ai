@@ -248,9 +248,9 @@ export function speechBubble(text: string, who?: string, how: { phone?: boolean;
 /**
  * A bubble's tail: a narrow wedge, wide where it meets the bubble and coming
  * to a point at the speaker's head, stretched to whatever length the gap
- * between them is. Drawn just under its own bubble (`Figure.placeOver`):
- * over the tags it passes, so it is never lost behind a neighbour's, and
- * under the newer bubbles.
+ * between them is, and turned to point at its speaker wherever the bubble
+ * went. Drawn under every tag (`Figure.placeOver`): led round them where it
+ * can be, and passing behind a neighbour's name where it can't.
  */
 export function bubbleTail(): THREE.Sprite {
   const canvas = document.createElement("canvas");
@@ -269,6 +269,29 @@ export function bubbleTail(): THREE.Sprite {
   const tail = sprite(canvas, 0.1);
   tail.renderOrder = 9;
   return tail;
+}
+
+/** How wide the line from a tag that made way down to its head is, in CSS pixels. */
+export const LEADER_WIDTH_PX = 2;
+
+/**
+ * The line from a tag that had to go off its head to make way for another,
+ * down to the top of that head, so it is plain whose tag it is: thin, in the
+ * tags' own white, stretched and turned to wherever the tag went
+ * (`Figure.placeLeader`). Drawn under every tag, so it never crosses a name.
+ */
+export function leaderLine(): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 16;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "rgba(232, 236, 248, 0.9)";
+    ctx.fillRect(1, 0, 2, 16);
+  }
+  const line = sprite(canvas, 0.1);
+  line.renderOrder = 9.5;
+  return line;
 }
 
 function drawSign(sign: Sign): HTMLCanvasElement {
@@ -402,9 +425,9 @@ export class SignPost {
     return this.shown && this.group.visible ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
   }
 
-  /** Stand the sign `lift` screen pixels up from the top of the head. */
-  place(lift: number) {
-    if (this.shown) liftSprite(this.shown, lift, this.perPixel);
+  /** Stand it `lift` screen pixels up from the top of the head, and `across` to the right, over its tag. */
+  place(lift: number, across = 0) {
+    if (this.shown) liftSprite(this.shown, lift, this.perPixel, across);
   }
 
   update(clock: number) {

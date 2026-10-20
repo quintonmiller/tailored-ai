@@ -82,12 +82,14 @@ import {
 } from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
 import {
+  carriedTo,
   doorItem,
   doorItemTo,
   doorPatch,
   doorPoint,
   doorSlotAt,
   footprint,
+  groupOf,
   heightOf,
   type Kinds,
   type Move,
@@ -146,6 +148,8 @@ import { type BuiltTown, buildTown } from "./townscape";
 import {
   clampReach,
   ease,
+  flyPinchStep,
+  flyWheelStep,
   followDistance,
   heldMove,
   keepUp,
@@ -342,6 +346,8 @@ export interface Stage {
   walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
   /** Where you are on the floor: your body, walking; what the camera turns about, flying. */
   where(): [number, number];
+  /** Where every body here stands on the floor: yours while you walk, and each agent's. */
+  standing(): [number, number][];
   /**
    * Keep a panel of the page's beside what it is about (see `anchors.ts`):
    * an agent's body, a thing here, the room's plaque, your own body, or held
@@ -514,6 +520,10 @@ const FADE_MS = 220;
 const DOOR_PATIENCE_MS = 5000;
 /** How often what is under a still pointer is looked at again while the view moves under it. */
 const HOVER_AGAIN_MS = 120;
+/** How much of a gate at an open side shows while someone stands behind it. */
+const GATE_FAINT = 0.03;
+/** How often the controls that step aside look again at what is behind them, in milliseconds. */
+const ASIDE_MS = 150;
 /** Seconds at least between one body's looks for a new way round you, while you are in its way. */
 const REROUTE_SECONDS = 0.4;
 /** Seconds something in the way takes to fade, or to come back once the view is clear. */
@@ -607,6 +617,12 @@ export async function createStage(
     overlays?: () => Element[];
     /** What else is laid over the stage that the page's panels keep clear of, though the camera frames past it. */
     hints?: () => Element[];
+    /**
+     * Controls over the stage that step aside: each is marked `data-behind` while what you are looking at is behind
+     * it (your body, the agent's in its own view, the middle of the view while you fly) or the pointer is, on the
+     * picture, and the page fades it then. The trail of where you are.
+     */
+    fades?: () => Element[];
     /** A surface was brought up to read close up, or put down (undefined). */
     onFocus?: (surface: string | undefined) => void;
     /** The pointer came over a surface a click brings up (what it is, and where on the page), or left it. */
@@ -1036,7 +1052,15 @@ export async function createStage(
       if (house) fadeable.push({ group: built.group, solid: house.solid, level: 1 });
       else if (door.wall === "back" || door.wall === "left")
         fadeable.push({ group: built.group, wall: door.wall, level: 1 });
-      else fadeable.push({ group: built.group, solid: solidOf(new THREE.Box3().setFromObject(built.group)), level: 1 });
+      // A gate at an open side, between the camera and the room, all but goes while someone stands behind it: half
+      // there, its posts and plate would look like a pane of glass in front of them.
+      else
+        fadeable.push({
+          group: built.group,
+          solid: solidOf(new THREE.Box3().setFromObject(built.group)),
+          level: 1,
+          faint: GATE_FAINT,
+        });
       if (built.light && door.occupant) doorLights.push({ occupant: door.occupant, light: built.light });
       if (built.note) doorNotes.push({ to: door.to, note: built.note });
       doorHighlights.set(door, built.highlight);
@@ -1715,6 +1739,14 @@ export async function createStage(
   };
   /** The chat page's view of the agent, which the wheel and a pinch bring nearer or take further back. */
   const ownView = () => !opts.visitor && !opts.still && view === "room";
+  /** Whether you fly about as you like: in your own body, with nothing brought up to read. */
+  const flyingFree = () => !!opts.visitor && travel === "fly" && !reading;
+  /** Fly this many metres along the way you look, forward, or back for less than none. */
+  const flyAlong = (metres: number) => {
+    const along = controls.target.clone().sub(camera.position).normalize().multiplyScalar(metres);
+    camera.position.add(along);
+    controls.target.add(along);
+  };
   /** A zoom while rearranging, kept between the nearest it comes and the whole room. */
   const editZoomTo = (zoom: number) => {
     editZoom = Math.min(1, Math.max(EDIT_NEAREST, zoom));
@@ -1730,7 +1762,12 @@ export async function createStage(
       zoomKept = ownZoom(zoomKept * REACH_PER_NOTCH ** (wheelPixels(e) / 100), room, visibleAspect(), visibleTall());
       return;
     }
-    // Flying, the controls' own zoom moves you along the way you look.
+    // Flying, the wheel flies you along the way you look, back as it rolls toward you and on as it rolls away.
+    if (flyingFree()) {
+      e.preventDefault();
+      flyAlong(flyWheelStep(wheelPixels(e)));
+      return;
+    }
     if (!opts.visitor || travel !== "walk") return;
     e.preventDefault();
     const widest = widestReach(room);
@@ -1745,12 +1782,13 @@ export async function createStage(
     return a && b ? Math.hypot(a[0] - b[0], a[1] - b[1]) : 0;
   };
   /**
-   * Two fingers down, walking: a pinch, which zooms and nothing else. The
-   * controls would go on turning the view with the first finger, so turning
-   * waits until a finger is lifted.
+   * Two fingers down, walking: a pinch, which zooms and nothing else; flying,
+   * it flies you on or back, as the wheel does. The controls would go on
+   * turning the view with the first finger, so turning waits until a finger
+   * is lifted.
    */
   const pinching = () => {
-    const now = touches.size === 2 && (!!editing || (!!opts.visitor && travel === "walk") || ownView());
+    const now = touches.size === 2 && (!!editing || (!!opts.visitor && travel === "walk") || flyingFree() || ownView());
     controls.enableRotate = !now;
     return now;
   };
@@ -1764,6 +1802,7 @@ export async function createStage(
     if (apart > 0 && now > 0) {
       if (editing) editZoomTo((editZoom * apart) / now);
       else if (ownView()) zoomKept = ownZoom((zoomKept * apart) / now, room, visibleAspect(), visibleTall());
+      else if (flyingFree()) flyAlong(flyPinchStep(apart, now));
       else zoomTo(pinchReach(clampReach(reachNow(), widest), apart, now, widest));
     }
     apart = now;
@@ -1791,13 +1830,26 @@ export async function createStage(
     for (let p = o; p; p = p.parent ?? undefined) if (typeof p.userData.prop === "string") return p.userData.prop;
     return undefined;
   };
+  /**
+   * Whether something is part of a gate all but gone for someone standing
+   * behind it (`GATE_FAINT`), other than the mat at its foot, which stays: a
+   * pointer on it is on what is behind it, as it looks.
+   */
+  const gateGone = (thing: THREE.Object3D) => {
+    if (thing.userData.keep) return false;
+    for (let o: THREE.Object3D | null = thing; o; o = o.parent) {
+      const f = fadeable.find((x) => x.group === o);
+      if (f) return f.faint !== undefined && f.level < 0.5;
+    }
+    return false;
+  };
   const pick = (e: At): (Use & { on?: UseSpot; object: THREE.Object3D }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
       camera,
     );
-    const found = nearestUse(ray.intersectObjects(clickable, true));
+    const found = nearestUse(ray.intersectObjects(clickable, true).filter((h) => !gateGone(h.object)));
     if (!found) return undefined;
     const { hit } = found;
     const use = { ...found.use, object: hit.object };
@@ -1831,7 +1883,9 @@ export async function createStage(
     // A visitor's own body is nobody's to open a menu on.
     const bodies = new Map<THREE.Object3D, string>(opts.visitor ? [] : [[me.body, self]]);
     for (const [agent, c] of companions) bodies.set(c.body, agent);
+    // A raycaster hits what isn't drawn all the same: a tag put away, a bubble that gave way, a tail too short to show.
     for (const hit of ray.intersectObjects([...bodies.keys()], true)) {
+      if (!shown(hit.object)) continue;
       for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
         const agent = bodies.get(o);
         if (agent) return agent;
@@ -1921,15 +1975,16 @@ export async function createStage(
     if (editing) return;
     const who = agentAt(e);
     if (who !== hovered) hover(who);
-    const it = pick(e);
+    // A surface brought up to read when clicked says so while the pointer is on it: found as a click finds it
+    // (`surfaceUnder`), so a face on anything says so, a model's on a wall too, and what a click does is what it says.
+    const surface = !who && overAFace(e) ? surfaceUnder(e) : undefined;
+    const reads = surface && !reading && layer.howUsed(surface) === "focus" ? surface : undefined;
+    // A click on a surface does what the surface is for, not what is behind or around it.
+    const it = reads ? undefined : pick(e);
     // A body stands in front of a door; the door behind it isn't what the pointer is on.
     const door = !who && !leaving && opts.onDoor ? it?.door : undefined;
     const box = canvas.getBoundingClientRect();
     hoverDoor(door, { x: e.clientX - box.left, y: e.clientY - box.top });
-    // A surface brought up to read when clicked says so while the pointer is on it: one on something made to be used,
-    // or a widget, which is there only to be read.
-    const surface = who ? undefined : ((it && layer.surfaceAt(it.object)) ?? surfaceUnder(e));
-    const reads = surface && !reading && layer.howUsed(surface) === "focus" ? surface : undefined;
     layer.hover(reads);
     if (reads || hoveredSurface)
       opts.onSurfaceHover?.(reads ? layer.labelOf(reads) : undefined, {
@@ -1947,7 +2002,7 @@ export async function createStage(
     if (plaqued) opts.onPlaqueHover?.({ x: e.clientX - box.left, y: e.clientY - box.top });
     const approach = !!it?.approach && opts.visitor && travel === "walk";
     canvas.style.cursor =
-      (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || door || approach || reads ? "pointer" : "";
+      (opts.onPick && who) || reads || it?.spot || (it?.action && opts.onUse) || door || approach ? "pointer" : "";
   };
   /** The pointer is over a body now, or none: its tag says more, and the last one's goes back. */
   const hover = (who: string | undefined) => {
@@ -2161,7 +2216,9 @@ export async function createStage(
     if (!floor) return undefined;
     const size = footprint(prop, kinds);
     const at = onFloor(room, [floor[0] - drag.grab[0], floor[1] - drag.grab[1]], free, size, kind?.round ? 0 : facing);
-    return { item: prop.id, at, facing };
+    // What goes with it comes along (`groupOf`): the chairs at a table, what stands on a rug. Alt moves it alone.
+    const along = e.altKey ? [] : groupOf(room, kinds, prop.id);
+    return { item: prop.id, at, facing, ...(along.length ? { with: along } : {}) };
   };
 
   /** Everything shown somewhere else, back where the room has it. */
@@ -2190,7 +2247,9 @@ export async function createStage(
     const turn = rad(move.facing - prop.facing);
     const from = new THREE.Vector3(prop.at[0], prop.elevation ?? 0, prop.at[1]);
     const to = new THREE.Vector3(move.at[0], lift, move.at[1]);
-    for (const id of [prop.id, ...ridersOf(room, prop.id)]) {
+    // It, what goes with it, and what stands on any of them: each kept in its place round it, turned as it turns.
+    const along = move.with ?? [];
+    for (const id of [prop.id, ...along, ...[prop.id, ...along].flatMap((a) => ridersOf(room, a))]) {
       const p = room.props.find((x) => x.id === id);
       const g = things.get(id);
       if (!p || !g) continue;
@@ -2276,7 +2335,16 @@ export async function createStage(
             ? "fits"
             : "no";
     host.dataset.fit = fit;
-    handles.show(things.get(prop.id), patchOf(prop, shown, editing.kinds), fit);
+    // What goes with it, where it is going too: dragged, or as it would go with it if dragged now.
+    const kinds = editing.kinds;
+    const also = (shown?.with ?? []).flatMap((id): Patch[] => {
+      const p = room.props.find((x) => x.id === id);
+      const to = shown ? carriedTo(room, shown).find((c) => c.id === id) : undefined;
+      return p ? [patchOf(p, to && { item: id, at: to.at, facing: to.facing }, kinds)] : [];
+    });
+    // For anyone inspecting the page, like `data-picked`: what is moving with it.
+    host.dataset.along = (shown?.with ?? []).join(" ");
+    handles.show(things.get(prop.id), patchOf(prop, shown, kinds), fit, also);
   };
   /** A thing picked up: pressed on, it is picked, and dragging moves it rather than turning the view. */
   const onEditDown = (e: PointerEvent) => {
@@ -2355,6 +2423,13 @@ export async function createStage(
   const drawn = (o: THREE.Object3D) => {
     for (let p: THREE.Object3D | null = o; p; p = p.parent) if (!p.visible) return false;
     return true;
+  };
+  /** Whether the pointer is on any surface's face at all: a quick look, before what might be in front of it is. */
+  const overAFace = (e: At): boolean => {
+    const faces = layer.faces();
+    if (!faces.length) return false;
+    aim(e);
+    return ray.intersectObjects(faces, false).some((h) => drawn(h.object));
   };
   /**
    * The surface under a pointer, with nothing nearer in front of it: a body,
@@ -3378,7 +3453,7 @@ export async function createStage(
     const hiding = new Set([...inWay].map((i) => tall[i]));
     const behind = wallsBehind(room, eye);
     for (const f of fadeable) {
-      const want = f.wall ? (behind.has(f.wall) ? FADED_WALL : 1) : hiding.has(f) ? FADED : 1;
+      const want = f.wall ? (behind.has(f.wall) ? FADED_WALL : 1) : hiding.has(f) ? (f.faint ?? FADED) : 1;
       // At rest and its own self, there is nothing to draw; faded, it is drawn every frame, keeping up.
       if (f.level === want && !f.own) continue;
       f.level = opts.reducedMotion ? want : ease(f.level, want, dt, SEE_THROUGH_SECONDS);
@@ -3424,36 +3499,85 @@ export async function createStage(
       // Behind the camera, nothing over its head is on the screen to lay out.
       if (depth <= 0.05) continue;
       onScreen.copy(crown).project(camera);
-      const over = f.fitOver(metresPerPixel(depth, camera.fov, stageH), clock);
-      // The tag under the pointer, or of the one you stand by, keeps its place; then whoever is talking; then the nearer.
-      const rank = (closeTo(id) ? 2 : f.speaking(clock) ? 1 : 0) * 1000 - depth;
-      columns.push({ id, x: ((onScreen.x + 1) / 2) * stageW, y: ((1 - onScreen.y) / 2) * stageH, rank, ...over });
+      const perPixel = metresPerPixel(depth, camera.fov, stageH);
+      const over = f.fitOver(perPixel, clock);
+      // Whoever is talking keeps its tag's place over its head, so its bubble's tail can reach it there; then the tag
+      // under the pointer, or of the one you stand by; then the nearer.
+      const close = closeTo(id);
+      const speaking = f.speaking(clock);
+      const rank = (speaking ? 2 : close ? 1 : 0) * 1000 - depth;
+      const x = ((onScreen.x + 1) / 2) * stageW;
+      const y = ((1 - onScreen.y) / 2) * stageH;
+      // Its body down to its feet, for bubbles brought down beside a speaker to keep off, and tails to go round.
+      const feet = onStage(f.body.position);
+      const half = 0.3 / perPixel;
+      const body = feet && { left: x - half, right: x + half, top: y, bottom: Math.max(y + half, feet[1]) };
+      columns.push({ id, x, y, rank, focus: close || speaking, ...(body ? { body } : {}), ...over });
     }
-    const laid = stack(columns, {
-      left: 0,
-      right: stageW - insetRight,
-      top: insetTop,
-      bottom: stageH - insetBottom,
-      covered,
-    });
+    // The keys hint along the foot of the stage, walking or flying: what is said is read above it.
+    const seen = stageW - insetRight;
+    const foot = hints
+      .filter((h) => h.top > stageH / 2 && h.right - h.left > seen / 2)
+      .reduce((y, h) => Math.min(y, h.top), stageH - insetBottom);
+    const laid = stack(columns, { left: 0, right: seen, top: insetTop, bottom: foot, covered });
     // Where each tag, sign and bubble is on the stage now, for the panels to keep off (`placePanels`).
     overheads = new Map();
     for (const c of columns) {
       const at = laid.get(c.id);
       if (!at) continue;
       const boxes: Box[] = [];
-      if (c.tag) boxes.push(overBox(c.x, c.y - at.tag, c.tag));
-      if (c.sign && !c.bubble) boxes.push(overBox(c.x, c.y - at.sign, [c.sign, c.sign]));
-      if (c.bubble) boxes.push(overBox(c.x + at.across, c.y - at.bubble, c.bubble));
+      if (c.tag && !at.hidden) boxes.push(overBox(c.x + at.tagAcross, c.y - at.tag, c.tag));
+      if (c.sign && !c.bubble) boxes.push(overBox(c.x + at.tagAcross, c.y - at.sign, [c.sign, c.sign]));
+      if (c.bubble && !at.gone) boxes.push(overBox(c.x + at.across, c.y - at.bubble, c.bubble));
       if (boxes.length) overheads.set(c.id, boxes);
     }
     const said = columns
-      .filter((c) => c.bubble)
+      .filter((c) => c.bubble && !laid.get(c.id)?.gone)
       .sort((a, b) => (a.said ?? 0) - (b.said ?? 0))
       .map((c) => c.id);
     for (const [id, f] of bodies) {
       const at = laid.get(id);
       if (at) f.placeOver(at, dt, 12 + Math.max(0, said.indexOf(id)));
+    }
+  }
+
+  // When the controls that step aside (`opts.fades`) were last looked at.
+  let asideAt = 0;
+  /**
+   * A few times a second: mark each control over the stage that steps aside
+   * (`opts.fades`) while what you are looking at is behind it, or the pointer
+   * is, over the picture: your body and what is over its head (the agent's
+   * in its own view), or the middle of the view while you fly.
+   */
+  function stepAside(now: number) {
+    if (now - asideAt < ASIDE_MS) return;
+    asideAt = now;
+    const els = opts.fades?.() ?? [];
+    if (!els.length) return;
+    camera.updateMatrixWorld();
+    const seen: Box[] = [];
+    const body = me.body.visible ? bodyOnStage(me) : undefined;
+    if (body) seen.push(body.box, ...(overheads.get(opts.visitor ? "you" : self) ?? []));
+    else {
+      const middle = onStage(controls.target);
+      if (middle)
+        seen.push({ left: middle[0] - 24, right: middle[0] + 24, top: middle[1] - 24, bottom: middle[1] + 24 });
+    }
+    const box = host.getBoundingClientRect();
+    if (pointer) {
+      const [x, y] = [pointer.clientX - box.left, pointer.clientY - box.top];
+      seen.push({ left: x - 4, right: x + 4, top: y - 4, bottom: y + 4 });
+    }
+    for (const el of els) {
+      const r = el.getBoundingClientRect();
+      const k = {
+        left: r.left - box.left,
+        right: r.right - box.left,
+        top: r.top - box.top,
+        bottom: r.bottom - box.top,
+      };
+      const behind = seen.some((b) => b.left < k.right && k.left < b.right && b.top < k.bottom && k.top < b.bottom);
+      if (behind !== el.hasAttribute("data-behind")) el.toggleAttribute("data-behind", behind);
     }
   }
 
@@ -3943,6 +4067,7 @@ export async function createStage(
     if (town) keepTown(t);
     floatOver(dt);
     placePanels(dt);
+    stepAside(now);
     seeThrough(dt);
     if (reading) clearView();
     renderer.render(scene, camera);
@@ -4160,6 +4285,10 @@ export async function createStage(
       const p = me.walker.place;
       return travel === "walk" ? [p.x, p.z] : [controls.target.x, controls.target.z];
     },
+    standing() {
+      const shown = [...(me.body.visible ? [me] : []), ...companions.values()];
+      return shown.map((f): [number, number] => [f.walker.place.x, f.walker.place.z]);
+    },
     anchorPanel,
     setPlaque(words) {
       if (words === plaqueWords) return;
@@ -4240,8 +4369,7 @@ export async function createStage(
       putDown(true);
       travel = next;
       held.clear();
-      // Flying, the wheel moves you along the way you look; walking, it zooms the camera following you.
-      controls.enableZoom = next === "fly";
+      // Walking, the wheel zooms the camera following you; flying, it flies you along the way you look (`onWheel`).
       me.body.visible = next === "walk";
       if (next === "fly") {
         turnAboutAhead();

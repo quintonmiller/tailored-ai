@@ -14,10 +14,31 @@ import { buildPiece, wearColors } from "./dress";
 import { type Arm, type ArmTurn, armClearance, bodyPoints, droopOf, earAt, measureWear, reach, wearBone } from "./fit";
 import { Director, findPath, type Obstacle, type Pick, route, slide, turnBetween, Walker } from "./locomotion";
 import { type BodyState, type Carriage, Motion, POSE_BONES, type Pose } from "./motion";
-import { BUBBLE_PX, GAP_PX, type Over, SETTLE_SECONDS, SIGN_PX, type Stacked, TAG_PX, TAIL_WIDTH_PX } from "./overhead";
+import {
+  BUBBLE_PX,
+  GAP_PX,
+  LEADER_PX,
+  type Over,
+  pointer,
+  SETTLE_SECONDS,
+  SIGN_PX,
+  type Stacked,
+  TAG_PX,
+  TAIL_WIDTH_PX,
+} from "./overhead";
 import { buildHeld, disposeHeld } from "./props";
 import { type Activity, type Room, type Spot, spotById } from "./scene";
-import { bubbleTail, disposeSprite, fitSprite, liftSprite, SignPost, speechBubble, tag } from "./signs";
+import {
+  bubbleTail,
+  disposeSprite,
+  fitSprite,
+  LEADER_WIDTH_PX,
+  leaderLine,
+  liftSprite,
+  SignPost,
+  speechBubble,
+  tag,
+} from "./signs";
 import { tintModel } from "./tint";
 import { ease, gait } from "./travel";
 import { Turns } from "./turns";
@@ -26,6 +47,12 @@ import { type BodyFit, type V3, wearPieces, wearTop } from "./wear";
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 /** Seconds its pace takes to catch up with how fast it is really going: long enough to smooth a frame's hitch. */
 const PACE_SECONDS = 0.12;
+/** Where a bubble's tail is drawn among what floats over heads: over the lines down from tags, under the tags. */
+const TAIL_ORDER = 9.75;
+/** How strongly a tag in a crowd that isn't the one to read is drawn: still there to read, but out of the way. */
+const FAINT_TAG = 0.42;
+/** The faintest a line from a tag down to its head is drawn, however faint its tag. */
+const LEADER_LEAST = 0.8;
 
 /** A VRM model, loaded and made ready to pose: facing +Z like a VRM 1.0 model, casting shadows. */
 export async function loadModel(url: string): Promise<VRM> {
@@ -159,6 +186,17 @@ export class Figure {
   /** The line in its bubble, drawn: the bubble and its tail. */
   private line: { bubble: THREE.Sprite; tail: THREE.Sprite; from: number } | undefined;
   private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
+  /** Its tag's size on the screen, in pixels, as last fitted: its tail points at the top of it. */
+  private tagSize: [number, number] = [0, 0];
+  /** How strongly its tag is drawn now, easing toward what the stage last said: faint in a crowd, unless it's to read. */
+  private tagStrength = 1;
+  /** The line from its tag down to its head, while the tag has gone off its head to make way for another. */
+  private leader: THREE.Sprite | undefined;
+  /**
+   * Its bubble gave way to newer ones in a crowd (`Stacked.gone`): not drawn, nor laid out, for the rest of the
+   * line, so it doesn't come and go as the crowd shifts.
+   */
+  private yielding = false;
   /** The sign over its head. */
   readonly signs = new SignPost();
   /** The top of its head, standing: its tag, its sign and its bubble stand on it, lifted on the screen. */
@@ -454,6 +492,7 @@ export class Figure {
     tail.visible = false;
     this.crownPoint.add(bubble, tail);
     this.line = { bubble, tail, from: now.from };
+    this.yielding = false;
     // A new bubble appears where it goes, rather than gliding there from where the last one was.
     if (this.lifted) this.lifted = { ...this.lifted, bubble: Number.NaN, across: Number.NaN };
   }
@@ -554,7 +593,8 @@ export class Figure {
       this.crownPoint.add(sprite);
       // Where the last tag stood, until the stage lays this one out.
       fitSprite(sprite, this.perPixel, TAG_PX);
-      if (this.lifted) liftSprite(sprite, this.lifted.tag, this.perPixel);
+      if (this.lifted) liftSprite(sprite, this.lifted.tag, this.perPixel, this.lifted.tagAcross);
+      sprite.material.opacity = this.tagStrength;
     }
     this.shownTag = { sprite, key };
   }
@@ -573,13 +613,14 @@ export class Figure {
   fitOver(perPixel: number, clock: number): Over {
     this.perPixel = perPixel;
     const out: Over = {};
-    // Speaking, the bubble says who it is: the tag is put away until it's done.
-    if (this.line && this.speaking(clock)) {
+    if (this.shownTag.sprite) out.tag = this.tagSize = fitSprite(this.shownTag.sprite, perPixel, TAG_PX);
+    // Speaking, its bubble is over its tag, which stays, so who is talking can be told in a crowd; the sign is put
+    // away until it's done.
+    if (this.line && this.speaking(clock) && !this.yielding) {
       out.bubble = fitSprite(this.line.bubble, perPixel, BUBBLE_PX);
       out.said = this.line.from;
       return out;
     }
-    if (this.shownTag.sprite) out.tag = fitSprite(this.shownTag.sprite, perPixel, TAG_PX);
     const sign = this.signs.fit(perPixel, SIGN_PX);
     if (sign !== undefined) out.sign = sign;
     return out;
@@ -595,27 +636,84 @@ export class Figure {
     const was = this.lifted;
     const go = (from: number | undefined, to: number) =>
       from === undefined || Number.isNaN(from) ? to : ease(from, to, dt, SETTLE_SECONDS);
-    this.lifted = {
+    const lifted: Stacked = {
+      ...at,
       tag: go(was?.tag, at.tag),
+      tagAcross: go(was?.tagAcross, at.tagAcross),
       sign: go(was?.sign, at.sign),
       bubble: go(was?.bubble, at.bubble),
       across: go(was?.across, at.across),
     };
-    if (this.shownTag.sprite) liftSprite(this.shownTag.sprite, this.lifted.tag, this.perPixel);
-    this.signs.place(this.lifted.sign);
+    this.lifted = lifted;
+    if (at.gone) this.yielding = true;
+    const px = this.perPixel;
+    this.tagStrength = ease(this.tagStrength, at.faded ? FAINT_TAG : 1, dt, SETTLE_SECONDS);
+    const shown = this.shownTag.sprite;
+    if (shown) {
+      liftSprite(shown, lifted.tag, px, lifted.tagAcross);
+      shown.material.opacity = this.tagStrength;
+      // Put away while a bubble brought on to the screen is over it.
+      shown.visible = !at.hidden;
+    }
+    this.signs.place(lifted.sign, lifted.tagAcross);
+    this.placeLeader();
     if (this.line) {
       const { bubble, tail } = this.line;
-      liftSprite(bubble, this.lifted.bubble, this.perPixel, this.lifted.across);
+      liftSprite(bubble, lifted.bubble, px, lifted.across);
       bubble.renderOrder = order;
-      // Its tail just under it and over everyone's tags, so it can be followed down past a neighbour's to its own
-      // speaker; under the newer bubbles below it.
-      tail.renderOrder = order - 0.5;
-      // The tail from the bubble down to just over the head, straight over the speaker wherever the bubble went.
-      const long = this.lifted.bubble - GAP_PX;
-      tail.scale.set(TAIL_WIDTH_PX * this.perPixel, Math.max(1, long) * this.perPixel, 1);
-      tail.center.set(0.5, -GAP_PX / Math.max(1, long));
-      tail.userData.long = long;
+      // Its tail under every tag: it is led round them (`stack`), and where it can't be, it passes behind a
+      // neighbour's name to its own speaker's rather than cutting through it. Under its bubble, and the newer ones.
+      tail.renderOrder = TAIL_ORDER;
+      // From where it leaves the bubble to the edge of its speaker's tag, gliding with it, with no gap for anyone
+      // else to show through; or, a little short of it, to its head or face.
+      const aim = at.tail;
+      const from: [number, number] | undefined = aim && [lifted.across + aim.from[0], lifted.bubble + aim.from[1]];
+      const to: [number, number] | undefined =
+        aim &&
+        (aim.toTag
+          ? [aim.to[0] + lifted.tagAcross - at.tagAcross, aim.to[1] + lifted.tag - at.tag]
+          : [aim.to[0], aim.to[1]]);
+      const p = from && to && pointer(from, to, aim?.toTag ? 0 : GAP_PX, TAIL_WIDTH_PX);
+      if (p) {
+        tail.scale.set(TAIL_WIDTH_PX * px, p.length * px, 1);
+        tail.center.set(p.center[0], p.center[1]);
+        tail.material.rotation = p.turn;
+      }
+      tail.userData.long = p?.length ?? 0;
     }
+  }
+
+  /**
+   * Draw the line from its tag down to the top of its head while the tag has
+   * gone more than `LEADER_PX` from over it to make way for another: from the
+   * nearest of the tag's foot, under every tag it passes, and drawn plain even from a faint tag.
+   */
+  private placeLeader() {
+    const at = this.lifted;
+    const shown = this.shownTag.sprite;
+    const [w] = this.tagSize;
+    const reach = Math.max(0, w / 2 - 10);
+    const foot: [number, number] | undefined =
+      at && shown ? [Math.max(at.tagAcross - reach, Math.min(at.tagAcross + reach, 0)), at.tag] : undefined;
+    const p =
+      foot && at && !at.hidden && Math.hypot(foot[0], foot[1]) - GAP_PX > LEADER_PX
+        ? pointer(foot, [0, 0], GAP_PX, LEADER_WIDTH_PX)
+        : undefined;
+    if (!p) {
+      if (this.leader) this.leader.visible = false;
+      return;
+    }
+    if (!this.leader) {
+      this.leader = leaderLine();
+      this.crownPoint.add(this.leader);
+    }
+    const px = this.perPixel;
+    this.leader.visible = true;
+    this.leader.scale.set(LEADER_WIDTH_PX * px, p.length * px, 1);
+    this.leader.center.set(p.center[0], p.center[1]);
+    this.leader.material.rotation = p.turn;
+    // Near full strength even from a faint tag: the line is what says whose it is, and a crowd is where it's needed.
+    this.leader.material.opacity = Math.max(LEADER_LEAST, this.tagStrength) * 0.85;
   }
 
   /**
@@ -741,21 +839,17 @@ export class Figure {
     this.body.position.set(x, y, z);
     this.body.rotation.y = this.walker.place.facing;
     this.signs.update(t);
-    // A bubble while it speaks, with the tag and the sign put away until it's done.
+    // A bubble while it speaks, with the sign put away until it's done.
     if (this.line) {
       const on = this.speaking(t);
-      this.line.bubble.visible = on;
-      // Brought down over its speaker's head, it has no room for a tail.
-      this.line.tail.visible = on && (this.line.tail.userData.long ?? Number.POSITIVE_INFINITY) > 4;
+      // Giving way to newer ones in a crowd, it isn't drawn; with no room between it and what it points at, its tail.
+      this.line.bubble.visible = on && !this.yielding;
+      this.line.tail.visible = on && !this.yielding && (this.line.tail.userData.long ?? Number.POSITIVE_INFINITY) > 4;
       this.signs.group.visible = !on;
-      if (this.shownTag.sprite) this.shownTag.sprite.visible = !on;
       // Its time up, the next thing said has its turn, if there is one.
       if (this.turns.tick(t)) {
         this.utter();
-        if (!this.line) {
-          this.signs.group.visible = true;
-          if (this.shownTag.sprite) this.shownTag.sprite.visible = true;
-        }
+        if (!this.line) this.signs.group.visible = true;
       }
     }
     const size = Math.max(0.05, this.bounds.max.y - this.hipsY) * 0.5;
@@ -781,6 +875,7 @@ export class Figure {
     this.hold(undefined, undefined);
     this.label(undefined, undefined);
     this.hush();
+    if (this.leader) disposeSprite(this.leader);
     this.signs.dispose();
     this.clips?.dispose();
     // Off first: what it wears is shared with every other body, and the model's own is let go below.

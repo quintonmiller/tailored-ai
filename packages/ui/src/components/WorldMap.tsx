@@ -251,6 +251,7 @@ export function WorldMap({
   here,
   you,
   activities,
+  back,
   onGo,
   onNeed,
   onClose,
@@ -268,6 +269,11 @@ export function WorldMap({
   /** Where you stand in the town, while you are out in it: marked on the plan. */
   you?: [number, number];
   activities: Record<string, AgentActivity>;
+  /**
+   * While you visit in your own body: the place that is the agent's own view, and the agent's name. Anywhere you
+   * pick you walk into as you; that one takes you back to the agent's view, and the map says so.
+   */
+  back?: { place: string; agent: string };
   onGo: (id: string) => void;
   /** Go to an agent waiting on you, with what it waits on open: from "Busy now", as from the "Needs you" list. */
   onNeed?: (agent: string) => void;
@@ -302,6 +308,8 @@ export function WorldMap({
     return mapIndex(places, areas, activities, query, rank);
   }, [places, areas, activities, query]);
   const busy = useMemo(() => busyAgents(places, activities), [places, activities]);
+  // The one place that ends a visit: the agent's own, which is its view rather than somewhere to walk into.
+  const backTo = back ? places.find((p) => p.id === back.place) : undefined;
   const first = (id: string) => (searching && id === index.first ? " first" : "");
   const current = (id: string) => (id === here ? "location" : undefined);
 
@@ -318,6 +326,9 @@ export function WorldMap({
           <span className="world-map-name">
             {p.kind === "room" ? `#${p.name}` : p.name}
             {p.id === here && <span className="world-map-here">you are here</span>}
+            {back?.place === p.id && p.id !== here && (
+              <span className="world-map-here world-map-back">back to {back.agent}'s view</span>
+            )}
           </span>
           {mark && <span className={`world-map-mark doing-${mark.doing}`}>{markWords(mark)}</span>}
           {p.purpose && <span className="world-map-purpose">{p.purpose}</span>}
@@ -392,6 +403,12 @@ export function WorldMap({
         </button>
       </div>
       {problem && <p className="world-map-problem">{problem}</p>}
+      {back && (
+        <p className="world-map-rule">
+          Anywhere you pick, you walk in as you, except {backTo ? placeTitle(backTo) : `${back.agent}'s home`}: that
+          takes you back to {back.agent}'s own view.
+        </p>
+      )}
       <div className="world-map-split">
         {town && (
           <TownPlan
@@ -419,24 +436,27 @@ export function WorldMap({
                         type="button"
                         className={`world-map-busy doing-${b.activity.doing}`}
                         aria-current={current(b.place.id)}
+                        title={`${nameOf(b.agent)}: ${b.activity.what}${b.activity.detail ? ` · ${b.activity.detail}` : ""}`}
                         onClick={() => (b.activity.doing === "waiting" && onNeed ? onNeed(b.agent) : onGo(b.place.id))}
                       >
                         <span className="world-map-dot" aria-hidden="true">
                           {MARKS[b.activity.doing]}
                         </span>
-                        <span className="world-map-busy-who">{nameOf(b.agent)}</span>
-                        <span className="world-map-busy-what">
-                          {b.activity.what}
-                          {b.activity.detail ? ` · ${b.activity.detail}` : ""}
-                        </span>
-                        <span className="world-map-busy-where">
-                          {b.place.id === here
-                            ? "here"
-                            : b.place.kind === "room"
-                              ? `in #${b.place.name}`
-                              : b.place.kind === "home" && b.place.owner === b.agent
-                                ? "at home"
-                                : `in ${b.place.name}`}
+                        <span className="world-map-busy-text">
+                          <span className="world-map-busy-who">{nameOf(b.agent)}</span>
+                          <span className="world-map-busy-what">
+                            {b.activity.what}
+                            {b.activity.detail ? ` · ${b.activity.detail}` : ""}
+                          </span>
+                          <span className="world-map-busy-where">
+                            {b.place.id === here
+                              ? "here"
+                              : b.place.kind === "room"
+                                ? `in #${b.place.name}`
+                                : b.place.kind === "home" && b.place.owner === b.agent
+                                  ? "at home"
+                                  : `in ${b.place.name}`}
+                          </span>
                         </span>
                       </button>
                     </li>
@@ -459,7 +479,7 @@ export function WorldMap({
                         type="button"
                         className={`world-map-who doing-${doing}${first(home.id)}`}
                         aria-current={current(home.id)}
-                        title={`${nameOf(agent)}${home.role ? `, ${home.role}` : ""}, ${STATE_WORDS[doing]}: go to ${placeTitle(home)}`}
+                        title={`${nameOf(agent)}${home.role ? `, ${home.role}` : ""}, ${STATE_WORDS[doing]}: ${back?.place === home.id ? `back to ${back.agent}'s view` : `go to ${placeTitle(home)}`}`}
                         onClick={() => onGo(home.id)}
                       >
                         <span className="world-map-dot" aria-hidden="true">
@@ -475,16 +495,24 @@ export function WorldMap({
                           {roleWord(agent, home.role)}
                         </span>
                         <span className={`world-map-who-doing${calm ? " calm" : ""}`}>{STATE_WORDS[doing]}</span>
+                        {back?.place === home.id && <span className="world-map-back">back to its view</span>}
                       </button>
                       {away && (
                         <button
                           type="button"
                           className="world-map-away"
                           aria-current={current(away.id)}
-                          title={`Go to ${placeTitle(away)}, where ${nameOf(agent)} is`}
+                          title={
+                            back?.place === away.id
+                              ? `${nameOf(agent)} is in ${placeTitle(away)}: back to ${back.agent}'s view`
+                              : `Go to ${placeTitle(away)}, where ${nameOf(agent)} is`
+                          }
                           onClick={() => onGo(away.id)}
                         >
                           in {placeTitle(away)}
+                          {back?.place === away.id && (
+                            <span className="world-map-back">back to {back.agent}'s view</span>
+                          )}
                         </button>
                       )}
                     </li>
