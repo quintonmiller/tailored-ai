@@ -2,9 +2,12 @@
  * A body in a colour of its own: the model's textures and colours turned
  * round the colour wheel by a number of degrees. Lightness and saturation
  * stay as the artist made them, so a green robot becomes an equally good red
- * or blue one, and several agents sharing one model can be told apart.
+ * or blue one, and several agents sharing one model can be told apart. A
+ * colour an agent chose scales them too (`Tint` in `body.ts`), so a body can
+ * be grey, pale or dark as well as any hue.
  */
 import * as THREE from "three";
+import type { Tint } from "./body";
 
 /**
  * The hue rotation matrix, as CSS `hue-rotate()` defines it: the same turn
@@ -25,6 +28,35 @@ export function hueMatrix(degrees: number): number[] {
     0.715 - c * 0.715 + s * 0.715,
     0.072 + c * 0.928 + s * 0.072,
   ];
+}
+
+/** Saturation scaled as CSS `saturate()` scales it: 0 is grey, 1 leaves it, more is richer. */
+export function saturateMatrix(s: number): number[] {
+  return [
+    0.213 + 0.787 * s,
+    0.715 - 0.715 * s,
+    0.072 - 0.072 * s,
+    0.213 - 0.213 * s,
+    0.715 + 0.285 * s,
+    0.072 - 0.072 * s,
+    0.213 - 0.213 * s,
+    0.715 - 0.715 * s,
+    0.072 + 0.928 * s,
+  ];
+}
+
+/** `a` after `b`: one 3×3 matrix that does both. */
+function times(a: number[], b: number[]): number[] {
+  const out: number[] = [];
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++) out.push(a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c]);
+  return out;
+}
+
+/** The whole turn a tint makes, as one matrix: round the wheel, then saturation, then lightness. */
+export function tintMatrix(tint: Tint): number[] {
+  const lit = [tint.lightness, 0, 0, 0, tint.lightness, 0, 0, 0, tint.lightness];
+  return times(lit, times(saturateMatrix(tint.saturation), hueMatrix(tint.hue)));
 }
 
 /** Turn RGBA pixels (0–255) in place. */
@@ -79,10 +111,10 @@ function rotateTexture(texture: THREE.Texture, m: number[], done: Map<THREE.Text
 const TEXTURES = ["map", "shadeMultiplyTexture"] as const;
 const COLORS = ["color", "shadeColorFactor"] as const;
 
-/** Turn every material in a model round the colour wheel. */
-export function tintModel(root: THREE.Object3D, degrees: number) {
-  if (!degrees) return;
-  const m = hueMatrix(degrees);
+/** Turn every material in a model by a tint: round the colour wheel, and paler, darker or greyer when it says. */
+export function tintModel(root: THREE.Object3D, tint: Tint) {
+  if (!tint.hue && tint.saturation === 1 && tint.lightness === 1) return;
+  const m = tintMatrix(tint);
   const textures = new Map<THREE.Texture, THREE.Texture>();
   const materials = new Set<THREE.Material>();
   root.traverse((o) => {

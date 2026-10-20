@@ -373,16 +373,36 @@ function draw<T>(options: { item: T; weight: number }[], random: () => number): 
 
 /** What it did last counts this much less, so it moves on to something else. */
 const AGAIN = 0.15;
+/** What an agent says it likes doing counts this much more. */
+export const LIKED = 3;
+
+/**
+ * How much more or less likely each thing is for one body, by its name: what
+ * its idle style draws it to (`idleStyle` in `body.ts`), and what it said it
+ * likes doing, several times over. Empty for a body that chose neither.
+ */
+export function likesOf(style: Record<string, number>, liked: string[] = []): Record<string, number> {
+  const out = { ...style };
+  for (const id of liked) out[id] = (out[id] ?? 1) * LIKED;
+  return out;
+}
 
 /**
  * Something for an idle body to do next, from everything its room offers:
- * weighted by the hour, less likely to be what it did last or where it is
- * now, never at a spot someone else has. Undefined when the room offers
- * nothing (or all of it is taken).
+ * weighted by the hour and by what it likes (`likes`, by name), less likely
+ * to be what it did last or where it is now, never at a spot someone else
+ * has. Undefined when the room offers nothing (or all of it is taken).
  */
 export function chooseErrand(
   room: Room,
-  at: { hour: number; random: () => number; last?: string; here?: string; taken?: ReadonlySet<string> },
+  at: {
+    hour: number;
+    random: () => number;
+    last?: string;
+    here?: string;
+    taken?: ReadonlySet<string>;
+    likes?: Record<string, number>;
+  },
 ): Errand | undefined {
   const options: { item: Errand; weight: number }[] = [];
   for (const spot of room.spots) {
@@ -390,7 +410,11 @@ export function chooseErrand(
     const where = whereOf(room, spot);
     if (!where) continue;
     for (const d of DOINGS[where]) {
-      const weight = d.weight(at.hour) * (d.id === at.last ? AGAIN : 1) * (spot.id === at.here ? AGAIN : 1);
+      const weight =
+        d.weight(at.hour) *
+        (at.likes?.[d.id] ?? 1) *
+        (d.id === at.last ? AGAIN : 1) *
+        (spot.id === at.here ? AGAIN : 1);
       options.push({ item: errand(spot, d), weight });
     }
   }
@@ -401,13 +425,38 @@ export function chooseErrand(
  * What an idle body does at a spot it was sent to or found itself at: a book
  * at the bookshelf, a coffee on the couch, a nap there late at night.
  * Undefined at a spot with nothing to do.
+ *
+ * `staying`, for a body that chose to stay at the spot: one thing after
+ * another, so only what lasts (no stretch, which is a one-off gesture that
+ * would be made over and over), and less likely what it did `last`.
  */
-export function errandAt(room: Room, spotId: string, hour: number, random: () => number): Errand | undefined {
+export function errandAt(
+  room: Room,
+  spotId: string,
+  hour: number,
+  random: () => number,
+  likes: Record<string, number> = {},
+  staying?: { last?: string },
+): Errand | undefined {
   const spot = room.spots.find((s) => s.id === spotId);
   const where = spot ? whereOf(room, spot) : undefined;
   if (!spot || !where) return undefined;
+  const doings = staying ? DOINGS[where].filter((d) => !d.gesture) : DOINGS[where];
   return draw(
-    DOINGS[where].map((d) => ({ item: errand(spot, d), weight: d.weight(hour) })),
+    doings.map((d) => ({
+      item: errand(spot, d),
+      weight: d.weight(hour) * (likes[d.id] ?? 1) * (staying && d.id === staying.last ? AGAIN : 1),
+    })),
     random,
   );
+}
+
+/**
+ * How long a body keeps at an errand at a spot it chose to stay at, in
+ * seconds: somewhere in the errand's own span, longer or shorter as its idle
+ * style has it (`stay`). Nothing else moves it on there, so this does.
+ */
+export function stayLength(errand: Errand, stay: number, random: () => number): number {
+  const [lo, hi] = errand.seconds;
+  return (lo + (hi - lo) * random()) * stay;
 }

@@ -5,11 +5,12 @@
  * filtered by what you type. Pure, so it is tested without a page; the map and
  * the stage's tools draw what this says.
  */
+import type { BodyLooks } from "../avatar/body";
 import type { AgentActivity } from "../avatar/doing";
 import { nameOf } from "./conversations";
 
-/** One place on the map, as `builtin:places` lists it. */
-export interface MapPlace {
+/** One place on the map, as `builtin:places` lists it: a home with how its owner chose to look and carry itself. */
+export interface MapPlace extends BodyLooks {
   id: string;
   name: string;
   kind: "town" | "lobby" | "office" | "home" | "shared" | "room";

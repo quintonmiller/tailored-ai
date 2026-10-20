@@ -22,12 +22,12 @@ import { createPortal } from "react-dom";
 import type { DashboardWidgetSpec } from "../api";
 import { taskLink } from "../components/WorldDashboard";
 import { widgetRenderers } from "../components/widgets";
+import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
 import { clockTime } from "../lib/did";
 import { GROUPS, type Group } from "../lib/tasks";
 import { type BoardTask, type ColumnSpan, columnAt, columnsFor, moveTo } from "./boards";
 import { byDay, type CalendarView, type Wake } from "./calendar";
-import { hueFor } from "./doing";
 import type { Prop } from "./scene";
 import { PAGE_MS, pageAt, type ScreenCard, screenWidgets, type Tone } from "./screens";
 import type { Stage, SurfaceView, UseSpot } from "./stage";
@@ -132,11 +132,11 @@ function PropFace({ prop }: { prop: Prop }) {
   }
 }
 
-/** An agent's name with the colour its body and its door wear, for a note or a line on a calendar. */
+/** An agent's name with the colour its body wears, for a note or a line on a calendar: the dot by its name elsewhere. */
 function Who({ agent }: { agent: string }) {
-  const hue = hueFor(agent);
+  const color = useAgentColor()(agent);
   return (
-    <span className="sf-who" style={hue === undefined ? undefined : { ["--who" as string]: `${hue}` }}>
+    <span className="sf-who" style={{ ["--who" as string]: color }}>
       {nameOf(agent)}
     </span>
   );

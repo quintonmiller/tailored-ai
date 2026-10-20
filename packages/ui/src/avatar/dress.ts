@@ -5,19 +5,19 @@
  * geometries, not a few hundred.
  */
 import * as THREE from "three";
+import { BASE_HUE, type Tint } from "./body";
 import type { Piece, Tone, V3 } from "./wear";
 
-/** The robot's own green, which an agent's hue turns from (see `hueFor`): the base the map's dots use too. */
-const BASE_HUE = 145;
-
 /**
- * An agent's colours for what it wears, from the hue its body is turned by:
- * its own hue, deeper than the body so a scarf or a cap stands out against
- * it, a darker one, a pale one for stripes and trims, and a muted one.
+ * An agent's colours for what it wears, from how its body is tinted: its own
+ * hue, deeper than the body so a scarf or a cap stands out against it, a
+ * darker one, a pale one for stripes and trims, and a muted one. A body made
+ * grey wears greys.
  */
-export function wearColors(hue: number | undefined): Record<"main" | "dark" | "light" | "muted", number> {
-  const h = (BASE_HUE + (hue ?? 0)) / 360;
-  const hsl = (s: number, l: number) => new THREE.Color().setHSL(h % 1, s, l).getHex();
+export function wearColors(tint: Tint | undefined): Record<"main" | "dark" | "light" | "muted", number> {
+  const h = (BASE_HUE + (tint?.hue ?? 0)) / 360;
+  const grey = Math.min(1, tint?.saturation ?? 1);
+  const hsl = (s: number, l: number) => new THREE.Color().setHSL(h % 1, s * grey, l).getHex();
   return { main: hsl(0.6, 0.34), dark: hsl(0.45, 0.19), light: hsl(0.5, 0.84), muted: hsl(0.25, 0.42) };
 }
 

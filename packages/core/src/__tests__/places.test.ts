@@ -16,7 +16,6 @@ import {
   buildWorld,
   followTalk,
   homeId,
-  looksOf,
   mayChange,
   messageTo,
   onlyMembers,
@@ -45,8 +44,8 @@ import {
   withChange,
   withLooks,
   worldMap,
-  wornBy,
 } from "../plugins/places.js";
+import { BODY_TYPE, type Chosen, looksOf, wornBy } from "../plugins/places-body.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
   CHANGE_LENGTH,
@@ -1961,6 +1960,7 @@ describe("whether there is anything to do", () => {
 describe("what a body wears, and the home that suits what an agent is for", () => {
   const types = [
     { name: PLACE_TYPE, scope: "agent" as const },
+    { name: BODY_TYPE, scope: "agent" as const },
     { name: WEAR_TYPE, scope: "agent" as const },
   ];
   const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
@@ -1984,7 +1984,7 @@ describe("what a body wears, and the home that suits what an agent is for", () =
       roles,
     );
   });
-  const chosen = async (agent: string) => (await state.get(owner, { type: WEAR_TYPE, id: agent }))?.data.wear;
+  const chosen = async (agent: string) => (await state.get(owner, { type: BODY_TYPE, id: agent }))?.data.wear;
 
   it("says what it wears when it looks: what suits its role until it chooses", async () => {
     const look = await tool.execute({ action: "look" }, as("coder"));
@@ -2000,7 +2000,8 @@ describe("what a body wears, and the home that suits what an agent is for", () =
     expect(worn.success, worn.error).toBe(true);
     expect(worn.output).toBe("You wear a wizard hat and a scarf now.");
     expect(await chosen("coder")).toEqual(["wizard hat", "scarf"]);
-    expect((await state.get(owner, { type: WEAR_TYPE, id: "coder" }))?.scope).toBe("agent:coder");
+    // Kept on its body record, where the body tool keeps it, in its own scope.
+    expect((await state.get(owner, { type: BODY_TYPE, id: "coder" }))?.scope).toBe("agent:coder");
     // The room is as it was: choosing a hat isn't changing the room.
     expect((await state.get(owner, { type: PLACE_TYPE, id: homeId("coder") }))?.version).toBe(room?.version);
     const look = await tool.execute({ action: "look" }, as("coder"));
@@ -2030,12 +2031,26 @@ describe("what a body wears, and the home that suits what an agent is for", () =
 
   it("wears what was chosen while it makes sense, and otherwise what suits its role", () => {
     const coder = roles("coder");
-    expect(wornBy(undefined, coder)).toEqual(["headset", "glasses"]);
-    expect(wornBy([], coder)).toEqual([]);
-    expect(wornBy(["beret"], coder)).toEqual(["beret"]);
+    expect(wornBy(undefined, undefined, coder)).toEqual(["headset", "glasses"]);
+    expect(wornBy({ wear: [] }, undefined, coder)).toEqual([]);
+    expect(wornBy({ wear: ["beret"] }, undefined, coder)).toEqual(["beret"]);
     // Someone wrote two hats on the State page: its role's, rather than a body with a hat inside a hat.
-    expect(wornBy(["cap", "beret"], coder)).toEqual(["headset", "glasses"]);
-    expect(wornBy(undefined, undefined)).toEqual([]);
+    expect(wornBy({ wear: ["cap", "beret"] }, undefined, coder)).toEqual(["headset", "glasses"]);
+    expect(wornBy(undefined, undefined, undefined)).toEqual([]);
+    // An old wear record, from before it was the body's, counts until the body record says what it wears.
+    expect(wornBy(undefined, ["scarf"], coder)).toEqual(["scarf"]);
+    expect(wornBy({ size: 1.2 }, ["scarf"], coder)).toEqual(["scarf"]);
+    expect(wornBy({ wear: ["cap"] }, ["scarf"], coder)).toEqual(["cap"]);
+  });
+
+  it("reads an old wear record until it chooses again, and then takes it away so it can't come back", async () => {
+    await state.put(owner, { type: WEAR_TYPE, id: "coder", scope: "agent:coder", data: { wear: ["satchel"] } });
+    expect(String((await tool.execute({ action: "look" }, as("coder"))).output)).toMatch(/You wear a satchel\./);
+    await tool.execute({ action: "room", wear: "default" }, as("coder"));
+    expect(await state.get(owner, { type: WEAR_TYPE, id: "coder" })).toBeNull();
+    expect(String((await tool.execute({ action: "look" }, as("coder"))).output)).toMatch(
+      /You wear a headset and glasses, as suits a coder\./,
+    );
   });
 
   it("reads an agent's role from its definition, and gives each home on the map its owner's role and wear", () => {
@@ -2045,8 +2060,13 @@ describe("what a body wears, and the home that suits what an agent is for", () =
     // The default agent's name is no word for anything, and no tool list says nothing.
     expect(aboutAgent("default", { description: "" })).toEqual({ name: "" });
     expect(aboutAgent("ivy", undefined)).toEqual({ name: "ivy" });
-    const chosen = new Map<string, unknown>([["coder", ["cap"]]]);
-    expect(looksOf("coder", roles("coder"), chosen)).toEqual({ role: "coder", wear: ["cap"], wearChosen: true });
+    const chosen: Chosen = { bodies: new Map([["coder", { wear: ["cap"], color: "#2a8a8a" }]]), wear: new Map() };
+    expect(looksOf("coder", roles("coder"), chosen)).toEqual({
+      role: "coder",
+      wear: ["cap"],
+      wearChosen: true,
+      color: "#2a8a8a",
+    });
     expect(looksOf("zork", undefined, chosen)).toEqual({ wear: [] });
     // Each home by its owner, whatever the place is called; nothing else on the map says who anyone is.
     expect(
@@ -2062,7 +2082,15 @@ describe("what a body wears, and the home that suits what an agent is for", () =
       ),
     ).toEqual([
       { id: "lobby", kind: "lobby" },
-      { id: homeId("coder"), kind: "home", owner: "coder", role: "coder", wear: ["cap"], wearChosen: true },
+      {
+        id: homeId("coder"),
+        kind: "home",
+        owner: "coder",
+        role: "coder",
+        wear: ["cap"],
+        wearChosen: true,
+        color: "#2a8a8a",
+      },
       { id: homeId("bookkeeper"), kind: "home", owner: "bookkeeper", role: "bookkeeper", wear: ["bow tie", "glasses"] },
       { id: "shared:den", kind: "shared" },
     ]);

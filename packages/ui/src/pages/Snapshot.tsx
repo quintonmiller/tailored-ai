@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Avatar } from "../avatar/Avatar";
+import type { BodyLooks } from "../avatar/body";
 import type { Room } from "../avatar/scene";
 import type { Companion } from "../avatar/stage";
-import { companyOf, type PlaceInfo, roomOf } from "../components/ChatStage";
+import { companyOf, looksIn, type PlaceInfo, roomOf } from "../components/ChatStage";
 
 /**
  * A photo of an agent's room, for the server's camera: the stage alone, with
@@ -27,6 +28,8 @@ export function Snapshot() {
     company: Companion[];
     /** What the agent wears, so a selfie shows it. */
     wear: string[];
+    /** How it chose to look and carry itself: its colour, model, size and posture. */
+    looks: BodyLooks;
   } | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   const [problem, setProblem] = useState("");
@@ -49,6 +52,7 @@ export function Snapshot() {
           room: roomOf(here),
           company: companyOf(here),
           wear: here?.wear ?? [],
+          looks: looksIn(here, here?.id),
         });
       })
       .catch((err: unknown) => {
@@ -71,6 +75,7 @@ export function Snapshot() {
             // Its own colours and what it wears, as it looks in the world.
             agent={agent}
             wear={scene.wear}
+            looks={scene.looks}
             view={view}
             state="idle"
             loudness={() => 0}

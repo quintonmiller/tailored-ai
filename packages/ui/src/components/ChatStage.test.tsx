@@ -57,6 +57,12 @@ const stage = vi.hoisted(() => ({
   company: [] as string[][],
   /** What each of them wears, each time, by agent. */
   companyWear: [] as Record<string, string[]>[],
+  /** How each of them chose to look and carry itself, each time, by agent. */
+  companyLooks: [] as Record<string, Record<string, unknown> | undefined>[],
+  /** How the stage's own body chose to look: as it was made, and each time after. */
+  looks: [] as Record<string, unknown>[],
+  /** The gestures the stage was told agents are making, each time. */
+  emotes: [] as Record<string, { name: string; at: string }>[],
   /** What the stage's own body was told to wear: as it was made, and each time after. */
   wears: [] as string[][],
   /** What the stage was told each agent is doing, each time. */
@@ -96,6 +102,7 @@ vi.mock("../avatar/stage", () => ({
       onLine?: (agent: string, text: string, nearness: number, phone?: boolean) => void;
       company?: { agent: string }[];
       wear?: string[];
+      looks?: Record<string, unknown>;
       onDoor?: (door: { to: string }) => void;
       arriveFrom?: string;
       lights?: string;
@@ -105,6 +112,7 @@ vi.mock("../avatar/stage", () => ({
     stage.onLine = opts.onLine;
     stage.onDoor = opts.onDoor;
     stage.wears.push(opts.wear ?? []);
+    stage.looks.push(opts.looks ?? {});
     stage.onDoorHover = opts.onDoorHover;
     if (opts.lights) stage.lights.push(opts.lights);
     stage.arrivals.push(opts.arriveFrom);
@@ -128,11 +136,14 @@ vi.mock("../avatar/stage", () => ({
         stage.rooms.push(room);
         stage.entered.push(from);
       },
-      setCompany: (company: { agent: string; wear?: string[] }[]) => {
+      setCompany: (company: { agent: string; wear?: string[]; looks?: Record<string, unknown> }[]) => {
         stage.company.push(company.map((c) => c.agent));
         stage.companyWear.push(Object.fromEntries(company.map((c) => [c.agent, c.wear ?? []])));
+        stage.companyLooks.push(Object.fromEntries(company.map((c) => [c.agent, c.looks])));
       },
       setWear: (wear: string[]) => stage.wears.push(wear),
+      setLooks: (looks: Record<string, unknown>) => stage.looks.push(looks),
+      setEmotes: (e: Record<string, { name: string; at: string }>) => stage.emotes.push(e),
       standBefore: (agent: string) => stage.greeted.push(agent),
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
@@ -178,9 +189,20 @@ class FakeEventSource {
 
 /** Where the agent is, and who else is there with a body, as the server says. */
 let placeId = "home:talker";
-let company: { agent: string; name: string; avatar: string; animations: string[]; wear?: string[] }[] = [];
+let company: ({ agent: string; name: string; avatar: string; animations: string[]; wear?: string[] } & Record<
+  string,
+  unknown
+>)[] = [];
 /** What the agent whose home it is wears, as its place says. */
 let ownWear: string[] | undefined;
+/** How the agent whose home it is chose to look, as its place says. */
+let ownLooks: Record<string, unknown> = {};
+/** The models a body can be drawn in, as the server lists them. */
+let modelNames: string[] = ["robot.vrm"];
+/** How the planner chose to look, as the map says of its home. */
+let plannerLooks: Record<string, unknown> = {};
+/** The gestures agents are making, as the server's emote records say. */
+let emoteRecords: { id: string; data: { name: string; at: string } }[] = [];
 /** What writing what a body wears answers: 200, or a failure. */
 let wearStatus = 200;
 /** Where the door of the agent's own place is, as the server says. */
@@ -430,9 +452,16 @@ beforeEach(() => {
   placeId = "home:talker";
   company = [];
   ownWear = undefined;
+  ownLooks = {};
+  modelNames = ["robot.vrm"];
+  plannerLooks = {};
+  emoteRecords = [];
   wearStatus = 200;
   stage.wears.length = 0;
   stage.companyWear.length = 0;
+  stage.companyLooks.length = 0;
+  stage.looks.length = 0;
+  stage.emotes.length = 0;
   homeDoorAlong = 1;
   stage.mounted = 0;
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -474,6 +503,7 @@ beforeEach(() => {
       if (url.startsWith("/api/live?")) return new Response(JSON.stringify(liveInfo));
       if (url.startsWith("/api/state/activity")) return new Response(JSON.stringify({ records: activityRecords }));
       if (url.startsWith("/api/state/speech")) return new Response(JSON.stringify({ records: speechRecords }));
+      if (url.startsWith("/api/state/emote?")) return new Response(JSON.stringify({ records: emoteRecords }));
       if (url === "/api/agents") return new Response(JSON.stringify(agentsInfo));
       if (url === "/api/ext/builtin:places/map")
         return new Response(
@@ -499,6 +529,7 @@ beforeEach(() => {
                 street: "Maple Lane",
                 role: "travel agent",
                 wear: ["adventurer hat"],
+                ...plannerLooks,
               },
               {
                 id: "room:local:trip",
@@ -605,6 +636,7 @@ beforeEach(() => {
             company,
             doors: [{ wall: "back", along: homeDoorAlong, to: "town", label: "Maple Lane", kind: "town" }],
             ...(ownWear ? { wear: ownWear } : {}),
+            ...ownLooks,
           }),
         );
       if (url.startsWith("/api/state/talk/") && init?.method === "PUT") {
@@ -618,7 +650,10 @@ beforeEach(() => {
           ? new Response(JSON.stringify({ type: "talk", id: talkRow[1], ...row }))
           : new Response(JSON.stringify({ error: "No talk record" }), { status: 404 });
       }
-      if (url.startsWith("/api/state/wear/") && init?.method === "PUT") {
+      if (url === "/api/live/models") return new Response(JSON.stringify({ models: modelNames }));
+      if (url.match(/^\/api\/state\/body\/[^/?]+$/) && !init?.method)
+        return new Response(JSON.stringify({ error: "No body record" }), { status: 404 });
+      if ((url.startsWith("/api/state/body/") || url.startsWith("/api/state/emote/")) && init?.method === "PUT") {
         posts.push({ url, body: JSON.parse(String(init.body)) });
         if (wearStatus !== 200)
           return new Response(JSON.stringify({ error: "The store is read-only." }), { status: wearStatus });
@@ -1793,13 +1828,16 @@ describe("the chat page's scene", () => {
     expect(chips.filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.textContent)).toEqual([
       "adventurer hat",
     ]);
-    // A cap goes on in place of the hat, written where the agent's own choice goes.
+    // A cap goes on in place of the hat, written where the agent's own choice goes: its body record.
     await act(async () => chips.find((c) => c.textContent === "cap")?.click());
     await settle(30);
-    expect(posts.find((p) => p.url === "/api/state/wear/planner")?.body).toEqual({
+    expect(posts.find((p) => p.url === "/api/state/body/planner")?.body).toEqual({
       scope: "agent:planner",
       data: { wear: ["cap"] },
+      expectedVersion: 0,
     });
+    // A wear record from before it was the body's is taken away, so it can't bring an old choice back.
+    expect(deleted).toContain("/api/state/wear/planner");
     // Visiting, the body is yours: it wears nothing of the agent's.
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     const tool = (label: string) =>
@@ -1810,6 +1848,166 @@ describe("the chat page's scene", () => {
     await settle(60);
     expect(stage.visitors.at(-1)).toBe(true);
     expect(stage.wears.at(-1)).toEqual([]);
+  });
+
+  it("draws each body as it chose to look and carry itself, a spot to stay at only in the place it is in", async () => {
+    ownLooks = {
+      color: "#2a8a8a",
+      colorName: "teal",
+      idle: "sleepy",
+      model: "fox.vrm",
+      avatar: "/api/live/avatar?model=fox.vrm",
+      spot: { place: "home:talker", spot: "couch", name: "on the couch" },
+    };
+    company = [
+      {
+        agent: "planner",
+        name: "planner",
+        avatar: "/api/live/avatar?agent=planner",
+        animations: [],
+        color: "#ee7f6d",
+        walk: "brisk",
+        size: 1.2,
+        spot: { place: "shared:lounge", spot: "window", name: "at the window" },
+      },
+    ];
+    await render();
+    await settle(60);
+    expect(stage.looks.at(-1)).toEqual({
+      color: "#2a8a8a",
+      colorName: "teal",
+      idle: "sleepy",
+      model: "fox.vrm",
+      avatar: "/api/live/avatar?model=fox.vrm",
+      spot: { place: "home:talker", spot: "couch", name: "on the couch" },
+    });
+    // Its spot is in another place: nothing to go to here.
+    expect(stage.companyLooks.at(-1)).toEqual({ planner: { color: "#ee7f6d", walk: "brisk", size: 1.2 } });
+  });
+
+  it("changes how an agent looks and carries itself from its card, and asks it for a gesture", async () => {
+    plannerLooks = {
+      color: "#2a8a8a",
+      colorName: "teal",
+      idle: "calm",
+      spot: { place: "home:planner", spot: "couch", name: "on the couch" },
+    };
+    modelNames = ["robot.vrm", "fox.vrm"];
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    expect(card.querySelector(".world-agent-body")?.textContent).toMatch(/^teal · calm · change/);
+    await act(async () => (card.querySelector(".world-agent-body .world-panel-inline") as HTMLButtonElement).click());
+    await settle(30);
+    // The model can be chosen when there is more than one; the one it chose is pressed.
+    expect([...card.querySelectorAll(".body-select option")].map((o) => o.textContent)).toEqual([
+      "Its own",
+      "robot",
+      "fox",
+    ]);
+    expect(card.querySelector('.body-swatch[aria-label="teal"]')?.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => (card.querySelector('.body-swatch[aria-label="coral"]') as HTMLButtonElement).click());
+    await settle(30);
+    expect(posts.filter((p) => p.url === "/api/state/body/planner").at(-1)?.body).toMatchObject({
+      scope: "agent:planner",
+      data: { color: "#ee7f6d", colorName: "coral" },
+    });
+    const chip = (group: string, label: string) =>
+      [...card.querySelectorAll(`[aria-label="${group}"] .world-wear-chip`)].find(
+        (c) => c.textContent === label,
+      ) as HTMLButtonElement;
+    expect(chip("How planner idles", "calm").getAttribute("aria-pressed")).toBe("true");
+    // What it likes doing, in the words the agent is told, kept by their names.
+    await act(async () => chip("What planner likes doing when idle", "plants").click());
+    await settle(30);
+    expect(posts.filter((p) => p.url === "/api/state/body/planner").at(-1)?.body).toMatchObject({
+      data: { errands: ["water"] },
+    });
+    await act(async () => chip("How planner walks", "sneak").click());
+    await settle(30);
+    expect(posts.filter((p) => p.url === "/api/state/body/planner").at(-1)?.body).toMatchObject({
+      data: { walk: "sneak" },
+    });
+    await act(async () => chip("Ask planner to make a gesture", "dance").click());
+    await settle(30);
+    expect(posts.find((p) => p.url === "/api/state/emote/planner")?.body).toMatchObject({
+      scope: "global",
+      data: { name: "dance" },
+    });
+    // Where it chose to stay, and a way to let it go where it likes again.
+    expect(card.querySelector(".body-controls")?.textContent).toMatch(/Stayson the couch · let it roam/);
+  });
+
+  it("hands the stage the gesture each agent is making, as it changes", async () => {
+    const at = new Date().toISOString();
+    emoteRecords = [{ id: "planner", data: { name: "wave", at } }];
+    await render();
+    await settle(60);
+    expect(stage.emotes.at(-1)).toEqual({ planner: { name: "wave", at } });
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "emote",
+        id: "talker",
+        op: "create",
+        after: { name: "cheer", at },
+      }),
+    );
+    await settle(30);
+    // Heard while the page was open: timed from when the page heard it, by its own clock.
+    expect(stage.emotes.at(-1)).toMatchObject({ talker: { name: "cheer", heard: expect.any(Number) } });
+    expect(stage.emotes.at(-1)?.planner).not.toHaveProperty("heard");
+  });
+
+  it("saves a colour from the picker once, when it closes, not at every step of a drag", async () => {
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    await act(async () => (card.querySelector(".world-agent-body .world-panel-inline") as HTMLButtonElement).click());
+    await settle(30);
+    const picker = card.querySelector('input[type="color"]') as HTMLInputElement;
+    const saves = () => posts.filter((p) => p.url === "/api/state/body/planner");
+    // Dragging round the picker: each step shows, none is saved.
+    for (const hex of ["#112233", "#334455", "#556677"]) {
+      await act(async () => {
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        set?.call(picker, hex);
+        picker.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
+    await settle(30);
+    expect(picker.value).toBe("#556677");
+    expect(saves()).toHaveLength(0);
+    // Closed: saved once, as the colour it ended on.
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    await settle(30);
+    expect(saves()).toHaveLength(1);
+    expect(saves()[0].body).toMatchObject({ data: { color: "#556677" } });
+  });
+
+  it("puts the card's choice back when a change to a body couldn't be saved", async () => {
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    wearStatus = 500;
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    await act(async () => (card.querySelector(".world-agent-body .world-panel-inline") as HTMLButtonElement).click());
+    await settle(30);
+    const coral = () => card.querySelector('.body-swatch[aria-label="coral"]') as HTMLButtonElement;
+    await act(async () => coral().click());
+    await settle(30);
+    expect(posts.some((p) => p.url === "/api/state/body/planner")).toBe(true);
+    // Not saved, so not chosen: the swatch isn't pressed, and the card says why.
+    expect(coral().getAttribute("aria-pressed")).toBe("false");
+    expect(card.querySelector(".body-swatch-own")?.getAttribute("aria-pressed")).toBe("true");
+    expect(card.querySelector(".agent-menu-problem")?.textContent).toMatch(/Couldn't change its body/);
   });
 
   it("puts the card's chips back when what a body wears couldn't be saved", async () => {
@@ -1839,7 +2037,7 @@ describe("the chat page's scene", () => {
         ?.click(),
     );
     await settle(30);
-    expect(posts.some((p) => p.url === "/api/state/wear/planner")).toBe(true);
+    expect(posts.some((p) => p.url === "/api/state/body/planner")).toBe(true);
     // Nothing was saved, so the card says what the body still wears, and why the change didn't take.
     expect(pressed()).toEqual(["adventurer hat"]);
     expect(card.querySelector(".world-agent-wear")?.textContent).toMatch(/^An adventurer hat/);

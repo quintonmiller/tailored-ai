@@ -4,7 +4,7 @@
  */
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
-import { type Arm, type ArmTurn, earAt, handAt, reach } from "./fit";
+import { type Arm, type ArmTurn, droopOf, earAt, handAt, reach } from "./fit";
 
 /** A grown-up in the T-pose, facing +z: the right arm straight out to −x at shoulder height. */
 const PERSON: Arm = { shoulder: [-0.18, 1.42, 0], elbow: [-0.45, 1.42, 0], hand: [-0.7, 1.42, 0] };
@@ -33,6 +33,16 @@ describe("turning the arm", () => {
     const down = handAt(PERSON, { upper: [0, 0, Math.PI / 2], lower: [0, 0, 0] });
     expect(down.hand.x).toBeCloseTo(-0.18, 5);
     expect(down.hand.y).toBeCloseTo(1.42 - 0.52, 5);
+  });
+});
+
+describe("how far an arm hangs as made", () => {
+  it("is level in a T-pose, and part way down in an A-pose", () => {
+    expect(droopOf(PERSON)).toBe(0);
+    expect(droopOf(ROBOT)).toBeCloseTo(Math.atan2(0.073, Math.hypot(0.094, 0.002)), 5);
+    // An arm made pointing up is taken as level, and one hanging straight down as hanging as far as it is taken to.
+    expect(droopOf({ ...PERSON, elbow: [-0.4, 1.6, 0] })).toBe(0);
+    expect(droopOf({ ...PERSON, elbow: [-0.18, 1.1, 0] })).toBe(0.9);
   });
 });
 

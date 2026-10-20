@@ -288,6 +288,25 @@ describe("/api/live/avatar", () => {
     expect((await json("GET", "/api/live?agent=nobody")).json).toEqual({ enabled: true });
   });
 
+  it("lists every model a body can be drawn in, and serves one by its name, and nothing else", async () => {
+    process.env.TAI_HOME = tmpDir;
+    mkdirSync(join(tmpDir, "avatars"));
+    writeFileSync(join(tmpDir, "avatars", "bot.vrm"), model);
+    writeFileSync(join(tmpDir, "avatars", "fox.vrm"), Buffer.from("fox-model"));
+    writeFileSync(join(tmpDir, "avatars", "notes.txt"), "not a model");
+    const own = join(tmpDir, "owl.vrm");
+    writeFileSync(own, Buffer.from("owl-model"));
+    setup(true, { model: "bot.vrm" }, { model: own });
+    // The configured ones first, then the rest of the folder; never a file that isn't a model.
+    expect((await json("GET", "/api/live/models")).json).toEqual({ models: ["bot.vrm", "owl.vrm", "fox.vrm"] });
+    expect(Buffer.from(await (await get("/api/live/avatar?model=fox.vrm")).arrayBuffer()).toString()).toBe("fox-model");
+    expect(Buffer.from(await (await get("/api/live/avatar?model=owl")).arrayBuffer()).toString()).toBe("owl-model");
+    const none = await json("GET", "/api/live/avatar?model=notes.txt");
+    expect(none.status).toBe(404);
+    expect(none.json.error).toBe("There's no model called notes.txt.");
+    expect((await get("/api/live/avatar?model=..%2F..%2Fetc%2Fpasswd")).status).toBe(404);
+  });
+
   it("names the missing file, without the path to it", async () => {
     process.env.TAI_HOME = tmpDir;
     setup(true, { model: "gone.vrm" });

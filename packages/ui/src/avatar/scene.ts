@@ -283,8 +283,25 @@ export function spotById(room: Room, id: string): Spot | undefined {
   return room.spots.find((s) => s.id === id);
 }
 
-/** The gestures the avatar can make, and so the ones the agent is offered. */
-export const GESTURES = ["wave", "nod", "shake", "shrug", "think", "bow"] as const;
+/**
+ * The gestures the avatar can make with a cue in a spoken reply, and so the
+ * ones the agent is offered there. Each has a move in `motion.ts`, as every
+ * gesture the `body` tool makes does.
+ */
+export const GESTURES = [
+  "wave",
+  "nod",
+  "shake",
+  "shrug",
+  "think",
+  "bow",
+  "cheer",
+  "clap",
+  "dance",
+  "laugh",
+  "salute",
+  "jump",
+] as const;
 
 /** Words that mean the person watching, when the agent looks or points at them. */
 const VIEWER = new Set([

@@ -4,7 +4,8 @@
  * hour and drawn per agent.
  */
 import { describe, expect, it } from "vitest";
-import { chooseErrand, errandAt, idleSpots, isMeeting, seeded } from "./idle";
+import { idleStyle } from "./body";
+import { chooseErrand, errandAt, idleSpots, isMeeting, likesOf, seeded, stayLength } from "./idle";
 import type { Obstacle } from "./locomotion";
 import type { Prop, Room } from "./scene";
 
@@ -220,6 +221,20 @@ describe("chooseErrand", () => {
     expect(stays).toBeLessThan((tally(8, 300).water ?? 0) / 3);
   });
 
+  it("does more of what it likes, and what its idle style draws it to", () => {
+    const count = (likes: Record<string, number>, id: string) => {
+      const random = seeded("planner");
+      let n = 0;
+      for (let i = 0; i < 400; i++) if (chooseErrand(room, { hour: 15, random, likes })?.id === id) n++;
+      return n;
+    };
+    expect(count(likesOf({}, ["read"]), "read")).toBeGreaterThan(1.6 * count({}, "read"));
+    expect(count(likesOf(idleStyle("sleepy").likes), "nap")).toBeGreaterThan(3 * count({}, "nap"));
+    // What it likes is never all it does.
+    expect(400 - count(likesOf({}, ["read"]), "read")).toBeGreaterThan(100);
+    expect(errandAt(room, "couch", 15, seeded("x"), likesOf({}, ["nap"]))).toBeDefined();
+  });
+
   it("never goes where someone else is", () => {
     const random = seeded("planner");
     const taken = new Set(room.spots.map((s) => s.id).filter((id) => id !== "window"));
@@ -299,5 +314,25 @@ describe("errandAt", () => {
 
   it("has nothing to do at a spot it doesn't know", () => {
     expect(errandAt(room, "nowhere", 15, seeded("a"))).toBeUndefined();
+  });
+
+  it("staying at a spot it chose, does only what lasts there, and something else after what it did last", () => {
+    // In the middle there is only a stretch, a one-off gesture: staying there, nothing to do over and over.
+    expect(errandAt(room, "middle", 15, seeded("a"))?.id).toBe("stretch");
+    expect(errandAt(room, "middle", 15, seeded("a"), {}, {})).toBeUndefined();
+    // At the bookshelf, after reading, browsing comes up far more often than reading again.
+    const random = seeded("planner");
+    const picks = Array.from({ length: 200 }, () => errandAt(room, "bookshelf", 15, random, {}, { last: "read" })?.id);
+    const again = picks.filter((id) => id === "read").length;
+    expect(again).toBeLessThan(picks.length - again);
+  });
+
+  it("keeps at it, staying, for a time in its own span, longer or shorter as its idle style has it", () => {
+    const errand = errandAt(room, "window", 15, seeded("a"));
+    if (!errand) throw new Error("no errand at the window");
+    const [lo, hi] = errand.seconds;
+    expect(stayLength(errand, 1, () => 0)).toBe(lo);
+    expect(stayLength(errand, 1, () => 0.999)).toBeCloseTo(hi, 0);
+    expect(stayLength(errand, 1.5, () => 0)).toBe(lo * 1.5);
   });
 });

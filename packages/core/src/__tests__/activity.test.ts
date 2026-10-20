@@ -143,6 +143,12 @@ describe("activity", () => {
     expect(await doing("planner")).toBe("working | taking a selfie | camera");
     await tool("planner", "mystery_tool", {}, false);
     expect(await doing("planner")).toBe("working | using mystery_tool");
+    await tool("planner", "body", { action: "go", to: "the window" }, false);
+    expect(await doing("planner")).toBe("working | going somewhere | the window");
+    await tool("planner", "body", { action: "emote", emote: "wave" }, false);
+    expect(await doing("planner")).toBe("working | making a gesture | wave");
+    await tool("planner", "body", { action: "change", color: "teal" }, false);
+    expect(await doing("planner")).toBe("working | changing how it looks");
   });
 
   it("lets a deployment say how its own tools look, by tool or tool.action", async () => {

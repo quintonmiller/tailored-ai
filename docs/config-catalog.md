@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 38 | 122 |
+| `agents` | object | {} | 38 | 123 |
 
 ### `autopilot`
 
@@ -89,7 +89,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `database.path` | string | `./agent.db` | 45 | 2 |
+| `database.path` | string | `./agent.db` | 46 | 2 |
 
 ### `live`
 

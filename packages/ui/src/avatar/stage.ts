@@ -32,16 +32,35 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { nameOf } from "../lib/conversations";
 import { aboutLines, asleepWords } from "../lib/did";
 import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
+import {
+  type BodyLooks,
+  builtKey,
+  carriageKey,
+  carriageOf,
+  chosenNow,
+  chosenSpotIn,
+  type EmoteRecord,
+  emoteNow,
+  idleStyle,
+  makesRoom,
+  type Plan,
+  planFor,
+  stayingWords,
+  type TurnBack,
+  tintOf,
+  turnBackAfter,
+  turnBackNow,
+} from "./body";
 import { type CalendarView, drawCalendar } from "./calendar";
 import type { Cue } from "./cues";
-import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
+import { type AgentActivity, type Behavior, behaviorFor, heldFor, sameBehavior, stationSpot } from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
 import { footprint, heightOf, type Kinds, type Move, moveKey, onFloor, onTop, onWall, ridersOf } from "./editing";
 import { type Fadeable, paintFaded } from "./fade";
 import { Figure, loadModel } from "./figure";
 import { faceToFace, sideFor } from "./greet";
 import { type Fit, Handles, type Patch } from "./handles";
-import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, seeded } from "./idle";
+import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, likesOf, seeded, stayLength } from "./idle";
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
@@ -144,6 +163,10 @@ const NOTICE_AT = 1.5;
 const FORGET_AT = 2.4;
 /** How near a visitor has to be to hear what an agent says. */
 const HEAR_AT = 3.5;
+/** How near another body has to be for a gesture with no target to be made for it. */
+const AUDIENCE_AT = 5;
+/** Seconds most gestures take, once: when a body turned to make one turns back. */
+const EMOTE_SECONDS = 2.5;
 
 /** Another agent in the same room: who, what to call it, and its body. */
 export interface Companion {
@@ -154,6 +177,12 @@ export interface Companion {
   animations: string[];
   /** What it wears, by name (see `wear.ts`). */
   wear?: string[];
+  /**
+   * How it chose to look and carry itself (see `body.ts`): its colour, size,
+   * idle style, posture, walk and what it likes doing, and a spot here it
+   * chose to stay at. `url` is already the model it chose, if it chose one.
+   */
+  looks?: BodyLooks;
 }
 
 export interface Stage {
@@ -183,6 +212,14 @@ export interface Stage {
   setCompany(company: Companion[]): void;
   /** What the body this stage shows wears, by name. */
   setWear(wear: string[]): void;
+  /**
+   * How the body this stage shows chose to look and carry itself: a new
+   * model, colour or size makes it again where it stands, without the room
+   * being built again; the rest changes on the body as it is.
+   */
+  setLooks(looks: BodyLooks): void;
+  /** The gesture each agent is making, by agent: a new one plays on its body here, once or for as long as it says. */
+  setEmotes(emotes: Record<string, EmoteRecord>): void;
   /** What each agent is doing, by agent: every body in the room shows its own. */
   setActivities(activities: Record<string, AgentActivity>): void;
   /** The last thing each agent said, by agent: a new line shows in a bubble over its head. */
@@ -442,6 +479,8 @@ export async function createStage(
     agent?: string;
     /** What that body wears, by name (see `wear.ts`). */
     wear?: string[];
+    /** How that body chose to look and carry itself: its colour, size, model, idle style, posture and walk. */
+    looks?: BodyLooks;
     /** Someone clicked an agent's body (or its tag): which agent, and where on the page. */
     onPick?: (agent: string, at: { x: number; y: number }) => void;
     /** The body here is the visitor's own, moved by keys and clicks, not an agent's. */
@@ -485,9 +524,12 @@ export async function createStage(
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
 
+  // How the body this stage shows chose to look, and what it was built from: a new model, colour or size makes it again.
+  let myLooks: BodyLooks = opts.looks ?? {};
+  let myBuild = builtKey(url, myLooks, opts.agent || "default");
   let vrm: VRM;
   try {
-    vrm = await loadModel(url);
+    vrm = await loadModel(myLooks.avatar ?? url);
   } catch (err) {
     renderer.dispose();
     throw err;
@@ -832,8 +874,9 @@ export async function createStage(
   const stillActivity = opts.still && !(selfie && start?.activity !== "sit") ? start?.activity : undefined;
   const self = opts.agent || "default";
 
-  // What each idle body is doing with its time, and whether it has got there yet.
-  const errands = new Map<Figure, { errand: Errand; arrived: boolean }>();
+  // What each idle body is doing with its time, whether it has got there yet, and, at a spot it chose to stay at,
+  // when it moves on to something else there (see `attend`).
+  const errands = new Map<Figure, { errand: Errand; arrived: boolean; ends?: number }>();
   // A run of chances per agent, so two in one room don't do the same thing at once, and each keeps its own day.
   const chances = new Map<string, () => number>();
   const chanceFor = (agent: string) => {
@@ -851,7 +894,15 @@ export async function createStage(
     errands.delete(f);
     if (e.errand.doze) f.doze(!!shows.get(f)?.behavior.asleep);
   };
-  /** Something to do next for an idle body: where it goes, and how long it stays once there. */
+  /** How each agent chose to look and carry itself, by agent: the others here, and the one this stage shows. */
+  const looksOf = (agent: string): BodyLooks | undefined =>
+    agent === self ? myLooks : wanted.find((c) => c.agent === agent)?.looks;
+  /** What each agent likes doing, by errand: what its idle style draws it to, and what it said it likes. */
+  const likesFor = (agent: string) => {
+    const looks = looksOf(agent);
+    return likesOf(idleStyle(looks?.idle).likes, looks?.errands);
+  };
+  /** Something to do next for an idle body: where it goes, and how long it stays once there, as its idle style has it. */
   const pickFor =
     (agent: string, figure: () => Figure | undefined) =>
     (here: string, busy?: ReadonlySet<string>): Pick | undefined => {
@@ -859,10 +910,12 @@ export async function createStage(
       if (!f) return undefined;
       const last = errands.get(f)?.errand.id;
       stopErrand(f);
-      const next = chooseErrand(room, { hour: hourNow(), random: chanceFor(agent), last, here, taken: busy });
+      const likes = likesFor(agent);
+      const next = chooseErrand(room, { hour: hourNow(), random: chanceFor(agent), last, here, taken: busy, likes });
       if (!next) return undefined;
       errands.set(f, { errand: next, arrived: false });
-      return { spot: next.spot, stay: next.seconds };
+      const stay = idleStyle(looksOf(agent)?.idle).stay;
+      return { spot: next.spot, stay: [next.seconds[0] * stay, next.seconds[1] * stay] };
     };
   /** What a body's errand has it doing where it stands, once it is there, for its pose. */
   const errandHere = (f: Figure): { activity: Errand["activity"] } | undefined => {
@@ -871,21 +924,26 @@ export async function createStage(
   };
   const pickMine = opts.visitor || opts.still ? undefined : pickFor(self, (): Figure | undefined => me);
 
-  const me: Figure = new Figure(vrm, room, start, {
-    reducedMotion: opts.reducedMotion,
-    animations: opts.animations,
-    agentChooses: !!opts.chooseIdle,
-    ...(pickMine ? { pick: pickMine } : {}),
-    ...(selfie && start && start.activity !== "sit" ? { facing: 0.5 } : {}),
-    hue: hueFor(opts.agent ?? "default"),
-    wear: opts.wear,
-    // Your own body walks briskly and turns on the spot, whatever its size; the agents keep their own calmer pace.
-    ...(opts.visitor ? { pace: WALK_SPEED, turn: VISITOR_TURN, runs: true } : {}),
-    // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
-    onClips: () => {
-      host.dataset.motion = "clips";
-    },
-  });
+  /** The body this stage shows, built from a model as it chose to look, standing at `at`. */
+  const makeMe = (model: VRM, at: Spot | undefined, wear: string[] | undefined) =>
+    new Figure(model, room, at, {
+      reducedMotion: opts.reducedMotion,
+      animations: opts.animations,
+      agentChooses: !!opts.chooseIdle,
+      ...(pickMine ? { pick: pickMine } : {}),
+      ...(selfie && at && at.activity !== "sit" ? { facing: 0.5 } : {}),
+      tint: tintOf(myLooks.color, self),
+      ...(myLooks.size ? { size: myLooks.size } : {}),
+      carriage: carriageOf(myLooks),
+      wear,
+      // Your own body walks briskly and turns on the spot, whatever its size; the agents keep their own calmer pace.
+      ...(opts.visitor ? { pace: WALK_SPEED, turn: VISITOR_TURN, runs: true } : {}),
+      // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
+      onClips: () => {
+        host.dataset.motion = "clips";
+      },
+    });
+  let me: Figure = makeMe(vrm, start, opts.wear);
   scene.add(me.body, me.gaze);
   if (arrival) me.placeAt(arrival.at, arrival.facing);
   host.dataset.motion = "code";
@@ -896,7 +954,7 @@ export async function createStage(
   paceFor();
 
   // Other agents in the room, by agent; and those still loading.
-  const companions = new Map<string, Figure & { name?: string }>();
+  const companions = new Map<string, Figure & { name?: string; built?: string; carried?: string }>();
   // What each body is showing of what its agent is doing.
   const shows = new Map<Figure, { behavior: Behavior; doing?: string; checked: number; faced: number }>();
   // The last line of each agent's that has been shown, by its time, so a line shows once.
@@ -944,6 +1002,8 @@ export async function createStage(
   // Who faces whom here, talking face to face, and whether each is the one to walk over (see `talkingHere`); where
   // each that walked over stands, or is walking to stand; and when each body last looked to its company.
   let kept = new Map<string, { partner: string; goes: boolean }>();
+  // Whether you are talking to the agent shown, this frame: a person at the page comes before the spot it chose.
+  let engagedNow = false;
   const standing = new Map<Figure, [number, number]>();
   const facedAt = new Map<Figure, number>();
   const rekeep = () => {
@@ -971,6 +1031,54 @@ export async function createStage(
     if (!spot) return;
     if (f === me) go(spot.id);
     else f.go(room, spot.id, ways());
+  };
+  /** The spot in this room an agent chose to stay at, while its time hasn't run out; undefined when there is none. */
+  const stayFor = (agent: string): string | undefined => {
+    const spot = looksOf(agent)?.spot;
+    const now = spot ? chosenNow(spot, spot.place, Date.now()) : undefined;
+    return now ? chosenSpotIn(room, now) : undefined;
+  };
+  /** Its tag at the spot it chose, with nothing else to say: "staying at the window". */
+  const stayTag = (agent: string, f: Figure): string | undefined => {
+    const name = looksOf(agent)?.spot?.name;
+    return name && f.here !== undefined && f.here === stayFor(agent) ? stayingWords(name) : undefined;
+  };
+  /**
+   * Which rule has a body this frame (see `planFor`): your own body on a
+   * visit, and a photo's, are yours. Whether you are talking to the agent
+   * shown is the frame's (`engagedNow`).
+   */
+  const planOf = (f: Figure): Plan => {
+    if (f === me && (opts.visitor || opts.still)) return "you";
+    const agent = f === me ? self : [...companions].find(([, c]) => c === f)?.[0];
+    if (!agent) return "routine";
+    return planFor({
+      talking: kept.has(agent),
+      working: !!shows.get(f)?.behavior.stays,
+      engaged: f === me && engagedNow,
+      spot: !!stayFor(agent),
+    });
+  };
+  /**
+   * Go to the spot it chose and stay. A body there about its own routine
+   * makes room; one with more reason to be there (it chose the spot too, it
+   * works there, it is talking, or with you) keeps it, and this one waits
+   * where it is until the spot is free, rather than pushing in every frame.
+   * Waiting at no spot at all, it stands at a free one meanwhile. Already
+   * there, or on its way, nothing to do.
+   */
+  const keepTo = (f: Figure, id: string) => {
+    if (f.current === id || f.pending === id) return;
+    const holders = [me, ...companions.values()].filter((g) => g !== f && g.current === id);
+    if (!holders.every((g) => makesRoom(planOf(g), "spot"))) {
+      drift(f);
+      return;
+    }
+    for (const g of holders) {
+      const elsewhere = freeSpot(g);
+      if (elsewhere && elsewhere.id !== id) g.go(room, elsewhere.id, waysFor(g));
+    }
+    f.go(room, id, waysFor(f));
   };
   /** Where `f` stands to talk to `partner`, on the side it comes from: clear of everyone else. */
   const standFor = (f: Figure, partner: Figure) => {
@@ -2302,7 +2410,7 @@ export async function createStage(
           ? `${behavior.label} · ${behavior.detail}`
           : behavior.label
       : close
-        ? (errands.get(f)?.errand.label ?? "idle")
+        ? (errands.get(f)?.errand.label ?? stayTag(agent, f) ?? "idle")
         : undefined;
     // The agent you talk to needs no name; the others always show theirs.
     f.label(
@@ -2322,7 +2430,8 @@ export async function createStage(
     });
     f.signs.set(behavior.sign, clock);
     f.doze(!!behavior.asleep);
-    if (behavior.gesture && was?.doing !== activity?.doing) f.gesture(behavior.gesture, clock);
+    if (behavior.gesture && was?.doing !== activity?.doing)
+      f.gesture(behavior.gesture, clock, undefined, { auto: true });
   }
 
   /**
@@ -2332,27 +2441,41 @@ export async function createStage(
    * turn to whoever it is talking to when they are here. Idle and free, its
    * time is its own: whatever it is doing with it, at the spot it went to.
    */
-  const attend = (f: Figure, agent: string, t: number, free: boolean) => {
+  const attend = (f: Figure, agent: string, t: number, free: boolean, stay?: string) => {
     const s = shows.get(f);
     const b = s?.behavior;
     const spot = f.here ? spotById(room, f.here) : undefined;
     let e = errands.get(f);
-    // Sent somewhere else, or busy now: whatever it was doing with its time is over.
+    // Sent somewhere else, or busy now: whatever it was doing with its time is over. Staying at a spot it chose, or
+    // waiting at another until that is free, nothing sends it on: what it does there ends with its own time, and
+    // something else there follows.
     const own = free && !b?.stays;
-    if (e && (!own || (f.current !== e.errand.spot && f.pending !== e.errand.spot))) {
+    const staying = !!stay && f.here !== undefined;
+    const last = e?.errand.id;
+    const over = staying && e?.ends !== undefined && t >= e.ends;
+    if (e && (!own || over || (f.current !== e.errand.spot && f.pending !== e.errand.spot))) {
       stopErrand(f);
       e = undefined;
     }
-    // At a spot it went to some other way (put there, sent by a cue): something to do there.
+    // At a spot it went to some other way (put there, sent by a cue, staying there): something to do there.
     if (!e && own && f.here) {
-      const found = errandAt(room, f.here, hourNow(), chanceFor(agent));
+      const found = errandAt(
+        room,
+        f.here,
+        hourNow(),
+        chanceFor(agent),
+        likesFor(agent),
+        staying ? { last } : undefined,
+      );
       if (found) errands.set(f, (e = { errand: found, arrived: false }));
     }
     if (e && !e.arrived && f.here === e.errand.spot) {
       e.arrived = true;
-      if (e.errand.gesture) f.gesture(e.errand.gesture, t);
+      if (e.errand.gesture) f.gesture(e.errand.gesture, t, undefined, { auto: true });
       if (e.errand.doze) f.doze(true);
     }
+    if (e?.arrived && staying && e.ends === undefined)
+      e.ends = t + stayLength(e.errand, idleStyle(looksOf(agent)?.idle).stay, chanceFor(agent));
     const partner = b?.face ? figureOf(b.face) : undefined;
     const held = heldFor(b, { spotActivity: spot?.activity, partnerHere: !!partner && partner !== f });
     const errandHold = e?.arrived ? e.errand.hold : undefined;
@@ -2396,6 +2519,7 @@ export async function createStage(
     const way = opts.still ? undefined : doorway();
     for (const [agent, fig] of companions) {
       if (ids.has(agent)) continue;
+      turnedFor.delete(fig);
       errands.delete(fig);
       shows.delete(fig);
       standing.delete(fig);
@@ -2418,9 +2542,16 @@ export async function createStage(
       const fig = companions.get(c.agent);
       if (fig) {
         fig.name = c.name;
+        // A new model, colour or size: made again where it stands. Anything else changes on the body as it is.
+        if (fig.built !== builtKey(c.url, c.looks, c.agent)) rebody(c.agent);
         // Dressed again only when what it wears changed: the same list is nothing to do.
         fig.dress(c.wear);
+        if (fig.carried !== carriageKey(c.looks)) {
+          fig.carried = carriageKey(c.looks);
+          fig.carry(carriageOf(c.looks));
+        }
         show(c.agent, fig);
+        playEmote(c.agent);
         continue;
       }
       if (arriving.has(c.agent)) continue;
@@ -2438,14 +2569,9 @@ export async function createStage(
           const start = entrance
             ? { id: "", name: "", place: "", at: entrance.at, facing: (entrance.facing * 180) / Math.PI }
             : seat;
-          const figure = new Figure(model, room, start, {
-            reducedMotion: opts.reducedMotion,
-            animations: still.animations,
-            hue: hueFor(c.agent),
-            wear: still.wear,
-            ...(opts.still ? {} : { pick: pickFor(c.agent, () => companions.get(c.agent)) }),
-          }) as Figure & { name?: string };
-          figure.name = still.name;
+          const figure = makeCompanion(model, still, start);
+          // Built from what it was asked for, which may have changed while it loaded: then it is made again.
+          figure.built = builtKey(c.url, c.looks, c.agent);
           scene.add(figure.body, figure.gaze);
           companions.set(c.agent, figure);
           rekeep();
@@ -2457,12 +2583,182 @@ export async function createStage(
           // What brought it here may be what it just said, in the room it came to say it in: that shows. Anything
           // older than a moment is old news, which `hear` leaves out.
           hear(c.agent, speech[c.agent]);
+          playEmote(c.agent);
+          if (figure.built !== builtKey(still.url, still.looks, still.agent)) rebody(c.agent);
         })
         .catch(() => {
           arriving.delete(c.agent);
         });
     }
     rekeep();
+  };
+
+  /** Another agent's body, built from a model as it chose to look, standing at `start`. */
+  function makeCompanion(model: VRM, c: Companion, start: Spot | undefined) {
+    const figure = new Figure(model, room, start, {
+      reducedMotion: opts.reducedMotion,
+      animations: c.animations,
+      tint: tintOf(c.looks?.color, c.agent),
+      ...(c.looks?.size ? { size: c.looks.size } : {}),
+      carriage: carriageOf(c.looks),
+      wear: c.wear,
+      ...(opts.still ? {} : { pick: pickFor(c.agent, () => companions.get(c.agent)) }),
+    }) as Figure & { name?: string; built?: string; carried?: string };
+    figure.name = c.name;
+    figure.carried = carriageKey(c.looks);
+    return figure;
+  }
+
+  /**
+   * Where a body made again goes: the spot the old one stood at, sitting if
+   * it sat; or the very place it stood, facing the same way, between spots.
+   */
+  const standIn = (fresh: Figure, old: Figure) => {
+    if (old.here && fresh.current === old.here) return;
+    fresh.placeAt([old.walker.place.x, old.walker.place.z], old.walker.place.facing);
+  };
+  /** Let go of what was kept about a body that has been made again. */
+  const forget = (old: Figure) => {
+    turnedFor.delete(old);
+    errands.delete(old);
+    shows.delete(old);
+    standing.delete(old);
+    facedAt.delete(old);
+  };
+
+  // Bodies being made again, by agent, and what each is being made from: only the latest ask is kept.
+  const remaking = new Map<string, string>();
+  /** Make another agent's body again, as it now chose to look, where the old one stands. */
+  function rebody(agent: string) {
+    const c = wanted.find((w) => w.agent === agent);
+    if (!c) return;
+    const key = builtKey(c.url, c.looks, agent);
+    if (remaking.get(agent) === key) return;
+    remaking.set(agent, key);
+    loadModel(c.url)
+      .then((model) => {
+        const still = wanted.find((w) => w.agent === agent);
+        const old = companions.get(agent);
+        if (remaking.get(agent) === key) remaking.delete(agent);
+        if (disposed || !still || !old || builtKey(still.url, still.looks, agent) !== key) {
+          VRMUtils.deepDispose(model.scene);
+          return;
+        }
+        const at = old.here ? spotById(room, old.here) : undefined;
+        const fresh = makeCompanion(model, still, at);
+        fresh.built = key;
+        standIn(fresh, old);
+        scene.add(fresh.body, fresh.gaze);
+        forget(old);
+        old.dispose();
+        companions.set(agent, fresh);
+        rekeep();
+        show(agent, fresh);
+      })
+      .catch(() => {
+        if (remaking.get(agent) === key) remaking.delete(agent);
+      });
+  }
+
+  // What the body this stage shows wears now, for a body made again.
+  let myWear = opts.wear;
+  /**
+   * The body this stage shows chose to look another way: a new model, colour
+   * or size makes it again where it stands, the room and everyone in it left
+   * as they are; how it carries itself changes on the body as it is.
+   */
+  const reclothe = (looks: BodyLooks) => {
+    const was = carriageKey(myLooks);
+    myLooks = looks;
+    const key = builtKey(url, looks, self);
+    if (key === myBuild) {
+      if (carriageKey(looks) !== was) me.carry(carriageOf(looks));
+      return;
+    }
+    myBuild = key;
+    loadModel(looks.avatar ?? url)
+      .then((model) => {
+        if (disposed || key !== myBuild) {
+          VRMUtils.deepDispose(model.scene);
+          return;
+        }
+        const old = me;
+        const at = old.here ? spotById(room, old.here) : undefined;
+        const fresh = makeMe(model, at, myWear);
+        standIn(fresh, old);
+        scene.add(fresh.body, fresh.gaze);
+        host.dataset.motion = "code";
+        forget(old);
+        old.dispose();
+        me = fresh;
+        host.dataset.model = looks.model ?? "";
+        rekeep();
+        show(self, me);
+      })
+      .catch(() => {
+        // The model couldn't be loaded: the body stays as it was.
+        if (key === myBuild) myBuild = "";
+      });
+  };
+
+  // The gesture each agent is making, and the last one each body here made, by agent.
+  let emotes: Record<string, EmoteRecord> = {};
+  const madeEmote = new Map<string, string>();
+  // Bodies turned to whoever they made a gesture for: the spot each turns back to facing, and when.
+  const turnedFor = new Map<Figure, TurnBack>();
+  /**
+   * Who a gesture with no target is made for: you, watching, for the agent
+   * this stage shows; for anyone else, the body near it (the agent shown, or
+   * you on a visit), when there is one close enough to make it for.
+   */
+  const audienceOf = (f: Figure): THREE.Vector3 | undefined => {
+    if (f === me) return camera.position.clone();
+    const d = Math.hypot(me.walker.place.x - f.walker.place.x, me.walker.place.z - f.walker.place.z);
+    return d <= AUDIENCE_AT && (!opts.visitor || travel === "walk") ? me.head() : undefined;
+  };
+  /**
+   * Make the gesture an agent asked for, when its body is here and hasn't
+   * made it yet: turned to someone or something here first when it said at
+   * what, or else to whoever it is for, and back to what its spot faces once
+   * it is done.
+   */
+  function playEmote(agent: string) {
+    const f = figureOf(agent);
+    if (!f || opts.still || (f === me && opts.visitor)) return;
+    const now = emoteNow(emotes[agent], madeEmote.get(agent), Date.now());
+    if (!now) return;
+    madeEmote.set(agent, emotes[agent].at);
+    const who = now.target ? (figureOf(now.target) ?? companionNamed(now.target)) : undefined;
+    const where = now.target && !who ? lookTarget(room, now.target) : undefined;
+    const at = who
+      ? who.head()
+      : where
+        ? "viewer" in where
+          ? camera.position.clone()
+          : new THREE.Vector3(...where.at)
+        : now.target
+          ? undefined
+          : audienceOf(f);
+    // Where it stands, taken before it turns: a body turning is on the move, and at no spot until it has. Still
+    // turning for a gesture before this one, it goes back to where that one had it.
+    const back = at ? turnBackAfter(f.here ?? turnedFor.get(f)?.spot, clock, now.seconds ?? EMOTE_SECONDS) : undefined;
+    if (now.name === "point") {
+      if (at) f.aim(at, true, clock);
+      else f.gesture("point", clock);
+    } else {
+      if (at) f.face(at, clock);
+      f.gesture(now.name, clock, now.seconds);
+    }
+    if (back) turnedFor.set(f, back);
+  }
+  /** Bodies done with a gesture turn back to what their spot faces, if they are still standing at it. */
+  const turnBack = (t: number) => {
+    for (const [f, back] of turnedFor) {
+      const next = turnBackNow(back, t, f);
+      if (next === "wait") continue;
+      turnedFor.delete(f);
+      if (next === "turn") f.go(room, back.spot, waysFor(f));
+    }
   };
   meet(opts.company ?? []);
   show(self, me);
@@ -2610,7 +2906,7 @@ export async function createStage(
         noticed.add(agent);
         if (!c.walker.busy) {
           c.aim(me.head(), false, t);
-          if (!shows.get(c)?.behavior.stays) c.gesture("wave", t);
+          if (!shows.get(c)?.behavior.stays) c.gesture("wave", t, undefined, { auto: true });
         }
       } else if (d > FORGET_AT) noticed.delete(agent);
     }
@@ -2760,6 +3056,7 @@ export async function createStage(
       if (page !== shownPage || (cards[page]?.clock && Math.floor(wall / 60_000) !== shownMinute)) drawScreens();
     }
     const { state, loudness, engaged } = input();
+    engagedNow = engaged;
     // A photo's frame is posed at the gesture's best moment exactly, however late this frame came.
     const peak = PEAK[opts.still?.gesture ?? ""] ?? 0.7;
     const shoot = !!opts.still && !readyFired && gestureAt !== undefined && t - gestureAt >= peak;
@@ -2768,8 +3065,12 @@ export async function createStage(
     const mine = shows.get(me)?.behavior;
     // Talking with someone here: it stays with them rather than wandering off.
     const myCompany = opts.visitor || opts.still ? undefined : kept.get(self);
+    // A spot it chose to stay at, which it goes back to whenever nothing comes first (see `planFor`).
+    const myStay = opts.visitor || opts.still ? undefined : stayFor(self);
+    const myPlan = planFor({ talking: !!myCompany, working: !!mine?.stays, engaged, spot: !!myStay });
+    if (myPlan === "spot" && myStay) keepTo(me, myStay);
     const next =
-      asking || opts.still || opts.visitor || mine?.stays || myCompany
+      asking || opts.still || opts.visitor || mine?.stays || myCompany || myPlan === "spot"
         ? undefined
         : me.director.decide(t, here, engaged, taken(me));
     if (typeof next === "string") go(next);
@@ -2793,8 +3094,9 @@ export async function createStage(
           me.director.sent();
         });
     }
-    if (!opts.still && !opts.visitor) attend(me, self, t, !engaged && !myCompany);
-    if (!opts.still && !opts.visitor && !myCompany && !engaged && !asking && !mine?.stays) drift(me);
+    if (!opts.still && !opts.visitor)
+      attend(me, self, t, !engaged && !myCompany, myPlan === "spot" ? myStay : undefined);
+    if (!opts.still && !opts.visitor && myPlan === "routine" && !asking) drift(me);
     // Talking with you comes first; otherwise it turns to whoever it is talking with here.
     if (myCompany && !engaged) keepCompany(me, myCompany.partner, myCompany.goes, t);
     if (opts.visitor) {
@@ -2871,13 +3173,17 @@ export async function createStage(
     for (const [agent, c] of companions) {
       const theirs = shows.get(c)?.behavior;
       if (!opts.still) {
-        // Talking with someone here, a body stays with them: no wandering, no going off to a desk.
+        // Talking with someone here, a body stays with them: no wandering, no going off to a desk. Nothing on, it
+        // goes back to a spot it chose, or about its own business.
         const company = kept.get(agent);
-        const move = theirs?.stays || company ? undefined : c.director.decide(t, c.here, false, taken(c));
+        const stay = stayFor(agent);
+        const plan = planFor({ talking: !!company, working: !!theirs?.stays, engaged: false, spot: !!stay });
+        if (plan === "spot" && stay) keepTo(c, stay);
+        const move = plan === "routine" ? c.director.decide(t, c.here, false, taken(c)) : undefined;
         if (typeof move === "string") c.go(room, move, ways());
-        attend(c, agent, t, !company);
+        attend(c, agent, t, !company, plan === "spot" ? stay : undefined);
         if (company) keepCompany(c, company.partner, company.goes, t);
-        else if (!theirs?.stays) drift(c);
+        else if (plan === "routine") drift(c);
       }
       const talking = c.speaking(t);
       c.step(
@@ -2927,6 +3233,7 @@ export async function createStage(
       noticeVisitor(t);
       sayAloud(t);
     }
+    turnBack(t);
     for (const w of warm)
       if (w.fire && lit)
         w.light.intensity = (lit.lamp.on ? 1.8 : 0.9) * (0.85 + 0.15 * Math.sin(t * 9) * Math.sin(t * 3.7));
@@ -2991,6 +3298,7 @@ export async function createStage(
     companions.clear();
     standing.clear();
     facedAt.clear();
+    turnedFor.clear();
     kept = new Map();
     for (const d of departing.splice(0)) d.fig.dispose();
     placedAt = performance.now();
@@ -3159,7 +3467,10 @@ export async function createStage(
           const fig = new Figure(model, room, start, {
             reducedMotion: opts.reducedMotion,
             animations: walker.animations,
-            hue: hueFor(walker.agent),
+            // As it chose to look and carry itself, as it would in any room.
+            tint: tintOf(walker.looks?.color, agent),
+            ...(walker.looks?.size ? { size: walker.looks.size } : {}),
+            carriage: carriageOf(walker.looks),
             wear: walker.wear,
             pace: PASSING_PACE,
           });
@@ -3178,7 +3489,13 @@ export async function createStage(
       return travel === "walk" ? [p.x, p.z] : [controls.target.x, controls.target.z];
     },
     setWear(wear) {
+      myWear = wear;
       me.dress(wear);
+    },
+    setLooks: reclothe,
+    setEmotes(next) {
+      emotes = next;
+      for (const agent of Object.keys(next)) playEmote(agent);
     },
     standBefore,
     setActivities(next) {

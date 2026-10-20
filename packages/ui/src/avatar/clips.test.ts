@@ -74,6 +74,23 @@ describe("rolesFor", () => {
     expect(rolesFor(["Idle_Loop", "Walk_Loop", "Jog_Bwd_Loop"]).run).toBeUndefined();
   });
 
+  it("finds the walks of other kinds and the gestures a library has, by the usual names", () => {
+    const more = ["Idle_Loop", "Walk_Loop", "Walk_Formal_Loop", "Crouch_Fwd_Loop", "Crouch_Idle_Loop", "Waving"];
+    expect(rolesFor([...more, "Clapping", "Cheering", "Bow", "Salute", "Laughing", "Bow_Shoot"])).toMatchObject({
+      walk: "Walk_Loop",
+      march: "Walk_Formal_Loop",
+      sneak: "Crouch_Fwd_Loop",
+      wave: "Waving",
+      clap: "Clapping",
+      cheer: "Cheering",
+      bow: "Bow",
+      salute: "Salute",
+      laugh: "Laughing",
+    });
+    // An archer's bow is no bow to make.
+    expect(rolesFor(["Idle_Loop", "Bow_Shoot"]).bow).toBeUndefined();
+  });
+
   it("does not take a thumbs-up called Yes for a nod: the nod stays code-driven", () => {
     expect(rolesFor(names).nod).toBeUndefined();
   });
