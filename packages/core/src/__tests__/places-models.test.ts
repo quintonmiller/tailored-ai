@@ -7,10 +7,13 @@ import { describe, expect, it } from "vitest";
 import { KINDS } from "../plugins/places-layout.js";
 import {
   bounds,
+  dayBefore,
+  dayIn,
   describeModel,
   faceArgs,
   faceFrom,
   facesOf,
+  habitTurnover,
   isModelKind,
   MODEL_LIMITS,
   MOUNT_KIND,
@@ -118,26 +121,44 @@ describe("a face", () => {
   it("shows only what can be used by whoever is in the room", () => {
     expect(faceFrom({ kind: "choice", question: "?" })).toMatch(/card, a list or a table, not a choice/);
     expect(faceFrom({ kind: "card", title: "Plan", actions: [{ label: "Yes", effect: "reply" }] })).toMatch(
-      /can't reply: a face is used by whoever is in the room/,
+      /can't reply: a face is used again and again, by whoever is in the room/,
     );
   });
 
-  it("makes a button with a patch write state, and one without announce an event", () => {
+  it("makes every button write its record: a reply or an event would answer the face once, for good", () => {
     const face = faceFrom({
       kind: "card",
       bind: { type: "plan", id: "trip" },
-      actions: [{ label: "Start", patch: { status: "active" } }, { label: "Ring" }],
+      actions: [{ label: "Start", patch: { status: "active" } }],
     }) as ModelFace;
-    expect(face.actions).toEqual([
-      { label: "Start", effect: "state", patch: { status: "active" } },
-      { label: "Ring", effect: "event" },
-    ]);
+    expect(face.actions).toEqual([{ label: "Start", effect: "state", patch: { status: "active" } }]);
+    const plan = { kind: "card", bind: { type: "plan", id: "trip" } };
+    expect(faceFrom({ ...plan, actions: [{ label: "Ring" }] })).toMatch(
+      /"Ring" button writes the record each time it is pressed: give it a `patch`/,
+    );
+    expect(faceFrom({ ...plan, actions: [{ label: "Ring", effect: "event", patch: { rung: true } }] })).toMatch(
+      /"Ring" button can't announce an event/,
+    );
     expect(faceFrom({ kind: "card", title: "Plan", actions: [{ label: "Go", patch: { a: 1 } }] })).toMatch(
       /the card needs `bind`/,
     );
     expect(
       faceFrom({ kind: "card", bind: { type: "plan", id: "t" }, actions: [{ label: "Go", effect: "state" }] }),
     ).toMatch(/give it a `patch`/);
+  });
+
+  it("lets a card name the record's fields it shows, and one as its text", () => {
+    expect(faceFrom({ bind: { type: "plan", id: "trip", fields: "status", body: "summary" } })).toMatchObject({
+      bind: { type: "plan", id: "trip", fields: ["status"], body: "summary" },
+    });
+    // Names given as the card's own fields are the record's to show.
+    expect(faceFrom({ bind: { type: "plan", id: "trip" }, fields: ["status", "due"] })).toEqual({
+      kind: "card",
+      props: {},
+      bind: { type: "plan", id: "trip", fields: ["status", "due"] },
+    });
+    expect(faceFrom({ bind: { type: "plan", id: "trip", fields: [3] } })).toMatch(/`bind.fields` is a list/);
+    expect(faceFrom({ bind: { type: "plan", id: "trip", body: " " } })).toMatch(/`bind.body` names/);
   });
 
   it("says what is missing or doesn't belong", () => {
@@ -269,7 +290,48 @@ describe("ready-made models", () => {
   it("show the agent's own records: a notes card the agent's own note", () => {
     const notes = READY.find((r) => r.name === "notes_card");
     const model = modelFrom({ name: "notes_card", owner: "writer", mount: "on", parts: notes?.parts("writer") ?? [] });
-    expect(facesOf(model as Model)[0].face.bind).toEqual({ type: "note", id: "writer-notes" });
+    // Its note's words as its text, and nothing else of the record: not the `seen` its button writes.
+    expect(facesOf(model as Model)[0].face.bind).toEqual({
+      type: "note",
+      id: "writer-notes",
+      body: "note",
+      fields: [],
+    });
     expect(notes?.seeds?.("writer")[0]).toMatchObject({ type: "note", id: "writer-notes" });
+  });
+});
+
+describe("a habit, day by day", () => {
+  it("reads the day in the deployment's time zone, and the day before across a month", () => {
+    const late = new Date("2026-10-20T23:30:00Z");
+    expect(dayIn(late, "UTC")).toBe("2026-10-20");
+    expect(dayIn(late, "Asia/Tokyo")).toBe("2026-10-21");
+    expect(dayIn(late, "America/Los_Angeles")).toBe("2026-10-20");
+    expect(dayBefore("2026-11-01")).toBe("2026-10-31");
+    expect(dayBefore("2027-01-01")).toBe("2026-12-31");
+  });
+
+  it("starts a new day unticked, its streak one longer when it was done yesterday", () => {
+    expect(habitTurnover({ name: "Walk", today: true, streak: 4 }, "2026-10-19", "2026-10-20")).toEqual({
+      today: false,
+      streak: 5,
+    });
+    expect(habitTurnover({ name: "Walk", today: true }, "2026-10-19", "2026-10-20")).toEqual({
+      today: false,
+      streak: 1,
+    });
+  });
+
+  it("ends a streak for a day missed, however long TAI was off", () => {
+    // Ticked three days ago and never turned since: yesterday wasn't done.
+    expect(habitTurnover({ today: true, streak: 6 }, "2026-10-17", "2026-10-20")).toEqual({ today: false, streak: 0 });
+    // Left unticked through yesterday.
+    expect(habitTurnover({ today: false, streak: 6 }, "2026-10-19", "2026-10-20")).toEqual({ streak: 0 });
+  });
+
+  it("leaves alone a habit written today, or one with nothing to change", () => {
+    expect(habitTurnover({ today: true, streak: 2 }, "2026-10-20", "2026-10-20")).toBeUndefined();
+    expect(habitTurnover({ today: false, streak: 0 }, "2026-10-18", "2026-10-20")).toBeUndefined();
+    expect(habitTurnover({ name: "Read" }, "2026-10-18", "2026-10-20")).toBeUndefined();
   });
 });

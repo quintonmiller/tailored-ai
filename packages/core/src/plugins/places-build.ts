@@ -16,6 +16,8 @@
  * The ready-made models (a to-do board, a habit tracker, a notes card) need
  * no `build`: `place` adds one by name, making it the agent's own first.
  */
+import type { ComponentSpec } from "../content/types.js";
+import { boundCardProps, queriedProps } from "../interfaces/bind.js";
 import type { InterfaceStore } from "../interfaces/store.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { StateConflictError, StateError, type StateRecord } from "../state/types.js";
@@ -23,18 +25,25 @@ import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { InterfaceTool } from "../tools/interface-tool.js";
 import { agentStateCaller } from "../tools/state.js";
 import {
+  dayIn,
   describeModel,
+  FACE_KINDS,
+  FACE_TYPES,
   faceArgs,
   facesOf,
+  HABIT_TYPE,
+  habitTurnover,
   listOf,
   MODEL_LIMITS,
   MODEL_TYPE,
   MOUNTS,
   type Model,
+  type ModelFace,
   modelFrom,
   modelId,
   modelLine,
   modelName,
+  mountOf,
   nameProblem,
   partsToCopy,
   READY,
@@ -90,16 +99,20 @@ export class ModelShelf {
 
   /**
    * The model to add to a room by this name: the agent's own, or a ready-made
-   * one, made the agent's own first, with the records its face shows. None
-   * when there is no model by that name.
+   * one as it would be the agent's, with `own` to make it so (its records and
+   * its face made too). Kept apart so a ready-made model becomes the agent's
+   * only once the room has found it a place: a failed add leaves nothing.
+   * None when there is no model by that name.
    */
-  async forPlacing(context: ToolContext, agent: string, name: string): Promise<Model | undefined> {
-    const caller = agentStateCaller(context, "place");
-    const own = await this.get(caller, agent, name);
-    if (own) return own.model;
+  async forPlacing(
+    context: ToolContext,
+    agent: string,
+    name: string,
+  ): Promise<{ model: Model; own?: () => Promise<Model> } | undefined> {
+    const found = await this.get(agentStateCaller(context, "place"), agent, name);
+    if (found) return { model: found.model };
     const ready = readyModel(name);
     if (!ready) return undefined;
-    await this.seed(context, agent, ready);
     const model = modelFrom({
       name: ready.name,
       owner: agent,
@@ -109,7 +122,13 @@ export class ModelShelf {
       from: ready.name,
     });
     if (typeof model === "string") throw new BuildError(model);
-    return this.save(context, model);
+    return {
+      model,
+      own: async () => {
+        await this.seed(context, agent, ready);
+        return this.save(context, model);
+      },
+    };
   }
 
   /** Make the records a ready-made model's face shows, for an agent that has none yet. */
@@ -143,6 +162,8 @@ export class ModelShelf {
     const open = (id: string | undefined) => !!id && store?.get(id)?.status === "open";
     const before = was ? facesOf(was.model).map((f) => f.face) : [];
     const made: string[] = [];
+    // Each live face changed in place, as it was, to put back if this save fails.
+    const changed: ComponentSpec[] = [];
     const used = new Set<string>();
     try {
       for (const [i, { part, face }] of facesOf(model).entries()) {
@@ -153,12 +174,14 @@ export class ModelShelf {
           used.add(prev.component);
           continue;
         }
-        const reuse = prev?.component && open(prev.component) && store?.get(prev.component)?.spec.kind === face.kind;
+        const live = prev?.component && open(prev.component) ? store?.get(prev.component) : undefined;
+        const reuse = !!live && live.spec.kind === face.kind && sameShape(prev, face);
         const args = reuse
           ? { action: "update", id: prev?.component, ...faceArgs(face) }
           : { action: "send", ...faceArgs(face) };
         const got = await faces.execute(args, context);
         if (!got.success) throw new BuildError(`Part ${part}'s face: ${got.error}`);
+        if (reuse && live) changed.push(live.spec);
         const id = (typeof got.output === "object" ? (got.output.structured as { componentId?: string }) : undefined)
           ?.componentId;
         if (!id) throw new BuildError(`Part ${part}'s face couldn't be made live.`);
@@ -177,8 +200,9 @@ export class ModelShelf {
         was?.version,
       );
     } catch (err) {
-      // Nothing was saved: what was made live for it stops taking clicks.
+      // Nothing was saved: what was made live for it stops taking clicks, and what was changed is as it was.
       for (const id of made) await faces?.execute({ action: "close", id }, context);
+      for (const spec of changed) store?.update(spec);
       throw err;
     }
     for (const prev of before)
@@ -212,6 +236,15 @@ export class ModelShelf {
 }
 
 /**
+ * Whether a live face can be changed in place into this one: a card stays
+ * bound to a record or stays unbound, since changing a card in place keeps
+ * the record it was bound to when it is given none.
+ */
+function sameShape(prev: ModelFace | undefined, face: ModelFace): boolean {
+  return !!prev?.bind?.id === !!face.bind?.id;
+}
+
+/**
  * What a model's faces do, said outright once it is saved, so the agent
  * doesn't wait for an answer that never comes: as the interface tool says it.
  */
@@ -223,6 +256,9 @@ function facesSaid(model: Model): string {
     faces.some((f) => f.actions?.some((a) => a.effect === "state"));
   return ` ${faces.length === 1 ? "Its face is" : "Its faces are"} live in the room.${writes ? " A tick or a button there writes the record directly; no message comes back to you." : ""}`;
 }
+
+const mountWords = (mount: string) =>
+  mount === "wall" ? "on a wall" : mount === "on" ? "on a desk or table" : "on the floor";
 
 const READY_WORDS = READY.map((r) => `${r.name} (${r.about})`).join("; ");
 
@@ -245,7 +281,7 @@ export class BuildTool implements Tool {
         type: "array",
         items: { type: "object" },
         description:
-          "make, add: each {shape: box|cylinder|sphere|cone|torus|capsule|plane, size: [w,h,d] m, at: [x,y,z] m (y up, z front), turn?: [x,y,z] degrees, color, finish?: matte|glossy|metal|glass|glowing, face?}. A face, on a box or plane: {kind: list|card|table, title, bind: {type, where?} or {type, id}, check?: {field}, columns?, actions?: [{label, patch}]}.",
+          "make, add: each {shape: box|cylinder|sphere|cone|torus|capsule|plane, size: [w,h,d] m, at: [x,y,z] m (y up, z front), turn?: [x,y,z] degrees, color, finish?: matte|glossy|metal|glass|glowing, face?}. A face, on a box or plane: {kind: list|card|table, title, bind: {type, where?} or {type, id, fields?, body?}, check?: {field}, columns?, actions?: [{label, patch}]}.",
       },
       part: { type: "array", items: { type: "number" }, description: "remove: part numbers, as show lists them." },
       about: { type: "string", description: "make: what it is for, in a line." },
@@ -291,6 +327,12 @@ export class BuildTool implements Tool {
         if (problem) return fail(problem);
         const parts = listOf(args.parts);
         if (!parts?.length) return fail("`make` needs `parts`: a list of {shape, size, at, color}.");
+        // Rooms lay a model out by where it goes, so where it goes stays what it was made for.
+        const mount = args.mount === undefined ? undefined : mountOf(args.mount);
+        if (found && mount && mount !== found.model.mount)
+          return fail(
+            `${name} goes ${mountWords(found.model.mount)}, and rooms have it laid out there. To have one ${mountWords(mount)}, make it under another name.`,
+          );
         const model = modelFrom({
           name,
           owner: agent,
@@ -319,7 +361,7 @@ export class BuildTool implements Tool {
           return fail(`There's no model called ${name} to copy. \`list\` shows yours and the ready-made ones.`);
         // A ready-made one copied under its own name is simply made the agent's own, as placing it would.
         if (ready && target === ready.name) {
-          await this.shelf.forPlacing(context, agent, ready.name);
+          await (await this.shelf.forPlacing(context, agent, ready.name))?.own?.();
           return { success: true, output: `${target} is yours now, as it comes. \`show\` lists its parts to change.` };
         }
         const source = found
@@ -410,8 +452,10 @@ export class BuildTool implements Tool {
 
 /**
  * The models a place's things are drawn as, by record id, for the page: each
- * face with the component that shows it, so it is drawn at once. A model that
- * is gone is left out, and the page draws an empty frame where it stood.
+ * face with the component that shows it, filled from the records as they are
+ * now, so its picture from across the room is true and it is drawn at once.
+ * A model that is gone is left out, and the page draws an empty frame where
+ * it stood.
  */
 export async function modelsIn(
   service: StateService,
@@ -424,13 +468,81 @@ export async function modelsIn(
     const found = await service.get(caller, { type: MODEL_TYPE, id }).catch(() => null);
     if (!found) continue;
     const model = found.data as unknown as Model;
+    const mine = found.scope === `agent:${model.owner}`;
     out[id] = {
       ...model,
-      parts: model.parts.map((p) => {
-        const spec = p.face?.component ? store?.get(p.face.component)?.spec : undefined;
-        return spec && p.face ? { ...p, face: { ...p.face, spec } } : p;
-      }),
+      parts: await Promise.all(
+        model.parts.map(async (p) => {
+          const spec =
+            mine && p.face ? await faceSpec(service, caller, store, model.owner, p.face.component) : undefined;
+          return spec && p.face ? { ...p, face: { ...p.face, spec } } : p;
+        }),
+      ),
     };
   }
   return out;
+}
+
+/**
+ * The component a face shows, with its props filled fresh: a list's items or a
+ * table's rows from its query, among the scopes its agent could see, or a
+ * card's lines from its record. Only one its model's agent made, of a kind a
+ * face can be, with buttons that only write: a model record edited by hand
+ * can't bring some other conversation's question into the room.
+ */
+async function faceSpec(
+  service: StateService,
+  caller: StateCaller,
+  store: InterfaceStore | undefined,
+  owner: string,
+  id: string | undefined,
+): Promise<ComponentSpec | undefined> {
+  const live = id ? store?.get(id) : undefined;
+  if (!live || live.agent !== owner) return undefined;
+  const { spec } = live;
+  if (!(FACE_KINDS as readonly string[]).includes(spec.kind)) return undefined;
+  if (spec.actions?.some((a) => a.effect.kind !== "state")) return undefined;
+  try {
+    if (spec.query) return { ...spec, props: await queriedProps(service, caller, spec.kind, spec.props, spec.query) };
+    if (spec.bind) {
+      const record = await service.get(caller, spec.bind);
+      if (record)
+        return {
+          ...spec,
+          props: boundCardProps(spec.props, record, service.getType(spec.bind.type)?.title, spec.bind),
+        };
+    }
+  } catch {
+    // Its records can't be read just now: drawn as it was last filled.
+  }
+  return spec;
+}
+
+/**
+ * A new day on every habit tracker: each habit ticked on an earlier day
+ * starts the day unticked, and its streak is counted (`habitTurnover`), as
+ * the places plugin. Only while `habit` is the type the plugin declares: a
+ * deployment's own habits are its own. How many were turned.
+ */
+export async function turnHabits(
+  service: StateService,
+  caller: StateCaller,
+  timeZone: string,
+  now: Date,
+): Promise<number> {
+  const ours: unknown = FACE_TYPES.find((t) => t.name === HABIT_TYPE)?.schema;
+  if (!ours || service.getType(HABIT_TYPE)?.schema !== ours) return 0;
+  const today = dayIn(now, timeZone);
+  const habits = await service.query(caller, { type: HABIT_TYPE, limit: 1000 });
+  let turned = 0;
+  for (const habit of habits) {
+    const patch = habitTurnover(habit.data, dayIn(new Date(habit.updatedAt), timeZone), today);
+    if (!patch) continue;
+    // Written over the version read, so a tick made meanwhile stands, and is turned tomorrow.
+    await service
+      .patch(caller, { type: HABIT_TYPE, id: habit.id }, patch, habit.version)
+      .then(() => turned++)
+      .catch(() => undefined);
+  }
+  return turned;
 }

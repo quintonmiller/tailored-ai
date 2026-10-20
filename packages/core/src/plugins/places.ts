@@ -57,8 +57,10 @@ import { enrichRoomMessage, IdentityResolver } from "../rooms/identities.js";
 import { getRoomBackend, listRoomBackends } from "../rooms/registry.js";
 import { formatRoomRef, type RoomBackend, type RoomMessage, type Room as TalkRoomRecord } from "../rooms/types.js";
 import type { AgentRuntime } from "../runtime.js";
+import { stateTypeRegistry } from "../state/registry.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { type Actor, type StateChange, StateConflictError, StateError, type StateRecord } from "../state/types.js";
+import { runtimeTimeProvider } from "../time/provider.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
 import { whyAsleep } from "./activity.js";
@@ -78,7 +80,7 @@ import {
   WEAR_TYPE,
   wornBy,
 } from "./places-body.js";
-import { BuildTool, ModelShelf, modelsIn } from "./places-build.js";
+import { BuildTool, ModelShelf, modelsIn, turnHabits } from "./places-build.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
 import { applyEdit, editFrom } from "./places-edit.js";
 import {
@@ -119,6 +121,7 @@ import {
   withSpots,
 } from "./places-layout.js";
 import {
+  dayIn,
   FACE_TYPES,
   isModelKind,
   MODEL_SCHEMA,
@@ -2147,11 +2150,14 @@ export class PlaceTool implements Tool {
         if (!ROOM_FIELDS.some((k) => roomArgs[k] !== undefined && roomArgs[k] !== null && roomArgs[k] !== ""))
           return { success: true, output: await this.dress(service, caller, agent, wearAsked) };
       }
-      // A model by its name: the agent's own, or a ready-made one, made its own first.
+      // A model by its name: the agent's own, or a ready-made one, made its own once the room has a place for it.
       let model: Model | undefined;
+      let own: (() => Promise<Model>) | undefined;
       if (action === "add" && this.models && !kindFrom(args.kind)) {
         const name = modelName(args.kind);
-        model = name ? await this.models.forPlacing(context, agent, name) : undefined;
+        const found = name ? await this.models.forPlacing(context, agent, name) : undefined;
+        model = found?.model;
+        own = found?.own;
       }
       for (let attempt = 0; ; attempt++) {
         const { id, place, version, scope } = await readCurrent(service, caller, agent, meetings, this.homes);
@@ -2167,6 +2173,10 @@ export class PlaceTool implements Tool {
             : undefined;
         const outcome = applyAction(place, roomArgs, { ...(redraw ? { redraw } : {}), ...(model ? { model } : {}) });
         if (!outcome.place) return outcome.ok ? { success: true, output: outcome.text } : fail(outcome.text);
+        if (own) {
+          await own();
+          own = undefined;
+        }
         const data = outcome.did
           ? withChange(outcome.place, { who: agent, what: outcome.did, at: this.now().toISOString() })
           : outcome.place;
@@ -2412,8 +2422,10 @@ const plugin: Plugin = (ctx) => {
     title: "name",
     schema: MODEL_SCHEMA as never,
   });
-  // What the ready-made models' faces show: to-dos, habits and a note. A type of the same name in config wins.
-  for (const type of FACE_TYPES) ctx.stateTypes.register({ ...type, schema: type.schema as never });
+  // What the ready-made models' faces show: to-dos, habits and a note. A type of the same name in config wins, and
+  // so does another plugin's: these are declared only where nothing has declared the name already.
+  for (const type of FACE_TYPES)
+    if (!stateTypeRegistry.has(type.name)) ctx.stateTypes.register({ ...type, schema: type.schema as never });
 
   // The models agents make, shared by the build tool and the place tool, which adds them to rooms by name.
   const components = () => (runtime.db ? interfaceStoreFor(runtime.db) : undefined);
@@ -2611,10 +2623,10 @@ const plugin: Plugin = (ctx) => {
     method: "GET",
     path: "edit/kinds",
     handler: async (): Promise<TaiHttpResponse> => {
-      // And every model an agent has made, for the catalogue's "Made by agents".
+      // And the models agents have made, newest first, for the catalogue's "Made by agents".
       const made = await runtime
         .getStateService()
-        .query(PLUGIN_CALLER, { type: MODEL_TYPE, orderBy: { field: "createdAt", direction: "asc" }, limit: 200 })
+        .query(PLUGIN_CALLER, { type: MODEL_TYPE, orderBy: { field: "createdAt", direction: "desc" }, limit: 200 })
         .catch(() => []);
       const models = made.map((r) => {
         const m = r.data as unknown as Model;
@@ -2766,6 +2778,19 @@ const plugin: Plugin = (ctx) => {
     );
     sweeps.push(() => presence.sweep());
   }
+  // Each morning, in the deployment's time zone, the habit trackers start the day unticked (`turnHabits`). Looked
+  // at when TAI starts and whenever the day changes, so a day missed while it was off is still counted.
+  let habitDay: string | undefined;
+  sweeps.push(async () => {
+    const timeZone = runtimeTimeProvider(runtime).timeZone();
+    const today = dayIn(new Date(), timeZone);
+    if (today === habitDay) return;
+    await turnHabits(runtime.getStateService(), PLUGIN_CALLER, timeZone, new Date())
+      .then(() => {
+        habitDay = today;
+      })
+      .catch((err: Error) => console.warn(`[places] habits couldn't start the day: ${err.message}`));
+  });
   const sweep = () => {
     // Each keeps its own troubles; one that slips through is said, never left to end the process.
     for (const s of sweeps)

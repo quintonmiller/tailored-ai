@@ -278,9 +278,18 @@ export interface OfferedModel {
   about?: string;
 }
 
-/** The catalogue's "Made by agents": every model, by its name and whose it is, in the order they were made. */
-export function madeByAgents(models: MadeModel[], kinds: Kinds): OfferedModel[] {
-  return models.map((m) => {
+/**
+ * The catalogue's "Made by agents", newest first as the server lists them:
+ * the models of whoever this place is for (`here`) first, and everyone
+ * else's apart, folded away until asked for, so a deployment of forty agents
+ * with a to-do board each doesn't bury the furniture.
+ */
+export function madeByAgents(
+  models: MadeModel[],
+  kinds: Kinds,
+  here: string[] = [],
+): { here: OfferedModel[]; others: OfferedModel[] } {
+  const offered = models.map((m): OfferedModel => {
     const mount = kinds[m.kind]?.mount;
     const goes = mount === "wall" ? "on a wall" : mount === "on" ? "on something" : undefined;
     return {
@@ -291,6 +300,14 @@ export function madeByAgents(models: MadeModel[], kinds: Kinds): OfferedModel[] 
       ...(m.about ? { about: m.about } : {}),
     };
   });
+  return { here: offered.filter((m) => here.includes(m.by)), others: offered.filter((m) => !here.includes(m.by)) };
+}
+
+/** Whom a place is for, in the catalogue: the agent whose home it is, and every agent whose model is in it already. */
+export function madeHere(id: string, room: Pick<Room, "models">): string[] {
+  const owners = new Set(Object.values(room.models ?? {}).map((m) => m.owner));
+  if (id.startsWith("home:")) owners.add(id.slice("home:".length));
+  return [...owners];
 }
 
 // --------------------------------------------------------------------------

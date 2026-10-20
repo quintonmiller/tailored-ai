@@ -24,6 +24,8 @@ const kinds = {
 
 /** A model an agent made, as the catalogue lists it and as a place is sent it. */
 const bookcase = { id: "planner:bookcase", name: "bookcase", owner: "planner", kind: "model", size: [0.9, 1.8, 0.34] };
+/** One the home's own agent made, which the catalogue offers before anyone else's. */
+const nook = { id: "assistant:reading_nook", name: "reading_nook", owner: "assistant", kind: "model", size: [1, 1, 1] };
 const bookcaseDef = {
   name: "bookcase",
   owner: "planner",
@@ -55,7 +57,7 @@ let server: Server;
 function fakeFetch(url: string, init?: RequestInit): Promise<Response> {
   const json = (body: unknown, status = 200) =>
     Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
-  if (url.endsWith("/edit/kinds")) return json({ kinds, models: [bookcase], person: "sam" });
+  if (url.endsWith("/edit/kinds")) return json({ kinds, models: [bookcase, nook], person: "sam" });
   if (url.endsWith("/builtin:places/edit")) {
     const body = JSON.parse(String(init?.body));
     server.edits.push(body);
@@ -438,10 +440,17 @@ describe("rearranging a room", () => {
     await act(async () => button("Add things").click());
     const groups = [...document.querySelectorAll(".room-edit-group")].map((g) => g.getAttribute("aria-label"));
     expect(groups[0]).toBe("Made by agents");
-    expect(text()).toMatch(/Bookcaseby planner/);
+    // The home's own agent's first; everyone else's folded away until asked for.
+    expect(text()).toMatch(/Reading nookby assistant/);
+    expect(text()).not.toMatch(/Bookcaseby planner/);
     // A model is offered by its own name, never as a blank one among the decor.
     expect(groups).not.toContain("Model");
-    await act(async () => (document.querySelector(".room-edit-group button") as HTMLButtonElement).click());
+    await act(async () => button("More by other agents (1)").click());
+    expect(text()).toMatch(/Bookcaseby planner/);
+    const shelf = [...document.querySelectorAll(".room-edit-group button")].find((b) =>
+      b.textContent?.startsWith("Bookcase"),
+    ) as HTMLButtonElement;
+    await act(async () => shelf.click());
     await settle();
     expect(server.edits[0].edit).toEqual({ op: "add", kind: "model", model: "planner:bookcase" });
     // Its parts are a record of their own: the room's record keeps only where it stands.

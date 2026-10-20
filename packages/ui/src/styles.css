@@ -8696,6 +8696,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .room-edit-kinds button:hover, .room-edit-kinds button:focus-visible { border-color: var(--accent); outline: none; }
 .room-edit-kinds button:disabled { opacity: 0.5; cursor: default; }
 .room-edit-goes { font-size: 10px; color: var(--text-dim); }
+.room-edit-more { margin-top: 6px; font-size: 12px; }
 
 /* The map: every place, to go to in one click. */
 .world-map { position: absolute; top: 44px; left: 8px; bottom: 8px; z-index: 6; width: min(420px, calc(100% - 16px)); display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); }

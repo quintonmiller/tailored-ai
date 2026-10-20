@@ -501,7 +501,7 @@ async function pressStateButton(
     );
     const bind = record.spec.bind;
     if (result.effect === "state" && bind && interaction.isButton()) {
-      const props = boundCardProps(record.spec.props, result.record, deps.state?.getType(bind.type)?.title);
+      const props = boundCardProps(record.spec.props, result.record, deps.state?.getType(bind.type)?.title, bind);
       const redrawn = buildComponentMessage({ ...record.spec, props });
       if (redrawn) {
         await interaction.update(redrawn);

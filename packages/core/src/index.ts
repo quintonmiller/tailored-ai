@@ -399,6 +399,7 @@ export { decodeMessageContent, encodeMessageContent } from "./content/codec.js";
 export type {
   ActionEffect,
   ActionSpec,
+  BoundRecord,
   ComponentSpec,
   ContentPart,
   MediaKind,

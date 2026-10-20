@@ -140,10 +140,10 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
     void load();
     const off = subscribeStateChanges((change) => {
       // Someone came or went, maybe this agent itself: where it is and who is there are asked again. And for
-      // someone choosing what a body here wears, or how it looks and carries itself, or making over a model
-      // that stands here.
+      // someone choosing what a body here wears, or how it looks and carries itself, making over a model that stands
+      // here, or changing a record a face here shows, so its picture from across the room says what is true now.
       if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
-      if (change.type === MODEL_TYPE && drawsModel(shown, change.id)) void load();
+      else if (drawsModel(shown, change) || facesShow(shown, change.type)) void load();
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
@@ -205,9 +205,21 @@ export function withModels(record: Room, was: Room): { room: Room; missing: bool
   return { room: models ? { ...record, models } : record, missing };
 }
 
-/** Whether a change to a model is to one drawn in the room: it is asked for again, to show it as it is now. */
-export function drawsModel(room: Room, id: string): boolean {
-  return room.props.some((p) => p.model === id);
+/** Whether a change is to a model drawn in the room: it is asked for again, to show it as it is now. */
+export function drawsModel(room: Room, change: { type: string; id: string }): boolean {
+  return change.type === MODEL_TYPE && room.props.some((p) => p.model === change.id);
+}
+
+/**
+ * Whether a face on a model in the room shows records of this type: a list's
+ * or a table's, or a card's record. The room is asked for again when one
+ * changes, so the face's picture from across the room is drawn from the
+ * records as they are now.
+ */
+export function facesShow(room: Room, type: string): boolean {
+  return Object.values(room.models ?? {}).some((m) =>
+    m.parts?.some((p) => p.face?.spec?.query?.type === type || p.face?.spec?.bind?.type === type),
+  );
 }
 
 const areaOf = (info: PlaceInfo | null | undefined) => (info?.area ? { area: info.area } : {});
@@ -963,7 +975,7 @@ export function useScene(id: string | null): SceneInfo | null {
     void load();
     const off = subscribeStateChanges((change) => {
       if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
-      if (change.type === MODEL_TYPE && drawsModel(shown, change.id)) void load();
+      else if (drawsModel(shown, change) || facesShow(shown, change.type)) void load();
       // A place made, gone, or moved to another area elsewhere may add or take away a door here.
       if (
         change.type === "place" &&

@@ -73,9 +73,16 @@ export interface ModelFace {
   kind: FaceKind;
   /** The interface's props: `title`, `body`, `check`, `columns`. */
   props: Record<string, unknown>;
-  /** A card: the record it shows, `{type, id}`. A list or a table: the records, `{type, where?, limit?}`. */
+  /**
+   * A card: the record it shows, `{type, id, fields?, body?}`. A list or a
+   * table: the records, `{type, where?, limit?}`.
+   */
   bind?: Record<string, unknown>;
-  /** A card's buttons, each writing state (`patch`) or announcing an event. */
+  /**
+   * A card's buttons, each writing its `patch` to the record. Never a reply or
+   * an event: either answers the component once, and a face is pressed again
+   * and again, by whoever is in the room.
+   */
   actions?: Record<string, unknown>[];
   /** The interface component that shows it, made as the model's agent. */
   component?: string;
@@ -217,6 +224,13 @@ export function listOf(v: unknown): unknown[] | undefined {
   return objectOf(v) ? [v] : undefined;
 }
 
+/** Field names from what a model wrote: one name, or a list of them (none is a list too). Undefined otherwise. */
+function fieldNames(v: unknown): string[] | undefined {
+  const list = typeof v === "string" && !v.trim().startsWith("[") ? [v] : listOf(v);
+  if (!list?.every((f) => typeof f === "string" && f.trim())) return undefined;
+  return (list as string[]).map((f) => f.trim());
+}
+
 export function shapeOf(v: unknown): Shape | undefined {
   const t = textOf(v)?.toLowerCase();
   if (!t) return undefined;
@@ -272,7 +286,24 @@ export function faceFrom(input: unknown): ModelFace | string {
     if (bind) {
       if (!textOf(bind.type) || !textOf(bind.id))
         return 'A card shows one record: `bind` is {type, id}, e.g. {"type": "note", "id": "fridge"}.';
-      face.bind = { type: textOf(bind.type), id: textOf(bind.id) };
+      // Field names given as the card's own fields are the record's fields to show: lifted, as what was meant is plain.
+      const named = fieldNames(props.fields);
+      if (named && bind.fields === undefined) {
+        bind.fields = named;
+        delete props.fields;
+      }
+      const fields = bind.fields === undefined ? undefined : fieldNames(bind.fields);
+      if (bind.fields !== undefined && !fields)
+        return '`bind.fields` is a list of the record\'s fields to show, e.g. ["status", "due"].';
+      const body = bind.body === undefined ? undefined : textOf(bind.body);
+      if (bind.body !== undefined && !body)
+        return '`bind.body` names the record\'s field to show as its text, e.g. "note".';
+      face.bind = {
+        type: textOf(bind.type),
+        id: textOf(bind.id),
+        ...(fields ? { fields } : {}),
+        ...(body ? { body } : {}),
+      };
     } else if (!textOf(props.title)) return "A card that shows no record needs a `title`.";
   } else {
     if (!bind || !textOf(bind.type))
@@ -296,7 +327,7 @@ export function faceFrom(input: unknown): ModelFace | string {
   if (actionsIn !== undefined) {
     if (kind !== "card") return "Only a card has buttons (`actions`); a list is used by ticking.";
     const list = listOf(actionsIn);
-    if (!list) return "`actions` is a list of buttons, each {label, patch?}.";
+    if (!list) return "`actions` is a list of buttons, each {label, patch}.";
     const actions: Record<string, unknown>[] = [];
     for (const a of list) {
       const action = objectOf(a);
@@ -305,19 +336,15 @@ export function faceFrom(input: unknown): ModelFace | string {
       const patch = action.patch === undefined ? undefined : objectOf(action.patch);
       if (action.patch !== undefined && !patch)
         return `The "${label}" button's \`patch\` is an object of fields to write.`;
-      const effect = textOf(action.effect)?.toLowerCase() ?? (patch ? "state" : "event");
-      if (effect !== "state" && effect !== "event")
-        return `The "${label}" button can't reply: a face is used by whoever is in the room, not in a conversation. Give it a \`patch\` to write the record, or effect "event" to announce the press.`;
-      if (effect === "state" && !patch) return `The "${label}" button writes the record: give it a \`patch\`.`;
-      if (effect === "state" && !face.bind && !objectOf(action.ref))
+      // A reply or an event answers the component, once; a face is pressed again and again, by whoever is there.
+      const effect = textOf(action.effect)?.toLowerCase() ?? "state";
+      if (effect !== "state")
+        return `The "${label}" button can't ${effect === "reply" ? "reply" : effect === "event" ? "announce an event" : `be "${effect}"`}: a face is used again and again, by whoever is in the room, so each press writes the record. Give it a \`patch\` of the fields to write.`;
+      if (!patch)
+        return `The "${label}" button writes the record each time it is pressed: give it a \`patch\`, e.g. {"seen": true}.`;
+      if (!face.bind && !objectOf(action.ref))
         return `The "${label}" button writes a record, so the card needs \`bind\` (or the button a \`ref\`).`;
-      actions.push({
-        label,
-        effect,
-        ...(patch ? { patch } : {}),
-        ...(objectOf(action.ref) ? { ref: objectOf(action.ref) } : {}),
-        ...(textOf(action.name) ? { name: textOf(action.name) } : {}),
-      });
+      actions.push({ label, effect, patch, ...(objectOf(action.ref) ? { ref: objectOf(action.ref) } : {}) });
     }
     if (actions.length) face.actions = actions;
   }
@@ -594,7 +621,7 @@ function faceWords(face: ModelFace): string {
 /** One line about a model, for a list of them. */
 export function modelLine(model: Model): string {
   const faces = facesOf(model);
-  return `${model.name} (${model.mount}, ${model.size.join(" × ")} m, ${model.parts.length} part${model.parts.length === 1 ? "" : "s"}${faces.length ? `, ${faces.length === 1 ? "a face" : `${faces.length} faces`}` : ""})${model.about ? `: ${model.about}` : ""}`;
+  return `${model.name} (${model.mount}, ${model.size.join(" × ")} m, ${model.parts.length} part${model.parts.length === 1 ? "" : "s"}${faces.length ? `, ${faces.length === 1 ? "a face" : `${faces.length} faces`}` : ""})${model.about ? `: ${model.about.replace(/\.$/, "")}` : ""}`;
 }
 
 /** A model in words, part by part, for the agent to change it by. */
@@ -691,7 +718,8 @@ const IVORY = "#f6f1e3";
 export const READY: ReadyModel[] = [
   {
     name: "todo_board",
-    about: "A to-do list on the wall: your todo records, ticked off by anyone in the room.",
+    about:
+      "A to-do list on the wall: your todo records still to do. Anyone in the room can tick one off, and it leaves the board.",
     mount: "wall",
     parts: () => [
       { shape: "box", size: [1.1, 0.8, 0.04], at: [0, 0.4, 0.02], color: OAK },
@@ -700,7 +728,13 @@ export const READY: ReadyModel[] = [
         size: [1.02, 0.72, 0.012],
         at: [0, 0.4, 0.046],
         color: IVORY,
-        face: { kind: "list", title: "To do", check: { field: "done" }, bind: { type: "todo", limit: 12 } },
+        face: {
+          kind: "list",
+          title: "To do",
+          check: { field: "done" },
+          // Done ones leave the board, so the newest still to do are on it, not hidden behind old ticked ones.
+          bind: { type: "todo", where: { done: { ne: true } }, limit: 12 },
+        },
       },
       { shape: "box", size: [0.7, 0.025, 0.07], at: [0, 0.0125, 0.075], color: OAK },
       { shape: "cylinder", size: [0.018, 0.12, 0.018], at: [-0.12, 0.034, 0.08], turn: [0, 0, 90], color: "#c0392b" },
@@ -711,7 +745,8 @@ export const READY: ReadyModel[] = [
   },
   {
     name: "habit_tracker",
-    about: "Today's habits on the wall: your habit records, each ticked when it is done today.",
+    about:
+      "Today's habits on the wall: your habit records, ticked when done. Each morning they start unticked, and streak counts the days in a row.",
     mount: "wall",
     parts: () => [
       { shape: "box", size: [0.8, 1.0, 0.04], at: [0, 0.5, 0.02], color: "#9caf88" },
@@ -755,7 +790,8 @@ export const READY: ReadyModel[] = [
         color: "#efe6d2",
         face: {
           kind: "card",
-          bind: { type: "note", id: notesId(agent) },
+          // The note's own words as the card's text, and nothing else of the record: not the `seen` its button writes.
+          bind: { type: "note", id: notesId(agent), body: "note", fields: [] },
           actions: [{ label: "Got it", patch: { seen: true } }],
         },
       },
@@ -794,7 +830,8 @@ export const FACE_TYPES = [
   },
   {
     name: "habit",
-    description: "A habit to keep. Shown on habit trackers in the 3D world, where people tick it when it's done today.",
+    description:
+      "A habit to keep. Shown on habit trackers in the 3D world, where people tick it when it's done; each morning it starts unticked again, and `streak` counts the days in a row it was done.",
     scope: "agent" as const,
     title: "name",
     schema: {
@@ -823,3 +860,40 @@ export const FACE_TYPES = [
     },
   },
 ];
+
+// --------------------------------------------------------------------------
+// Habits, day by day
+// --------------------------------------------------------------------------
+
+/** The habit type the ready-made habit tracker shows, which starts each day unticked. */
+export const HABIT_TYPE = "habit";
+
+/** The date an instant falls on in a time zone, as "2026-10-20". */
+export function dayIn(at: Date, timeZone: string): string {
+  // Canadian English writes a date year first, as an ISO date does.
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
+}
+
+/** The day before "2026-10-20". */
+export function dayBefore(day: string): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * What a habit needs written as a new day starts, or nothing. Ticked on an
+ * earlier day (the day its record was last written), it starts today
+ * unticked, its streak one longer if that day was yesterday and over if it
+ * was before. Left unticked through a day, its streak is over. Worked out
+ * from the record alone, so it comes out right however long TAI was off.
+ */
+export function habitTurnover(
+  data: Record<string, unknown>,
+  written: string,
+  today: string,
+): Record<string, unknown> | undefined {
+  if (written >= today) return undefined;
+  const streak = typeof data.streak === "number" && Number.isFinite(data.streak) ? data.streak : 0;
+  if (data.today === true) return { today: false, streak: written === dayBefore(today) ? streak + 1 : 0 };
+  return streak > 0 ? { streak: 0 } : undefined;
+}

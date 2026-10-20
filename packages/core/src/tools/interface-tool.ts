@@ -1,4 +1,4 @@
-import { componentPart, textPart } from "../content/types.js";
+import { type BoundRecord, componentPart, textPart } from "../content/types.js";
 import { boundCardProps, checkOf, type ListQuery, queriedProps } from "../interfaces/bind.js";
 import { type AgentAction, buildComponent, componentKindRegistry, InterfaceError } from "../interfaces/kinds.js";
 import type { InterfaceStore } from "../interfaces/store.js";
@@ -49,7 +49,7 @@ export class InterfaceTool implements Tool {
       bind: {
         type: "object",
         description:
-          "card: show a state record {type, id}. list, table: show the records {type, where?, limit?} match. All stay current as records change.",
+          "card: show a state record {type, id, fields?: the fields to show, body?: one to show as its text}. list, table: show the records {type, where?, limit?} match. All stay current as records change.",
       },
       id: { type: "string", description: "update and close: the component's id." },
       expiresInMinutes: { type: "number", description: "send: stop taking answers after this many minutes." },
@@ -212,7 +212,7 @@ export class InterfaceTool implements Tool {
   private async boundProps(
     kind: string,
     props: Record<string, unknown>,
-    bind: { type: string; id: string },
+    bind: BoundRecord,
     context: ToolContext,
   ): Promise<Record<string, unknown>> {
     if (!componentKindRegistry.get(kind)?.bindable) {
@@ -224,7 +224,7 @@ export class InterfaceTool implements Tool {
       throw new InterfaceError(err.message);
     });
     if (!record) throw new InterfaceError(`There is no ${bind.type} record "${bind.id}" you can see.`);
-    return boundCardProps(props, record, state.getType(bind.type)?.title);
+    return boundCardProps(props, record, state.getType(bind.type)?.title, bind);
   }
 
   private own(store: InterfaceStore, id: unknown, agent: string) {
@@ -271,7 +271,8 @@ function sentNote(
   return notes.join(" ");
 }
 
-const FIELDS_FROM_RECORD = " It shows the record's own fields, so the fields you gave were left out.";
+const FIELDS_FROM_RECORD =
+  " It shows the record's own fields, so the fields you gave were left out. To pick which of them it shows, name them in `bind.fields`.";
 
 /**
  * Buttons put inside `props` instead of beside it, which a local model did
@@ -320,14 +321,28 @@ function queryArg(value: unknown): ListQuery {
   };
 }
 
-/** A `{type, id}` reference, accepted as an object or the JSON text small models often send. */
-function refArg(value: unknown): { type: string; id: string } | undefined {
+/**
+ * A `{type, id}` reference, with the fields to show (`fields`) and the one to
+ * show as the card's text (`body`), accepted as an object or the JSON text
+ * small models often send.
+ */
+function refArg(value: unknown): BoundRecord | undefined {
   const ref = objectArg(value, "bind");
   if (!ref) return undefined;
   if (typeof ref.type !== "string" || !ref.type || typeof ref.id !== "string" || !ref.id) {
     throw new InterfaceError('`bind` needs a record\'s `type` and `id`, e.g. {"type": "plan", "id": "trip"}.');
   }
-  return { type: ref.type, id: ref.id };
+  const fields = ref.fields === undefined ? undefined : typeof ref.fields === "string" ? [ref.fields] : ref.fields;
+  if (fields !== undefined && (!Array.isArray(fields) || !fields.every((f) => typeof f === "string" && f.trim())))
+    throw new InterfaceError('`bind.fields` is a list of the record\'s field names to show, e.g. ["status", "due"].');
+  if (ref.body !== undefined && (typeof ref.body !== "string" || !ref.body.trim()))
+    throw new InterfaceError("`bind.body` names the record's field to show as the card's text, e.g. \"note\".");
+  return {
+    type: ref.type,
+    id: ref.id,
+    ...(fields ? { fields: (fields as string[]).map((f) => f.trim()) } : {}),
+    ...(typeof ref.body === "string" ? { body: ref.body.trim() } : {}),
+  };
 }
 
 /** Small models often send an object argument as a JSON string; accept that. */

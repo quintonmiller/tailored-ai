@@ -10,15 +10,17 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { respondToComponent } from "../interfaces/respond.js";
 import { InterfaceStore } from "../interfaces/store.js";
 import { homeId, PLACE_TYPE, PlaceTool, readHome } from "../plugins/places.js";
-import { BuildTool, ModelShelf, modelsIn } from "../plugins/places-build.js";
+import { BuildTool, ModelShelf, modelsIn, turnHabits } from "../plugins/places-build.js";
 import { applyEdit } from "../plugins/places-edit.js";
 import { firstHome, type Place, type PlaceItem, placeProblems } from "../plugins/places-layout.js";
 import { FACE_TYPES, MODEL_SCHEMA, MODEL_TYPE, type Model } from "../plugins/places-models.js";
 import "../state/builtin.js";
 import { type StateCaller, StateService } from "../state/service.js";
 import type { ToolContext } from "../tools/interface.js";
+import { InterfaceTool } from "../tools/interface-tool.js";
 
 const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+const places: StateCaller = { actor: { kind: "plugin", name: "places" } };
 const as = (agentName: string): ToolContext => ({ agentName, sessionId: `s-${agentName}` }) as ToolContext;
 
 const bookcase = [
@@ -137,7 +139,13 @@ describe("the build tool", () => {
     const component = store.get(face?.component ?? "");
     expect(component).toMatchObject({ agent: "planner", status: "open" });
     // Its list runs as the agent: the scopes it could see, kept.
-    expect(component?.spec.query).toEqual({ type: "todo", limit: 12, scopes: ["agent:planner", "global"] });
+    // Done ones leave the board.
+    expect(component?.spec.query).toEqual({
+      type: "todo",
+      where: { done: { ne: true } },
+      limit: 12,
+      scopes: ["agent:planner", "global"],
+    });
   });
 
   it("lets a person tick a to-do on a face, writing as the person, and only one the agent could see", async () => {
@@ -228,6 +236,154 @@ describe("the build tool", () => {
     expect(replying.error).toMatch(/can't reply/);
   });
 
+  it("keeps a face's button working for everyone: pressed again and again, it writes each time", async () => {
+    await place.execute({ action: "add", kind: "notes_card" }, as("planner"));
+    const id = (await model("planner:notes_card")).parts.find((p) => p.face)?.face?.component as string;
+    const button = store.get(id)?.spec.actions?.[0].id as string;
+    for (const by of ["owner", "guest"]) {
+      const pressed = await respondToComponent(store, undefined, { id, actionId: button, by }, { state });
+      expect(pressed).toMatchObject({ effect: "state", record: { data: { seen: true } } });
+    }
+    expect(store.get(id)?.status).toBe("open");
+  });
+
+  it("puts a face changed in place back as it was when another face fails", async () => {
+    const face = { kind: "list", title: "Chores", bind: { type: "todo" }, check: "done" };
+    await build.execute({ action: "make", name: "chores", mount: "wall", parts: board(face) }, as("planner"));
+    const first = (await model("planner:chores")).parts[1].face?.component as string;
+    const wrong = await build.execute(
+      {
+        action: "make",
+        name: "chores",
+        parts: [
+          ...board({ ...face, title: "CHANGED" }),
+          {
+            shape: "plane",
+            size: [0.4, 0.3, 0.01],
+            at: [0, 1, 0.05],
+            face: { kind: "list", bind: { type: "nothing" } },
+          },
+        ],
+      },
+      as("planner"),
+    );
+    expect(wrong.error).toMatch(/^Part 3's face/);
+    expect((await model("planner:chores")).parts[1].face?.props.title).toBe("Chores");
+    expect(store.get(first)?.spec.props.title).toBe("Chores");
+    expect(store.get(first)?.status).toBe("open");
+  });
+
+  it("gives a card that stops showing a record a component of its own, rather than one still bound", async () => {
+    const planner = { actor: { kind: "agent" as const, name: "planner" } };
+    await state.put(planner, { type: "note", id: "fridge", data: { title: "Fridge", note: "Milk" } });
+    await build.execute(
+      { action: "make", name: "fridge_card", mount: "wall", parts: board({ bind: { type: "note", id: "fridge" } }) },
+      as("planner"),
+    );
+    const bound = (await model("planner:fridge_card")).parts[1].face?.component as string;
+    await build.execute({ action: "make", name: "fridge_card", parts: board({ title: "Welcome" }) }, as("planner"));
+    const plain = (await model("planner:fridge_card")).parts[1].face?.component as string;
+    expect(plain).not.toBe(bound);
+    expect(store.get(bound)?.status).toBe("closed");
+    expect(store.get(plain)?.spec.bind).toBeUndefined();
+    expect(store.get(plain)?.spec.props.title).toBe("Welcome");
+  });
+
+  it("keeps where a model goes: rooms have it laid out there", async () => {
+    await build.execute(
+      { action: "make", name: "chores", mount: "wall", parts: board({ title: "Chores" }) },
+      as("planner"),
+    );
+    const moved = await build.execute(
+      { action: "make", name: "chores", mount: "floor", parts: bookcase },
+      as("planner"),
+    );
+    expect(moved.error).toMatch(/chores goes on a wall.*make it under another name/);
+    expect((await model("planner:chores")).mount).toBe("wall");
+  });
+
+  it("makes a ready-made model the agent's own only once the room has a place for it", async () => {
+    const open = () =>
+      (db.prepare("SELECT COUNT(*) AS n FROM interface_components WHERE status = 'open'").get() as { n: number }).n;
+    const failed = await place.execute({ action: "add", kind: "todo_board", near: "the grand piano" }, as("planner"));
+    expect(failed.success).toBe(false);
+    expect(await model("planner:todo_board")).toBeUndefined();
+    expect(open()).toBe(0);
+    expect((await place.execute({ action: "add", kind: "todo_board" }, as("planner"))).success).toBe(true);
+    expect(await model("planner:todo_board")).toMatchObject({ from: "todo_board" });
+  });
+
+  it("hands the page each face as its records are now, not as they were when it was made", async () => {
+    await place.execute({ action: "add", kind: "todo_board" }, as("planner"));
+    await place.execute({ action: "add", kind: "notes_card" }, as("planner"));
+    const planner = { actor: { kind: "agent" as const, name: "planner" } };
+    const ferry = await state.put(planner, { type: "todo", data: { title: "Book the ferry" } });
+    await state.patch(planner, { type: "note", id: "planner-notes" }, { note: "Tickets are in the top drawer." });
+    const room = await home("planner");
+    type Spec = { props: Record<string, unknown> };
+    const faceOf = async (id: string) =>
+      (await modelsIn(state, places, store, room.props))[id].parts.find((p) => p.face)?.face as { spec?: Spec };
+    expect((await faceOf("planner:todo_board")).spec?.props.items).toEqual([
+      { id: ferry.id, label: "Book the ferry", checked: false },
+    ]);
+    // The note's own words as the card's text, and not the `seen` its button writes.
+    expect((await faceOf("planner:notes_card")).spec?.props).toEqual({
+      title: "Notes",
+      body: "Tickets are in the top drawer.",
+    });
+    // Ticked, it leaves the board.
+    const board = (await model("planner:todo_board")).parts.find((p) => p.face)?.face?.component as string;
+    await respondToComponent(store, undefined, { id: board, actionId: `check:${ferry.id}`, by: "owner" }, { state });
+    expect((await faceOf("planner:todo_board")).spec?.props.items).toEqual([]);
+  });
+
+  it("leaves off a face that names a component its agent didn't make for a face", async () => {
+    const interfaces = new InterfaceTool(
+      () => store,
+      () => state,
+    );
+    const sent = async (args: Record<string, unknown>, agent: string) =>
+      (
+        (await interfaces.execute({ action: "send", ...args }, as(agent))).output as {
+          structured: { componentId: string };
+        }
+      ).structured.componentId;
+    await build.execute(
+      { action: "make", name: "chores", mount: "wall", parts: board({ title: "Chores" }) },
+      as("planner"),
+    );
+    const planner = { actor: { kind: "agent" as const, name: "planner" } };
+    const made = await model("planner:chores");
+    const wrong = {
+      "another agent's card": await sent({ kind: "card", props: { title: "Theirs" } }, "writer"),
+      "a question of its own": await sent(
+        { kind: "choice", props: { question: "Which?", options: ["a", "b"] } },
+        "planner",
+      ),
+      "something not for a face": await sent(
+        { kind: "progress", props: { label: "Packing", value: 1, max: 3 } },
+        "planner",
+      ),
+      "a card that answers": await sent(
+        { kind: "card", props: { title: "Go?" }, actions: [{ label: "Yes", effect: "reply" }] },
+        "planner",
+      ),
+    };
+    for (const [what, component] of Object.entries(wrong)) {
+      const parts = made.parts.map((p) => (p.face ? { ...p, face: { ...p.face, component } } : p));
+      await state.patch(planner, { type: MODEL_TYPE, id: "planner:chores" }, { parts });
+      const shown = await modelsIn(state, places, store, [{ model: "planner:chores" }]);
+      expect(shown["planner:chores"].parts[1].face, what).not.toHaveProperty("spec");
+    }
+    // Nor one kept in one agent's scope that says another made it, to show that one's card.
+    const parts = made.parts.map((p) =>
+      p.face ? { ...p, face: { ...p.face, component: wrong["another agent's card"] } } : p,
+    );
+    await state.patch(planner, { type: MODEL_TYPE, id: "planner:chores" }, { parts, owner: "writer" });
+    const claimed = await modelsIn(state, places, store, [{ model: "planner:chores" }]);
+    expect(claimed["planner:chores"].parts[1].face).not.toHaveProperty("spec");
+  });
+
   it("copies a ready-made model under a new name, with the record its face shows", async () => {
     const copied = await build.execute({ action: "copy", name: "notes_card", as: "desk_note" }, as("writer"));
     expect(copied.success, copied.error).toBe(true);
@@ -283,5 +439,39 @@ describe("a person adding a model", () => {
     if (typeof copy === "string") throw new Error(copy);
     expect(copy.place.props.find((p) => p.id === copy.item)).toMatchObject({ model: "planner:bookcase" });
     expect(applyEdit(homeId("planner"), firstHome(), { op: "add", kind: "model" })).toMatch(/Say which model/);
+  });
+});
+
+describe("habits, as a new day starts", () => {
+  it("unticks what was done yesterday and counts its streak, once a day, and leaves a deployment's own habits", async () => {
+    const db = new Database(":memory:");
+    let clock = Date.parse("2026-10-19T20:00:00Z");
+    const habit = FACE_TYPES.find((t) => t.name === "habit");
+    const types = [{ ...habit, schema: habit?.schema as never }] as never[];
+    const state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db,
+      now: () => new Date(clock),
+    });
+    const planner = { actor: { kind: "agent" as const, name: "planner" } };
+    const walk = await state.put(planner, { type: "habit", data: { name: "Walk", today: true, streak: 2 } });
+    const read = await state.put(planner, { type: "habit", data: { name: "Read", today: false, streak: 5 } });
+    expect(await turnHabits(state, places, "UTC", new Date(clock))).toBe(0);
+
+    clock = Date.parse("2026-10-20T06:00:00Z");
+    expect(await turnHabits(state, places, "UTC", new Date(clock))).toBe(2);
+    expect((await state.get(owner, { type: "habit", id: walk.id }))?.data).toMatchObject({ today: false, streak: 3 });
+    expect((await state.get(owner, { type: "habit", id: read.id }))?.data).toMatchObject({ today: false, streak: 0 });
+    // Later the same day, nothing more.
+    clock = Date.parse("2026-10-20T18:00:00Z");
+    expect(await turnHabits(state, places, "UTC", new Date(clock))).toBe(0);
+
+    // A `habit` of the deployment's own, with another shape, is never touched.
+    const own = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types: [{ name: "habit", scope: "agent" }] } }),
+      db,
+      now: () => new Date(clock + 3 * 86_400_000),
+    });
+    expect(await turnHabits(own, places, "UTC", new Date(clock + 3 * 86_400_000))).toBe(0);
   });
 });

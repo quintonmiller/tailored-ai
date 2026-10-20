@@ -100,12 +100,15 @@ export function mergePlan(parts: Pick<ModelPart, "color" | "finish" | "face">[])
  * big as fits whole, the same every way so it keeps its shape. The box is
  * its own size times a scale, so this is that scale; a model remade since
  * still fits the box it was placed in, never through a wall or into the next
- * thing. A side thinner than a centimetre (a plate's depth) doesn't count.
+ * thing. A side thinner than a centimetre (a plate's depth) doesn't count,
+ * and nor does depth for something on a wall (`flat`): placed a few
+ * centimetres deep, a board made deeper would otherwise shrink to a speck,
+ * when standing out a little further from the wall is all it needs.
  */
-export function fitScale(made: Vec3, size: Vec3 | undefined): number {
+export function fitScale(made: Vec3, size: Vec3 | undefined, flat = false): number {
   if (!size) return 1;
   let fit = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < 3; i++) if (made[i] > 0.011 && size[i] > 0) fit = Math.min(fit, size[i] / made[i]);
+  for (let i = 0; i < (flat ? 2 : 3); i++) if (made[i] > 0.011 && size[i] > 0) fit = Math.min(fit, size[i] / made[i]);
   return Number.isFinite(fit) ? Math.max(0.05, Math.min(20, fit)) : 1;
 }
 
@@ -153,9 +156,11 @@ export interface FaceLine {
 
 /**
  * What the picture of a face says while it isn't live (from across a room):
- * its title, and the lines its component last had, a list's items with their
- * ticks, a card's fields, a table's first column. The live face, close up, is
- * the real thing.
+ * its title, and the lines its component was filled with when the room was
+ * last sent (the server fills them from the records each time, and the page
+ * asks again when one changes), a list's items with their ticks, a card's
+ * text and fields, a table's first column. The live face, close up, is the
+ * real thing.
  */
 export function faceLines(spec: ComponentSpec | undefined, most = 6): { title: string; lines: FaceLine[] } {
   if (!spec) return { title: "", lines: [] };
@@ -169,11 +174,13 @@ export function faceLines(spec: ComponentSpec | undefined, most = 6): { title: s
       ...(p.check ? { ticked: i.checked === true } : {}),
     }));
   else if (Array.isArray(p.rows)) lines = (p.rows as { cells?: unknown[] }[]).map((r) => ({ text: str(r.cells?.[0]) }));
-  else if (Array.isArray(p.fields))
-    lines = (p.fields as { label?: unknown; value?: unknown }[]).map((f) => ({
-      text: `${str(f.label)}: ${str(f.value)}`,
-    }));
-  else if (p.body) lines = [{ text: str(p.body) }];
+  else {
+    // A card: its text, then its fields.
+    if (p.body) lines.push({ text: str(p.body) });
+    if (Array.isArray(p.fields))
+      for (const f of p.fields as { label?: unknown; value?: unknown }[])
+        lines.push({ text: `${str(f.label)}: ${str(f.value)}` });
+  }
   return { title, lines: lines.slice(0, most) };
 }
 
@@ -252,9 +259,10 @@ function partGeometry(part: ModelPart): THREE.BufferGeometry {
       break;
     }
     case "capsule": {
+      // Never shorter than it is round, so one lower than it is wide is a round one squashed to its height.
       const r = Math.min(w, d) / 2;
       g = new THREE.CapsuleGeometry(r, Math.max(0, h - 2 * r), 4, 14);
-      stretch = [w / (2 * r), 1, d / (2 * r)];
+      stretch = [w / (2 * r), h / Math.max(h, 2 * r), d / (2 * r)];
       break;
     }
     default:
@@ -348,7 +356,7 @@ export function buildModel(def: ModelDef | undefined, size?: Vec3): { group: THR
     return { group, faces: [] };
   }
   const inner = new THREE.Group();
-  inner.scale.setScalar(fitScale(def.size, size));
+  inner.scale.setScalar(fitScale(def.size, size, def.mount === "wall"));
   group.add(inner);
   const plan = mergePlan(def.parts);
   for (const g of plan.groups) {

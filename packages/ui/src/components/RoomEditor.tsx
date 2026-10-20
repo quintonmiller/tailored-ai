@@ -7,6 +7,7 @@ import {
   type MadeModel,
   type Move,
   madeByAgents,
+  madeHere,
   moveKey,
   noSteps,
   palette,
@@ -205,6 +206,8 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   const [kinds, setKinds] = useState<Offer | null>(null);
   const [local, setLocal] = useState<Saved | null>(null);
   const [selected, setSelected] = useState<string | undefined>(undefined);
+  /** Whether the catalogue shows the models of agents this place isn't for. */
+  const [othersShown, setOthersShown] = useState(false);
   const [pending, setPending] = useState<Pending | undefined>(undefined);
   const [steps, setSteps] = useState<Steps<Room>>(noSteps);
   const [notice, setNotice] = useState<string | undefined>(undefined);
@@ -592,7 +595,11 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   const picked = thing(selected);
   const swatches = useMemo(() => (shown ? palette(shown) : []), [shown]);
   const groups = useMemo(() => (kinds ? catalogue(kinds.kinds) : []), [kinds]);
-  const made = useMemo(() => (kinds ? madeByAgents(kinds.models ?? [], kinds.kinds) : []), [kinds]);
+  const here = useMemo(() => (id && shown ? madeHere(id, shown) : []), [id, shown]);
+  const made = useMemo(
+    () => (kinds ? madeByAgents(kinds.models ?? [], kinds.kinds, here) : { here: [], others: [] }),
+    [kinds, here],
+  );
   // A model keeps its parts' own colours: there is nothing to repaint.
   const fixedColours = !!picked?.model;
   const hangs = !!picked && kinds?.kinds[picked.kind]?.mount === "wall";
@@ -698,12 +705,12 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         <p className="world-panel-quiet">
           Pick one: it goes somewhere free near the middle, ready to drag where you want it.
         </p>
-        {/* What the agents made first: it is theirs, and the list is short. */}
-        {made.length > 0 && (
+        {/* What the agents made first: this place's own agents' things, and everyone else's folded until asked for. */}
+        {made.here.length + made.others.length > 0 && (
           <section className="room-edit-group" aria-label="Made by agents">
             <h3>Made by agents</h3>
             <div className="room-edit-kinds">
-              {made.map((m) => (
+              {[...made.here, ...(othersShown ? made.others : [])].map((m) => (
                 <button
                   key={m.id}
                   type="button"
@@ -719,6 +726,18 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
                 </button>
               ))}
             </div>
+            {made.others.length > 0 && (
+              <button
+                type="button"
+                className="world-panel-inline world-panel-link room-edit-more"
+                aria-expanded={othersShown}
+                onClick={() => setOthersShown((v) => !v)}
+              >
+                {othersShown
+                  ? "Fewer"
+                  : `${made.here.length ? "More by other agents" : "By agents"} (${made.others.length})`}
+              </button>
+            )}
           </section>
         )}
         {groups.map((g) => (

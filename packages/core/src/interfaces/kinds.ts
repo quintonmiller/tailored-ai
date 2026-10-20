@@ -9,7 +9,7 @@
  * The built-ins register through the same registry a plugin uses.
  */
 import { randomBytes } from "node:crypto";
-import type { ActionEffect, ActionSpec, ComponentSpec } from "../content/types.js";
+import type { ActionEffect, ActionSpec, BoundRecord, ComponentSpec } from "../content/types.js";
 import { type Disposer, Registry } from "../registry.js";
 import type { JsonSchema } from "../state/types.js";
 import { validateAgainstSchema } from "../state/validate.js";
@@ -69,8 +69,8 @@ export interface BuildComponentInput {
   expiresInMinutes?: number;
   /** Set when updating, so the component keeps its identity. */
   id?: string;
-  /** The world-state record it shows; only for a kind that is `bindable`. */
-  bind?: { type: string; id: string };
+  /** The world-state record it shows, and which of its fields; only for a kind that is `bindable`. */
+  bind?: BoundRecord;
   /** The world-state query it shows; required by a kind that is `queryable`, refused by any other. */
   query?: { type: string; where?: Record<string, unknown>; limit?: number; scopes?: string[] };
 }
@@ -116,11 +116,21 @@ export function buildComponent(input: BuildComponentInput, now: Date = new Date(
     ...(input.expiresInMinutes && input.expiresInMinutes > 0
       ? { expiresAt: new Date(now.getTime() + input.expiresInMinutes * 60_000).toISOString() }
       : {}),
-    ...(input.bind ? { bind: { type: input.bind.type, id: input.bind.id } } : {}),
+    ...(input.bind ? { bind: boundRecord(input.bind) } : {}),
     ...(input.query ? { query: input.query } : {}),
   };
   spec.fallback = `[${spec.kind} ${spec.id}] ${kind.fallback(input.props, actions)}`;
   return spec;
+}
+
+/** A record to show, with only what a binding holds: which record, and which of its fields. */
+function boundRecord(bind: BoundRecord): BoundRecord {
+  return {
+    type: bind.type,
+    id: bind.id,
+    ...(bind.fields ? { fields: bind.fields } : {}),
+    ...(bind.body ? { body: bind.body } : {}),
+  };
 }
 
 function agentActions(actions: AgentAction[], bind: { type: string; id: string } | undefined): ActionSpec[] {

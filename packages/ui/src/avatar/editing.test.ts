@@ -7,6 +7,7 @@ import {
   GROUPS,
   type Kinds,
   madeByAgents,
+  madeHere,
   noSteps,
   onFloor,
   onTop,
@@ -182,11 +183,38 @@ describe("the catalogue", () => {
           },
         ],
         withModels,
+        ["planner"],
       ),
-    ).toEqual([
-      { id: "planner:reading_nook", label: "reading nook", by: "planner" },
-      { id: "planner:todo_board", label: "todo board", by: "planner", goes: "on a wall", about: "A to-do list" },
-    ]);
+    ).toEqual({
+      here: [
+        { id: "planner:reading_nook", label: "reading nook", by: "planner" },
+        { id: "planner:todo_board", label: "todo board", by: "planner", goes: "on a wall", about: "A to-do list" },
+      ],
+      others: [],
+    });
+  });
+
+  it("offers the models of whoever a place is for first, and everyone else's apart", () => {
+    const made = (owner: string) => ({
+      id: `${owner}:todo_board`,
+      name: "todo_board",
+      owner,
+      kind: "model",
+      size: [1, 1, 1] as [number, number, number],
+    });
+    const offered = madeByAgents([made("writer"), made("planner"), made("reviewer")], kinds, ["planner"]);
+    expect(offered.here.map((m) => m.by)).toEqual(["planner"]);
+    expect(offered.others.map((m) => m.by)).toEqual(["writer", "reviewer"]);
+    // A home is its agent's; any place is for the agents whose models are in it already.
+    const def = {
+      name: "lamp",
+      owner: "writer",
+      mount: "floor" as const,
+      parts: [],
+      size: [1, 1, 1] as [number, number, number],
+    };
+    expect(madeHere("home:planner", { models: { "writer:lamp": def } }).sort()).toEqual(["planner", "writer"]);
+    expect(madeHere("room:discord:123", {})).toEqual([]);
   });
 });
 

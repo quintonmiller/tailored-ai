@@ -114,7 +114,7 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
           listed
             ? { ...spec, props: listed }
             : bound.data
-              ? { ...spec, props: boundView(spec.props, bound.data, bound.titleField) }
+              ? { ...spec, props: boundView(spec.props, bound.data, bound.titleField, spec.bind) }
               : spec
         }
         open={open}
@@ -265,19 +265,24 @@ function listView(
 }
 
 /** A bound card's props from its record. Mirrors `boundCardProps` in core's `interfaces/bind.ts`. */
-function boundView(
+export function boundView(
   props: Record<string, unknown>,
   data: Record<string, unknown>,
   titleField: string | undefined,
+  show: { fields?: string[]; body?: string } = {},
 ): Record<string, unknown> {
   const named = titleField ? data[titleField] : undefined;
+  const text = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
+  const keys = show.fields ?? Object.keys(data).filter((key) => key !== titleField && key !== show.body);
+  const body = show.body && data[show.body] != null ? text(data[show.body]) : undefined;
   return {
     ...props,
     title: typeof named === "string" && named.trim() ? named : props.title,
-    fields: Object.entries(data)
-      .filter(([key]) => key !== titleField)
+    ...(body ? { body } : {}),
+    fields: keys
+      .filter((key) => data[key] !== undefined)
       .slice(0, 20)
-      .map(([key, value]) => ({ label: key, value: typeof value === "string" ? value : JSON.stringify(value) })),
+      .map((key) => ({ label: key, value: text(data[key]) })),
   };
 }
 

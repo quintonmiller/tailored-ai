@@ -16,8 +16,8 @@
  * viewer, 90° toward +X.
  */
 
-import { OUTDOOR_FAR, type TownPlan } from "./town";
 import type { ModelDef } from "./models";
+import { OUTDOOR_FAR, type TownPlan } from "./town";
 
 export type PropKind =
   | "rug"
@@ -184,9 +184,10 @@ export interface RoomChange {
  */
 export function roomChanges(before: Room, after: Room): { fresh: Set<string>; moved: Map<string, Prop> } {
   const was = new Map(before.props.map((p) => [p.id, p]));
-  // A model made over since grows in again, wherever it stands.
-  const madeOver = (id: string | undefined) =>
-    !!id && JSON.stringify(before.models?.[id]) !== JSON.stringify(after.models?.[id]);
+  // A model made over since grows in again, wherever it stands; not one whose faces only show other records now.
+  const made = (room: Room, id: string) =>
+    JSON.stringify(room.models?.[id], (key, v) => (key === "spec" ? undefined : v));
+  const madeOver = (id: string | undefined) => !!id && made(before, id) !== made(after, id);
   const fresh = new Set<string>();
   const moved = new Map<string, Prop>();
   for (const prop of after.props) {

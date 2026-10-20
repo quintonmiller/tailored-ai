@@ -14,6 +14,7 @@ import {
   type ChatStageOptions,
   companyOf,
   drawsModel,
+  facesShow,
   lastExchange,
   newest,
   roomOf,
@@ -2545,8 +2546,30 @@ describe("models agents made, in the room the page draws", () => {
 
   it("asks again for a model that changed only when the room draws it", () => {
     const shown = roomOf({ place, models: { "planner:bookcase": def } });
-    expect(drawsModel(shown, "planner:bookcase")).toBe(true);
-    expect(drawsModel(shown, "writer:lamp_post")).toBe(false);
+    expect(drawsModel(shown, { type: "model", id: "planner:bookcase" })).toBe(true);
+    expect(drawsModel(shown, { type: "model", id: "writer:lamp_post" })).toBe(false);
+    expect(drawsModel(shown, { type: "todo", id: "planner:bookcase" })).toBe(false);
+  });
+
+  it("asks again when a record a face here shows changes, so its picture says what is true now", () => {
+    const spec = (more: Record<string, unknown>) => ({ id: "c-1", kind: "list", props: {}, fallback: "", ...more });
+    const faced = (face: Record<string, unknown>) =>
+      roomOf({
+        place,
+        models: {
+          "planner:bookcase": {
+            ...def,
+            parts: [{ shape: "box" as const, size: [1, 1, 0.1], at: [0, 0.5, 0], color: "#ffffff", face }],
+          },
+        } as never,
+      });
+    const list = faced({ kind: "list", spec: spec({ query: { type: "todo" } }) });
+    expect(facesShow(list, "todo")).toBe(true);
+    expect(facesShow(list, "habit")).toBe(false);
+    expect(
+      facesShow(faced({ kind: "card", spec: spec({ kind: "card", bind: { type: "note", id: "n" } }) }), "note"),
+    ).toBe(true);
+    expect(facesShow(roomOf({ place, models: { "planner:bookcase": def } }), "todo")).toBe(false);
   });
 });
 

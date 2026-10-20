@@ -72,6 +72,23 @@ describe("fitting a model in its box", () => {
     expect(fitScale([1, 1, 0.01], [2, 2, 0.01])).toBeCloseTo(2);
   });
 
+  it("fits something on a wall by its width and height: made deeper, it stands out further, not smaller", () => {
+    expect(fitScale([0.8, 0.4, 0.3], [0.8, 0.4, 0.03], true)).toBeCloseTo(1);
+    expect(fitScale([0.8, 0.4, 0.3], [0.8, 0.4, 0.03])).toBeCloseTo(0.1);
+  });
+
+  it("draws a capsule lower than it is round as tall as its box, not as tall as it is round", () => {
+    const pill: ModelDef = {
+      ...shelf,
+      size: [0.4, 0.1, 0.4],
+      parts: [{ shape: "capsule", size: [0.4, 0.1, 0.4], at: [0, 0.05, 0], color: "#2a8a8a" }],
+    };
+    const box = new THREE.Box3().setFromObject(buildModel(pill, pill.size).group);
+    expect(box.min.y).toBeCloseTo(0, 3);
+    expect(box.max.y).toBeCloseTo(0.1, 3);
+    expect(box.max.x - box.min.x).toBeCloseTo(0.4, 2);
+  });
+
   it("stands a model on its foot, scaled about it", () => {
     const { group } = buildModel(shelf, [0.45, 0.9, 0.17]);
     const box = new THREE.Box3().setFromObject(group);
@@ -164,6 +181,14 @@ describe("a face", () => {
     expect(
       faceLines({ ...spec, kind: "card", props: { title: "Notes", fields: [{ label: "note", value: "Hi" }] } }).lines,
     ).toEqual([{ text: "note: Hi" }]);
+    // A card's text first, then its fields.
+    expect(
+      faceLines({
+        ...spec,
+        kind: "card",
+        props: { title: "Notes", body: "Tickets are in the drawer.", fields: [{ label: "due", value: "Friday" }] },
+      }).lines,
+    ).toEqual([{ text: "Tickets are in the drawer." }, { text: "due: Friday" }]);
     expect(
       faceLines({ ...spec, kind: "table", props: { title: "Bills", rows: [{ id: "x", cells: ["Rent", "900"] }] } })
         .lines,
