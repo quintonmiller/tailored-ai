@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveAgent } from "../agent/agents.js";
 import type { AgentConfig } from "../config.js";
 import type { Tool } from "../tools/interface.js";
@@ -156,6 +156,29 @@ describe("resolveAgent", () => {
     const resolved = resolveAgent("bad", config, tools);
 
     expect(resolved.tools.map((t) => t.name)).toEqual(["read"]);
+  });
+
+  it("warns about an unknown tool once, against the real tools, and not when asked without any", () => {
+    // Asking for one setting (an avatar, a voice) resolves the agent with no tools. That used to call every tool it
+    // names unknown, "Available: " and nothing after, 155 lines a start, and used up the once-per-process warning
+    // before the real resolve could give it.
+    const config = makeConfig({ agents: { "n3-asker": { tools: ["read", "made_up"], skills: ["s"] } } });
+    const resolveSkill = () => ({ toolRefs: ["skill_made_up"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      resolveAgent("n3-asker", config, [], undefined, undefined, undefined, { resolveSkill });
+      const toolWarnings = () => warn.mock.calls.map((c) => String(c[0])).filter((w) => /unknown tool/.test(w));
+      expect(toolWarnings()).toEqual([]);
+      // Resolved for real, the one that is unknown is said, with what there is.
+      resolveAgent("n3-asker", config, tools, undefined, undefined, undefined, { resolveSkill });
+      resolveAgent("n3-asker", config, tools, undefined, undefined, undefined, { resolveSkill });
+      const agentWarnings = toolWarnings().filter((w) => w.startsWith('[agents] Agent "n3-asker"'));
+      expect(agentWarnings).toHaveLength(1);
+      expect(agentWarnings[0]).toMatch(/"made_up" — skipping it\. Available: exec, read/);
+      expect(toolWarnings().some((w) => /Skill "s" references unknown tool "skill_made_up"/.test(w))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("applies model override over agent model", () => {

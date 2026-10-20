@@ -61,8 +61,14 @@ export class HostSandbox implements Sandbox {
       // `ExecTool` returns here and never reaches its own execFile call.
       closeChildStdin(child);
 
-      if (opts?.signal) {
-        opts.signal.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
+      const signal = opts?.signal;
+      if (signal) {
+        const kill = () => child.kill("SIGTERM");
+        signal.addEventListener("abort", kill, { once: true });
+        // Let go of it once the command is done. The signal is the turn's, which lives on after the command, and
+        // a listener left on it holds the child; on a signal made of others (`AbortSignal.any`, as the turn's
+        // usually is), it also keeps that signal in memory for good, once for every command a turn runs.
+        child.once("exit", () => signal.removeEventListener("abort", kill));
       }
     });
   }

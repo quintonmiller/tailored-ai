@@ -40,6 +40,47 @@ export function outingNow(o: Partial<Outing> | undefined, now: number): Outing |
   return Number.isFinite(until) && until > now ? (o as Outing) : undefined;
 }
 
+/**
+ * Out on its day (`withRoutines`): idle, and at the café, on a bench, in the
+ * park, reading somewhere, in a meeting room or at a friend's, rather than at
+ * home. One at home with friends round is at home; one put to bed is asleep.
+ */
+export function isOut(a: AgentActivity | undefined): boolean {
+  return a?.doing === "idle" && !!a.routine && a.routine.errand !== "host";
+}
+
+/** Where an errand has a body, in a word for a list of them. */
+const OUT_AT: Record<string, string> = {
+  cafe: "café",
+  bench: "benches",
+  park: "the park",
+  read: "reading",
+  meeting: "meeting rooms",
+  friend: "visiting",
+};
+
+/**
+ * Who is out on their day, in a line: "6 out: café, benches", the places
+ * most are at first. Nothing when nobody is out.
+ */
+export function outWords(activities: Record<string, AgentActivity>): string | undefined {
+  const at = new Map<string, number>();
+  let out = 0;
+  for (const a of Object.values(activities)) {
+    if (!isOut(a)) continue;
+    out++;
+    const where = OUT_AT[a.routine?.errand ?? ""] ?? "out";
+    at.set(where, (at.get(where) ?? 0) + 1);
+  }
+  if (!out) return undefined;
+  const order = Object.values(OUT_AT);
+  const places = [...at.entries()]
+    .sort((a, b) => b[1] - a[1] || order.indexOf(a[0]) - order.indexOf(b[0]))
+    .map(([where]) => where)
+    .filter((where) => where !== "out");
+  return places.length ? `${out} out: ${places.join(", ")}` : `${out} out`;
+}
+
 /** Names in a list, as said: "writer", "writer and planner", "writer, planner and coach". */
 function names(agents: string[]): string {
   const all = agents.map(nameOf);

@@ -360,6 +360,10 @@ export function resolveAgent(
     resolved.kbDir = join(baseKbDir, "agents", agentName);
   }
 
+  // No tools at all is a caller asking about something else (an agent's avatar, its voice) and not resolving its
+  // tools: checked against nothing, every name is "unknown", and each warning, said once per process, would be spent
+  // on noise before the real resolve could say it.
+  const checking = allTools.length > 0;
   if (agent?.tools) {
     const toolMap = new Map(allTools.map((t) => [t.name, t]));
     const picked: Tool[] = [];
@@ -369,6 +373,7 @@ export function resolveAgent(
         picked.push(tool);
         continue;
       }
+      if (!checking) continue;
       // MCP tools (mcp_<server>_<tool>) register after async discovery and
       // disappear when their server is down — skip with a warning instead
       // of failing the whole resolve. The loop re-resolves tools every
@@ -453,7 +458,7 @@ export function resolveAgent(
               if (haveTool.has(name)) continue;
               const tool = toolMap.get(name);
               if (!tool) {
-                console.warn(`[agents] Skill "${skillId}" references unknown tool "${name}" — skipping`);
+                if (checking) console.warn(`[agents] Skill "${skillId}" references unknown tool "${name}" — skipping`);
                 continue;
               }
               resolved.tools.push(tool);

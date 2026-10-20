@@ -157,7 +157,6 @@ import {
 } from "@tailored-ai/core";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
-import { streamSSE } from "hono/streaming";
 import YAML from "yaml";
 import {
   getAllPendingApprovals,
@@ -177,6 +176,7 @@ import {
 import { mountPluginHttpRoutes, routePathToRegex } from "./http-routes.js";
 // `checkPortAvailable` is re-exported below but not called here.
 import { portInUseMessage } from "./port.js";
+import { OpenStreams, type Stoppable, stopServer, untilEnded } from "./streams.js";
 
 export interface ServerOptions {
   runtime: AgentRuntime;
@@ -368,6 +368,8 @@ export function createServer(opts: ServerOptions) {
   const { runtime } = opts;
 
   const app = new Hono();
+  // Every event stream the server has open, so stopping it can end them (`streams.ts`).
+  const streams = new OpenStreams();
 
   // --- Briefing cache (server-process lifetime, single entry) ---
   //
@@ -1233,7 +1235,7 @@ export function createServer(opts: ServerOptions) {
     const approvalHandler = new HttpApprovalHandler();
     const handlerKey = `chat:${key}:${Date.now()}`;
 
-    return streamSSE(c, async (stream) => {
+    return streams.sse(c, async (stream, ended) => {
       approvalHandler.setEmitter((event, data) => {
         stream.writeSSE({ event, data: JSON.stringify(data) });
       });
@@ -1273,9 +1275,7 @@ export function createServer(opts: ServerOptions) {
             else if (withText && p.text) stream.writeSSE({ event: "delta", data: JSON.stringify({ text: p.text }) });
           }
         };
-        const combinedSignal = baseOpts.signal
-          ? AbortSignal.any([baseOpts.signal, c.req.raw.signal])
-          : c.req.raw.signal;
+        const combinedSignal = baseOpts.signal ? AbortSignal.any([baseOpts.signal, ended]) : ended;
         // Resolve the ids the client uploaded into refs. An id the store does
         // not know is dropped with a warning rather than failing the turn: the
         // text is still worth answering, and a blob that expired mid-compose
@@ -1967,18 +1967,14 @@ export function createServer(opts: ServerOptions) {
   // Registered before `/api/interfaces/:id`, which would read "events" as an id.
   app.get("/api/interfaces/events", (c) => {
     const store = interfaceStoreFor(runtime.db);
-    return streamSSE(c, async (stream) => {
+    return streams.sse(c, async (stream, ended) => {
       const off = store.onChange((record) => {
         stream.writeSSE({ event: "component", data: JSON.stringify(toComponentJson(record)) }).catch(() => {});
       });
       const ping = setInterval(() => stream.writeSSE({ event: "ping", data: "" }).catch(() => {}), 25_000);
       try {
         await stream.writeSSE({ event: "ready", data: "{}" });
-        await new Promise<void>((resolve) => {
-          if (c.req.raw.signal.aborted) return resolve();
-          c.req.raw.signal.addEventListener("abort", () => resolve());
-          stream.onAbort(() => resolve());
-        });
+        await untilEnded(ended);
       } finally {
         clearInterval(ping);
         off();
@@ -2216,7 +2212,7 @@ export function createServer(opts: ServerOptions) {
       if (bytes.length === 0) return c.json({ error: "Send the recorded audio as the request body." }, 400);
       input = { audio: { bytes, mimeType: type || "audio/webm" } };
     }
-    return streamSSE(c, async (stream) => {
+    return streams.sse(c, async (stream, ended) => {
       const send = (event: string, data: unknown) =>
         stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {});
       try {
@@ -2231,7 +2227,7 @@ export function createServer(opts: ServerOptions) {
               send("audio", { seq: a.seq, text: a.text, mimeType: a.mimeType, data: a.bytes.toString("base64") }),
             cue: (cue) => send("cue", cue),
           },
-          c.req.raw.signal,
+          ended,
         );
         await send("done", { transcript: result.transcript, reply: result.reply, timings: result.timings });
       } catch (err) {
@@ -2270,7 +2266,7 @@ export function createServer(opts: ServerOptions) {
   // as a type name.
   app.get("/api/state/events", (c) => {
     const type = c.req.query("type");
-    return streamSSE(c, async (stream) => {
+    return streams.sse(c, async (stream, ended) => {
       const listener = (change: StateChange) => {
         if (type && change.type !== type) return;
         stream.writeSSE({ event: "change", data: JSON.stringify(change) }).catch(() => {});
@@ -2280,11 +2276,7 @@ export function createServer(opts: ServerOptions) {
       const ping = setInterval(() => stream.writeSSE({ event: "ping", data: "" }).catch(() => {}), 25_000);
       try {
         await stream.writeSSE({ event: "ready", data: "{}" });
-        await new Promise<void>((resolve) => {
-          if (c.req.raw.signal.aborted) return resolve();
-          c.req.raw.signal.addEventListener("abort", () => resolve());
-          stream.onAbort(() => resolve());
-        });
+        await untilEnded(ended);
       } finally {
         clearInterval(ping);
         stateListeners.delete(listener);
@@ -3089,7 +3081,7 @@ export function createServer(opts: ServerOptions) {
         const cmdApprovalHandler = new HttpApprovalHandler();
         const cmdHandlerKey = `cmd:${key}:${Date.now()}`;
 
-        return streamSSE(c, async (stream) => {
+        return streams.sse(c, async (stream) => {
           cmdApprovalHandler.setEmitter((event, data) => {
             stream.writeSSE({ event, data: JSON.stringify(data) });
           });
@@ -3827,7 +3819,7 @@ export function createServer(opts: ServerOptions) {
   app.get("/api/workflow-runs/:id/events", async (c) => {
     const id = c.req.param("id");
     const engine = opts.workflowEngine;
-    return streamSSE(c, async (stream) => {
+    return streams.sse(c, async (stream, ended) => {
       // Send the initial snapshot.
       const initial = getWorkflowRun(runtime.db, id);
       if (initial) {
@@ -3850,7 +3842,7 @@ export function createServer(opts: ServerOptions) {
       const onClose = () => {
         closed = true;
       };
-      c.req.raw.signal.addEventListener("abort", onClose);
+      ended.addEventListener("abort", onClose);
       let unsubscribe: (() => void) | undefined;
       let unsubscribeForms: (() => void) | undefined;
       if (engine) {
@@ -4720,6 +4712,7 @@ export function createServer(opts: ServerOptions) {
     });
   }
 
+  let listening: Stoppable | undefined;
   function start() {
     const config = runtime.getConfig();
     const port = config.server.port;
@@ -4739,11 +4732,27 @@ export function createServer(opts: ServerOptions) {
       console.error(`[server] listen failed on ${hostname}:${port}:`, err.message);
       process.exit(1);
     });
+    listening = server as Stoppable;
     return server;
   }
 
-  return { app, start };
+  /**
+   * Stop listening and let every connection go: open event streams end at
+   * once, and a request still being answered gets {@link STOP_GRACE_MS}.
+   * A browser with the world open holds streams, so a plain `close()` waited
+   * on it until the service killed the process.
+   */
+  function stop(): Promise<void> {
+    const server = listening;
+    listening = undefined;
+    return server ? stopServer(server, streams, STOP_GRACE_MS) : Promise.resolve();
+  }
+
+  return { app, start, stop };
 }
+
+/** How long a request still being answered as the server stops gets to finish before its connection is closed. */
+const STOP_GRACE_MS = 2_000;
 
 export { checkPortAvailable, portInUseMessage } from "./port.js";
 

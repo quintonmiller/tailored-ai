@@ -589,7 +589,10 @@ Hang more ("add a picture by the window") to show more of them.
 
 Photos need Playwright with Chromium (`npm install playwright && npx
 playwright install chromium`), as the browser tool does. Without it, the tool
-says so and the agent can pass that on.
+tells the agent in a sentence what is missing and the command that adds it
+("No photo: the browser photos are taken with isn't installed on this server…"),
+so the agent can pass that on, and the photo is not counted as something it
+did.
 
 #### Getting around: the map, walking and flying
 
@@ -672,7 +675,9 @@ the conversation lasts, in the words of how they talk: "on the phone with
 writer · at home", or "talking with reviewer · in the lounge" for two in the
 same place (see [Near and far](#near-and-far)). When nobody is
 busy it says so, which tells you a
-quiet world is idle rather than broken. It steps aside while you search.
+quiet world is idle rather than broken. Agents out on their day aren't busy
+and aren't at home either: a line under the list counts them by where they
+are, most first ("6 out: café, benches"). It steps aside while you search.
 Among the rooms and places, those where something is happening come first,
 with a coloured edge and a word for the most pressing thing there and how
 many are doing it, then how many others are busy ("waiting on you · 2 more
@@ -1156,8 +1161,8 @@ and forth stays on. Where their bodies are is looked at again at each
 exchange, so two who end up in the same place (both called to the same
 meeting, say) are face to face from then on. A message that doesn't go
 through hangs up: one that fails, and one turned back before it is sent, say
-because its arguments are the wrong kind (`to` given as a name, not a list)
-or a person refuses the approval. A message an agent sends itself is no
+because its arguments are the wrong kind (two names run together in one
+string where `to` takes a list) or a person refuses the approval. A message an agent sends itself is no
 talk; one to an agent without a body puts the sender on the phone to it. A
 message sent on to a desk room (`rooms.desks`) is said in that room instead,
 so the body goes to that room's meeting room, as for anything said in a room.
@@ -1513,7 +1518,9 @@ conversation is still being found when you start typing.
 Talking to an agent whose body isn't where you are is a call: the same
 conversation, in a phone in your hand, headed "On the phone with planner",
 its words edged in dashes as a call's are over a head (see [Near and
-far](#near-and-far)). With nobody to stand beside in the agent's own view,
+far](#near-and-far)). An agent that leaves while you talk, sent home or off
+on its day, is still face to face, its card beside it, as it walks to the
+door; the call starts once it is through it. With nobody to stand beside in the agent's own view,
 it docks at the side. While a card has most of the room, the conversation
 shows only your last exchange and keeps out of the card's way, docked at the
 side if it has to be; it steps aside altogether while the agent's own card
@@ -1983,7 +1990,7 @@ brought up close, everything, with its buttons and its lists to scroll.
 
 | Kind | What it shows | Brought up close |
 |---|---|---|
-| `status_board` | Every agent by what it is doing: waiting on you, stuck (a turn that failed or stalled), working, talking (each with what and for how long), then idle and asleep with what each did last. From afar, a big count for each, the stuck only while some are. | Click an agent to go to it, its card open beside you. |
+| `status_board` | Every agent by what it is doing: waiting on you, stuck (a turn that failed or stalled), working, talking (each with what and for how long), out and about on its day (at the café, on a bench, at a friend's, in the words of its outing), then idle and asleep with what each did last. From afar, a big count for each, the stuck and the out only while some are. | Click an agent to go to it, its card open beside you, in the place its body is in. |
 | `feed` (activity feed) | What agents did lately, newest first: replies, tools used (the same one used again and again folded into one line, "searching the web ×3"), posts in rooms, tasks finished. | Chips narrow it to replies, tools, posts or done, and to the agents here. A finished task opens its card; anything else the agent's. |
 | `needs_board` | Every approval and question waiting on you, with the call an approval is for: its first three arguments, cut at 160 characters, saying how many more there are. | **Approve** and **Deny** right there, for an approval the page has the details of, whose whole call the board shows, and which has no stricter flow of its own. A purchase or a trusted action says it is approved in the chat that asked for it, and offers Deny; a call too long to show in full says to approve it from **Details**, whose card shows all of it. Neither button takes the second click of a double click. **Answer** and **Details** open the card. |
 | `todo` (to-do list) | One agent's open tasks on a pad: what is in hand first, then blocked, then waiting to start. In a home, its owner's. | A line opens its task. |
@@ -2090,7 +2097,10 @@ The card shows each request the agent is waiting on:
   chat** opens the conversation it asked in, when that was one of your web
   chats with the agent, so the answer goes where the question is; otherwise
   your chat with the agent as it stands. The question is already quoted at
-  the start of your message.
+  the start of your message, and the cursor is in the box after it, ready
+  for your answer; with a reply still coming in, it goes there once the
+  reply is done, unless you have started typing somewhere else by then. A
+  message a kiosk starts for you puts the cursor there the same way.
 
 What you did stays on the card after the agent stops waiting ("Approved.
 planner carries on."), and the `!` goes as soon as its activity changes.
@@ -2188,7 +2198,9 @@ own. `last` is the status line it showed for its last tool call ("posting in
 used none, "talking to planner", "replying", or, for a turn a room woke,
 "talking in #trip" when its answer reached the room and "reading #trip" when
 it kept quiet. A reply that reaches the room after its tools is the last
-thing it did. `next` is the soonest wake it booked with the `schedule` tool,
+thing it did. Only a tool call that worked counts: a photo it couldn't take,
+or a call the agent loop turned back, was never done, so the turn reads as the
+reply it gave instead. `next` is the soonest wake it booked with the `schedule` tool,
 or its next turn when it runs on its own, worked out the way the worker does
 it: outside the hours it keeps to (`cadence.window`), or once it has had its
 turns for the day, it is when those come round again. A time that has passed

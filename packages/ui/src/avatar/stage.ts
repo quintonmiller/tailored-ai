@@ -144,7 +144,7 @@ import { drawScreen, drawStrip, pageAt, type ScreenCard } from "./screens";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { behindView, blocksView, facingSurface, focusDistance, focusFraming, overWalls, solidInWay } from "./surfaces";
-import { byPhone, heardThrough, standBy, talkingHere, talkMove } from "./talk";
+import { byPhone, heardThrough, presentIn, standBy, talkingHere, talkMove } from "./talk";
 import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
 import {
@@ -610,6 +610,11 @@ export async function createStage(
     visitor?: boolean;
     /** The agent the visitor is standing next to, when it changes; undefined when none is. */
     onNear?: (agent: string | undefined) => void;
+    /**
+     * The agents whose bodies are in the place, when that changes: those here,
+     * and those still walking out of it, who are here until they reach the door.
+     */
+    onPresent?: (agents: string[]) => void;
     /**
      * Something made to be used was clicked: a kiosk, a task board, a screen, a
      * calendar. Its action; on a board, what was hit; on a screen, the page up.
@@ -1222,7 +1227,8 @@ export async function createStage(
   const passing = new Set<string>();
   // Bodies walking out, each gone once it gets where it is going, or by `until` (seconds on the stage's clock); one
   // going by in the town says whose it is (`agent`), so its next walk takes its place.
-  const departing: { fig: Figure; from: number; until?: number; agent?: string }[] = [];
+  /** Bodies on their way out, gone at the door: one leaving the place (`leaving`), or one passing by outdoors. */
+  const departing: { fig: Figure; from: number; until?: number; agent?: string; leaving?: boolean }[] = [];
   // When the stage came to the place it shows, and which place that is, counted: see `meet`.
   let placedAt = performance.now();
   let placeGen = 0;
@@ -2921,6 +2927,19 @@ export async function createStage(
 
   /** The body an agent has in this room, if it has one here. */
   const figureOf = (agent: string): Figure | undefined => (agent === self ? me : companions.get(agent));
+  /** An agent's body in the place: here, or on its way out of it, which is still here until it reaches the door. */
+  const bodyOf = (agent: string): Figure | undefined =>
+    figureOf(agent) ?? departing.find((d) => d.leaving && d.agent === agent)?.fig;
+  /** Who is in the place, as last said to the page. */
+  let present: string | undefined;
+  /** Say who is in the place, when it has changed: those here, and those still walking out. */
+  const sayPresent = () => {
+    if (!opts.onPresent) return;
+    const now = presentIn(companions.keys(), departing);
+    if (now.join("\n") === present) return;
+    present = now.join("\n");
+    opts.onPresent(now);
+  };
 
   // Whose tag says more: the body under the pointer, and the one a visitor stands next to.
   let hovered: string | undefined;
@@ -3123,9 +3142,11 @@ export async function createStage(
         fig,
         from: clock,
         agent,
+        leaving: true,
         ...(outdoors ? { until: clock + (far * 1.6) / PASSING_PACE + 8 } : {}),
       });
     }
+    sayPresent();
     // Arriving after the stage has settled in this place is coming in; any sooner, it was here already.
     const coming = !opts.still && performance.now() - placedAt > SETTLED_MS;
     const gen = placeGen;
@@ -3180,6 +3201,7 @@ export async function createStage(
           companions.set(c.agent, figure);
           rekeep();
           show(c.agent, figure);
+          sayPresent();
           // Still where you came in: the shot of the room takes in whoever has just come.
           if (entering.holds) aimArrival();
           // The agent you came to see: you stand in front of it now that it is here.
@@ -3792,7 +3814,8 @@ export async function createStage(
   const anchorOnStage = (a: Anchor): { target?: PanelIn["target"]; floor?: [number, number] } => {
     if ("held" in a) return {};
     if ("agent" in a || "you" in a) {
-      const f = "you" in a ? (opts.visitor ? me : undefined) : figureOf(a.agent);
+      // A card beside an agent stays beside it as it walks out, until it is gone through the door.
+      const f = "you" in a ? (opts.visitor ? me : undefined) : bodyOf(a.agent);
       if (!f) return {};
       const body = bodyOnStage(f);
       // What is over its head is part of what the panel is about: its name, what it is doing, what it says.
@@ -4114,6 +4137,7 @@ export async function createStage(
       if ((t - from > 0.5 && !fig.moving) || t > (until ?? from + LEAVING_SECONDS)) {
         fig.dispose();
         departing.splice(i, 1);
+        sayPresent();
       }
     }
     // The tags that say more keep up: what they are doing changes, and "40 min ago" goes on counting.
@@ -4214,6 +4238,7 @@ export async function createStage(
     turnedFor.clear();
     kept = new Map();
     for (const d of departing.splice(0)) d.fig.dispose();
+    sayPresent();
     placedAt = performance.now();
     placeGen++;
     greeting = undefined;
@@ -4380,6 +4405,7 @@ export async function createStage(
           // Still on its last walk: that body goes, and this one sets out from the door it left by.
           for (let i = departing.length - 1; i >= 0; i--)
             if (departing[i].agent === agent) departing.splice(i, 1)[0].fig.dispose();
+          sayPresent();
           const [dx, dz] = [walker.to[0] - walker.from[0], walker.to[1] - walker.from[1]];
           const start = { id: "", name: "", place: "", at: walker.from, facing: (Math.atan2(dx, dz) * 180) / Math.PI };
           const fig = new Figure(model, room, start, {

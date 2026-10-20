@@ -1037,6 +1037,50 @@ function ensureUserMessagePresent(trimmed: Message[], original: Message[]): Mess
   return [...trimmed.slice(0, insertAt), latestUser, ...trimmed.slice(insertAt)];
 }
 
+/**
+ * Arguments in the shape the tool's schema asks for, where what the model
+ * meant is plain: one name where a list of names goes is that list, of one,
+ * and a list written out as JSON text (`"[\"writer\", \"editor\"]"`) is that
+ * list. Turned back instead, the call costs a round and teaches little: a
+ * model that writes `to: "writer"` tends to write it again. Only a string
+ * for a list of strings (or of items the schema doesn't type) is lifted, and
+ * not one that reads as several (with a comma in it, or JSON that isn't a
+ * list of strings): lifted, that would be one wrong item the tool can't tell
+ * from a right one. Anything else goes on to validation as it came.
+ */
+export function liftArgs(tool: Tool, args: Record<string, unknown>): Record<string, unknown> {
+  const properties = (
+    tool.parameters as { properties?: Record<string, { type?: unknown; items?: { type?: unknown } }> }
+  )?.properties;
+  if (!properties) return args;
+  let lifted = args;
+  for (const [key, value] of Object.entries(args)) {
+    const prop = properties[key];
+    if (typeof value !== "string" || prop?.type !== "array") continue;
+    if (prop.items?.type !== undefined && prop.items.type !== "string") continue;
+    const list = listIn(value);
+    if (!list) continue;
+    if (lifted === args) lifted = { ...args };
+    lifted[key] = list;
+  }
+  return lifted;
+}
+
+/** The list of strings one string plainly is (`liftArgs`): a list in JSON, or the one item; none when it is unclear. */
+function listIn(value: string): string[] | undefined {
+  const text = value.trim();
+  if (text.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      return Array.isArray(parsed) && parsed.every((v) => typeof v === "string") ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  // Several in one string, or an object in JSON, is no one item.
+  return text.startsWith("{") || text.includes(",") ? undefined : [value];
+}
+
 /** Validate tool arguments against the tool's parameter schema. Returns an error string or null if valid. */
 function validateToolArgs(tool: Tool, args: Record<string, unknown>): string | null {
   const schema = tool.parameters as {
@@ -1281,7 +1325,8 @@ async function executeToolCall(
   // What must stay authoritative after a human says yes does not belong here:
   // those ceilings live inside the tools themselves — `exec`'s allowlist, the
   // path boundary, the sandbox — where nothing can reorder them.
-  let args = call.arguments;
+  // Lifted first, so a subscriber, the approval and the tool all see the shape the schema asks for.
+  let args = liftArgs(tool, call.arguments);
   if (opts.events) {
     const decided = await opts.events.waterfall("agent.pre_tool_use", {
       sessionId: opts.session.id,
@@ -1290,7 +1335,7 @@ async function executeToolCall(
       tool: call.name,
       toolUseId: call.id,
       cwd: context.workingDirectory,
-      args: call.arguments,
+      args,
     });
     if (decided.deny) return { output: decided.deny };
     args = decided.args;

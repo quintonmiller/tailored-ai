@@ -108,6 +108,20 @@ export function withTalks(
 }
 
 /**
+ * Who is in the place to talk to face to face, in order: the agents whose
+ * bodies are `here`, and those still walking out of it (`leaving`, in
+ * `departing`), who are here until they reach the door. A body only going
+ * by outdoors, on its way somewhere else, isn't anyone you are with.
+ */
+export function presentIn(
+  here: Iterable<string>,
+  departing: readonly { agent?: string; leaving?: boolean }[],
+): string[] {
+  const leaving = departing.flatMap((d) => (d.leaving && d.agent ? [d.agent] : []));
+  return [...new Set([...here, ...leaving])].sort();
+}
+
+/**
  * Who faces whom here, of the bodies `here`, and whether each is the one to
  * walk over when they are too far apart to talk: each agent talking face to
  * face with another here, by its talk. The one who spoke first goes over;

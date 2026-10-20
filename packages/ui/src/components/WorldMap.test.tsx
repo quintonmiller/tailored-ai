@@ -67,6 +67,30 @@ function render(over: Partial<Parameters<typeof WorldMap>[0]> = {}) {
 const tiles = () => [...container.querySelectorAll(".world-map-place")] as HTMLButtonElement[];
 
 describe("WorldMap", () => {
+  it("says who is out on their day, apart from who is busy", () => {
+    const out = (agent: string, errand: string, what: string) => ({
+      agent,
+      doing: "idle" as const,
+      what,
+      routine: { errand },
+    });
+    render({
+      activities: {
+        planner: out("planner", "cafe", "having a coffee at the café"),
+        writer: out("writer", "bench", "sitting on a bench"),
+        reviewer: out("reviewer", "cafe", "having a coffee at the café"),
+      },
+    });
+    expect(container.querySelector(".world-map-quiet")?.textContent).toBe("Nobody is busy.");
+    expect(container.querySelector(".world-map-out")?.textContent).toBe("3 out: café, benches");
+    // Nobody out: just nobody busy, and no line for it.
+    render({ activities: {} });
+    expect(container.querySelector(".world-map-quiet")?.textContent).toBe(
+      "Nobody is busy: every agent is idle or asleep.",
+    );
+    expect(container.querySelector(".world-map-out")).toBeNull();
+  });
+
   const sections = () => [...container.querySelectorAll("h3")].map((h) => h.textContent);
   const people = () => [...container.querySelectorAll(".world-map-who")] as HTMLButtonElement[];
   const type = (text: string) =>

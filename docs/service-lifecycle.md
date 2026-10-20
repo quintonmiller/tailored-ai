@@ -26,6 +26,15 @@ whose process is gone is treated as absent rather than as a lock.
 watches the child, so a start that dies during boot reports a failure with the
 tail of the log rather than a pid and a lie.
 
+`stop` sends SIGTERM and waits up to 30 seconds before it kills the process.
+Pages left open don't hold it up: an open page keeps event streams (the 3D
+world keeps `/api/state/events`, among others), which never finish on their
+own, so the HTTP server ends every stream it has open as it shuts down, lets
+each connection go once nothing is being answered on it, and gives a request
+still being answered two seconds before closing its connection
+(`packages/server/src/streams.ts`). A browser sees its stream end, and tries
+again once the server is back.
+
 ## The four lifecycle events
 
 They are ordinary hooks, declared in the deployment's `hooks.on`. What makes

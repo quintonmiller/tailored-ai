@@ -17,6 +17,7 @@ import {
   companyOf,
   drawsModel,
   facesShow,
+  keptOnArrival,
   lastExchange,
   newest,
   roomOf,
@@ -55,6 +56,8 @@ const stage = vi.hoisted(() => ({
   calendars: [] as { title: string; names: boolean; wakes: { key: string }[]; done: { key: string }[] }[],
   /** The last visitor stage's report of who you are standing next to. */
   onNear: undefined as ((agent: string | undefined) => void) | undefined,
+  /** The last stage's report of whose bodies are in the place, those walking out included. */
+  onPresent: undefined as ((agents: string[]) => void) | undefined,
   /** What the stage was told each agent last said, each time. */
   speech: [] as Record<string, { text: string; at: string }>[],
   cues: [] as string[],
@@ -125,6 +128,7 @@ vi.mock("../avatar/stage", () => ({
       onPick?: (agent: string, at: { x: number; y: number }) => void;
       visitor?: boolean;
       onNear?: (agent: string | undefined) => void;
+      onPresent?: (agents: string[]) => void;
       onUse?: (action: string, on?: Record<string, string>, thing?: string) => void;
       onLine?: (agent: string, text: string, nearness: number, phone?: boolean) => void;
       company?: { agent: string }[];
@@ -149,6 +153,7 @@ vi.mock("../avatar/stage", () => ({
     stage.arrivals.push(opts.arriveFrom);
     stage.visitors.push(!!opts.visitor);
     stage.onNear = opts.onNear;
+    stage.onPresent = opts.onPresent;
     stage.onUse = opts.onUse;
     stage.calls.push({ url, input, animations: opts.animations, chooseIdle: opts.chooseIdle, onPick: opts.onPick });
     stage.agents.push(opts.agent);
@@ -265,6 +270,8 @@ let agentsInfo: Record<string, { online?: { enabled?: boolean } }> = {};
 let speechRecords: { id: string; data: { agent: string; text: string; at: string } }[] = [];
 /** Bodies out on their day, as the places plugin's `visit` records say. */
 let outingRecords: { id: string; data: Record<string, unknown> }[] = [];
+/** Where agents went to live, as `whereabouts` records: none is everyone at home. */
+let whereaboutsRecords: { id: string; data: Record<string, unknown> }[] = [];
 /** What rooms said last, as the places plugin's `chatter` records say. */
 let chatterRecords: { id: string; data: Record<string, unknown> }[] = [];
 /** Agents the page was asked to switch to. */
@@ -290,6 +297,8 @@ let ownAgents: Record<string, unknown>[] = [];
 let mapExtra: Record<string, unknown>[] = [];
 /** Where planner's body is on the map: at home, or gone to the trip's meeting room. */
 let plannerAt = "home:planner";
+/** Who the scene of planner's home has in it. */
+let plannerHome = ["planner"];
 // When the map says the trip's room last woke someone, if it says.
 let tripTalked: string | undefined;
 /** The town's plan, as small as it can be: the town hall, two houses, and the office. */
@@ -482,9 +491,11 @@ beforeEach(() => {
   agentsInfo = {};
   speechRecords = [];
   outingRecords = [];
+  whereaboutsRecords = [];
   chatterRecords = [];
   mapExtra = [];
   plannerAt = "home:planner";
+  plannerHome = ["planner"];
   tripTalked = undefined;
   stage.agents.length = 0;
   activityRecords = [];
@@ -576,6 +587,8 @@ beforeEach(() => {
       if (url.startsWith("/api/state/emote?")) return new Response(JSON.stringify({ records: emoteRecords }));
       if (url.startsWith("/api/state/body?")) return new Response(JSON.stringify({ records: bodyRecords }));
       if (url.startsWith("/api/state/visit?")) return new Response(JSON.stringify({ records: outingRecords }));
+      if (url.startsWith("/api/state/whereabouts?"))
+        return new Response(JSON.stringify({ records: whereaboutsRecords }));
       if (url.startsWith("/api/state/chatter")) return new Response(JSON.stringify({ records: chatterRecords }));
       if (url === "/api/agents") return new Response(JSON.stringify(agentsInfo));
       if (url === "/api/ext/builtin:places/map")
@@ -623,7 +636,7 @@ beforeEach(() => {
           JSON.stringify({
             id: "home:planner",
             place: { ...home, name: "planner's room" },
-            company: [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner" }],
+            company: plannerHome.map((a) => ({ agent: a, name: a, avatar: `/api/live/avatar?agent=${a}` })),
             doors: [{ wall: "back", along: 1, to: "town", label: "Maple Lane", kind: "town" }],
           }),
         );
@@ -1017,6 +1030,7 @@ describe("the chat page's scene", () => {
     company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
     agentsInfo = { planner: { online: { enabled: true } } };
     activityRecords = [{ id: "planner", data: { agent: "planner", doing: "working", what: "taking a photo" } }];
+    whereaboutsRecords = [{ id: "planner", data: { place: "shared:lounge" } }];
     await render();
     const buttons = await pick("planner");
     expect(container.querySelector(".agent-menu-head")?.textContent).toMatch(/planner.*taking a photo/);
@@ -1026,11 +1040,10 @@ describe("the chat page's scene", () => {
       "Pause for 4 hours",
       "About planner",
     ]);
-    // Home from a meeting room it is visiting and from the shared place it went to, whichever it is in: nothing to
-    // end in one of them is no trouble.
-    missing = ["/api/state/visit/planner"];
+    // Home from the shared place it went to: the record it has, and not a visit it doesn't have, which would only be
+    // a 404 in the console.
     await press(buttons, "Send home");
-    expect(deleted).toEqual(["/api/state/visit/planner", "/api/state/whereabouts/planner"]);
+    expect(deleted).toEqual(["/api/state/whereabouts/planner"]);
     expect(container.querySelector(".agent-menu-problem")).toBeNull();
     // Done, it closes.
     expect(container.querySelector(".agent-menu")).toBeNull();
@@ -1159,6 +1172,49 @@ describe("the chat page's scene", () => {
     await go("talker");
     expect(chattedWith).toEqual(["planner", "talker", "planner", "talker"]);
     expect(stage.visitors.at(-1)).toBe(false);
+  });
+
+  it("keeps your conversation face to face while the agent walks out, and makes it a call once it has gone", async () => {
+    // Sent home, the conversation card said "On the phone with artist" while artist still sat beside you.
+    await render({ following: true, dialogue: true, panelOpen: false });
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Map").click());
+    await settle();
+    const planner = [...container.querySelectorAll(".world-map-who")].find(
+      (b) => b.querySelector(".world-map-who-name")?.textContent === "planner",
+    ) as HTMLButtonElement;
+    await act(async () => planner.click());
+    await settle(60);
+    expect(chattedWith.at(-1)).toBe("planner");
+    const shown = () => container.querySelector(".talk-shown")?.textContent;
+    expect(shown()).toBe("beside planner");
+    await act(async () => stage.onPresent?.(["planner"]));
+    // Off out: the scene has it gone, but its body is still on its way to the door.
+    plannerHome = [];
+    await act(async () => FakeEventSource.last?.emit("change", { type: "visit", id: "planner", op: "create" }));
+    await settle(60);
+    expect(stage.company.at(-1)).toEqual([]);
+    expect(shown()).toBe("beside planner");
+    // Through the door: now it's a call.
+    await act(async () => stage.onPresent?.([]));
+    await settle();
+    expect(shown()).toBe("on the phone with planner");
+  });
+
+  it("goes from the status board to an agent, its card open beside it once you get there", async () => {
+    // The docs say a click on the board takes you to it with its card open; arriving at its home closed the card.
+    await render({ following: true });
+    await settle(60);
+    await act(async () => stage.onUse?.("go", { agent: "planner" }));
+    await settle(60);
+    expect(chattedWith).toEqual(["planner"]);
+    expect(stage.visitors.at(-1)).toBe(true);
+    expect(container.querySelector(".world-agent .world-agent-name")?.textContent).toMatch(/planner/);
+    // Arriving somewhere with another agent's card open still puts that card away: it isn't what you came for.
+    expect(keptOnArrival({ kind: "agent", agent: "writer" }, "planner", true)).toBe(false);
+    expect(keptOnArrival({ kind: "agent", agent: "planner" }, "planner", false)).toBe(false);
+    expect(keptOnArrival({ kind: "map" }, "planner", false)).toBe(true);
   });
 
   it("goes straight to an agent waiting on you, in front of it once, and not again on a later visit", async () => {
@@ -1628,7 +1684,8 @@ describe("the chat page's scene", () => {
     const buttons = await pick("planner");
     expect(container.querySelector(".agent-menu-head")?.textContent).toMatch(/planner.*having a coffee at the café/);
     await press(buttons, "Send home");
-    expect(deleted).toContain("/api/state/visit/planner");
+    // Its day out ends; it lives at home, which is no record, so there is none to delete (and no 404 for it).
+    expect(deleted).toEqual(["/api/state/visit/planner"]);
     // The card on the trip's door, and its whiteboard inside.
     expect(stage.talked.at(-1)?.["room:local:trip"]).toBe(said);
     // The room woke someone since it last said anything: the door and the board both say so.

@@ -1956,9 +1956,10 @@ export class Talks {
  * to another agent, by its name or its label in rooms (`agentFor`). Not one
  * sent on to a desk, which is said in a room, where the body goes to say it
  * instead; nor one that would be refused: arguments of the wrong kind, which
- * the loop turns back before the tool runs (`to` is a list), or what the room
- * tool would refuse (no words, nobody, itself). Arguments are read as the
- * room tool reads them, so `to: ["editor"]` names editor.
+ * the loop turns back before the tool runs, or what the room tool would
+ * refuse (no words, nobody, more than one, itself). Arguments are read as the
+ * room tool reads them, so `to: ["editor"]` and `to: "editor"` both name
+ * editor (the loop lifts the one into the other).
  */
 export function messageTo(
   tool: string,
@@ -1970,9 +1971,14 @@ export function messageTo(
   const { action, body, agent, to, member } = args;
   const given = (v: unknown) => v !== undefined && v !== null;
   if ([action, body, agent, member].some((v) => given(v) && typeof v !== "string")) return undefined;
-  if (given(to) && !Array.isArray(to)) return undefined;
+  if (given(to) && !Array.isArray(to) && typeof to !== "string") return undefined;
   if (String(action ?? "").toLowerCase() !== "dm" || !String(body ?? "").trim()) return undefined;
-  const label = String(agent ?? to ?? member ?? "").trim();
+  // As the room tool reads it: the first of these to name anyone, and only one.
+  const named = [agent, to, member]
+    .map((v) => (Array.isArray(v) ? v : given(v) ? [v] : []).map(String).filter(Boolean))
+    .find((n) => n.length > 0);
+  if (named?.length !== 1) return undefined;
+  const label = named[0].trim();
   const name = label ? known.agentFor(label) : undefined;
   return name && name !== from && !(known.desks?.[name] ?? known.desks?.[label]) ? name : undefined;
 }

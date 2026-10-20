@@ -960,11 +960,16 @@ function useTalkWithYou(opts: {
   return { talk, lines, spoke };
 }
 
-/** An agent's body home: out of any meeting room it is visiting, and back from any shared place it went to. */
-async function sendHome(who: string): Promise<void> {
-  for (const type of ["visit", "whereabouts"]) {
+/**
+ * An agent's body home: out of any meeting room it is visiting or day out it is on (`visit`), and back from any
+ * shared place it went to (`whereabouts`). Only the records it has (`has`): no record is home already, which is how
+ * most agents are, and asking to delete one that isn't there is an error in the browser's console for nothing.
+ */
+async function sendHome(who: string, has: (type: "visit" | "whereabouts") => boolean): Promise<void> {
+  for (const type of ["visit", "whereabouts"] as const) {
+    if (!has(type)) continue;
     const res = await fetch(`/api/state/${type}/${encodeURIComponent(who)}`, { method: "DELETE" });
-    // Nothing to delete is a body that wasn't there to begin with.
+    // Gone in the meantime: home already.
     if (res.status !== 404) await must(Promise.resolve(res), "send it home");
   }
 }
@@ -1128,7 +1133,7 @@ export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
  * thing in the room it was opened from, a board, a kiosk, a screen or a
  * calendar, which it is kept beside, as is whatever it opens in turn.
  */
-type Panel =
+export type Panel =
   | { kind: "map" }
   | { kind: "tasks"; at?: string }
   | { kind: "task"; id: string; fromList?: boolean; at?: string }
@@ -1141,6 +1146,16 @@ type Panel =
   | { kind: "dashboard"; focus?: string; at?: string }
   /** A calendar's full list: one agent's, those of whoever is in the place it hangs in, or everyone's. */
   | { kind: "calendar"; who?: string; here?: true; at?: string };
+
+/**
+ * Whether what is open stays as you start talking to `who`: the map always; arriving, what an agent waits on you for,
+ * and the card of the agent you arrived at.
+ */
+export function keptOnArrival(open: Panel, who: string, arriving: boolean): boolean {
+  if (open.kind === "map") return true;
+  if (!arriving) return false;
+  return open.kind === "need" || (open.kind === "agent" && open.agent === who);
+}
 
 /** The thing in the room a panel was opened from, as a field to pass on to what it opens next. */
 const atOf = (panel: Panel | null): { at?: string } => (panel && "at" in panel && panel.at ? { at: panel.at } : {});
@@ -1308,6 +1323,9 @@ export function useChatStage({
   const closePanel = useCallback(() => setPanel(null), []);
   const [listView, setListView] = useState<ListView>({ filter: "open", who: undefined });
   const [near, setNear] = useState<string | undefined>(undefined);
+  // Whose bodies the stage has in the place: those the scene says are here, and any still walking out, who are here
+  // until they reach the door (`onPresent`).
+  const [present, setPresent] = useState<string[]>([]);
   const visited = useScene(visiting);
   // What is on screen: the place you are going to once it has come, and until then the one you are in, so a door
   // or the map never shows a room that isn't there yet.
@@ -1421,6 +1439,7 @@ export function useChatStage({
   // biome-ignore lint/correctness/useExhaustiveDependencies: arriving anywhere is what clears it.
   useEffect(() => {
     setNear(undefined);
+    setPresent([]);
   }, [visiting]);
   const doings = useRecords<AgentActivity>("activity", showStage);
   // What every agent's day has it doing while it has nothing else to (`routines.ts`): out on an errand, or asleep for
@@ -1451,15 +1470,21 @@ export function useChatStage({
   );
   const shown = home || "default";
   const talking = agent || "default";
+  // Home, by whichever of its records it has: the visit it is on, and where it went to live.
+  const homeAgain = useCallback(
+    (who: string) => sendHome(who, (type) => !!(type === "visit" ? outings : lives)[who]),
+    [outings, lives],
+  );
   // Where you are says who you talk to: an agent's own home is a conversation with it, and coming back to the
   // agent you came from is one with it again. Anywhere else, the conversation you had goes on. Through a door or
   // by the map, arriving is the same.
   const host = visiting ? (visiting.startsWith("home:") ? visiting.slice("home:".length) : undefined) : shown;
   // Talking to someone is your conversation with them: a card steps aside for it, beside them or on the phone.
-  // Arriving at an agent's home to see to what it waits on keeps that card open: it is what you came for.
+  // Arriving at an agent's home to see to what it waits on keeps that card open, and so does arriving with its own
+  // card open (from the status board, say): it is what you came for.
   const chatWith = useCallback(
     (who: string, arriving = false) => {
-      setPanel((open) => (open && open.kind !== "map" && !(arriving && open.kind === "need") ? null : open));
+      setPanel((open) => (open && !keptOnArrival(open, who, arriving) ? null : open));
       onChatWith?.(who);
     },
     [onChatWith],
@@ -1489,7 +1514,7 @@ export function useChatStage({
       if (placeId?.startsWith("shared:") || placeId?.startsWith("room:") || outHere)
         actions.push({
           label: who === shown ? "Go home" : "Send home",
-          run: () => sendHome(who),
+          run: () => homeAgain(who),
         });
       if (online.has(who)) {
         const resting = activities[who]?.doing === "asleep" && activities[who]?.detail !== "agents are paused";
@@ -1524,7 +1549,7 @@ export function useChatStage({
       });
       return actions;
     },
-    [shown, talking, onChatWith, chatWith, placeId, online, activities, needs, outings],
+    [shown, talking, onChatWith, chatWith, placeId, online, activities, needs, outings, homeAgain],
   );
   // A click on an agent waiting on you opens what it waits on, rather than the menu.
   const onBody = useCallback(
@@ -1744,7 +1769,8 @@ export function useChatStage({
   const you = useTalkWithYou({
     on: showStage && !!showing.visiting,
     agent: talking,
-    near: !!showing.visiting && company.some((c) => c.agent === talking),
+    // Face to face until its body has gone: sent home, it is still here while it walks to the door.
+    near: !!showing.visiting && (company.some((c) => c.agent === talking) || present.includes(talking)),
     sending,
     busy,
     exchange: exchange ?? {},
@@ -2440,7 +2466,7 @@ export function useChatStage({
         tasksWake={watcher ? watcher.created || watcher.updated : undefined}
         onChat={() => chatWith(who)}
         {...(where && where.id !== (visiting ?? own.id) ? { onVisit: () => go(where.id) } : {})}
-        onSendHome={() => sendHome(who)}
+        onSendHome={() => homeAgain(who)}
         onTasks={() => {
           setListView({ filter: "open", who });
           setPanel({ kind: "tasks" });
@@ -2454,11 +2480,12 @@ export function useChatStage({
   const plaqueWords = changeable && placeId && room.name ? wordsOnPlaque(placeId, room.name) : undefined;
   const where = useMemo(
     (): Where => ({
-      here: new Set(here),
+      // A body on its way out is still here to stand a card beside, until it is through the door.
+      here: new Set([...here, ...present]),
       things: room.props.map((p) => ({ id: p.id, kind: p.kind, ...(p.action ? { action: p.action } : {}) })),
       plaque: !!plaqueWords && !!plaqueSpot(room),
     }),
-    [here, room, plaqueWords],
+    [here, present, room, plaqueWords],
   );
   // Your conversation, beside whoever you talk to, unless something else has its place: the whole chat open beside
   // the world, the room being rearranged, the map, that agent's own card, or a meeting room's own conversation.
@@ -2553,6 +2580,7 @@ export function useChatStage({
         menuFor={menuFor}
         visitor={!!showing.visiting}
         onNear={setNear}
+        onPresent={setPresent}
         tools={editor.editing ? editor.tools : tools}
         {...(!wide ? { bar } : {})}
         tasks={boardTasks}

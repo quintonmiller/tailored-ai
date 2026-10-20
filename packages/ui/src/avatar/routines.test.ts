@@ -8,9 +8,11 @@ import {
   drawNotes,
   flowRows,
   inkFor,
+  isOut,
   notesFrom,
   occupied,
   outingNow,
+  outWords,
   talkedAt,
   talkedWords,
   withRoutines,
@@ -53,6 +55,27 @@ describe("an agent's day, as the world shows it", () => {
   const activities = Object.fromEntries(
     ["writer", "planner", "coach", "guest", "host", "talker"].map((a) => [a, idle(a)]),
   );
+
+  it("counts those out on their day as out, by where they are: not the host at home, the asleep, or a talk", () => {
+    // The status board said "Everyone is idle or asleep" with six out at the café and on benches.
+    const shown = withRoutines(
+      { ...activities, sitter: idle("sitter") },
+      {
+        ...visits,
+        sitter: { place: "town", until: later, spot: "bench-2", errand: "bench", what: "sitting on a bench" },
+      },
+      NOW,
+    );
+    expect(
+      Object.keys(shown)
+        .filter((a) => isOut(shown[a]))
+        .sort(),
+    ).toEqual(["guest", "planner", "sitter", "writer"]);
+    expect(outWords(shown)).toBe("4 out: café, benches, visiting");
+    // Called away to work, it is busy, not out; and nobody out says nothing.
+    expect(isOut({ ...shown.writer, doing: "working" })).toBe(false);
+    expect(outWords(activities)).toBeUndefined();
+  });
 
   it("says what each is doing out, and who with, in the words the server gave", () => {
     const shown = withRoutines(activities, visits, NOW);

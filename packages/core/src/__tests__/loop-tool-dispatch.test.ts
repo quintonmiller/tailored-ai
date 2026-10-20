@@ -14,7 +14,7 @@
  */
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runAgentLoop } from "../agent/loop.js";
+import { liftArgs, runAgentLoop } from "../agent/loop.js";
 import { newSession } from "../agent/session.js";
 import type { ApprovalHandler, ApprovalRequest } from "../approval.js";
 import { initDatabase } from "../db/schema.js";
@@ -237,5 +237,88 @@ describe("agent.post_tool_use", () => {
 
     expect(used).toHaveLength(1);
     expect(used[0].success).toBe(false);
+  });
+});
+
+describe("one name where a list of names goes", () => {
+  /** A tool that addresses people, by a list of names, and records what it was given. */
+  function addressTool(seen: Array<Record<string, unknown>>): Tool {
+    return {
+      name: "probe",
+      description: "addresses people",
+      parameters: {
+        type: "object",
+        properties: {
+          to: { type: "array", items: { type: "string" } },
+          tags: { type: "array" },
+          spots: { type: "array", items: { type: "object" } },
+          note: { type: "string" },
+        },
+      },
+      async execute(args: Record<string, unknown>): Promise<ToolResult> {
+        seen.push(args);
+        return { success: true, output: "ran" };
+      },
+    };
+  }
+
+  it("runs as the list of one it means, and everyone after the model sees the list", async () => {
+    // `to: "writer"` was turned back with "should be an array, got string", which costs a round and, as the docs
+    // showed it that way, was what a model wrote again.
+    const events = new TypedEventBus();
+    const before: Array<Record<string, unknown>> = [];
+    const after: Array<Record<string, unknown>> = [];
+    events.onWaterfall("agent.pre_tool_use", (p, next) => {
+      before.push(p.args);
+      return next(p);
+    });
+    events.on("agent.post_tool_use", (p) => after.push(p.args));
+    const seen: Array<Record<string, unknown>> = [];
+
+    await run(callsProbe({ to: "writer", note: "hi" }), [addressTool(seen)], { events });
+
+    expect(seen).toEqual([{ to: ["writer"], note: "hi" }]);
+    expect(before).toEqual(seen);
+    expect(after).toEqual(seen);
+  });
+
+  it("lifts only a string, for a list of strings or of anything", () => {
+    const tool = addressTool([]);
+    expect(liftArgs(tool, { to: "writer", tags: "urgent" })).toEqual({ to: ["writer"], tags: ["urgent"] });
+    // Already a list, a string where a string goes, or a string for a list of something else: as it came.
+    const asIs = { to: ["writer"], note: "hi", spots: "the couch", other: "x" };
+    expect(liftArgs(tool, asIs)).toBe(asIs);
+    // A number for a list of names is still for validation to turn back.
+    expect(liftArgs(tool, { to: 7 })).toEqual({ to: 7 });
+  });
+
+  it("reads a list written out as JSON as that list, and leaves a string that reads as several as it came", () => {
+    const tool = addressTool([]);
+    // Lifted as one item, each was a name nobody has, or for another tool's list (tags, paths) a wrong value it
+    // couldn't tell from a right one; turned back, the model writes the list again.
+    expect(liftArgs(tool, { to: '["writer", "editor"]' })).toEqual({ to: ["writer", "editor"] });
+    expect(liftArgs(tool, { to: ' ["writer"] ' })).toEqual({ to: ["writer"] });
+    for (const several of ["writer, editor", "[writer, editor]", '["writer", 7]', '{"to": "writer"}'])
+      expect(liftArgs(tool, { to: several })).toEqual({ to: several });
+  });
+
+  it("turns back names given as one string with commas, for the model to write as a list", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const results: string[] = [];
+    await run(callsProbe({ to: "writer, editor" }), [addressTool(seen)], {
+      onToolResult: (_name: string, output: string) => results.push(output),
+    });
+    expect(seen).toEqual([]);
+    expect(results.join("\n")).toMatch(/should be an array, got string/);
+  });
+
+  it("leaves a number where the list goes for validation to turn back", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const results: string[] = [];
+    await run(callsProbe({ to: 7 }), [addressTool(seen)], {
+      onToolResult: (_name: string, output: string) => results.push(output),
+    });
+    expect(seen).toEqual([]);
+    expect(results.join("\n")).toMatch(/should be an array, got number/);
   });
 });

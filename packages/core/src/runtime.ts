@@ -542,13 +542,16 @@ export class AgentRuntime {
     return this._liveSessions;
   }
 
-  /** An agent's `voice:` settings, resolved the way the rest of the agent is. */
-  /** The agent's own `avatar:` setting, or the deployment default's; undefined when neither sets one. */
+  /**
+   * The agent's own `avatar:` setting, or the deployment default's; undefined when neither sets one. Resolved with
+   * no tools, as only the setting is wanted: `resolveAgent` checks a `tools:` list only against tools it is given.
+   */
   avatarFor(agentName?: string): AgentDefinition["avatar"] {
     return resolveAgent(agentName, this._config, [], undefined, this.contextDir, this.kbDir, this.buildResolveOptions())
       .avatar;
   }
 
+  /** An agent's `voice:` settings, resolved the way the rest of the agent is (without its tools, as `avatarFor`). */
   voiceModeFor(agentName?: string): AgentDefinition["voice"] {
     const resolved = resolveAgent(
       agentName,

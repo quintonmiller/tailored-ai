@@ -15,6 +15,7 @@ import type { BoardTask } from "./boards";
 import type { Done, Wake } from "./calendar";
 import { chartGlance, MEASURES, type Measure, measureOf, type StatsData } from "./charts";
 import type { AgentActivity } from "./doing";
+import { isOut } from "./routines";
 import type { ScreenCard, ScreenRow, Tone } from "./screens";
 
 // --------------------------------------------------------------------------
@@ -161,17 +162,22 @@ export function faceOf(prop: { kind: string; shows?: string }): FaceChoice | und
 
 /** A group on the status board, and the doings it gathers. */
 export interface WhoGroupSpec {
-  id: "waiting" | "stuck" | "working" | "talking" | "idle" | "asleep";
+  id: "waiting" | "stuck" | "working" | "talking" | "out" | "idle" | "asleep";
   title: string;
   doings: AgentActivity["doing"][];
 }
 
-/** The groups, in the board's order: what needs a person first, a turn that failed or stalled straight after. */
+/**
+ * The groups, in the board's order: what needs a person first, a turn that
+ * failed or stalled straight after. Out is idle and somewhere on its day (see
+ * `isOut` in `routines.ts`), so it gathers no doing of its own.
+ */
 export const WHO_GROUPS: WhoGroupSpec[] = [
   { id: "waiting", title: "Waiting on you", doings: ["waiting"] },
   { id: "stuck", title: "Stuck", doings: ["stuck"] },
   { id: "working", title: "Working", doings: ["working", "thinking"] },
   { id: "talking", title: "Talking", doings: ["talking"] },
+  { id: "out", title: "Out and about", doings: [] },
   { id: "idle", title: "Idle", doings: ["idle"] },
   { id: "asleep", title: "Asleep", doings: ["asleep"] },
 ];
@@ -198,10 +204,14 @@ export interface WhoGroup extends WhoGroupSpec {
  */
 export function whoGroups(activities: Record<string, AgentActivity>, agents: string[], now = Date.now()): WhoGroup[] {
   const all = [...new Set([...agents, ...Object.keys(activities)])];
-  const rows = all.map((agent): WhoRow & { at: number } => {
+  const groupOf = (a: AgentActivity) =>
+    isOut(a) ? "out" : (WHO_GROUPS.find((g) => g.doings.includes(a.doing))?.id ?? "idle");
+  const rows = all.map((agent): WhoRow & { at: number; group: WhoGroupSpec["id"] } => {
     const a = activities[agent];
-    if (!a) return { agent, doing: "idle", what: "idle", at: Number.NEGATIVE_INFINITY };
-    const quiet = a.doing === "idle" || a.doing === "asleep";
+    if (!a) return { agent, doing: "idle", what: "idle", at: Number.NEGATIVE_INFINITY, group: "idle" };
+    const group = groupOf(a);
+    // Out, what it is doing there says more than what it last did: "having a coffee at the café".
+    const quiet = (a.doing === "idle" || a.doing === "asleep") && group !== "out";
     const last = quiet && a.last?.what ? a.last : undefined;
     const at = whenMs(last ? last.at : a.since);
     const when = last ? ago(last.at, now) : lasting(a.since, now);
@@ -212,13 +222,14 @@ export function whoGroups(activities: Record<string, AgentActivity>, agents: str
       ...(a.detail && !quiet ? { detail: a.detail } : {}),
       ...(when ? { when } : {}),
       at: Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY,
+      group,
     };
   });
   return WHO_GROUPS.map((g) => {
-    const mine = rows.filter((r) => g.doings.includes(r.doing));
+    const mine = rows.filter((r) => r.group === g.id);
     const quiet = g.id === "idle" || g.id === "asleep";
     mine.sort((a, b) => (quiet ? b.at - a.at : a.at - b.at) || a.agent.localeCompare(b.agent));
-    return { ...g, rows: mine.map(({ at: _, ...r }) => r) };
+    return { ...g, rows: mine.map(({ at: _, group: __, ...r }) => r) };
   });
 }
 
@@ -531,8 +542,8 @@ export function statusGlance(groups: WhoGroup[]): ScreenCard {
     id: "status",
     title: "Who's doing what",
     big: {
-      text: busy ? `${busy} busy` : "All quiet",
-      sub: `${count("idle")} idle · ${count("asleep")} asleep${waiting.length ? ` · ${waiting.length} waiting on you` : ""}${stuck.length ? ` · ${stuck.length} stuck` : ""}`,
+      text: busy ? `${busy} busy` : count("out") ? `${count("out")} out` : "All quiet",
+      sub: `${busy && count("out") ? `${count("out")} out · ` : ""}${count("idle")} idle · ${count("asleep")} asleep${waiting.length ? ` · ${waiting.length} waiting on you` : ""}${stuck.length ? ` · ${stuck.length} stuck` : ""}`,
       tone: stuck.length ? "bad" : waiting.length ? "warn" : busy ? "ok" : "dim",
     },
     rows,

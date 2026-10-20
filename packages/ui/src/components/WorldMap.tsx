@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BODY_TYPE, dotColor } from "../avatar/body";
 import type { AgentActivity } from "../avatar/doing";
-import { talkedWords } from "../avatar/routines";
+import { outWords, talkedWords } from "../avatar/routines";
 import type { TownPlan as Plan } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { nameOf } from "../lib/conversations";
@@ -308,6 +308,8 @@ export function WorldMap({
     return mapIndex(places, areas, activities, query, rank);
   }, [places, areas, activities, query]);
   const busy = useMemo(() => busyAgents(places, activities), [places, activities]);
+  // Out on their day, which is neither busy nor idle at home: "6 out: café, benches".
+  const out = useMemo(() => outWords(activities), [activities]);
   // The one place that ends a visit: the agent's own, which is its view rather than somewhere to walk into.
   const backTo = back ? places.find((p) => p.id === back.place) : undefined;
   const first = (id: string) => (searching && id === index.first ? " first" : "");
@@ -427,7 +429,9 @@ export function WorldMap({
             <section aria-label="Busy now" className="world-map-busy-list">
               <h3>Busy now</h3>
               {busy.length === 0 ? (
-                <p className="world-map-quiet">Nobody is busy: every agent is idle or asleep.</p>
+                <p className="world-map-quiet">
+                  {out ? "Nobody is busy." : "Nobody is busy: every agent is idle or asleep."}
+                </p>
               ) : (
                 <ul>
                   {busy.map((b) => (
@@ -463,6 +467,7 @@ export function WorldMap({
                   ))}
                 </ul>
               )}
+              {out && <p className="world-map-out">{out}</p>}
             </section>
           )}
           {index.agents.length > 0 && (

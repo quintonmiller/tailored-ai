@@ -7,7 +7,8 @@
  * "follow the URL" effect then fought its "keep the URL in step" effect, and
  * the view flickered between the two before settling on the wrong one.
  */
-import { act, useContext } from "react";
+import { act, useContext, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatProvider } from "../components/ChatContext";
@@ -618,6 +619,99 @@ describe("what you type stays with its conversation", () => {
     expect(box().value).toBe("Something for the default agent");
   });
 
+  it("puts the cursor in the box after an answer started on a card, ready to finish it", async () => {
+    // "Answer in the chat" filled the right conversation but left the focus on the page.
+    let reply: ((name: string, session: string | undefined, text: string) => void) | undefined;
+    let draft: ((name: string, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      reply = opts.onReply;
+      draft = opts.onDraft;
+      return sceneAt(null);
+    };
+    await render();
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => reply?.("planner", "sess-p", "About your question: "));
+    await settle();
+    expect(box().value).toBe("About your question: ");
+    expect(document.activeElement).toBe(box());
+    // At the end of what is written, to go on from there.
+    expect(box().selectionStart).toBe("About your question: ".length);
+    // A message started for you, from a kiosk say, is the same.
+    box().blur();
+    await act(async () => draft?.("writer", "Draft the trip notes"));
+    await settle();
+    expect(box().value).toBe("Draft the trip notes");
+    expect(document.activeElement).toBe(box());
+  });
+
+  it("puts the cursor after an answer started while a reply comes in, however long the reply takes", async () => {
+    // The box takes no typing while a reply comes in, and the answer waits to go in after it. The cursor waited ten
+    // seconds from the click and gave up, so a reply slower than that (a local model's, often) left it on the page,
+    // a frame callback spinning all the while.
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reply: ((name: string, session: string | undefined, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      reply = opts.onReply;
+      return sceneAt(null);
+    };
+    const question = "About your question: Book the ferry for Saturday morning, or the afternoon one? ";
+    // A box shorter than what is in it, as on a page: the end of the words is off its right edge.
+    const wide = vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(674);
+    const realNow = Date.now.bind(Date);
+    let later = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + later);
+    try {
+      await render();
+      await send("Hey!");
+      await act(async () => reply?.("planner", "sess-p", question));
+      await settle();
+      expect(box().disabled).toBe(true);
+      later = 30_000;
+      await settle();
+      await act(async () => release());
+      await settle();
+      expect(box().value).toBe(question);
+      expect(document.activeElement).toBe(box());
+      expect(box().selectionStart).toBe(question.length);
+      // Scrolled to the end, where the cursor is: a box shows what is typed into it, not where a cursor is put.
+      expect(box().scrollLeft).toBe(674);
+    } finally {
+      wide.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
+  it("leaves the cursor where you put it when you start typing somewhere else while the reply comes in", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reply: ((name: string, session: string | undefined, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      reply = opts.onReply;
+      return sceneAt(null);
+    };
+    const elsewhere = document.createElement("input");
+    document.body.appendChild(elsewhere);
+    try {
+      await render();
+      await send("Hey!");
+      await act(async () => reply?.("planner", "sess-p", "About your question: "));
+      await settle();
+      elsewhere.focus();
+      await act(async () => release());
+      await settle();
+      // The answer is there to finish, and the cursor where you are typing.
+      expect(box().value).toBe("About your question: ");
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
   it("keeps files attached with the conversation they were added to", async () => {
     await render();
     const picker = container.querySelector(".chat-input-bar input[type=file]") as HTMLInputElement;
@@ -905,6 +999,47 @@ describe("your conversation in the world", () => {
     expect((world().querySelector(".world-talk-input") as HTMLInputElement).value).toBe(ROOM_ASK);
     // Ready to send where you are: the whole chat stays hidden.
     expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(true);
+  });
+
+  it("puts the cursor in the box in the world for an answer, though the stage puts the card in place a frame later", async () => {
+    // The stage draws a card into a holder of its own and puts that in the page once it knows where it goes: the box
+    // isn't in the page yet when it is drawn, which left the focus on the page.
+    let holder: HTMLDivElement | null = null;
+    function TalkPlacedLater() {
+      const [box] = useState(() => document.createElement("div"));
+      useEffect(() => {
+        const frame = requestAnimationFrame(() => {
+          box.className = "fake-stage";
+          document.body.appendChild(box);
+          holder = box;
+        });
+        return () => {
+          cancelAnimationFrame(frame);
+          box.remove();
+        };
+      }, [box]);
+      return createPortal(useContext(TalkSlot), box);
+    }
+    let reply: ((name: string, session: string | undefined, text: string) => void) | undefined;
+    // The conversation steps aside while the card that asked is open, and comes back as you choose to answer.
+    let answering = false;
+    fakeScene = (opts) => {
+      reply = opts.onReply;
+      return answering
+        ? { ...sceneTalking(), stage: <TalkPlacedLater /> }
+        : { ...sceneTalking(), talk: undefined, stage: null };
+    };
+    await render();
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => {
+      answering = true;
+      reply?.("talker", undefined, "About your question: ");
+    });
+    await settle();
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+    const input = (holder as HTMLDivElement | null)?.querySelector(".world-talk-input") as HTMLInputElement;
+    expect(input.value).toBe("About your question: ");
+    expect(document.activeElement).toBe(input);
   });
 
   const classes = () => container.querySelector(".chat")?.classList as DOMTokenList;

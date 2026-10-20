@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,21 @@ describe("HostSandbox", () => {
     const r = await sandbox.exec(h, "echo hello");
     expect(r.exitCode).toBe(0);
     expect(r.stdout.trim()).toBe("hello");
+  });
+
+  it("stops a command when its signal aborts, and leaves nothing on the signal once a command is done", async () => {
+    const h = await sandbox.prepare({ cwd: dir });
+    const turn = new AbortController();
+    // The turn's signal outlives each command it runs: a listener left on it held the child, and on a signal made
+    // with `AbortSignal.any` (a chat turn's) kept the signal in memory for good.
+    const r = await sandbox.exec(h, "echo done", { signal: turn.signal });
+    expect(r.stdout.trim()).toBe("done");
+    expect(getEventListeners(turn.signal, "abort")).toHaveLength(0);
+    const began = performance.now();
+    const stopped = sandbox.exec(h, "sleep 5", { signal: turn.signal });
+    setTimeout(() => turn.abort(), 50);
+    expect((await stopped).exitCode).not.toBe(0);
+    expect(performance.now() - began).toBeLessThan(3000);
   });
 
   it("exec surfaces non-zero exit codes without throwing", async () => {
