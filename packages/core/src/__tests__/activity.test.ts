@@ -482,6 +482,22 @@ describe("activity", () => {
     expect(after.since).toBe(before.since);
   });
 
+  it("is idle from the end of a turn too short to be written, so its card's now and last did agree", async () => {
+    let clock = Date.parse("2026-10-19T08:00:00.000Z");
+    make({ settleMs: 30, now: () => new Date(clock) });
+    await tracker.start();
+    expect((await activity("planner")).since).toBe("2026-10-19T08:00:00.000Z");
+    clock += 24 * 60_000;
+    // Over before the record is written: idle before, idle after, with something new done in between.
+    started("planner");
+    ended("planner", { stop: { kind: "complete" } });
+    await new Promise((r) => setTimeout(r, 60));
+    const after = await activity("planner");
+    expect(after.doing).toBe("idle");
+    expect(after.last?.at).toBe("2026-10-19T08:24:00.000Z");
+    expect(after.since).toBe("2026-10-19T08:24:00.000Z");
+  });
+
   it("stops listening when stopped", async () => {
     make();
     tracker.stop();

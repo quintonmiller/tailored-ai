@@ -25,6 +25,10 @@ export interface MapPlace extends BodyLooks {
   members?: string[];
   /** When a room of conversation last talked, as far as the server knows. */
   talked?: string;
+  /** How many are in a room of conversation, people and agents, as the room lists them, when it keeps a list. */
+  everyone?: number;
+  /** How many agents a room of conversation wakes, with a body or not, when it keeps no list of who is in it. */
+  subscribed?: number;
   /** The place its way in is through: the town for a building, the floor of the office for a room on one. */
   via?: string;
   /** A home's owner, in a word ("coder", "writer"), when what it is for can be read. */

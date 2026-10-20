@@ -313,7 +313,7 @@ const DOINGS: Record<Where, Doing[]> = {
   bed: [nap("asleep in bed", 4), { ...sitAndRead, weight: () => 0.3 }],
   middle: [{ id: "stretch", label: "stretching", gesture: "stretch", seconds: [8, 14], weight: () => 0.5 }],
   // A meeting room's seats: while it is there, a body mostly sits in on the conversation.
-  table: [{ id: "listen", label: "sitting in", activity: "spot", seconds: [90, 240], weight: () => 6 }],
+  table: [{ id: "listen", label: "sitting in on the meeting", activity: "spot", seconds: [90, 240], weight: () => 6 }],
 };
 
 /** The kinds of furniture whose own spot means a place to go, by kind. */

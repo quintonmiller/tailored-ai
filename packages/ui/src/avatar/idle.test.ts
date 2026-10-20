@@ -264,6 +264,8 @@ describe("chooseErrand", () => {
     let seated = 0;
     for (let i = 0; i < 100; i++) if (chooseErrand(meeting, { hour: 15, random })?.id === "listen") seated++;
     expect(seated).toBeGreaterThan(50);
+    // Its tag says what it sits in on: "sitting in" alone reads as cut off.
+    expect(errandAt(meeting, "seat-1", 15, seeded("a"))?.label).toBe("sitting in on the meeting");
   });
 });
 

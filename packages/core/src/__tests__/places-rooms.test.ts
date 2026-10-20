@@ -40,7 +40,7 @@ const seeds = Array.from({ length: 120 }, (_, i) => `home:agent-${i}`);
 const homes = seeds.map((s) => homePlace(s, s));
 const meetings = [
   ...[2, 3, 4, 5, 6, 7, 9, 12, 16].map((n) => meetingRoom("standup", n)),
-  ...THEMES.flatMap((t) => [3, 8].map((n) => meetingRoom(`${t.id} room`, n, `${t.words.source.split("|")[1]}`))),
+  ...THEMES.flatMap((t) => [3, 8].map((n) => meetingRoom(`${t.id} room`, n, t.words[0]))),
 ];
 // Each role's homes, for a dozen agents of it: the kind of home that suits it, and what its work needs in it.
 const suited = ROLES.flatMap((role) =>
@@ -350,7 +350,7 @@ describe("meeting rooms", () => {
     expect(new Set(plain.map((p) => [...new Set(p.props.map((i) => i.kind))].sort().join())).size).toBeGreaterThan(2);
     expect(new Set(plain.map(signature)).size).toBeGreaterThan(names.length * 0.8);
     for (const theme of THEMES) {
-      const rooms = names.map((n) => meetingRoom(`${n} ${theme.words.source.split("|")[1]}`, 4));
+      const rooms = names.map((n) => meetingRoom(`${n} ${theme.words[0]}`, 4));
       expect(new Set(rooms.map((p) => p.walls)).size, theme.id).toBeGreaterThan(1);
       expect(
         rooms.every((p) => theme.palettes.some((c) => c.walls === p.walls)),

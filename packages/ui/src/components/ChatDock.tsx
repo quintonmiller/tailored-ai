@@ -77,7 +77,9 @@ export function ChatDock() {
   const [mode, setMode] = useState<DockMode>(loadMode);
   const [floating, setFloating] = useState<FloatingState>(() => loadJSON(FLOATING_KEY, DEFAULT_FLOATING));
   const [docked, setDocked] = useState<DockedState>(() => loadJSON(DOCKED_KEY, DEFAULT_DOCKED));
-  const [input, setInput] = useState("");
+  // The same draft as the Chat page's, kept for each conversation: switching agent here leaves it behind too.
+  const input = store.draft;
+  const setInput = store.setDraft;
   const messagesEnd = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [hash, setHash] = useState(() => window.location.hash);
@@ -150,7 +152,7 @@ export function ChatDock() {
     if (sig.text) setInput(sig.text);
     // Focus after the panel mounts.
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [store.dockSignal, onChatPage]);
+  }, [store.dockSignal, onChatPage, setInput]);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -248,8 +250,8 @@ export function ChatDock() {
   }
 
   function handleNewChat() {
+    // What was typed stays with the conversation you left, to find again there.
     store.newChat();
-    setInput("");
     inputRef.current?.focus();
   }
 

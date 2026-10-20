@@ -262,6 +262,22 @@ const mountWords = (mount: string) =>
 
 const READY_WORDS = READY.map((r) => `${r.name} (${r.about})`).join("; ");
 
+/**
+ * A note that a model was saved under another name than the one asked for,
+ * when more changed than its case and its spaces: "Bad Name!" is kept as
+ * bad_name, the name to use for it from now on. Nothing for "Tall bookcase",
+ * which is found by those words as it is.
+ */
+function savedAs(asked: unknown, name: string): string {
+  if (typeof asked !== "string") return "";
+  const plain = asked
+    .trim()
+    .toLowerCase()
+    .replace(/^(the|a|an|my)\s+/, "")
+    .replace(/[\s-]+/g, "_");
+  return plain === name ? "" : ` Saved as ${name}: a model's name is letters, digits and _, so use that from now on.`;
+}
+
 export class BuildTool implements Tool {
   name = "build";
   description =
@@ -345,7 +361,7 @@ export class BuildTool implements Tool {
         const saved = await this.shelf.save(context, model, found);
         return {
           success: true,
-          output: `${found ? "Made again" : "Made"} ${modelLine(saved)}.${facesSaid(saved)} ${found ? "Wherever it stands, it shows as it is now." : `Add it to a room with place: add, kind "${name}".`}`,
+          output: `${found ? "Made again" : "Made"} ${modelLine(saved)}.${found ? "" : savedAs(args.name, name)}${facesSaid(saved)} ${found ? "Wherever it stands, it shows as it is now." : `Add it to a room with place: add, kind "${name}".`}`,
         };
       }
 
@@ -371,7 +387,10 @@ export class BuildTool implements Tool {
         const model = modelFrom({ name: target, owner: agent, ...source, ...(ready ? { from: ready.name } : {}) });
         if (typeof model === "string") return fail(model);
         const saved = await this.shelf.save(context, model);
-        return { success: true, output: `Copied ${name} as ${modelLine(saved)}. \`show\` lists its parts.` };
+        return {
+          success: true,
+          output: `Copied ${name} as ${modelLine(saved)}.${savedAs(args.as, target)} \`show\` lists its parts.`,
+        };
       }
 
       if (!found) {

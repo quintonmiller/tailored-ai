@@ -140,7 +140,7 @@ import { drawScreen, drawStrip, pageAt, type ScreenCard } from "./screens";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { behindView, blocksView, facingSurface, focusDistance, focusFraming, overWalls, solidInWay } from "./surfaces";
-import { byPhone, GET_UP_AT, heardThrough, standBy, TALK_APART, talkingHere } from "./talk";
+import { byPhone, heardThrough, standBy, talkingHere, talkMove } from "./talk";
 import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
 import {
@@ -1232,6 +1232,12 @@ export async function createStage(
       standing.delete(f);
       if (f.here && f.seated < 0.05 && !opts.still) f.go(room, f.here, waysFor(f));
     }
+    // A talk begun, or with someone else now: seen to at once, not at the next look round a couple of seconds on.
+    for (const [agent, talk] of kept) {
+      const before = was.get(agent);
+      const f = before?.partner === talk.partner ? undefined : figureOf(agent);
+      if (f) facedAt.delete(f);
+    }
   };
   /** At a spot with something to do there: a line said to it turns its head, not the whole of it. */
   const busyAt = (f: Figure) => !!f.here && !!spotById(room, f.here)?.activity;
@@ -1312,32 +1318,36 @@ export async function createStage(
     f.goTo(room, spot.at, waysFor(f));
   };
   /**
-   * Every few seconds, a body talking face to face turns to the other; the
-   * one who goes (see `talkingHere`) walks over first when they are too far
-   * apart to talk, and again if the other moves off. One sitting about when
-   * the other has walked over to it gets up to stand with it, unless it is at
-   * a meeting table, where everyone keeps their seat; near enough to talk
-   * already, it stays sat and turns.
+   * Every few seconds, a body talking face to face turns to the other, and
+   * the one who goes walks over (see `talkMove`): when they are too far apart
+   * to talk, again if the other moves off, and at once from wherever else it
+   * was going, its desk among them. One sitting about when the other has
+   * walked over to it gets up to stand with it; at a meeting table everyone
+   * keeps their seat.
    */
   const keepCompany = (f: Figure, partnerAgent: string, goes: boolean, t: number) => {
     const partner = figureOf(partnerAgent);
-    if (!partner || t - (facedAt.get(f) ?? Number.NEGATIVE_INFINITY) < 2 || f.moving) return;
+    if (!partner || t - (facedAt.get(f) ?? Number.NEGATIVE_INFINITY) < 2) return;
+    const move = talkMove({
+      goes,
+      apart: Math.hypot(partner.walker.place.x - f.walker.place.x, partner.walker.place.z - f.walker.place.z),
+      joining: f.walking && standing.has(f),
+      walking: f.walking,
+      seated: f.seated > 0.05,
+      partnerWalking: partner.walking,
+      partnerCame: standing.has(partner),
+      meeting: isMeeting(room),
+    });
+    // Turning where it stands, it turns again in a moment; anything else waits a while before it is looked at again.
+    if (move === "wait" && f.moving && !f.walking) return;
     facedAt.set(f, t);
-    const apart = Math.hypot(partner.walker.place.x - f.walker.place.x, partner.walker.place.z - f.walker.place.z);
-    if (goes && apart > TALK_APART && !partner.moving && !isMeeting(room)) joinUp(f, partner);
-    else if (
-      !goes &&
-      f.seated > 0.05 &&
-      standing.has(partner) &&
-      !partner.moving &&
-      apart <= GET_UP_AT &&
-      !isMeeting(room)
-    ) {
+    if (move === "join") joinUp(f, partner);
+    else if (move === "rise") {
       // Idle, or talking with the one who came over: up it gets. Asleep it sleeps on, and busy it carries on.
       const b = shows.get(f)?.behavior;
       if (!b?.stays || b.face === partnerAgent) joinUp(f, partner);
       else f.face(partner.head(), t);
-    } else f.face(partner.head(), t, !goes && !!shows.get(f)?.behavior.stays && busyAt(f));
+    } else if (move === "face") f.face(partner.head(), t, !goes && !!shows.get(f)?.behavior.stays && busyAt(f));
   };
 
   /** The agent you talk to goes somewhere; anyone already there makes room. */

@@ -25,6 +25,7 @@ import {
   ridersOf,
   SAME_CHANGE_MS,
   STEPS_KEPT,
+  shownName,
   showsChoices,
   snap,
   stepped,
@@ -267,6 +268,53 @@ describe("what a change says", () => {
     expect(changeWords({ op: "move", item: "laptop", at: [0, 0], facing: 0, on: "side" }, onTable, onTable)).toBe(
       "moved the laptop onto the side table",
     );
+  });
+
+  it("says another was added, not the number the room told the copy apart by", () => {
+    const plant = room.props.find((p) => p.kind === "plant") as Prop;
+    const added: Room = { ...room, props: [...room.props, { ...plant, id: "plant-2", name: `${plant.name} 2` }] };
+    expect(changeWords({ op: "add", kind: "plant" }, room, added)).toBe("added another plant");
+  });
+
+  it("calls a copy the other one, or one of them, whatever you do to it", () => {
+    const plant = room.props.find((p) => p.kind === "plant") as Prop;
+    const copy = {
+      ...plant,
+      id: "plant-2",
+      name: `${plant.name} 2`,
+      at: [plant.at[0] + 1, plant.at[1]] as [number, number],
+    };
+    const two: Room = { ...room, props: [...room.props, copy] };
+    const noun = plant.name.replace(/^the /, "");
+    expect(changeWords({ op: "move", item: "plant-2", at: [0, 0], facing: 0 }, two, two)).toBe(
+      `moved the other ${noun}`,
+    );
+    expect(changeWords({ op: "move", item: "plant-2", at: copy.at, facing: 90 }, two, two)).toBe(
+      `turned the other ${noun}`,
+    );
+    expect(changeWords({ op: "color", item: "plant-2", color: "#010203" }, two, two)).toBe(
+      `repainted the other ${noun}`,
+    );
+    const gone: Room = { ...two, props: room.props };
+    expect(changeWords({ op: "remove", item: "plant-2" }, two, gone)).toBe(`removed the other ${noun}`);
+    expect(changeWords({ op: "add", kind: "plant", like: "plant-2" }, two, two)).toBe(`copied the other ${noun}`);
+    // The first keeps its name; with three, a copy is one of them.
+    expect(
+      changeWords({ op: "remove", item: plant.id }, two, {
+        ...two,
+        props: [...room.props.filter((p) => p !== plant), copy],
+      }),
+    ).toBe(`removed ${plant.name}`);
+    const three: Room = { ...two, props: [...two.props, { ...copy, id: "plant-3", name: `${plant.name} 3` }] };
+    expect(changeWords({ op: "move", item: "plant-3", at: [0, 0], facing: 0 }, three, three)).toBe(`moved a ${noun}`);
+  });
+
+  it("shows a person a copy by its kind's name, and a name someone chose as it is", () => {
+    expect(shownName({ name: "the vase of flowers 2" }, "vase of flowers")).toBe("the vase of flowers");
+    expect(shownName({ name: "the green armchair 3" }, "armchair")).toBe("the green armchair");
+    expect(shownName({ name: "the room 101 sign" }, "sign")).toBe("the room 101 sign");
+    expect(shownName({ name: "the seat 3" }, "chair")).toBe("the seat 3");
+    expect(shownName({ name: "the vase of flowers" }, "vase of flowers")).toBe("the vase of flowers");
   });
 
   it("names what was added, copied or taken away, and what went with it", () => {

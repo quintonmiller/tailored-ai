@@ -108,15 +108,18 @@ describe("mergeProjectOverlay", () => {
 });
 
 describe("AgentRuntime + active project", () => {
-  function buildRuntime(initialProject: ProjectContext | null): AgentRuntime {
+  /** A tool by this name, doing nothing. */
+  const toolNamed = (name: string): Tool => ({
+    name,
+    description: name,
+    parameters: {},
+    execute: async () => ({ success: true, output: "" }),
+  });
+
+  function buildRuntime(initialProject: ProjectContext | null, plugins: Tool[] = []): AgentRuntime {
     const config = baseConfig();
     const fakeProvider = { name: "fake", chat: async () => ({ message: { role: "assistant", content: "" } }) } as never;
-    const fakeTool: Tool = {
-      name: "fake",
-      description: "fake",
-      parameters: {},
-      execute: async () => ({ success: true, output: "" }),
-    };
+    const fakeTool = toolNamed("fake");
 
     let toolsCalls = 0;
     let providerCalls = 0;
@@ -125,9 +128,10 @@ describe("AgentRuntime + active project", () => {
       db,
       contextDir: "/tmp",
       kbDir: "/tmp",
+      // `plugins` are the tools plugins have registered so far: none until a test adds them, as at startup.
       createTools: (_cfg: AgentConfig) => {
         toolsCalls++;
-        return [fakeTool];
+        return [fakeTool, ...plugins];
       },
       createProvider: (_cfg: AgentConfig) => {
         providerCalls++;
@@ -199,13 +203,39 @@ describe("AgentRuntime + active project", () => {
       path: "/bad",
       overlayPath: "/bad/.tai.yaml",
       overlay: {
-        agents: { ghost: { instructions: "x", tools: ["nonexistent_tool"] } },
+        agents: { ghost: { instructions: "x", tols: ["fake"] } },
       },
     };
     r.setActiveProject(ctx);
     const all = warn.mock.calls.map((c) => String(c[0])).join("\n");
     warn.mockRestore();
-    expect(all).toMatch(/\[project:proj_bad\] Warning:/);
-    expect(all).toMatch(/nonexistent_tool/);
+    expect(all).toMatch(/\[project:proj_bad\] Warning: Agent "ghost": unknown key "tols"/);
+  });
+
+  it("leaves the tools an overlay names to be checked once plugins have registered theirs, tagged with the project", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const plugins: Tool[] = [];
+    const r = buildRuntime(null, plugins);
+    r.setActiveProject({
+      id: "proj_tools",
+      name: "Tools",
+      path: "/tools",
+      overlayPath: "/tools/.tai.yaml",
+      overlay: {
+        // "fake" is a tool the runtime built; "furnish" one a plugin will register; "nonexistent_tool" none at all.
+        agents: { ghost: { instructions: "x", tools: ["fake", "furnish", "nonexistent_tool"] } },
+      },
+    });
+    const all = warn.mock.calls.map((c) => String(c[0])).join("\n");
+    warn.mockRestore();
+    // At the reload, before any plugin has loaded, neither is called "not enabled".
+    expect(all).not.toMatch(/furnish|nonexistent_tool/);
+    // Once the plugin has registered its tool and the host has picked it up, only the one there is none of is
+    // called "not enabled", as the project's.
+    plugins.push(toolNamed("furnish"));
+    expect(r.applyPendingToolFactories()).toEqual(["furnish"]);
+    expect(r.toolWarnings()).toEqual([
+      { warning: 'Agent "ghost" references tool "nonexistent_tool" which is not enabled', project: "proj_tools" },
+    ]);
   });
 });

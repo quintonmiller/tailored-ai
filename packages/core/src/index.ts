@@ -388,6 +388,8 @@ export {
   mergeProjectOverlay,
   migrateDefaultPlugins,
   normalizeRawConfig,
+  toolReferenceWarnings,
+  type ValidateConfigOptions,
   validateConfig,
 } from "./config.js";
 export { AGENT_DEFINITION_KEYS, AgentDefinitionSchema, CronJobConfigSchema, findShapeIssues } from "./config-schema.js";

@@ -17,6 +17,7 @@ import {
   palette,
   redoing,
   type Steps,
+  shownName,
   showsChoices,
   stepped,
   TURNS,
@@ -675,8 +676,11 @@ export function useRoomEditor(
   // A door put in, picked: it can be taken out, and nothing else.
   const doorTo = doorItemTo(selected);
   const pickedDoor = doorTo ? madeDoors(shown ?? { doors: [] }).find((d) => d.to === doorTo) : undefined;
-  const pickedName =
-    picked?.name ?? (pickedDoor ? `the door to ${named(pickedDoor.to) ?? pickedDoor.label}` : undefined);
+  const pickedName = picked
+    ? shownName(picked, kinds?.kinds[picked.kind]?.noun)
+    : pickedDoor
+      ? `the door to ${named(pickedDoor.to) ?? pickedDoor.label}`
+      : undefined;
   const swatches = useMemo(() => (shown ? palette(shown) : []), [shown]);
   const doorPlaces = useMemo(
     () => (id && shown && doorsOpen ? linkable(places, id, shown, doorQuery) : []),

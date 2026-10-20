@@ -78,6 +78,8 @@ import {
   placeProblems,
   resize,
   spotOf,
+  withDoorwayHeld,
+  withSpots,
 } from "../plugins/places-layout.js";
 import { homeFor, readRole } from "../plugins/places-roles.js";
 import {
@@ -201,10 +203,123 @@ describe("adding things", () => {
   it("names things so they stay tell-apart-able", () => {
     let place = must(firstHome(), { action: "add", kind: "lamp", wall: "right" });
     expect((place.props.at(-1) as PlaceItem).name).toBe("the lamp");
-    place = must(place, { action: "add", kind: "lamp", corner: "front left" });
+    const second = applyAction(place, { action: "add", kind: "lamp", corner: "front left" });
+    place = second.place as Place;
     expect((place.props.at(-1) as PlaceItem).name).toBe("the lamp 2");
+    // Its number is for the tools: the change, which people read, says there is another.
+    expect(second.did).toBe("added another lamp in the front left corner");
     place = must(place, { action: "add", kind: "block", size: "0.3 1.2 0.3", color: "#ff8800", name: "pillar" });
     expect(place.props.at(-1)).toMatchObject({ name: "the pillar", size: [0.3, 1.2, 0.3], color: "#ff8800" });
+  });
+
+  it("calls a numbered copy what a person would in every change, and keeps its name for the agent", () => {
+    let place = must(firstHome(), { action: "add", kind: "lamp", wall: "right" });
+    place = must(place, { action: "add", kind: "lamp", corner: "front left" });
+    const moved = applyAction(place, { action: "move", item: "the lamp 2", x: 0, z: 0.5 });
+    expect(moved.did).toMatch(/^moved the other lamp\b/);
+    // The agent still needs the name to say which.
+    expect(moved.text).toContain("the lamp 2");
+    expect(applyAction(place, { action: "move", item: "the lamp 2", facing: 90 }).did).toBe("turned the other lamp");
+    expect(applyAction(place, { action: "change", item: "the lamp 2", color: "red" }).did).toBe(
+      "made the other lamp red",
+    );
+    expect(applyAction(place, { action: "remove", item: "the lamp 2" }).did).toBe("removed the other lamp");
+    // The first one keeps its name, and with three, a copy is one of them.
+    expect(applyAction(place, { action: "remove", item: "the lamp" }).did).toBe("removed the lamp");
+    place = must(place, { action: "add", kind: "lamp", corner: "back right" });
+    expect(applyAction(place, { action: "remove", item: "the lamp 3" }).did).toBe("removed a lamp");
+  });
+
+  describe("a wall thing with no room for it", () => {
+    // A furnished room: on the back wall a bookshelf in the middle and a picture to its right, and on the left wall
+    // a window with a little less room beside it than a board needs.
+    const room = () =>
+      withDoorwayHeld(
+        withSpots({
+          ...firstHome(),
+          width: 3.2,
+          depth: 3,
+          props: [
+            { id: "bookshelf", name: "the bookshelf", kind: "bookshelf", at: [-0.1, -1.33], facing: 0 },
+            { id: "picture", name: "the picture", kind: "picture", at: [1, -1.49], facing: 0, elevation: 1.55 },
+            { id: "window", name: "the window", kind: "window", at: [-1.59, 0.35], facing: 90, elevation: 1 },
+          ],
+          spots: [],
+        }),
+      );
+    // A board an agent made, 1.2 m across.
+    const board = { kind: "wall_model", size: [1.2, 0.8, 0.05] as [number, number, number] };
+    const scaled = (k: number) => ({ ...board, size: board.size.map((v) => v * k) as [number, number, number] });
+    const SAY_WHY = { explain: true };
+
+    it("says how wide it is and what is in the way", () => {
+      const why = findPlacement(room(), board, { wall: "back" }, SAY_WHY);
+      expect(why).toMatch(/^There's no free stretch of the back wall wide enough for it: it is 1\.2 m wide\./);
+      expect(why).toMatch(/On the back wall, the bookshelf is in the way\./);
+    });
+
+    it("names the one piece whose going makes room, not merely the smallest one", () => {
+      const why = findPlacement(room(), board, { wall: "back" }, SAY_WHY) as string;
+      expect(why).toMatch(/removing the bookshelf makes room for it on the back wall at this size/);
+      // The picture is smaller, but taking it down leaves too little wall.
+      expect(why).not.toMatch(/removing the picture/);
+      const without = withSpots({ ...room(), props: room().props.filter((p) => p.id !== "bookshelf") });
+      expect(typeof findPlacement(without, board, { wall: "back" })).not.toBe("string");
+    });
+
+    it("gives a smaller scale it really fits at", () => {
+      const why = findPlacement(room(), board, { wall: "back" }, SAY_WHY) as string;
+      const scale = Number(/at `scale` ([\d.]+) it fits on the back wall/.exec(why)?.[1]);
+      expect(scale).toBeGreaterThanOrEqual(0.5);
+      expect(scale).toBeLessThan(1);
+      expect(typeof findPlacement(room(), scaled(scale), { wall: "back" })).not.toBe("string");
+      expect(typeof findPlacement(room(), scaled(scale + 0.1), { wall: "back" })).toBe("string");
+    });
+
+    it("points to the other wall when it is nearly wide enough", () => {
+      const why = findPlacement(room(), board, { wall: "back" }, SAY_WHY) as string;
+      expect(why).toMatch(/the left wall is nearly wide enough: at `scale` 0\.9 it fits there/);
+      expect(typeof findPlacement(room(), scaled(0.9), { wall: "left" })).not.toBe("string");
+    });
+
+    it("says so when nothing is enough", () => {
+      const crowded = withSpots({
+        ...room(),
+        width: 2.5,
+        depth: 2.5,
+        props: [
+          { id: "window", name: "the window", kind: "window", at: [-1.24, 0], facing: 90, elevation: 1 },
+          { id: "picture", name: "the picture", kind: "picture", at: [-0.6, -1.24], facing: 0, elevation: 1.55 },
+          { id: "picture-2", name: "the picture 2", kind: "picture", at: [0.6, -1.24], facing: 0, elevation: 1.55 },
+        ],
+      });
+      const why = findPlacement(crowded, { ...board, size: [2.4, 0.8, 0.05] }, {}, SAY_WHY) as string;
+      expect(why).toMatch(/no free stretch of wall/);
+      expect(why).toMatch(/What would work: |Even at the smallest `scale`/);
+    });
+
+    it("is explained to an agent by the tool, adding or resizing, and kept short for a room drawn from a seed", () => {
+      // A painting is as wide as the board.
+      const added = applyAction(room(), { action: "add", kind: "painting", wall: "back" });
+      expect(added.ok).toBe(false);
+      expect(added.text).toMatch(
+        /it is 1\.2 m wide\. On the back wall, the bookshelf is in the way\. What would work: /,
+      );
+      const hung = withSpots({
+        ...room(),
+        props: [
+          ...room().props,
+          { id: "poster", name: "the poster", kind: "poster", at: [-1.59, -0.9], facing: 90, elevation: 1.3 },
+        ],
+      });
+      const resized = applyAction(hung, { action: "change", item: "the poster", scale: 2 });
+      expect(resized.ok).toBe(false);
+      expect(resized.text).toMatch(/^At that size it doesn't fit: .*What would work: |Even at the smallest/);
+      // Without asking, it is the one sentence, which costs no more searching.
+      expect(findPlacement(room(), board, { wall: "back" })).toBe(
+        "There's no free stretch of the back wall wide enough for it.",
+      );
+    });
   });
 
   it("says why when there's no room, and stops instead of overlapping", () => {
@@ -1365,6 +1480,17 @@ describe("the map, and any place on it", () => {
     expect(new Set(map.map((p) => p.area))).toEqual(new Set(["main"]));
   });
 
+  it("counts everyone a room lists, people too, apart from the agents it wakes", async () => {
+    const listed = [{ ...rooms[0], everyone: 5 }];
+    const map = await worldMap(state, owner, ["host", "guest"], listed, hasBody);
+    expect(map.find((p) => p.kind === "room")).toMatchObject({ members: ["guest", "host"], everyone: 5 });
+    expect(map.find((p) => p.kind === "room")).not.toHaveProperty("subscribed");
+    // A room that keeps no list says how many agents it wakes, the one without a body too.
+    const unlisted = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(unlisted.find((p) => p.kind === "room")).not.toHaveProperty("everyone");
+    expect(unlisted.find((p) => p.kind === "room")).toMatchObject({ members: ["guest", "host"], subscribed: 3 });
+  });
+
   it("has a body at home when the place it went to is gone", async () => {
     await tool.execute({ action: "new", name: "lounge" }, as("host"));
     await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
@@ -1525,6 +1651,43 @@ describe("the map, and any place on it", () => {
     expect(board.at[0]).toBeGreaterThan(footprintOf(screen)[0] / 2);
     expect(calendar.at[1]).toBe(board.at[1]);
     expect(footprintOf(calendar)[0]).toBeGreaterThanOrEqual(footprintOf(board)[0]);
+  });
+
+  it.each([
+    ["lisbon-trip", "Plan the Lisbon trip", "beach"],
+    ["summer", "Plan the family vacation", "beach"],
+    ["travel-research", "Research flights and hotels for the trip", "beach"],
+    ["the-campaign", "A D&D campaign", "tavern"],
+    ["game-night", "Board games and a dnd one-shot", "tavern"],
+    ["fridays", "Our weekly DnD campaign", "tavern"],
+    ["DnDNight", "", "tavern"],
+    ["marketing", "Plan the spring marketing campaign", undefined],
+    ["podcast", "Produce the weekly episode", "studio"],
+    ["home-studio", "Record the band's demo", "studio"],
+    ["records", "Keep a record of household spending", undefined],
+    ["code-review", "Review pull requests before they merge", "workshop"],
+    ["codeReview", "", "workshop"],
+    ["product-development", "Build the app", "workshop"],
+    ["business-development", "Find new partners", undefined],
+    ["deploys", "Watch the deploy pipeline and fix bugs", "workshop"],
+    ["quarterly-planning-and-review", "", undefined],
+    ["household", "Bills, groceries and the building's repairs", undefined],
+    ["mornings", "Morning devotions and a walk", undefined],
+    ["research", "Research questions and keep a library of notes", "library"],
+    ["reading-group", "Read a book a month", "library"],
+    ["researchers", "Where the researcher shares findings", "library"],
+    ["travelers", "Planning for travelers", "beach"],
+    ["meeting-notes", "Notes from the weekly sync", undefined],
+    ["questions", "Questions for the team", undefined],
+    ["standup", "Daily standup", undefined],
+    ["general", "", undefined],
+  ])("dresses %s (%s) as %s", (name, purpose, theme) => {
+    expect(themeFor(`${name} ${purpose}`)?.id).toBe(theme);
+  });
+
+  it("settles a tie by the room's name, which comes before its purpose", () => {
+    expect(themeFor("research-trip Research for the trip")?.id).toBe("library");
+    expect(themeFor("trip-research Research for the trip")?.id).toBe("beach");
   });
 
   it("dresses a room for its purpose, and gives every room a task board", async () => {

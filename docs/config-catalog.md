@@ -110,7 +110,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 86 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 87 |
 
 ### `prompts`
 

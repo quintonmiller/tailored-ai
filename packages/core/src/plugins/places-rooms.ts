@@ -1179,14 +1179,42 @@ export function sharedPlace(seed: string, name: string): Place {
  */
 export interface Theme {
   id: string;
-  words: RegExp;
+  /**
+   * The words that call for it, each matched as a whole word in the forms
+   * listed: "quest" is not "questions", "build" not "building". `names` name
+   * the place or the thing it is for outright ("tavern", "podcast"); `words`
+   * are a purpose that usually means it ("vacation", "research"); `hints` mean
+   * it only in company, so one alone calls for nothing: a quarterly review is
+   * no code review, meeting notes no library, a marketing campaign no D&D one.
+   */
+  names: string[];
+  words: string[];
+  hints: string[];
   palettes: Palette[];
 }
 
 export const THEMES: Theme[] = [
   {
     id: "beach",
-    words: /\b(beach|vacation|holiday|trip|travel|surf|island|tropic|seaside)/i,
+    names: ["beach", "beaches", "seaside", "island", "islands", "surf", "surfing", "tropical", "tropics"],
+    words: [
+      "vacation",
+      "vacations",
+      "holiday",
+      "holidays",
+      "trip",
+      "trips",
+      "travel",
+      "travels",
+      "travelling",
+      "traveling",
+      "traveler",
+      "travelers",
+      "traveller",
+      "travellers",
+      "getaway",
+    ],
+    hints: [],
     palettes: [
       { walls: "#cfe8f0", floor: "tile", floorColor: "#e6d3a3" },
       { walls: "#f3e9d2", floor: "wood", floorColor: "#d9b98c" },
@@ -1195,7 +1223,9 @@ export const THEMES: Theme[] = [
   },
   {
     id: "tavern",
-    words: /\b(d&d|dnd|campaign|quest|tavern|dungeon|adventure|rpg)/i,
+    names: ["tavern", "taverns", "dungeon", "dungeons", "d&d", "dnd", "rpg", "rpgs", "ttrpg", "ttrpgs"],
+    words: ["quest", "quests", "adventure", "adventures", "adventuring"],
+    hints: ["campaign", "campaigns"],
     palettes: [
       { walls: "#6e4e38", floor: "wood" },
       { walls: "#5b4636", floor: "wood", floorColor: "#4a3424" },
@@ -1204,7 +1234,22 @@ export const THEMES: Theme[] = [
   },
   {
     id: "studio",
-    words: /\b(podcast|music|audio|studio|record|episode)/i,
+    names: ["studio", "studios", "podcast", "podcasts", "podcasting"],
+    words: [
+      "music",
+      "musician",
+      "musicians",
+      "audio",
+      "recording",
+      "recordings",
+      "episode",
+      "episodes",
+      "band",
+      "song",
+      "songs",
+      "mixing",
+    ],
+    hints: ["record", "show"],
     palettes: [
       { walls: "#3d3648", floor: "carpet" },
       { walls: "#2f3a44", floor: "carpet", floorColor: "#4a4f5a" },
@@ -1213,12 +1258,61 @@ export const THEMES: Theme[] = [
   },
   {
     id: "workshop",
-    words: /\b(code|coder|coding|dev|engineer|build|deploy|bug|ops|review|repo)/i,
+    names: ["workshop", "code", "codebase", "coding", "coder", "coders", "devops", "repo", "repos", "repository"],
+    words: [
+      "dev",
+      "devs",
+      "developer",
+      "developers",
+      "engineer",
+      "engineers",
+      "engineering",
+      "programming",
+      "software",
+      "deploy",
+      "deploys",
+      "deploying",
+      "deployment",
+      "deployments",
+      "bug",
+      "bugs",
+      "debugging",
+    ],
+    // "Business development" and a planning review are no workshop: these need company.
+    hints: [
+      "build",
+      "builds",
+      "development",
+      "review",
+      "reviews",
+      "reviewer",
+      "reviewers",
+      "reviewing",
+      "ops",
+      "pr",
+      "prs",
+      "release",
+      "releases",
+    ],
     palettes: WORK,
   },
   {
     id: "library",
-    words: /\b(research|study|read|book|library|learn|notes)/i,
+    names: ["library", "libraries", "books"],
+    words: [
+      "research",
+      "researcher",
+      "researchers",
+      "researching",
+      "study",
+      "studies",
+      "studying",
+      "reading",
+      "book",
+      "learning",
+      "papers",
+    ],
+    hints: ["read", "notes", "learn"],
     palettes: BOOKISH,
   },
 ];
@@ -1226,9 +1320,56 @@ export const THEMES: Theme[] = [
 /** A room that matches no theme is coloured like a home, from the cooler and lighter end. */
 const PLAIN: Palette[] = [{ walls: "#dfe4ea", floor: "carpet" }, ...COOL, ...BRIGHT, ...WARM];
 
-/** The theme the words of a room's name and purpose call for, if any. */
-export function themeFor(words: string): Theme | undefined {
-  return THEMES.find((t) => t.words.test(words));
+/** How much a theme's word counts, by the list it is in; a theme needs `CALLS_FOR` to be called for. */
+const WEIGHTS = { names: 3, words: 2, hints: 1 } as const;
+const CALLS_FOR = 2;
+
+/**
+ * A room's words as plain lower-case words: "code-review", "codeReview" and "code_review" read alike. A word is
+ * split only where a capital starts a lower-case word, so "DnD" stays one and "DnDNight" is "DnD Night".
+ */
+function plainWords(text: string): string {
+  return text
+    .replace(/([a-z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/[-_.:/#]+/g, " ")
+    .toLowerCase();
+}
+
+const literal = (word: string) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Where a whole word first turns up in `text`, or -1. Its own word: what comes before and after it is no letter or
+ * digit, so "d&d" counts as one and "quest" is never the start of "questions".
+ */
+function wordAt(text: string, word: string): number {
+  return text.search(new RegExp(`(?<![a-z0-9])${literal(word)}(?![a-z0-9])`));
+}
+
+/**
+ * The theme the words of a room's name and purpose call for, if any: the one
+ * its words weigh most for, and at least a word that usually means it. A tie
+ * goes to the theme whose word comes first, so the room's name, which comes
+ * before its purpose, settles it.
+ */
+export function themeFor(text: string): Theme | undefined {
+  const words = plainWords(text);
+  let best: { theme: Theme; score: number; first: number } | undefined;
+  for (const theme of THEMES) {
+    let score = 0;
+    let first = Number.POSITIVE_INFINITY;
+    for (const list of ["names", "words", "hints"] as const) {
+      for (const word of theme[list]) {
+        const at = wordAt(words, word);
+        if (at < 0) continue;
+        score += WEIGHTS[list];
+        first = Math.min(first, at);
+      }
+    }
+    if (score < CALLS_FOR) continue;
+    if (!best || score > best.score || (score === best.score && first < best.first)) best = { theme, score, first };
+  }
+  return best?.theme;
 }
 
 /** A place with no theme: chosen, so no guess dresses it again. */

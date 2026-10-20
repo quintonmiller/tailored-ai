@@ -105,6 +105,16 @@ describe("the build tool", () => {
     );
   });
 
+  it("says when it saved a model under another name than the one asked for", async () => {
+    const made = await build.execute({ action: "make", name: "Bad Name!", parts: bookcase }, as("planner"));
+    expect(String(made.output)).toMatch(/^Made bad_name .*\. Saved as bad_name: a model's name is letters/);
+    // Only case and spaces changed: nothing to say, and its words find it as they are.
+    const plain = await build.execute({ action: "make", name: "Tall bookcase", parts: bookcase }, as("planner"));
+    expect(String(plain.output)).not.toMatch(/Saved as/);
+    const copied = await build.execute({ action: "copy", name: "tall bookcase", as: "Spare (2)" }, as("planner"));
+    expect(String(copied.output)).toMatch(/^Copied tall_bookcase as spare_2 .*\. Saved as spare_2:/);
+  });
+
   it("refuses a bad model with a sentence it can act on, and saves nothing", async () => {
     const bad = await build.execute(
       { action: "make", name: "lamp_post", parts: [{ shape: "box", size: [0.2, "tall", 0.2] }] },

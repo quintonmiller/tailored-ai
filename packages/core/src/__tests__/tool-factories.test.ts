@@ -11,7 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig } from "../config.js";
-import { validateConfig } from "../config.js";
+import { toolReferenceWarnings, validateConfig } from "../config.js";
 import type { Tool } from "../tools/interface.js";
 import {
   META_TOOL_NAMES,
@@ -254,6 +254,55 @@ describe("validateConfig — meta-tool references", () => {
     c.agents = { myAgent: { tools: ["memory", "exec", "read"] } };
     const warnings = validateConfig(c);
     expect(warnings.filter((w) => w.includes("not enabled"))).toHaveLength(0);
+  });
+});
+
+/**
+ * A tool a plugin registers exists only once plugins have loaded, which is
+ * after startup validated the config. Checked then, against a guess from
+ * config alone, every agent that listed one drew "references tool X which is
+ * not enabled" on every start, while the tool was there and being used. The
+ * references are checked against the tools there are, once there are.
+ */
+describe("validateConfig — the tools plugins provide", () => {
+  it("checks references against the tools there are, when told them, and still flags one that isn't", () => {
+    const c = baseConfig();
+    c.agents = { keeper: { tools: ["place", "phantom_tool"] } };
+    // The guess from config alone can't see a plugin's tool.
+    expect(validateConfig(c).some((w) => w.includes('"place" which is not enabled'))).toBe(true);
+    const warnings = validateConfig(c, { tools: ["place"] });
+    expect(warnings.filter((w) => w.includes("which is not enabled"))).toEqual([
+      'Agent "keeper" references tool "phantom_tool" which is not enabled',
+    ]);
+  });
+
+  it("leaves references for later with `tools: false`, and checks them then", () => {
+    const c = baseConfig();
+    c.agents = { keeper: { tools: ["place", "phantom_tool", "mcp_notes_search"] } };
+    const early = validateConfig(c, { tools: false });
+    expect(early.filter((w) => w.includes("which is not enabled"))).toEqual([]);
+    // An MCP tool needs a server whatever plugins register: that check doesn't wait.
+    expect(early.some((w) => w.includes('MCP tool "mcp_notes_search"'))).toBe(true);
+    expect(toolReferenceWarnings(c, ["place", "exec"])).toEqual([
+      'Agent "keeper" references tool "phantom_tool" which is not enabled',
+    ]);
+  });
+
+  it("checks hooks, cron hooks and permissions the same way", () => {
+    const c = baseConfig();
+    c.agents = {
+      keeper: { hooks: { beforeRun: { tool: "place" }, afterRun: [{ tool: "gone" }] } },
+    } as AgentConfig["agents"];
+    c.cron = {
+      enabled: true,
+      jobs: [{ name: "tidy", schedule: "0 * * * *", prompt: "tidy", hooks: { beforeRun: { tool: "place" } } }],
+    } as unknown as AgentConfig["cron"];
+    c.permissions = { tools: { place: "ask", gone: "ask" } } as unknown as AgentConfig["permissions"];
+    expect(toolReferenceWarnings(c, ["place"])).toEqual([
+      'Agent "keeper" hook references tool "gone" which is not enabled',
+      'permissions.tools references tool "gone" which is not enabled',
+    ]);
+    expect(validateConfig(c, { tools: ["place"] }).filter((w) => w.includes('"place"'))).toEqual([]);
   });
 });
 
