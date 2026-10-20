@@ -859,17 +859,20 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       return { group: g };
     }
     case "server_rack": {
-      // A tall black cabinet of servers, each with a row of lights that stay on day and night.
+      // A tall black cabinet of servers, each with a row of lights that stay on day and night: lit as they are made,
+      // since the time of day never dims them.
       const frame = main(0x23262c);
       box(g, 0.6, 1.9, 0.62, frame, 0, 0.95, 0);
       const leds = glowing(0x55e08a);
+      const busy = glowing(0x5aa9ff);
+      leds.emissiveIntensity = busy.emissiveIntensity = 1.2;
       for (let i = 0; i < 9; i++) {
         const y = 0.28 + i * 0.17;
         box(g, 0.52, 0.12, 0.012, tint(frame, i % 3 === 0 ? 0.18 : 0.1), 0, y, 0.312).castShadow = false;
         for (let k = 0; k < 3; k++) {
           const led = solid(
             new THREE.BoxGeometry(0.018, 0.018, 0.006),
-            k === 2 && i % 2 ? glowing(0x5aa9ff) : leds,
+            k === 2 && i % 2 ? busy : leds,
             -0.2 + k * 0.035,
             y,
             0.32,
@@ -879,7 +882,7 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
         }
       }
       box(g, 0.56, 0.08, 0.6, tint(frame, -0.3), 0, 0.04, 0);
-      return { group: g, glow: leds };
+      return { group: g };
     }
     case "ledger": {
       // An open book of accounts: two pages with columns ruled in, and a pen across it.

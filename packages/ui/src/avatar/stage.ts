@@ -863,7 +863,6 @@ export async function createStage(
       } else if (kind === "fireplace" || kind === "candle") glow.emissiveIntensity = 1.4;
       else if (kind === "tv") glow.emissiveIntensity = 0.55;
       else if (kind === "aquarium") glow.emissiveIntensity = l.lamp.on ? 0.5 : 0.15;
-      else if (kind === "server_rack") glow.emissiveIntensity = 1.2;
     }
   };
   const hourNow = () => opts.hour ?? new Date().getHours();

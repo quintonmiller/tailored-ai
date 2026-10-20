@@ -10,8 +10,8 @@ export type { MapArea, MapPlace } from "../lib/wayfinding";
 
 /**
  * A body's colour, near enough to the colour it is drawn in, for the dot by an
- * agent's name on its card and in the chat. The map's dots say what agents
- * are doing instead.
+ * agent's name on its card and in the chat, and the small one by its role in
+ * the map's list. The map's larger dot by each agent says what it is doing.
  */
 export function agentColor(agent: string): string {
   const hue = hueFor(agent);

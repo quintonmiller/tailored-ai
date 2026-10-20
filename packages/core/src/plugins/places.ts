@@ -88,7 +88,17 @@ import {
   withDoorwayHeld,
   withSpots,
 } from "./places-layout.js";
-import { aOrAn, homeFor, parseWear, type Role, readRole, WEAR, WEAR_MOST, wearWords } from "./places-roles.js";
+import {
+  type AgentAbout,
+  aOrAn,
+  homeFor,
+  parseWear,
+  type Role,
+  readRole,
+  WEAR,
+  WEAR_MOST,
+  wearWords,
+} from "./places-roles.js";
 import {
   homePlace,
   LOBBY,
@@ -318,6 +328,42 @@ export async function chosenWear(service: StateService, caller: StateCaller): Pr
     .query(caller, { type: WEAR_TYPE, limit: 500 })
     .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
   return new Map(records.map((r) => [r.id, r.data.wear]));
+}
+
+/**
+ * What an agent's role is read from: the name it goes by, and its
+ * definition's description, instructions and tool list. The default agent's
+ * name is no word for anything, and an agent given every tool (no list) says
+ * nothing by its tools.
+ */
+export function aboutAgent(
+  agent: string,
+  def: { description?: string; instructions?: string; tools?: string[] } | undefined,
+): AgentAbout {
+  return {
+    name: agent === "default" ? "" : agent,
+    ...(def?.description ? { description: def.description } : {}),
+    ...(def?.instructions ? { instructions: def.instructions } : {}),
+    ...(def?.tools ? { tools: def.tools } : {}),
+  };
+}
+
+/** What an agent is, in a word, and what its body wears, given everyone's choices by agent (`chosenWear`), and whether it chose. */
+export function looksOf(agent: string, role: Role | undefined, chosen: Map<string, unknown>) {
+  return {
+    ...(role ? { role: role.word } : {}),
+    wear: wornBy(chosen.get(agent), role),
+    ...(chosen.has(agent) ? { wearChosen: true as const } : {}),
+  };
+}
+
+/** The map's places, each home saying what its owner is and wears, for the map's list of agents and each agent's card. */
+export function withLooks<P extends { kind: string; owner?: string }>(
+  places: P[],
+  roleOf: (agent: string) => Role | undefined,
+  chosen: Map<string, unknown>,
+) {
+  return places.map((p) => (p.kind === "home" && p.owner ? { ...p, ...looksOf(p.owner, roleOf(p.owner), chosen) } : p));
 }
 /** Shared places are `place` records everyone can see, named `shared:<slug>`. */
 const SHARED = "shared:";
@@ -1730,7 +1776,7 @@ export class PlaceTool implements Tool {
       purpose: { type: "string", description: 'room: what it is for, in a line, e.g. "planning the Lisbon trip".' },
       wear: {
         type: "string",
-        description: `room: what your body wears, e.g. "glasses, scarf", or none: ${Object.keys(WEAR).join(", ")}.`,
+        description: `room: what your body wears, from: ${Object.keys(WEAR).join(", ")}; or "none", or "default" for what suits you.`,
       },
       area: {
         type: "string",
@@ -2126,13 +2172,7 @@ const plugin: Plugin = (ctx) => {
   // one of them.
   const read = new Map<string, Role | undefined>();
   const roleOf = (agent: string): Role | undefined => {
-    const def = runtime.getAgentDefinition(agent);
-    const about = {
-      name: agent === "default" ? "" : agent,
-      ...(def?.description ? { description: def.description } : {}),
-      ...(def?.instructions ? { instructions: def.instructions } : {}),
-      ...(def?.tools ? { tools: def.tools } : {}),
-    };
+    const about = aboutAgent(agent, runtime.getAgentDefinition(agent));
     const key = JSON.stringify(about);
     if (!read.has(key)) {
       if (read.size >= 256) read.clear();
@@ -2175,15 +2215,6 @@ const plugin: Plugin = (ctx) => {
       defaultBackend: config.defaultChannel,
     });
   };
-  /** What an agent is, in a word, and what its body wears, given everyone's choices (`chosenWear`), and whether chosen. */
-  const looksOf = (name: string, chosen: Map<string, unknown>) => {
-    const role = roleOf(name);
-    return {
-      ...(role ? { role: role.word } : {}),
-      wear: wornBy(chosen.get(name), role),
-      ...(chosen.has(name) ? { wearChosen: true } : {}),
-    };
-  };
   const bodyOf = (name: string, chosen: Map<string, unknown>) => {
     const own = runtime.avatarFor(name === "default" ? undefined : name);
     const files = resolveAvatar(runtime.getConfig().live, own);
@@ -2193,7 +2224,7 @@ const plugin: Plugin = (ctx) => {
       name,
       avatar: `/api/live/avatar${q}`,
       animations: files.animations.map((_, i) => `/api/live/animations/${i}${q}`),
-      ...looksOf(name, chosen),
+      ...looksOf(name, roleOf(name), chosen),
     };
   };
 
@@ -2205,9 +2236,10 @@ const plugin: Plugin = (ctx) => {
       const rooms = talkRooms();
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const chosen = await chosenWear(service, PLUGIN_CALLER);
-      // Each home says what its owner is and wears, for the map's list of agents and each agent's card.
-      const places = (await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world)).map((p) =>
-        p.kind === "home" && p.owner ? { ...p, ...looksOf(p.owner, chosen) } : p,
+      const places = withLooks(
+        await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world),
+        roleOf,
+        chosen,
       );
       const areas: Area[] = world.areas;
       return { json: { places, areas } };
@@ -2283,7 +2315,7 @@ const plugin: Plugin = (ctx) => {
           doors,
           area: world.areaOf.get(id) ?? MAIN,
           // What the agent itself is, and wears: its body is drawn from /api/live, which says nothing of either.
-          ...looksOf(agent, chosen),
+          ...looksOf(agent, roleOf(agent), chosen),
         },
       };
     },

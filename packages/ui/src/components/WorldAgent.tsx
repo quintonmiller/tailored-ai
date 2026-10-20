@@ -145,7 +145,13 @@ export function WorldAgent({
   const dress = (next: string[] | null) =>
     void act("change what it wears", async () => {
       setDressed(next ?? undefined);
-      await onWear?.(next);
+      try {
+        await onWear?.(next);
+      } catch (err) {
+        // Not saved, so not worn: the chips go back to what the body still wears.
+        setDressed(undefined);
+        throw err;
+      }
     });
   const post = (path: string, body?: unknown) =>
     fetch(`/api/exploratory/agents/${encodeURIComponent(agent)}/${path}`, {

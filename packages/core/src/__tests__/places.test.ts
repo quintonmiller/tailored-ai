@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import { TypedEventBus } from "../events.js";
 import {
+  aboutAgent,
   anyAvatar,
   applyAction,
   bodyAt,
@@ -16,6 +17,7 @@ import {
   followMessages,
   goingToSee,
   homeId,
+  looksOf,
   mayChange,
   messageTo,
   onlyMembers,
@@ -38,6 +40,7 @@ import {
   whereIs,
   whoIsIn,
   withChange,
+  withLooks,
   worldMap,
   wornBy,
 } from "../plugins/places.js";
@@ -1958,6 +1961,36 @@ describe("what a body wears, and the home that suits what an agent is for", () =
     // Someone wrote two hats on the State page: its role's, rather than a body with a hat inside a hat.
     expect(wornBy(["cap", "beret"], coder)).toEqual(["headset", "glasses"]);
     expect(wornBy(undefined, undefined)).toEqual([]);
+  });
+
+  it("reads an agent's role from its definition, and gives each home on the map its owner's role and wear", () => {
+    const def = { description: "Plans our family trips.", instructions: "Book the flights.", tools: ["speak"] };
+    expect(aboutAgent("ivy", def)).toEqual({ name: "ivy", ...def });
+    expect(readRole(aboutAgent("ivy", def))?.word).toBe("travel agent");
+    // The default agent's name is no word for anything, and no tool list says nothing.
+    expect(aboutAgent("default", { description: "" })).toEqual({ name: "" });
+    expect(aboutAgent("ivy", undefined)).toEqual({ name: "ivy" });
+    const chosen = new Map<string, unknown>([["coder", ["cap"]]]);
+    expect(looksOf("coder", roles("coder"), chosen)).toEqual({ role: "coder", wear: ["cap"], wearChosen: true });
+    expect(looksOf("zork", undefined, chosen)).toEqual({ wear: [] });
+    // Each home by its owner, whatever the place is called; nothing else on the map says who anyone is.
+    expect(
+      withLooks(
+        [
+          { id: "lobby", kind: "lobby" },
+          { id: homeId("coder"), kind: "home", owner: "coder" },
+          { id: homeId("bookkeeper"), kind: "home", owner: "bookkeeper" },
+          { id: "shared:den", kind: "shared" },
+        ],
+        roles,
+        chosen,
+      ),
+    ).toEqual([
+      { id: "lobby", kind: "lobby" },
+      { id: homeId("coder"), kind: "home", owner: "coder", role: "coder", wear: ["cap"], wearChosen: true },
+      { id: homeId("bookkeeper"), kind: "home", owner: "bookkeeper", role: "bookkeeper", wear: ["bow tie", "glasses"] },
+      { id: "shared:den", kind: "shared" },
+    ]);
   });
 
   it("starts a home as the kind that suits what its agent is for, with what the work needs", async () => {

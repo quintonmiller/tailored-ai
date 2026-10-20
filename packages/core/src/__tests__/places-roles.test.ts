@@ -1,9 +1,10 @@
 /**
  * What an agent is for, read from its name, description, instructions and
  * tools: a word for it, the kind of home that suits it, and what it wears.
- * Words alone, no model: the name counts most, a tie goes to the more
- * particular role, and a stray word is not a role. What to wear comes from
- * words too, one thing to each place on the body.
+ * Words alone, no model: only the name or the description gives a role, the
+ * name counts over everything else, instructions and tools only choose
+ * between roles already said, and a tie goes to the more particular role.
+ * What to wear comes from words too, one thing to each place on the body.
  */
 import { describe, expect, it } from "vitest";
 import { homeFor, parseWear, ROLES, readRole, roleScores, WEAR, wearWords } from "../plugins/places-roles.js";
@@ -25,6 +26,9 @@ describe("reading what an agent is for", () => {
     expect(word("debugger")).toBe("coder");
     expect(word("healthCoach")).toBe("coach");
     expect(word("designer")).toBe("artist");
+    expect(word("verifier")).toBe("reviewer");
+    expect(word("judge-clarity")).toBe("reviewer");
+    expect(word("health-tracker")).toBe("coach");
   });
 
   it("gives a tie to the more particular role", () => {
@@ -33,31 +37,77 @@ describe("reading what an agent is for", () => {
     expect(word("code-reviewer")).toBe("reviewer");
   });
 
-  it("reads a plain name from its description and instructions", () => {
+  it("reads a plain name from its description", () => {
     expect(word("sam", { description: "Keeps the household budget and pays the bills." })).toBe("bookkeeper");
-    expect(word("juno", { instructions: "You write and edit the weekly newsletter. Keep drafts short." })).toBe(
-      "writer",
+    expect(word("kit", { description: "Compiles the morning news digest." })).toBe("reporter");
+    expect(word("rue", { description: "Plans email campaigns." })).toBe("clerk");
+  });
+
+  it("counts the name over the description, instructions and tools together", () => {
+    const coding = {
+      description: "Explains code.",
+      instructions: "Read the code, find the bugs, and point to the repository.",
+      tools: ["coding_agent", "git_diff"],
+    };
+    expect(roleScores({ name: "writer", ...coding }).get("coder")).toBe(9);
+    expect(word("writer", coding)).toBe("writer");
+  });
+
+  it("lets instructions and tools choose between roles the description says", () => {
+    // The podcast is listed first, so it wins a tie; the mail tools, or instructions all about the mail, tip it.
+    const both = { description: "Handles the mail and the podcast." };
+    expect(word("pip", both)).toBe("producer");
+    expect(word("pip", { ...both, tools: ["gmail_read", "gmail_send"] })).toBe("clerk");
+    expect(word("pip", { ...both, instructions: "Sort the inbox. Answer each email. File every letter." })).toBe(
+      "clerk",
     );
   });
 
-  it("counts the name over the instructions", () => {
-    const writer = {
-      instructions: "You sometimes read code, and write code examples in the code blocks of your essays.",
-    };
-    expect(word("writer", writer)).toBe("writer");
-    expect(roleScores({ name: "writer", ...writer }).get("coder")).toBeGreaterThan(0);
+  it("never reads a role from instructions or tools alone", () => {
+    expect(word("juno", { instructions: "You write and edit the weekly newsletter. Keep the essays short." })).toBe(
+      undefined,
+    );
+    expect(word("atlas", { tools: ["exec", "edit", "read_file"] })).toBeUndefined();
+    expect(word("atlas", { tools: ["coding_agent", "git_push", "speak"] })).toBeUndefined();
+    expect(word("judge", { instructions: "Score how well each player played. Every player gets a line." })).toBe(
+      "reviewer",
+    );
+    expect(
+      word("", {
+        instructions: "Keep the conversation history short. Read the data first; the data is in the history.",
+        tools: ["web_search", "web_fetch"],
+      }),
+    ).toBeUndefined();
   });
 
-  it("counts the tools an agent is given, but not having every tool", () => {
-    expect(word("helper", { tools: ["exec", "edit", "read_file"] })).toBe("coder");
-    expect(word("helper", { tools: ["speak"] })).toBe("producer");
-    expect(word("helper")).toBeUndefined();
+  it("reads the description's role, not the common tools nearly every agent has", () => {
+    const tools = ["read", "write", "edit", "exec", "web_search", "web_fetch", "browser", "memory", "schedule"];
+    expect(word("ivy", { description: "Plans our family trips.", tools })).toBe("travel agent");
+    expect(word("ivy", { description: "Keeps the household budget.", tools })).toBe("bookkeeper");
+    expect(word("ivy", { description: "Tracks workouts and sleep.", tools })).toBe("coach");
+    expect(word("ivy", { description: "Keeps my journal.", tools })).toBe("writer");
+    expect(word("ivy", { description: "Writes the weekly newsletter.", tools: ["write_file", "edit"] })).toBe("writer");
   });
 
-  it("finds no role in a stray word, or in nothing at all", () => {
+  it("finds no role in a stray word, a word that means something else here, or nothing at all", () => {
     expect(word("zork")).toBeUndefined();
     expect(word("", {})).toBeUndefined();
     expect(word("ada", { instructions: "Answer questions. Now and then, plan ahead." })).toBeUndefined();
+    // On a chat server a DM is a direct message, and an agent's health is whether it is running.
+    expect(
+      word("ivy", { instructions: "Reply in the room. If someone needs privacy, send a DM. Never DM strangers." }),
+    ).toBe(undefined);
+    expect(word("notifier", { description: "Sends a DM when a task fails, and keeps the DM short." })).toBeUndefined();
+    expect(
+      word("overseer", { description: "Checks the health of the other agents and restarts any that stall." }),
+    ).toBe(undefined);
+    expect(word("booking-tracker", { description: "Monitors restaurant bookings and alerts on changes." })).toBe(
+      undefined,
+    );
+    expect(word("wiki-keeper", { description: "Keeps the workspace design and UI tidy, and curates the wiki." })).toBe(
+      undefined,
+    );
+    expect(word("watcher", { description: "Keeps the Discord server running smoothly." })).toBeUndefined();
   });
 
   it("gives every role homes that exist, work that a home can have, and things to wear that exist", () => {

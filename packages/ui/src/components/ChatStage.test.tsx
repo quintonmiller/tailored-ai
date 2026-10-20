@@ -156,6 +156,8 @@ let placeId = "home:talker";
 let company: { agent: string; name: string; avatar: string; animations: string[]; wear?: string[] }[] = [];
 /** What the agent whose home it is wears, as its place says. */
 let ownWear: string[] | undefined;
+/** What writing what a body wears answers: 200, or a failure. */
+let wearStatus = 200;
 /** Where the door of the agent's own place is, as the server says. */
 let homeDoorAlong = 1;
 /** The agents as configured: which run on their own. */
@@ -336,6 +338,7 @@ beforeEach(() => {
   placeId = "home:talker";
   company = [];
   ownWear = undefined;
+  wearStatus = 200;
   stage.wears.length = 0;
   stage.companyWear.length = 0;
   homeDoorAlong = 1;
@@ -487,6 +490,8 @@ beforeEach(() => {
         );
       if (url.startsWith("/api/state/wear/") && init?.method === "PUT") {
         posts.push({ url, body: JSON.parse(String(init.body)) });
+        if (wearStatus !== 200)
+          return new Response(JSON.stringify({ error: "The store is read-only." }), { status: wearStatus });
         return new Response("{}");
       }
       if (init?.method === "DELETE") {
@@ -1368,6 +1373,40 @@ describe("the chat page's scene", () => {
     await settle(60);
     expect(stage.visitors.at(-1)).toBe(true);
     expect(stage.wears.at(-1)).toEqual([]);
+  });
+
+  it("puts the card's chips back when what a body wears couldn't be saved", async () => {
+    company = [
+      {
+        agent: "planner",
+        name: "planner",
+        avatar: "/api/live/avatar?agent=planner",
+        animations: [],
+        wear: ["satchel"],
+      },
+    ];
+    wearStatus = 500;
+    await render();
+    await settle(60);
+    await press(await pick("planner"), "About planner");
+    await settle(60);
+    const card = container.querySelector(".world-agent") as HTMLElement;
+    const pressed = () =>
+      [...card.querySelectorAll(".world-wear-chip")]
+        .filter((c) => c.getAttribute("aria-pressed") === "true")
+        .map((c) => c.textContent);
+    expect(pressed()).toEqual(["adventurer hat"]);
+    await act(async () =>
+      ([...card.querySelectorAll(".world-wear-chip")] as HTMLButtonElement[])
+        .find((c) => c.textContent === "cap")
+        ?.click(),
+    );
+    await settle(30);
+    expect(posts.some((p) => p.url === "/api/state/wear/planner")).toBe(true);
+    // Nothing was saved, so the card says what the body still wears, and why the change didn't take.
+    expect(pressed()).toEqual(["adventurer hat"]);
+    expect(card.querySelector(".world-agent-wear")?.textContent).toMatch(/^An adventurer hat/);
+    expect(card.querySelector(".agent-menu-problem")?.textContent).toMatch(/Couldn't change what it wears/);
   });
 
   it("shows what an agent just did to the room over its head, and every change on the room's card", async () => {

@@ -268,32 +268,38 @@ same colour. The default agent keeps the model's own colours.
 
 Forty bodies in one colour scheme still look alike from across a hall, so
 the world reads what each agent is for and shows it. The reading is words
-alone, no model call: the agent's name counts most, then its `description`,
-then the start of its `instructions`, then the tools in its `tools:` list (an
-agent given every tool says nothing by its tools). Each role has a handful of
-words. `coder`, `debugger`, or instructions about pull requests and
-repositories read as a coder; `podcast-producer`, or "you produce the weekly
-podcast", as a producer. When two roles score the same, the more particular
-one wins: a trip planner is a travel agent before it is a planner, a code
-reviewer a reviewer before a coder. A stray word in long instructions isn't
-enough, and an agent nothing much says anything about has no role.
+alone, no model call, and it starts from the agent's name and its
+`description`: an agent has a role only when one of those says it. `coder`
+or `debugger` reads as a coder, and so does "Fixes bugs in the repo";
+`podcast-producer`, or "Turns each session into a podcast episode", as a
+producer. The name counts over everything else. The start of its
+`instructions` and the tools in its `tools:` list only choose between roles
+the name or description already says, so "Handles the mail and the podcast"
+is a clerk if its tools are the mail's. They never give a role on their
+own: instructions mention all sorts in passing, and most agents are given
+the same exec, edit and web search. Words that often mean something else
+are left out: a DM is usually a direct message, not a dungeon master, and
+"health" is as often an agent's as a person's. When two roles score the
+same, the more particular one wins: a trip planner is a travel agent before
+it is a planner, a code reviewer a reviewer before a coder. An agent whose
+name and description say nothing has no role.
 
 | role | home | something in it for the work | wears |
 |---|---|---|---|
 | coder | workshop or study | two server racks, their lights on day and night | headset, glasses |
-| operator (servers, backups, alerts) | workshop | server racks | headset, tool belt |
-| reviewer | study or workshop | | glasses, lanyard |
-| producer (podcast, audio, voice) | studio | a mixing desk with a microphone on a stand, acoustic panels, no easel | headset, scarf |
+| operator (deploys, backups, outages) | workshop | server racks | headset, tool belt |
+| reviewer (reviews, audits, judges) | study or workshop | | glasses, lanyard |
+| producer (podcast, audio, voice-overs) | studio | a mixing desk with a microphone on a stand, acoustic panels, no easel | headset, scarf |
 | travel agent | lounge | a globe, a map of the world, a suitcase | adventurer hat, satchel |
 | bookkeeper (budget, bills, accounts) | study | a bureau with ledgers on it, and a safe | bow tie, glasses |
 | game master | den | a game table with a chessboard and the rule books | wizard hat |
 | player | den | the game table | adventurer hat, tool belt |
 | writer | reading nook or study | | beret, scarf |
-| artist (design, drawing, photos) | studio | | beret, satchel |
+| artist (graphic design, drawing, photography) | studio | | beret, satchel |
 | researcher | study or reading nook | | glasses, satchel |
 | reporter (news, digests) | study or studio | | cap, satchel |
 | tutor | reading nook | | glasses, scarf |
-| coach (health, workouts, sleep) | garden room | | cap, lanyard |
+| coach (fitness, workouts, sleep) | garden room | | cap, lanyard |
 | clerk (mail, inbox) | study | | bow tie, lanyard |
 | housekeeper (chores, groceries, the garden) | garden room or lounge | | tool belt, scarf |
 | concierge | lounge | | bow tie |
@@ -334,7 +340,8 @@ agent chooses with the `place` tool's `room` action and `wear`:
 [What it is doing](#what-it-is-doing)), a row of chips under **Wears** puts
 each thing on or takes it off, in place of whatever was in its place, and
 **back to what suits** goes back to the role's. Either way the choice is a
-`wear` world-state record (`wear:<agent>`, in the agent's own scope), kept
+`wear` world-state record whose id is the agent's name
+(`/api/state/wear/<agent>`), in the agent's own scope, kept
 apart from the home so that choosing a hat never counts as changing the
 room. No record means what suits its role. The page redraws the body the
 moment the record changes, whoever changed it.

@@ -5,13 +5,17 @@
  * it, something in that home for the work (a server rack, a microphone, a
  * globe), and what its body wears unless it chooses otherwise.
  *
- * Read from words alone, with no model call. Each role has a few patterns: a
- * name that matches counts most, then the description, then the instructions
- * and the tools it is given. The best score wins, and a tie goes to the role
- * listed first, so the more particular role wins over the general one: a trip
- * planner is a travel agent before it is a planner, a code reviewer a
- * reviewer before a coder. An agent nothing much matches has no role: its
- * home is the seed's, and it wears nothing.
+ * Read from words alone, with no model call. Each role has a few patterns,
+ * and an agent has a role only when its name or its description says one:
+ * those are written to say what it is for. Its instructions and the tools it
+ * is given only add to a role already said, to choose between two, since
+ * instructions mention all sorts in passing and most agents are given the
+ * same exec, edit and web search. The name counts over everything else
+ * together, and a tie goes to the role listed first, so the more particular
+ * role wins over the general one: a trip planner is a travel agent before it
+ * is a planner, a code reviewer a reviewer before a coder. An agent whose
+ * name and description say nothing has no role: its home is the seed's, and
+ * it wears nothing.
  *
  * Pure, like `places-layout.ts`.
  */
@@ -141,9 +145,14 @@ export interface Role {
 }
 
 interface RoleDef extends Role {
-  /** Words that say it, each matched from the start of a word. */
+  /**
+   * Words that say it, each matched from the start of a word. Only words that
+   * mean the role wherever they turn up: "DM" is a direct message as often as
+   * a dungeon master, "health" an agent's or a channel's as often as a
+   * person's, so neither is here.
+   */
   words: RegExp;
-  /** Tools that say it, by name. */
+  /** Tools that say it, by name: only ones particular to the work, never the exec, edit and web search most agents have. */
   tools?: RegExp;
 }
 
@@ -154,19 +163,7 @@ export const ROLES: RoleDef[] = [
   {
     id: "game-master",
     word: "game master",
-    words: words(
-      "game.?master",
-      "dungeon.?master",
-      "gm\\b",
-      "dm\\b",
-      "campaigns?\\b",
-      "d&d",
-      "dnd\\b",
-      "tabletop",
-      "rpg\\b",
-      "storytell",
-      "one.?shot",
-    ),
+    words: words("game.?master", "dungeon.?master", "d&d", "dnd\\b", "tabletop", "ttrpgs?\\b", "rpgs?\\b"),
     homes: ["den"],
     dressing: "game",
     wear: ["wizard hat"],
@@ -202,13 +199,12 @@ export const ROLES: RoleDef[] = [
       "audio",
       "sound\\b",
       "music",
-      "radio",
+      "radio\\b",
       "recording",
       "narrat",
-      "voices?\\b",
-      "speak",
+      "voice.?overs?\\b",
+      "voice actor",
       "tts\\b",
-      "broadcast",
       "dj\\b",
       "producer",
       "episodes?\\b",
@@ -230,17 +226,13 @@ export const ROLES: RoleDef[] = [
       "hotels?\\b",
       "itinerar",
       "vacation",
-      "holiday",
-      "journey",
-      "tours?\\b",
-      "tourism",
+      "holidays?\\b",
+      "touris",
       "passport",
       "airline",
       "getaway",
       "cartograph",
-      "maps?\\b",
       "mapper",
-      "scout",
     ),
     homes: ["lounge"],
     dressing: "travel",
@@ -260,12 +252,12 @@ export const ROLES: RoleDef[] = [
       "invoice",
       "expense",
       "money",
-      "bank",
+      "bank(?:s|ing)?\\b",
       "bills?\\b",
       "billing",
-      "invest",
-      "stocks?\\b",
-      "portfolio",
+      "invest(?:s|or|ors|ing|ment|ments)?\\b",
+      "stocks\\b",
+      "stock (?:market|prices?)",
       "payroll",
       "spending",
       "savings",
@@ -279,7 +271,11 @@ export const ROLES: RoleDef[] = [
     id: "coach",
     word: "coach",
     words: words(
-      "health",
+      "health.?coach",
+      "health.?track",
+      "healthy",
+      "mental health",
+      "physical health",
       "fitness",
       "workouts?\\b",
       "exercis",
@@ -292,9 +288,10 @@ export const ROLES: RoleDef[] = [
       "doctor",
       "wellness",
       "wellbeing",
+      "well-being",
       "yoga",
-      "running",
-      "runner",
+      "jogging",
+      "marathon",
       "coach",
       "therap",
       "moods?\\b",
@@ -307,20 +304,27 @@ export const ROLES: RoleDef[] = [
     id: "reviewer",
     word: "reviewer",
     words: words(
-      "review",
+      "reviewer",
+      "reviewing",
+      "code.?reviews?",
+      "reviews? (?:the )?(?:code|pull requests?|prs?\\b|diffs?|changes|drafts?|work)",
       "critic",
       "critique",
       "audit",
       "qa\\b",
-      "quality",
+      "quality (?:assurance|control)",
       "lint",
       "proofread",
       "checker",
-      "inspect",
-      "verif",
-      "approv",
+      "verifier",
+      "inspector",
       "gatekeep",
-      "test(?:er|ers|ing|s)?\\b",
+      "testers?\\b",
+      "judge",
+      "judging",
+      "grader",
+      "grading",
+      "scorer",
     ),
     homes: ["study", "workshop"],
     wear: ["glasses", "lanyard"],
@@ -332,8 +336,8 @@ export const ROLES: RoleDef[] = [
       "code",
       "coder",
       "coding",
-      "program",
-      "develop",
+      "programm",
+      "developer",
       "devs?\\b",
       "engineer",
       "software",
@@ -349,13 +353,12 @@ export const ROLES: RoleDef[] = [
       "full.?stack",
       "hacker",
       "bugs?\\b",
-      "compil",
+      "compiler",
       "repos?\\b",
       "repositor",
       "pull requests?",
-      "commits?\\b",
     ),
-    tools: /^(exec|edit|write_file|apply_patch|coding_agent|git|github|repo|bash|shell)/,
+    tools: /^(coding_agent|claude_code|apply_patch|git)/,
     homes: ["workshop", "study"],
     dressing: "rack",
     wear: ["headset", "glasses"],
@@ -369,19 +372,18 @@ export const ROLES: RoleDef[] = [
       "sre\\b",
       "deploy",
       "infra",
-      "servers?\\b",
       "sysadmin",
-      "monitor",
+      "homelab",
+      "self.?host",
+      "web servers?\\b",
       "uptime",
       "kubernetes",
       "k8s\\b",
       "docker",
-      "cloud\\b",
       "backups?\\b",
-      "incident",
+      "incidents?\\b",
       "on.?call",
-      "alerts?\\b",
-      "outage",
+      "outages?\\b",
     ),
     homes: ["workshop"],
     dressing: "rack",
@@ -391,10 +393,10 @@ export const ROLES: RoleDef[] = [
     id: "writer",
     word: "writer",
     words: words(
-      "writ(?:e|er|ers|es|ing)\\b",
-      "wrote",
+      "writers?\\b",
+      "writing",
       "scribe",
-      "journal",
+      "journal(?:s|ing)?\\b",
       "author",
       "blog",
       "essay",
@@ -404,12 +406,12 @@ export const ROLES: RoleDef[] = [
       "poet",
       "poem",
       "copywrit",
-      "drafts?\\b",
       "prose",
       "editor",
       "editing",
       "manuscript",
       "newsletter",
+      "screenplay",
     ),
     homes: ["nook", "study"],
     wear: ["beret", "scarf"],
@@ -420,20 +422,16 @@ export const ROLES: RoleDef[] = [
     words: words(
       "artist",
       "arts?\\b",
-      "design",
+      "designer",
+      "graphic",
       "draw",
       "paint",
       "illustrat",
       "sketch",
-      "photograph",
-      "visual",
-      "images?\\b",
-      "graphic",
-      "ui\\b",
-      "ux\\b",
+      "photographer",
+      "photography",
       "comic",
-      "animat",
-      "curat",
+      "animator",
     ),
     homes: ["studio"],
     wear: ["beret", "satchel"],
@@ -444,8 +442,8 @@ export const ROLES: RoleDef[] = [
     words: words(
       "research",
       "analy",
-      "data\\b",
-      "dataset",
+      "datasets?\\b",
+      "data scien",
       "scien",
       "scholar",
       "investigat",
@@ -454,13 +452,11 @@ export const ROLES: RoleDef[] = [
       "literature",
       "papers?\\b",
       "fact.?check",
-      "librar",
-      "archiv",
-      "histor",
-      "look things up",
-      "finder",
+      "librarian",
+      "archivist",
+      "historian",
+      "look(?:s)? things up",
     ),
-    tools: /^(web_search|web_fetch|browse|search|fetch)/,
     homes: ["study", "nook"],
     wear: ["glasses", "satchel"],
   },
@@ -470,14 +466,12 @@ export const ROLES: RoleDef[] = [
     words: words(
       "news",
       "reporter",
-      "reporting",
       "digest",
       "briefing",
       "briefer",
       "headlines?\\b",
       "journalis",
       "rss\\b",
-      "feeds?\\b",
       "summar",
       "bulletin",
       "press\\b",
@@ -491,12 +485,10 @@ export const ROLES: RoleDef[] = [
     words: words(
       "teach",
       "tutor",
-      "learn",
       "lessons?\\b",
-      "courses?\\b",
-      "languages?\\b",
+      "courses\\b",
+      "coursework",
       "mentor",
-      "explain",
       "school",
       "homework",
       "quiz",
@@ -517,10 +509,8 @@ export const ROLES: RoleDef[] = [
       "filing",
       "letters?\\b",
       "correspond",
-      "admin",
       "paperwork",
       "notary",
-      "forms?\\b",
     ),
     tools: /^(gmail|email|mail)/,
     homes: ["study"],
@@ -531,10 +521,10 @@ export const ROLES: RoleDef[] = [
     word: "housekeeper",
     words: words(
       "house",
-      "household",
       "home\\b",
       "chores?\\b",
-      "clean",
+      "cleaning",
+      "cleaner",
       "garden",
       "plants?\\b",
       "grocer",
@@ -545,9 +535,7 @@ export const ROLES: RoleDef[] = [
       "recipe",
       "chef",
       "room.?keeper",
-      "keeper",
       "janitor",
-      "tidy",
       "laundry",
       "pets?\\b",
     ),
@@ -559,12 +547,11 @@ export const ROLES: RoleDef[] = [
     word: "concierge",
     words: words(
       "concierge",
-      "support",
       "help.?desk",
+      "tech support",
       "customers?\\b",
       "butler",
       "receptionist",
-      "host\\b",
       "hostess",
       "greet",
       "welcom",
@@ -578,7 +565,7 @@ export const ROLES: RoleDef[] = [
     id: "builder",
     word: "builder",
     words: words(
-      "build",
+      "builder",
       "maker",
       "craft",
       "repair",
@@ -612,8 +599,6 @@ export const ROLES: RoleDef[] = [
       "assistant",
       "secretary",
       "chief of staff",
-      "lists?\\b",
-      "lister",
     ),
     homes: ["study", "lounge"],
     wear: ["lanyard"],
@@ -629,16 +614,18 @@ export interface AgentAbout {
   tools?: string[];
 }
 
-/** How much each kind of evidence counts. */
-const WEIGHT = { name: 5, description: 3, instructions: 1, tools: 2 };
+/**
+ * How much each kind of evidence counts: the name over everything else
+ * together (10 > 4 + 3 + 2), the description over either of the rest alone.
+ * Instructions and tools only ever add to a role the name or description says.
+ */
+const WEIGHT = { name: 10, description: 4, instructions: 1, tools: 1 };
 /** Instructions run long and mention all sorts: at most this many of a role's words in them count. */
 const INSTRUCTION_HITS = 3;
 /** And this many of its tools. */
 const TOOL_HITS = 2;
 /** Long instructions are read only this far: what an agent is for comes first. */
 const INSTRUCTION_CHARS = 4000;
-/** Less than this is a stray word, not a role. */
-const ENOUGH = 2;
 
 /** A name as words: "podcast-producer", "tripPlanner" and "mail_sorter" read as two words each. */
 function nameWords(name: string): string {
@@ -650,28 +637,36 @@ function nameWords(name: string): string {
 
 const hits = (pattern: RegExp, text: string | undefined) => (text ? (text.match(pattern)?.length ?? 0) : 0);
 
-/** How strongly each role is said of an agent, by role id: only roles said at all. */
+/**
+ * How strongly each role is said of an agent, by role id: only the roles its
+ * name or description says. A role its instructions or tools alone suggest is
+ * no role: long instructions mention players, history and DMs in passing, and
+ * most agents have the same handful of tools.
+ */
 export function roleScores(about: AgentAbout): Map<string, number> {
   const name = nameWords(about.name);
   const instructions = about.instructions?.slice(0, INSTRUCTION_CHARS);
   const scores = new Map<string, number>();
   for (const role of ROLES) {
+    const said =
+      (hits(role.words, name) ? WEIGHT.name : 0) + (hits(role.words, about.description) ? WEIGHT.description : 0);
+    if (!said) continue;
     const tools = role.tools ? (about.tools ?? []).filter((t) => role.tools?.test(t)).length : 0;
-    const score =
-      (hits(role.words, name) ? WEIGHT.name : 0) +
-      (hits(role.words, about.description) ? WEIGHT.description : 0) +
-      Math.min(INSTRUCTION_HITS, hits(role.words, instructions)) * WEIGHT.instructions +
-      Math.min(TOOL_HITS, tools) * WEIGHT.tools;
-    if (score) scores.set(role.id, score);
+    scores.set(
+      role.id,
+      said +
+        Math.min(INSTRUCTION_HITS, hits(role.words, instructions)) * WEIGHT.instructions +
+        Math.min(TOOL_HITS, tools) * WEIGHT.tools,
+    );
   }
   return scores;
 }
 
-/** What an agent is for, from its name, description, instructions and tools; undefined when nothing much says. */
+/** What an agent is for, from its name and description, its instructions and tools choosing between two; undefined when neither says. */
 export function readRole(about: AgentAbout): Role | undefined {
   const scores = roleScores(about);
   let best: RoleDef | undefined;
-  let top = ENOUGH - 1;
+  let top = 0;
   for (const role of ROLES) {
     const score = scores.get(role.id) ?? 0;
     if (score > top) {
