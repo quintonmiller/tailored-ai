@@ -683,6 +683,8 @@ export interface Where {
   middle?: boolean;
   /** On open floor: where it has the most room round it (`OPEN_FLOOR`), nearest the middle of those. */
   open?: boolean;
+  /** With `open`, where people stand, [x, z] each: something tall doesn't go between them and the view in. */
+  seen?: [number, number][];
   x?: number;
   z?: number;
   facing?: string | number;
@@ -841,6 +843,59 @@ export const OPEN_FLOOR = 1;
 const OPEN_STEP = 0.2;
 /** The floor clear round a thing that `roomRound` tells apart, most first. */
 const OPEN_LEVELS = [OPEN_FLOOR, 0.75, 0.5, 0.25];
+/** How tall a thing has to be to hide what is behind it, in metres: the page's `TALL`, at which it fades out of your way. */
+const HIDES = 1.1;
+/**
+ * How far in from the open front a tall new thing is kept, in metres. The
+ * page looks in across it, so a shelf or a palm put down there stands
+ * between you and the room.
+ */
+export const VIEW_STRIP = 1.3;
+/**
+ * The way the page looks into a room, [x, z] along the floor toward the
+ * viewer: from the front, a little to the right (the page's `ROOM_VIEW`,
+ * turned 0.42 rad from the front).
+ */
+const VIEW_IN: [number, number] = [Math.sin(0.42), Math.cos(0.42)];
+/** How far to one side of someone, from their middle, a thing has to be to leave them in sight, besides its own half. */
+const BODY_HALF = 0.5;
+/**
+ * How much of the room a tall new thing may have behind it, looking in, in
+ * metres: up by the back or left wall it hides little, out on the floor a
+ * stretch of the room.
+ */
+export const BEHIND = 2.5;
+
+/** How far the room goes on behind a point, looking in (`VIEW_IN`), to the back or the left wall. */
+function behind(place: Place, [x, z]: [number, number]): number {
+  const [vx, vz] = VIEW_IN;
+  return Math.min((z + place.depth / 2) / vz, (x + place.width / 2) / vx);
+}
+
+/**
+ * How much a tall thing standing at `at`, `half` across from its middle, gets
+ * in the way of the view in: 2 at the open front, which every view looks in
+ * across, or between someone standing in `seen` and the view; 1 out on the
+ * floor, with more of the room than `BEHIND` behind it; 0 by the back or the
+ * left wall, and for anything low.
+ */
+function inTheWay(
+  place: Place,
+  placing: Placing,
+  [x, z]: [number, number],
+  half: number,
+  seen: [number, number][],
+): number {
+  if (heightOf(placing) < HIDES) return 0;
+  if (place.depth / 2 - z < VIEW_STRIP) return 2;
+  const [vx, vz] = VIEW_IN;
+  const hides = seen.some(([px, pz]) => {
+    const [dx, dz] = [x - px, z - pz];
+    return dx * vx + dz * vz > 0 && Math.abs(dx * vz - dz * vx) < half + BODY_HALF;
+  });
+  if (hides) return 2;
+  return behind(place, [x, z]) > BEHIND ? 1 : 0;
+}
 
 /**
  * How much floor is clear round a thing put here, in metres, to the nearest
@@ -1286,17 +1341,20 @@ function placeOnFloor(place: Place, placing: Placing, where: Where): Placement |
   }
 
   if (where.open) {
-    // Anywhere it fits, nearest the middle first, keeping the one with the most floor clear round it.
+    // Anywhere it fits, nearest the middle first, keeping the one with the most floor clear round it. Something tall
+    // goes by the back or the left wall, where it hides little of the room, and across the open front or in front of
+    // anyone standing only when there is nowhere else: out of the way of the view in first, then open.
     const facingAt = (at: [number, number]) =>
       explicit(at) ?? (kind?.use?.activity === "sit" ? towards(at, [0, 0.6]) : 0);
-    let best: { at: [number, number]; facing: number; room: number } | undefined;
+    let best: { at: [number, number]; facing: number; room: number; way: number } | undefined;
     for (const at of around([0, 0], Math.max(3.5, Math.hypot(place.width, place.depth) / 2), OPEN_STEP)) {
       const facing = facingAt(at);
       const rect = { at, hw: w / 2, hd: d / 2, facing: kind?.round ? 0 : facing };
       if (!floorFits(place, placing, rect)) continue;
       const room = roomRound(place, placing, rect);
-      if (!best || room > best.room) best = { at, facing, room };
-      if (room >= OPEN_FLOOR) break;
+      const way = inTheWay(place, placing, at, Math.max(w, d) / 2, where.seen ?? []);
+      if (!best || way < best.way || (way === best.way && room > best.room)) best = { at, facing, room, way };
+      if (way === 0 && room >= OPEN_FLOOR) break;
     }
     return best
       ? { at: best.at, facing: best.facing }

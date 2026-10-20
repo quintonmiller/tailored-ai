@@ -152,17 +152,25 @@ function world([lx, lz]: [number, number], [cx, cz]: [number, number], facing: n
 }
 
 /** Seats drawn up to a table or a desk to sit at it, which go where it goes. */
-export const DRAWN_UP_KINDS = new Set(["chair", "stool", "bench", "cafe_chair", "armchair"]);
+export const DRAWN_UP_KINDS = new Set(["chair", "stool", "bench", "cafe_chair"]);
 /** What seats are drawn up to. */
 export const TABLE_KINDS = new Set(["table", "round_table", "desk", "coffee_table", "cafe_table"]);
+/**
+ * The tables people meet round, as a meeting room seats them: armchairs set
+ * back from one and turned to it are drawn up to it too. Not a coffee table,
+ * whose armchairs belong to the lounge round it, couch and all.
+ */
+export const MEETING_KINDS = new Set(["table", "round_table"]);
+/** The armchairs a meeting table has drawn up to it. */
+const MEETING_SEATS = new Set([...DRAWN_UP_KINDS, "armchair"]);
 /** What things stand on, on the floor, and are carried along with it. */
 export const RUG_KINDS = new Set(["rug", "round_rug"]);
 /** How near a seat comes to a table, edge to edge, to be drawn up to it, in metres. */
 export const DRAWN_UP = 0.35;
 /**
- * How near a seat turned to face a table comes to it to be drawn up to it:
- * further, since a meeting room sets its armchairs back far enough for
- * someone to walk between them and the table.
+ * How near a seat turned to face a meeting table comes to it to be drawn up
+ * to it: further, since a meeting room sets its armchairs back far enough
+ * for someone to walk between them and the table.
  */
 export const DRAWN_UP_FACING = 0.8;
 /**
@@ -226,16 +234,18 @@ export function groupOf(room: Pick<Room, "props">, kinds: Kinds, id: string): st
   if (!prop || !floor(prop)) return [];
   const tables = room.props.filter((p) => floor(p) && TABLE_KINDS.has(p.kind));
   /** The seats drawn up to a table: near enough, and no nearer another. */
-  const seatsAt = (table: Prop) =>
-    room.props
-      .filter((p) => floor(p) && DRAWN_UP_KINDS.has(p.kind))
+  const seatsAt = (table: Prop) => {
+    const meeting = MEETING_KINDS.has(table.kind);
+    return room.props
+      .filter((p) => floor(p) && (meeting ? MEETING_SEATS : DRAWN_UP_KINDS).has(p.kind))
       .filter((seat) => {
         const [w, d] = footprint(seat, kinds);
-        const reach = (faces(seat, table.at) ? DRAWN_UP_FACING : DRAWN_UP) + Math.max(w, d) / 2;
+        const reach = (meeting && faces(seat, table.at) ? DRAWN_UP_FACING : DRAWN_UP) + Math.max(w, d) / 2;
         const gap = outside(seat.at, table, kinds);
         return gap <= reach && tables.every((t) => t === table || outside(seat.at, t, kinds) >= gap);
       })
       .map((p) => p.id);
+  };
   /** A table and every table pushed together with it, and with those, end to end. */
   const tableOf = (first: Prop) => {
     const all = new Set([first]);

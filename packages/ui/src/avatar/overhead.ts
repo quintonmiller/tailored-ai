@@ -157,7 +157,8 @@ export interface Screen {
   covered?: Box[];
   /**
    * What is on the walls to be read, where it is on the screen: a room's
-   * whiteboard and its task board. A faint tag in a crowd never sits over one.
+   * whiteboard and its task board. A tag goes up past one rather than sit
+   * over it, and a faint tag in a crowd never does.
    */
   boards?: Box[];
 }
@@ -183,6 +184,12 @@ const HEAD_HALF_PX = 12;
  * whose, and its line down would be lost among the others.
  */
 const CROWD_LIFT = 2;
+/**
+ * How much further up a tag goes to clear a board on the wall
+ * (`Screen.boards`), in its own heights: past a board's foot, but not up a
+ * whole board brought near, which would leave the tag far from its head.
+ */
+const BOARD_LIFT = 3;
 /** Where a face is, as a share of half a body's width on the screen: across from the middle of it, and down from the top of the head. */
 const FACE: [number, number] = [0.4, 0.5];
 
@@ -327,8 +334,10 @@ function tailFrom(b: Box, to: [number, number], others: Box[]): [number, number]
  * `LEADER_PX` has a line down to its head, drawn by the body. Where three or
  * more tags would meet, they are a crowd: the ones that aren't to read
  * (`Column.focus`, or a speaker's) are drawn faint, and a faint one that
- * would have to go a column high, or would sit over a board on the wall
- * (`Screen.boards`), is put away instead (`CROWD_LIFT`). A tag that would
+ * would have to go a column high is put away instead (`CROWD_LIFT`). A tag
+ * over a board on the wall (`Screen.boards`) goes across or up past it, if
+ * that isn't far (`BOARD_LIFT`); a faint one that can't is put away, and
+ * one to read stays where it can be read. A tag that would
  * sit under the foot of what can be seen (`Screen.bottom`: the keys hint, a
  * phone's chat) is put away too, as the head it names is under there,
  * unless it is a speaker's.
@@ -370,13 +379,24 @@ export function stack(columns: Column[], screen?: Screen, gap = GAP_PX): Map<str
     // A sign shows over a tag only while there is no bubble, and needs its room too.
     const sign = c.sign && !c.bubble ? c.sign + gap : 0;
     const base = c.y - gap;
-    const way = c.tag || sign ? makeWay(c.x, base, w, h + sign, tags, gap, screen) : { up: 0, across: 0 };
+    let way = c.tag || sign ? makeWay(c.x, base, w, h + sign, tags, gap, screen) : { up: 0, across: 0 };
     const faded = !!c.tag && !c.focus && !c.bubble && crowd.has(c.id);
-    const at = box(c.x + way.across, base - way.up, w, h + sign);
-    // Faint, with no sign to show, and going a column high to make way, or laid over a board on the wall that is
-    // there to be read: put away, keeping no room from the others. And a tag that would sit under the keys hint along
-    // the foot of the stage, where the head it names is too; but a speaker's, which its bubble's tail ends on.
-    const crowded = way.up > CROWD_LIFT * (h + gap) || (screen?.boards ?? []).some((b) => overlapArea(at, b) > 0);
+    let at = box(c.x + way.across, base - way.up, w, h + sign);
+    // Over a board on the wall, which is there to be read: across or up past it, if that isn't far.
+    const boards = screen?.boards ?? [];
+    let onBoard = !!(c.tag || sign) && boards.some((b) => overlapArea(at, b) > 0);
+    if (onBoard) {
+      const past = makeWay(c.x, base, w, h + sign, [...tags, ...boards], gap, screen);
+      if (past.up - way.up <= BOARD_LIFT * (h + gap)) {
+        way = past;
+        at = box(c.x + way.across, base - way.up, w, h + sign);
+        onBoard = false;
+      }
+    }
+    // Faint, with no sign to show, and going a column high to make way, or left over a board: put away, keeping no
+    // room from the others. And a tag that would sit under the keys hint along the foot of the stage, where the head
+    // it names is too; but a speaker's, which its bubble's tail ends on.
+    const crowded = way.up > CROWD_LIFT * (h + gap) || onBoard;
     const under = !!c.tag && !c.bubble && screen?.bottom !== undefined && at.bottom > screen.bottom + 1;
     const away = (faded && !sign && crowded) || under;
     if ((c.tag || sign) && !away) {

@@ -146,13 +146,16 @@ page keeps that while it is open. Drag to look around the room, or press
 furniture is built from simple shapes, so there are no files to download.
 
 Something tall standing between the camera and you (or, in an agent's own
-view, the agent), a palm at the front of a meeting room or a bookshelf you
-walked behind, fades to a ghost of itself until the view is clear again. Only
-its parts count, not the air round them: a café cart you see past under its
-awning stays as it is, and so does one that hides someone else across the
-café. A faded thing casts no shadow, so its ghost doesn't darken the floor. On a visit you can turn the
-view all the way round; a wall the camera goes behind fades the same way,
-with whatever hangs on it, so you see into the room rather than its back.
+view, the agent) fades to a ghost of itself until the view is clear again: a
+bookshelf you walked behind, say. So does one hiding whoever you are with,
+the agent you stand by or one you have a card open beside, like a palm in
+front of the seat of the agent you came to see. Only its parts count, not
+the air round them: a café cart you see past under its awning stays as it
+is, and so does one that hides someone else across the café. A faded thing
+casts no shadow, so its ghost doesn't darken the floor. On a visit you can
+turn the view all the way round; a wall the camera goes behind fades the
+same way, with whatever hangs on it, so you see into the room rather than
+its back.
 
 The avatar moves around the room on its own. Between sessions it wanders:
 it sits on the couch, types at the desk, looks out of the window, browses
@@ -728,7 +731,7 @@ fingers to fly on, close them to fly back (`flyPinchStep`). In a room you fly
 inside it: the camera comes down from the view that followed you to take off
 from your head, and stays between the floor and the ceiling and within the
 walls, so holding `Q` stops just over the floor, holding `E` stops under the
-ceiling, and the wheel or a turn never takes you out of the room and lost.
+ceiling, and the wheel or a turn never takes you out of the room.
 Outdoors you fly over the town, from just over the ground up to 60 metres
 (`flyBounds`). Walk brings the camera back round to you.
 Agents keep their own calmer pace in
@@ -1387,13 +1390,16 @@ where you were.
   through the door.", "It would be where someone stands to use the couch."
   Let go somewhere red and it goes back.
 - **What goes with it comes too.** Drag a table, a café table or a desk and
-  the chairs, stools, benches and armchairs drawn up to it come along, each
-  keeping its place round it (a seat between two tables goes with the
-  nearer; an armchair turned to face a table counts from further off, as a
-  meeting room sets them back for someone to walk between). Tables pushed
+  the chairs, stools and benches drawn up to it come along, each keeping its
+  place round it (a seat between two tables goes with the nearer). A table
+  people meet round, as a meeting room has, takes the armchairs turned to
+  face it too, counted from further off, since a meeting room sets them back
+  for someone to walk between; a coffee table goes without the armchairs
+  either side of it, which belong to the lounge, couch and all. Tables pushed
   together, end to end or nearly, are one table: drag any piece of a meeting
-  room's long table and the whole of it comes, with every seat round it. Drag a rug and
-  everything standing on it comes, with the chairs at any table on it. Their
+  room's long table and the whole of it comes, with every seat round it. Drag
+  a rug and everything standing on it comes, with the chairs at any table on
+  it. Their
   footprints are outlined with it while you drag, the line under the bar says
   what comes ("Drag it to move it with its 3 chairs"), and the whole group is
   checked where it lands, together, so the bar names the piece that doesn't
@@ -1423,8 +1429,11 @@ where you were.
   floor, where it has a metre clear round it, nearest the middle of the room
   of the places that do, rather than in among the furniture there; never on
   you or an agent, and a metre clear of you both where the room has the floor
-  for it (less, in a room too full). It comes picked, ready to drag where you
-  want it. A task
+  for it (less, in a room too full). Something tall, a bookshelf or a palm,
+  goes up by the back or the left wall, where it hides little of the room,
+  and goes across the open front or in front of anyone standing only when
+  there is nowhere else. It comes picked, ready to drag where you want it. A
+  task
   board you add shows the tasks and opens them, like the ones rooms come
   with. Above them all, **Made by agents** lists the models agents have made,
   newest first, by name and whose each is (see
@@ -2227,8 +2236,8 @@ The chat page draws it on every body in the room:
 - **Thinking**, a thought cloud floats over it and it looks up and away, at
   its desk if it has one. In a meeting room it keeps its seat at the table.
   Three or more thinking together, round a table or close by, share one
-  cue over the middle of them, "4 thinking" under a thought cloud, in place
-  of a cloud and "thinking" over each; their tags keep their names. Point at
+  tag over the middle of them, a thought cloud and "4 thinking", in place of
+  a cloud and "thinking" over each; their tags keep their names. Point at
   one, or stand by it, and its own sign and words are back.
 - **Talking** to an agent in the same place, the two turn to face each other
   under speech bubbles; to one anywhere else, it holds a phone to its ear (see
@@ -2253,9 +2262,12 @@ when the tag is faint, so you can tell whose it is. Where three or more tags
 would meet, round a meeting table say, they are a crowd: everyone's but the
 one you are pointing at or standing by, and whoever is talking, is drawn
 faint, so the speaker's name stands out; and a faint one that would have to
-go up past a couple of others, or would sit over the room's whiteboard or task
-board, is put away rather than stacked a column high over the table or laid
-over what is there to read. Point at that body and its tag is back. A tag
+go up past a couple of others is put away rather than stacked a column high
+over the table. A tag that would sit over the room's whiteboard or task
+board goes across or up past it, if that isn't far, so what is there to
+read stays clear; a faint one that can't is put away, and one to read, like
+the shared "thinking" tag, stays where you can read it. Point at a body
+whose tag was put away and the tag is back. A tag
 whose head is under the keys hint along the foot of the stage, as one at the
 foot of the view can be when you fly up high, is put away rather than drawn
 behind the hint.

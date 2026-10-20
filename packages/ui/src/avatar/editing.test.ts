@@ -648,6 +648,29 @@ describe("what goes with a thing you move", () => {
     expect(groupOf(round, k, "table")).toEqual(ring.map((s) => s.id));
   });
 
+  it("leaves a lounge's armchairs and couch where they are when you move its coffee table or its rug", () => {
+    const k: Kinds = {
+      ...more,
+      armchair: { noun: "armchair", mount: "floor", footprint: [0.85, 0.8], height: 0.85 },
+      coffee_table: { noun: "coffee table", mount: "floor", footprint: [1.0, 0.55], height: 0.42, surface: 0.42 },
+    };
+    // A home's lounge on its back wall, as it is laid out: the couch against the wall, a rug out from it with the
+    // coffee table on it, and an armchair either side of the table, turned to it.
+    const den = {
+      props: [
+        { ...thing("rug", "rug", [0, -1.55]), scale: 1.25 },
+        thing("couch", "couch", [0, -2.58]),
+        thing("coffee", "coffee_table", [0, -1.35]),
+        thing("mug", "laptop", [0, -1.35], 0, "coffee"),
+        thing("armchair", "armchair", [-1.45, -1.35], 90),
+        thing("armchair-2", "armchair", [1.45, -1.35], -90),
+      ],
+    };
+    // The armchairs belong to the lounge, couch and all: a coffee table goes by itself, and the rug with what is on it.
+    expect(groupOf(den, k, "coffee")).toEqual([]);
+    expect(groupOf(den, k, "rug")).toEqual(["coffee"]);
+  });
+
   it("keeps a table apart from one a step away, and joins one pushed up to it, nudged a little apart or not", () => {
     const two = { props: [thing("table", "table", [0, 0]), thing("table-2", "table", [1.7, 0])] };
     expect(groupOf(two, more, "table")).toEqual([]);

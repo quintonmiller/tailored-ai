@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { applyEdit, doorsFor, type Edit, type Edited, editFrom } from "../plugins/places-edit.js";
 import {
+  BEHIND,
   DOOR_HOLD,
   doorOf,
   firstHome,
@@ -15,6 +16,7 @@ import {
   type Place,
   type PlaceItem,
   placeProblems,
+  VIEW_STRIP,
   whyNotOnFloor,
   withDoorsHeld,
 } from "../plugins/places-layout.js";
@@ -213,16 +215,88 @@ describe("adding, copying, recolouring and taking away", () => {
     // A meeting room for six: a round table in the middle, with its armchairs round it.
     const place = meetingRoom("general", 6, "Everyday chat for everyone");
     const { place: next, item: id } = made(
-      { op: "add", kind: "tall_plant", avoid: [[0, 2.4]] },
+      { op: "add", kind: "plant", avoid: [[0, 2.4]] },
       place,
       "room:local:general",
     );
     const added = item(next, id as string);
+    const half = Math.max(...footprintOf(added)) / 2;
     const furniture = place.props.filter(
       (p) => !p.on && !["rug", "round_rug"].includes(p.kind) && KINDS[p.kind]?.mount === "floor",
     );
     // A metre of floor clear round it, as near the middle as there is that much.
-    for (const p of furniture) expect(away(added.at, p), p.name).toBeGreaterThanOrEqual(OPEN_FLOOR + 0.25 - 0.01);
+    for (const p of furniture) expect(away(added.at, p), p.name).toBeGreaterThanOrEqual(OPEN_FLOOR + half - 0.01);
+  });
+
+  it("keeps something tall out of the view in: by the back or the left wall, not across the open front", () => {
+    // The page looks in across the open front, a little from the right; meeting rooms leave their front strip clear.
+    const view = [Math.sin(0.42), Math.cos(0.42)];
+    const rooms: [Place, string][] = [
+      [meetingRoom("general", 6, "Everyday chat for everyone"), "room:local:general"],
+      [meetingRoom("general", 16, "Everyday chat for everyone"), "room:local:general"],
+      [lobby(), LOBBY],
+      [firstHome(), HOME],
+    ];
+    for (const [place, room] of rooms) {
+      for (const kind of ["tall_plant", "bookshelf", "palm", "lamp"]) {
+        const { place: next, item: id } = made({ op: "add", kind, avoid: [[0, 0.5]] }, place, room);
+        const [x, z] = item(next, id as string).at;
+        expect(z, `${kind} in ${room}`).toBeLessThanOrEqual(place.depth / 2 - VIEW_STRIP);
+        // Little of the room behind it, looking in: it is up by the back or the left wall.
+        const behind = Math.min((z + place.depth / 2) / view[1], (x + place.width / 2) / view[0]);
+        expect(behind, `${kind} in ${room} at ${x}, ${z}`).toBeLessThanOrEqual(BEHIND);
+      }
+    }
+    // With the back and the left wall taken, out on the floor rather than across the open front, though the front
+    // has more room round it.
+    const blocked: Place = {
+      ...firstHome(),
+      width: 8,
+      depth: 6,
+      props: [
+        { id: "back", name: "the back", kind: "block", at: [0, -1.25], facing: 0, size: [8, 1, 3.5] },
+        { id: "left", name: "the left", kind: "block", at: [-3.25, 1.75], facing: 0, size: [1.5, 1, 2.5] },
+      ],
+    };
+    const out = made({ op: "add", kind: "tall_plant" }, blocked);
+    expect(item(out.place, out.item as string).at[1]).toBeLessThanOrEqual(3 - VIEW_STRIP);
+    // Something low may go there: it hides nothing.
+    const low = made({ op: "add", kind: "armchair" }, meetingRoom("general", 16), "room:local:general");
+    expect(item(low.place, low.item as string)).toBeDefined();
+  });
+
+  it("doesn't stand something tall between you and the view in", () => {
+    // The view in comes from the front, a little to the right. Wherever you stand, nothing tall goes in front of you.
+    const view = [Math.sin(0.42), Math.cos(0.42)];
+    const rooms: [Place, string][] = [
+      [meetingRoom("general", 16, "Everyday chat for everyone"), "room:local:general"],
+      [meetingRoom("general", 6, "Everyday chat for everyone"), "room:local:general"],
+      [lobby(), LOBBY],
+      [firstHome(), HOME],
+    ];
+    const spots: [number, number][] = [
+      [0, 0.5],
+      [0, -1],
+      [2, -1],
+      [-2, -1],
+      [1, -2],
+      [-1, 0.5],
+    ];
+    for (const [place, id] of rooms) {
+      for (const you of spots) {
+        for (const kind of ["tall_plant", "bookshelf"]) {
+          const { place: next, item: added } = made({ op: "add", kind, avoid: [you] }, place, id);
+          const thing = item(next, added as string);
+          const [dx, dz] = [thing.at[0] - you[0], thing.at[1] - you[1]];
+          const across = Math.abs(dx * view[1] - dz * view[0]);
+          if (dx * view[0] + dz * view[1] <= 0) continue;
+          // Nearer the view than you: far enough to one side that your body is still in sight.
+          expect(across, `${kind} in ${id} with you at ${you}`).toBeGreaterThanOrEqual(
+            Math.max(...footprintOf(thing)) / 2 + 0.25,
+          );
+        }
+      }
+    }
   });
 
   it("keeps a metre clear of you in a little room with no open floor to spare, or as near that as it can", () => {

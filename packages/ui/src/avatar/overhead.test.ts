@@ -627,6 +627,37 @@ describe("stack", () => {
     expect(table.filter((c) => bare.get(c.id)?.hidden)).toEqual([]);
   });
 
+  it("takes the shared thinking cue and the tags to read up past a board on the wall, not over it", () => {
+    // Four round a table thinking, one cue over the middle of them, the whiteboard on the wall just behind.
+    const table = [
+      body("host", 300, 300, { focus: true }),
+      body("left", 230, 315),
+      body("right", 370, 312, { focus: true }),
+      body("near", 305, 340),
+    ];
+    const cue = body("cue", 300, 305, { tag: [110, 22], rank: -1e9, focus: true });
+    const whiteboard: Box = { left: 180, right: 340, top: 200, bottom: 270 };
+    const columns = [...table, cue];
+    const out = stack(columns, { left: 0, right: 1000, top: 0, boards: [whiteboard] });
+    for (const c of [cue, table[0], table[2]]) {
+      const at = out.get(c.id) as Stacked;
+      expect(at.hidden, c.id).toBe(false);
+      expect(meets(drawn(c, at).tag as Box, whiteboard), c.id).toBe(false);
+    }
+    // Nothing on the wall: the cue sits just over the tags, lower than it went to clear the board.
+    const bare = stack(columns, { left: 0, right: 1000, top: 0 });
+    expect((bare.get("cue") as Stacked).tag).toBeLessThan((out.get("cue") as Stacked).tag);
+  });
+
+  it("leaves a tag to read where it is under a board too tall to go up past", () => {
+    // Close up, the board fills the wall over the table: the name stays over its head, on the board's foot.
+    const near = body("near", 300, 330, { focus: true });
+    const board: Box = { left: 150, right: 450, top: 20, bottom: 320 };
+    const at = stack([near], { left: 0, right: 1000, top: 0, boards: [board] }).get("near") as Stacked;
+    expect(at.hidden).toBe(false);
+    expect(at.tag).toBeLessThan(10);
+  });
+
   it("puts away a tag that would sit under the keys hint along the foot of the stage", () => {
     // Flown up high, someone at the foot of the view has their head under the hint.
     const out = stack([body("low", 300, 712), body("high", 500, 400)], { left: 0, right: 1000, top: 0, bottom: 700 });

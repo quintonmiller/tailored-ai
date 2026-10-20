@@ -3491,17 +3491,6 @@ export async function createStage(
     }
   };
 
-  /** Flying: turn about a point just ahead, so dragging feels like turning your head, any way round. */
-  function turnAboutAhead() {
-    const look = controls.target.clone().sub(camera.position).normalize();
-    controls.target.copy(camera.position).add(look.multiplyScalar(1.2));
-    controls.minAzimuthAngle = Number.NEGATIVE_INFINITY;
-    controls.maxAzimuthAngle = Number.POSITIVE_INFINITY;
-    controls.minPolarAngle = 0.05;
-    controls.maxPolarAngle = Math.PI - 0.05;
-    controls.update();
-  }
-
   /**
    * Flying, the camera stays where you can fly (`flyBounds`): in a room,
    * between its floor and ceiling and within its walls; outdoors, over the
@@ -3536,13 +3525,27 @@ export async function createStage(
       polar: [0.05, Math.PI - 0.05],
     };
   };
-  /** Flying on from somewhere new (another room, or face to face with someone): in a room, from your head. */
-  const flyOn = () => {
-    if (isOutdoors(room)) {
-      turnAboutAhead();
-      keepFlying();
-    } else settle(liftOff());
+  /**
+   * Starting to fly outdoors, the camera flies on from where it is, looking
+   * the way it looks and turning about a point just ahead. The view following
+   * you can stand further off than flying goes (`flyBounds`), above the sky's
+   * limit or out over the sea, so it is brought in over the town first.
+   */
+  const flyFromHere = (): Framing => {
+    const look = controls.target.clone().sub(camera.position).normalize();
+    const p = camera.position;
+    const at = new THREE.Vector3(...keptIn([p.x, p.y, p.z], flyBounds(room)));
+    return {
+      target: at.clone().add(look.multiplyScalar(1.2)),
+      position: at,
+      azimuth: [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY],
+      polar: [0.05, Math.PI - 0.05],
+    };
   };
+  /** Where flying starts: outdoors from where the camera is, in a room from your head. */
+  const takingOff = (): Framing => (isOutdoors(room) ? flyFromHere() : liftOff());
+  /** Flying on from somewhere new (another room, or face to face with someone): in a room, from your head. */
+  const flyOn = () => settle(takingOff());
 
   /** The camera's heading on the floor, and its right, for keys that move relative to the view. */
   const heading = () => {
@@ -3694,11 +3697,18 @@ export async function createStage(
     if (!fadeable.length) return;
     const eye: Vec3 = [camera.position.x, camera.position.y, camera.position.z];
     const targets: Vec3[] = [];
-    // Only what hides you, on a visit, or the agent the chat page shows: a cart beside you that hides someone across
-    // the café stays as it is. Flying, your body is put away: nothing need fade for it.
-    if (!(opts.visitor && travel !== "walk")) {
-      const head = me.head();
-      const feet = me.body.position.y;
+    // Only what hides you, on a visit, or the agent the chat page shows, and whoever you are with: the one you stand
+    // by, and any a card is open beside. A cart beside you that hides someone else across the café stays as it is.
+    // Flying, your body is put away: nothing need fade for it.
+    const seen = new Set<Figure>();
+    if (!(opts.visitor && travel !== "walk")) seen.add(me);
+    for (const agent of [near, ...[...pins].map((p) => ("agent" in p.anchor ? p.anchor.agent : undefined))]) {
+      const f = agent === undefined ? undefined : bodyOf(agent);
+      if (f && f !== me) seen.add(f);
+    }
+    for (const f of seen) {
+      const head = f.head();
+      const feet = f.body.position.y;
       targets.push([head.x, head.y, head.z], [head.x, feet + (head.y - feet) * 0.6, head.z]);
     }
     const tall = fadeable.filter((f) => f.solid);
@@ -4058,8 +4068,17 @@ export async function createStage(
     }
     return out;
   };
-  /** What an anchor is on the stage this frame, and where on the floor, for walking away from it. */
-  const anchorOnStage = (a: Anchor, gathered = false): { target?: PanelIn["target"]; floor?: [number, number] } => {
+  /**
+   * What an anchor is on the stage this frame, and where on the floor, for
+   * walking away from it. Gathered, what it is about takes in who and what
+   * it is with, which the panel goes beside; whether it is in sight at all is
+   * still the body's own box (`seen`), so a panel never points at someone
+   * turned out of view because whoever was beside them still shows.
+   */
+  const anchorOnStage = (
+    a: Anchor,
+    gathered = false,
+  ): { target?: PanelIn["target"]; floor?: [number, number]; seen?: Box } => {
     if ("held" in a) return {};
     if ("agent" in a || "you" in a) {
       // A card beside an agent stays beside it as it walks out, until it is gone through the door.
@@ -4074,7 +4093,7 @@ export async function createStage(
         box: gathered ? (boxRound(boxCorners([body.box, ...withOnStage(f)])) as Box) : body.box,
         keep: boxRound(boxCorners([body.keep, ...over])) as Box,
       };
-      return { target, floor: [f.walker.place.x, f.walker.place.z] };
+      return { target, floor: [f.walker.place.x, f.walker.place.z], ...(body ? { seen: body.box } : {}) };
     }
     const o = "plaque" in a ? plaque?.group : things.get(a.thing);
     if (!o) return {};
@@ -4125,9 +4144,9 @@ export async function createStage(
     const floors = new Map<Pin, [number, number] | undefined>();
     const panels: PanelIn[] = [];
     for (const p of pins) {
-      const { target, floor } = anchorOnStage(p.anchor, !!p.gathered);
+      const { target, floor, seen } = anchorOnStage(p.anchor, !!p.gathered);
       floors.set(p, floor);
-      const shown = target && inView(target.box, view) ? target : undefined;
+      const shown = target && inView(seen ?? target.box, view) ? target : undefined;
       const held = "held" in p.anchor ? p.anchor.held : (p.fallback ?? "front");
       panels.push({
         id: p.id,
@@ -4778,11 +4797,9 @@ export async function createStage(
       me.body.visible = next === "walk";
       if (next === "fly") {
         dropLead();
-        // Outdoors you fly on from where the camera is; in a room, it comes down into the room to take off.
-        if (isOutdoors(room)) {
-          turnAboutAhead();
-          keepFlying();
-        } else moveCamera(liftOff());
+        // Outdoors you fly on from where the camera is; in a room, it comes down into the room to take off. Either
+        // way it eases there, never a jump.
+        moveCamera(takingOff());
         if (near) {
           near = undefined;
           opts.onNear?.(undefined);
@@ -4820,7 +4837,7 @@ export async function createStage(
         canvas.style.cursor = "";
         // Back to the view you had: following you on a visit, the agent on the chat page; flying in a room, from
         // inside it again.
-        moveCamera(opts.visitor && travel === "fly" && !isOutdoors(room) ? liftOff() : framing(view));
+        moveCamera(opts.visitor && travel === "fly" ? takingOff() : framing(view));
       }
       markEdit();
     },

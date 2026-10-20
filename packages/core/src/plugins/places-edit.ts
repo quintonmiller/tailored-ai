@@ -54,7 +54,8 @@ export type Edit =
    * A new thing of a kind, somewhere on open floor, where it has the most room round it; `like`, a copy of that
    * thing, beside it. A model an agent made is added by its record's id, `model`; the server fills in its kind, the
    * box it fills and its name. `avoid` is where people and agents stand on the page, [x, z] each: nothing new lands
-   * on anyone, or within a metre of them where the room has the floor for it.
+   * on anyone, or within a metre of them where the room has the floor for it, and nothing tall stands between them
+   * and the view in.
    */
   | {
       op: "add";
@@ -337,9 +338,10 @@ export function applyEdit(id: string, place: Place, edit: Edit, names?: DoorName
             : {};
     const placing: Placing = { kind: edit.kind, ...copied };
     // A copy goes beside what it copies; anything new on open floor, out of the furnished middle, or else wherever
-    // it fits; never on anyone, and a metre clear of them where the room has the floor for it.
-    const where: Where = like ? { near: like.id } : kind.mount === "floor" ? { open: true } : {};
+    // it fits; never on anyone, and a metre clear of them where the room has the floor for it. Something tall keeps
+    // out of the view in where it can: by the back or left wall, not across the open front or in front of anyone.
     const standing = kind.mount === "floor" ? (edit.avoid ?? []) : [];
+    const where: Where = like ? { near: like.id } : kind.mount === "floor" ? { open: true, seen: standing } : {};
     let spot: ReturnType<typeof findPlacement> = "";
     for (const across of standing.length ? STANDING : [0]) {
       spot = findPlacement(withStandingHeld(held, standing, across), placing, where);
