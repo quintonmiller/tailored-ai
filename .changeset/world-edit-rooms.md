@@ -1,5 +1,6 @@
 ---
 "@tailored-ai/core": patch
+"@tailored-ai/server": patch
 "@tailored-ai/ui": patch
 ---
 
@@ -15,7 +16,10 @@ as yours: the room's recent changes say "You moved the couch", the agent
 whose room it is sees it the next time it looks, the redraw of untouched
 homes never replaces it, and an agent's `undo` leaves it alone. Undo and redo
 take back your own changes; if an agent changed the room meanwhile, you're
-told who and shown the room as it is now instead of writing over it. The
+told who and shown the room as it is now instead of writing over it. The lobby's kiosks and task board can be moved but not removed. The
 places plugin adds `GET /api/ext/builtin:places/edit/kinds` and
 `POST /api/ext/builtin:places/edit`, and its scene routes now say what a write
-needs (`version`, `scope`, `editable`, `lent`).
+needs (`version`, `scope`, `editable`, `lent`). World-state deletes take an
+`expectedVersion`, as writes do (`StateService.delete`, the providers'
+`delete`, and `DELETE /api/state/:type/:id?expectedVersion=`), so a delete
+never takes someone else's change with it.

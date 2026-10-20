@@ -31,6 +31,7 @@
  * Free when unused: with no avatar configured, it registers nothing. An agent
  * with its own `tools:` list needs `place` named in it, like any tool.
  */
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgent } from "../agent/agents.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
@@ -173,30 +174,60 @@ export function isFirstHome(place: Place): boolean {
 }
 
 /**
+ * The newest change to a place that wasn't a person's on the page, when
+ * every change a person made since has been taken back: their change and
+ * their undo of it leave the room exactly as it was, which is nobody's
+ * change. Undefined when one of theirs still stands, or there is nothing but
+ * theirs. `changes` is newest first, and `now` the record's data, none when
+ * there is no record (a meeting room a person took back to being drawn).
+ */
+function pastPeople(changes: StateChange[], now: Record<string, unknown> | undefined): StateChange | undefined {
+  const standing = changes.find((c) => c.actor.kind !== "user");
+  if (!standing) return undefined;
+  const same = now ? !!standing.after && isDeepStrictEqual(standing.after, now) : standing.op === "delete";
+  return same ? standing : undefined;
+}
+
+/** How far back the place tool's undo looks past a person's changes that they took back. */
+const PEOPLE_LOOK = 50;
+
+/**
  * Whether a home is still as the system gave it: since the room was last
  * made, no agent, person or other plugin has changed it. The room was made
  * by this plugin, or in the agent's name when its first `place` call found
  * no room (then it is the first room exactly), and this plugin wrote every
  * version since, giving it a newer room. What came before a delete was
- * another room. Anything else is someone's room and is never replaced.
+ * another room. A person's changes on the page that they took back count
+ * for nothing, so trying Edit room doesn't keep a home from a newer room.
+ * Anything else is someone's room and is never replaced.
  */
 async function untouched(service: StateService, record: StateRecord): Promise<boolean> {
   const asMade = (actor: Actor, data: Record<string, unknown> | undefined) =>
     byPlugin(actor) || (actor.kind === "agent" && !!data && isFirstHome(data as unknown as Place));
   if (record.version === 1) return asMade(record.updatedBy, record.data);
-  if (!byPlugin(record.updatedBy) && record.updatedBy.kind !== "agent") return false;
+  const person = record.updatedBy.kind === "user";
+  if (!person && !byPlugin(record.updatedBy) && record.updatedBy.kind !== "agent") return false;
   const ref = { type: record.type, id: record.id };
   const history = (limit: number) => service.history(PLUGIN_CALLER, ref, { limit }).catch(() => undefined);
   // An agent wrote last: untouched only if that write made the room, which the newest entry alone says.
-  if (!byPlugin(record.updatedBy)) {
+  if (record.updatedBy.kind === "agent") {
     const [last] = (await history(1)) ?? [];
     return last?.op === "create" && asMade(last.actor, last.after);
   }
   const changes = await history(record.version);
   if (!changes) return false;
+  // A person wrote last: untouched only if the room is just as it was before their changes, and was untouched then.
+  let from = 0;
+  if (person) {
+    const standing = pastPeople(changes, record.data);
+    if (!standing) return false;
+    if (standing.actor.kind === "agent") return standing.op === "create" && asMade(standing.actor, standing.after);
+    if (!byPlugin(standing.actor)) return false;
+    from = changes.indexOf(standing);
+  }
   // Newest first: everything written since the room was last made, which must be in the history.
   const since: StateChange[] = [];
-  for (const change of changes) {
+  for (const change of changes.slice(from)) {
     since.push(change);
     if (change.op === "create") break;
   }
@@ -1910,17 +1941,25 @@ export class PlaceTool implements Tool {
       if (action === "undo") {
         const { id } = await readCurrent(service, caller, agent, meetings, this.homes);
         const ref = { type: PLACE_TYPE, id };
-        const [last] = await service.history(caller, ref, { limit: 1 }).catch(() => []);
-        // What a person changed on the page is theirs to take back, not the agent's.
-        if (last?.actor.kind === "user") {
-          const by = (last.after as unknown as Place | undefined)?.changes?.[0];
-          return fail(
-            `The last change here was made on the page by ${by?.person ? by.who : "a person"}, so it's theirs to take back, not yours.`,
-          );
+        const recent = await service.history(caller, ref, { limit: PEOPLE_LOOK }).catch(() => []);
+        const [newest] = recent;
+        let last: StateChange | undefined = newest;
+        if (newest?.actor.kind === "user") {
+          // A person who changed the room on the page and took it back left it as it was: what there is to take
+          // back is the change before theirs. One of theirs that stands is theirs to take back, not the agent's.
+          const now = await service.get(caller, ref).catch(() => null);
+          last = pastPeople(recent, now?.data);
+          if (!last && !now) return fail("There's nothing to undo.");
+          if (!last) {
+            const by = (newest.after as unknown as Place | undefined)?.changes?.[0];
+            return fail(
+              `The last change here was made on the page by ${by?.person ? by.who : "a person"}, so it's theirs to take back, not yours.`,
+            );
+          }
         }
         // A meeting room's first change made its record: taking that back is the room as it was drawn.
         if (last?.op === "create" && id.startsWith("room:") && !byPlugin(last.actor)) {
-          await service.delete(caller, ref);
+          await service.delete(caller, ref, newest?.version);
           return { success: true, output: "Undone: the meeting room is back as it was drawn for its room." };
         }
         // The system giving an untouched home a newer room is not a change of anyone's to take back.
@@ -1929,7 +1968,9 @@ export class PlaceTool implements Tool {
         const undone = (last.after as unknown as Place | undefined)?.changes?.[0];
         const what = undone && undone.at !== before.changes?.[0]?.at ? `took back "${undone.what}"` : "undid a change";
         const data = withChange(before, { who: agent, what, at: this.now().toISOString() });
-        await service.put(caller, { ...ref, data: data as unknown as Record<string, unknown> }, last.version);
+        // Written over the record as it is now, which is as that change left it: a person's taken-back changes since
+        // moved its version on, not what is in it.
+        await service.put(caller, { ...ref, data: data as unknown as Record<string, unknown> }, newest?.version);
         return {
           success: true,
           output: `Undone: the room is back as it was before the last change by ${last.actor.name}.`,

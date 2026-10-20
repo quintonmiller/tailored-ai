@@ -154,4 +154,22 @@ describe("a place's card", () => {
     expect([...container.querySelectorAll("button")].some((b) => /make it fit/.test(b.textContent ?? ""))).toBe(false);
     expect(container.querySelector('a[href^="#/agents/"]')).toBeNull();
   });
+
+  it("says what the lobby is for itself, since nobody gives it a purpose or a theme", () => {
+    act(() =>
+      root.render(
+        <WorldPlace
+          id="lobby"
+          room={{ ...DEFAULT_ROOM, name: "the lobby" }}
+          members={[]}
+          canPlace={() => true}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    const text = container.textContent ?? "";
+    expect(text).toMatch(/Where everyone starts: the kiosks, the task board/);
+    expect(text).not.toMatch(/Nobody has said yet|Theme/);
+    expect(text).toMatch(/You, with Edit room; agents leave the lobby as it is/);
+  });
 });

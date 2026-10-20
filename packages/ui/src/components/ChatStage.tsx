@@ -135,7 +135,8 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
         // Shown as changed at once; and since where its door goes depends on what is in it, asked again for that.
         setScene((s) => ({
           ...s,
-          room: { ...(change.after as unknown as Room), doors: s.room.doors },
+          // As on a visit: a meeting room's purpose stays its room's while the record has none of its own.
+          room: { ...lentTo(change.after as unknown as Room, s), doors: s.room.doors },
           version: change.version,
         }));
         void load(true);
@@ -924,6 +925,8 @@ export function useChatStage({
   // Everything but the map sits in the chat's column while it is open, so the scene stays in view beside it; while
   // you rearrange the room, the catalogue does too.
   const side = (!!panel && panel.kind !== "map") || editor.adding;
+  // On a phone the catalogue is a sheet over the foot of the scene, where the bar would be: one at a time.
+  const sheet = editor.adding && !wide;
   // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
   // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
   const map = useWorldMap(
@@ -1643,8 +1646,9 @@ export function useChatStage({
         controls={controls}
         insetRight={(panelOpen || side) && wide ? PANEL_WIDTH : 0}
         insetTop={covered?.top ?? 0}
-        // Rearranging, the room is framed above the bar over the stage's foot, so what you drag is never under it.
-        insetBottom={(covered?.bottom ?? 0) + (editor.editing && dockTall ? dockTall + 24 : 0)}
+        // Rearranging, the room is framed above the bar over the stage's foot, so what you drag is never under it; on a
+        // phone with the catalogue open, the bar is hidden under the sheet, which `covered` already counts.
+        insetBottom={(covered?.bottom ?? 0) + (editor.editing && dockTall && !sheet ? dockTall + 24 : 0)}
         room={room}
         place={placeId}
         arriveFrom={showing.visiting ? cameFrom : undefined}
@@ -1667,13 +1671,13 @@ export function useChatStage({
         overlay={
           editor.editing ? (
             <>
-              {/* On a phone the catalogue is a sheet over the foot of the scene, where the bar would be: one at a time. */}
               <div
-                hidden={editor.adding && !wide}
+                hidden={sheet}
                 ref={dock}
                 className="room-edit-dock"
                 style={{
-                  right: ((panelOpen || side) && wide ? PANEL_WIDTH : 0) + 16,
+                  // Clear of the chat's column, where the bar to type or talk stays even with the chat hidden.
+                  right: (wide ? PANEL_WIDTH : 0) + 16,
                   bottom: (covered?.bottom ?? 0) + 16,
                 }}
               >

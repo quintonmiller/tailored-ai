@@ -175,6 +175,28 @@ describe("doors and halls", () => {
     expect(whyNotOnFloor(held, { kind: "plant" }, [5.7, -4.5], 0)).toBe("It would block the way through the door.");
   });
 
+  it("keeps the lobby's kiosks and task board, which nothing in the catalogue can stand in for", () => {
+    expect(refused({ op: "remove", item: "kiosk-task" }, lobby(), LOBBY)).toBe(
+      "The new task kiosk is how you make a task from the lobby, so it stays. Move it instead.",
+    );
+    expect(refused({ op: "remove", item: "board" }, lobby(), LOBBY)).toBe(
+      "The task board is how you see the open tasks from the lobby, so it stays. Move it instead.",
+    );
+    // They can still be moved; and anything else in the lobby, the big screen too, can go.
+    made({ op: "move", item: "kiosk-task", at: [0, -2.5], facing: 180 }, lobby(), LOBBY);
+    expect(made({ op: "remove", item: "screen" }, lobby(), LOBBY).place.props.some((p) => p.id === "screen")).toBe(
+      false,
+    );
+    // Somewhere else, a task board is anyone's to take down, as the place tool lets its agents.
+    const board = made({ op: "add", kind: "board" });
+    made({ op: "remove", item: board.item as string }, board.place);
+  });
+
+  it("makes a new task board a working one, showing the tasks and opening them", () => {
+    const { place, item: id } = made({ op: "add", kind: "board" });
+    expect(item(place, id as string)).toMatchObject({ kind: "board", label: "Tasks", action: "tasks" });
+  });
+
   it("won't change a hall, which the building lays out", () => {
     expect(refused({ op: "add", kind: "plant" }, firstHome(), "hall:main:homes-1")).toMatch(/hall/);
   });

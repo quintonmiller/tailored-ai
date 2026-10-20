@@ -125,10 +125,12 @@ export class MemoryStateProvider implements StateProvider {
     return live ? { record: copy, previous: structuredClone(live) } : { record: copy };
   }
 
-  async delete(ref: StateRef, actor: Actor, source?: Source): Promise<StateRecord | null> {
+  async delete(ref: StateRef, actor: Actor, source?: Source, expectedVersion?: number): Promise<StateRecord | null> {
     const slot = this.slots.get(key(ref));
     if (!slot || slot.deleted) return null;
     const removed = slot.record;
+    if (expectedVersion !== undefined && expectedVersion !== removed.version)
+      throw new StateConflictError(ref, expectedVersion, removed.version);
     const at = this.now().toISOString();
     const version = removed.version + 1;
     slot.deleted = true;

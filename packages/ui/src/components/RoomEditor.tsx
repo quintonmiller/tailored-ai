@@ -96,11 +96,12 @@ async function write(place: EditablePlace, data: Room, version: number): Promise
 
 /** Take a place back to being drawn fresh, if it is still at `version`: undoing the change that first kept it. */
 async function unkeep(place: EditablePlace, version: number): Promise<void> {
-  const url = `/api/state/place/${encodeURIComponent(place.id)}`;
-  const now = (await fetch(url).then((r) => (r.ok ? r.json() : null))) as { version?: number } | null;
-  if (now?.version !== version) throw new Changed();
-  const res = await fetch(url, { method: "DELETE" });
-  if (!res.ok && res.status !== 404) throw new Error(`Couldn't undo (${res.status}).`);
+  const res = await fetch(`/api/state/place/${encodeURIComponent(place.id)}?expectedVersion=${version}`, {
+    method: "DELETE",
+  });
+  // Changed since, or gone already: either way someone else got there first, and theirs stands.
+  if (res.status === 409 || res.status === 404) throw new Changed();
+  if (!res.ok) throw new Error(`Couldn't undo (${res.status}).`);
 }
 
 /** A place's record as it is now, and who wrote it last: for showing the room an agent just changed. */
@@ -137,18 +138,25 @@ const NEEDS_A_TOP = "It needs something with a top to stand on: a desk, a table 
  * before you took the place back to being drawn fresh (0), while the page
  * may not have heard yet.
  */
-interface Saved {
+export interface Saved {
   id: string;
   room: Room;
   version: number;
   was?: number;
 }
 
-/** Whether your saved change is still ahead of what the page has: the same place, and nothing newer heard. */
-function ahead(saved: Saved, place: EditablePlace): boolean {
+/**
+ * Whether your saved change is still ahead of what the page has: the same
+ * place, and the page hasn't heard of it yet. Once it has, the page's room is
+ * the same record with its doors asked for again, so it is the one shown.
+ */
+export function ahead(saved: Saved, place: EditablePlace): boolean {
   if (saved.id !== place.id) return false;
-  return saved.was !== undefined ? place.version === saved.was : saved.version >= place.version;
+  return saved.was !== undefined ? place.version > 0 && place.version <= saved.was : saved.version > place.version;
 }
+
+/** The place as a change is made to it: its record as the server takes it, and the version that record is at. */
+type Base = { place: EditablePlace; record: Room; version: number };
 
 /** Where a thing is being put, before it is saved, and whether it fits there: unknown while the server is asked. */
 type Pending = Move & { fits?: boolean; why?: string };
@@ -192,6 +200,9 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
     latest.current = saved;
     setLocal(saved);
   }, []);
+  // The version your own last write left the record at, in this place (0 once you took it back to being drawn): undo
+  // and redo write only over that, so a change anyone else made since is never taken back along with yours.
+  const wrote = useRef<{ id: string; version: number } | null>(null);
   const mine = local && place && ahead(local, place) ? local : null;
   const id = place?.id;
   const shown = mine?.room ?? place?.room;
@@ -207,6 +218,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
     setSelected(undefined);
     setPending(undefined);
     setSteps(noSteps());
+    wrote.current = null;
     setNotice(undefined);
     setAdding(false);
   }, [id]);
@@ -216,7 +228,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   now.current = { place, selected, pending, kinds, steps };
 
   /** The place as your next change is made to it: its record as the server takes it, and the version it is at. */
-  const current = (): { place: EditablePlace; record: Room; version: number } | undefined => {
+  const current = (): Base | undefined => {
     const p = now.current.place;
     if (!p) return undefined;
     const l = latest.current;
@@ -242,12 +254,11 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   };
 
   const start = useCallback(() => {
+    setEditing(true);
+    setNotice(undefined);
+    // Picking and adding wait for the kinds of thing, asked once; if they can't be had, the bar says why.
     askKinds()
-      .then((k) => {
-        setKinds(k);
-        setEditing(true);
-        setNotice(undefined);
-      })
+      .then(setKinds)
       .catch((err: unknown) => setNotice(err instanceof Error ? err.message : String(err)));
   }, []);
   const stop = useCallback(() => {
@@ -262,10 +273,11 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
    * Your change didn't save because the place moved on: shown as it is now,
    * read again rather than waiting for the page to hear of it, and said who by.
    */
-  const changedUnder = async (where: string) => {
+  const changedUnder = async (where: string, lost: string) => {
     setPending(undefined);
     now.current.steps = noSteps();
     setSteps(now.current.steps);
+    wrote.current = null;
     const record = await readRecord(where);
     keep(
       record?.data && typeof record.version === "number"
@@ -274,27 +286,39 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
     );
     const who = record?.updatedBy?.kind === "agent" ? record.updatedBy.name : undefined;
     setNotice(
-      `${who ?? "Someone"} changed this room while you were rearranging it, so your last change wasn't saved. This is the room as it is now.`,
+      `${who ?? "Someone"} changed this room while you were rearranging it, so ${lost}. This is the room as it is now.`,
     );
   };
-  /** Something went wrong saving: said, and the thing back where it was. */
-  const failed = async (err: unknown, where: string) => {
-    if (err instanceof Changed) return changedUnder(where);
+  /** Something went wrong saving: said, and the thing back where it was; `lost`, what didn't happen if it changed. */
+  const failed = async (err: unknown, where: string, lost = "your last change wasn't saved") => {
+    if (err instanceof Changed) return changedUnder(where, lost);
     setPending(undefined);
     setNotice(err instanceof Error ? err.message : String(err));
   };
 
-  /** Save what a change made, with yours at the top of the room's recent changes; `picked`, what to pick after. */
-  const save = async (edit: Edit, after: Room, picked?: string) => {
-    const c = current();
+  /**
+   * Save what a change made to `c`, the room as it was when the server was
+   * asked, with yours at the top of its recent changes; `picked`, what to
+   * pick after. Written with the version `c` was at, so a change anyone made
+   * while the server was being asked isn't written over.
+   */
+  const save = async (c: Base, edit: Edit, after: Room, picked?: string) => {
     const k = now.current.kinds;
-    if (!c || !k) return;
+    if (!k) return;
     const what = changeWords(edit, c.record, after);
     const data = withYourChange(recordOf(after, c.place.lent), { who: k.person, what, at: new Date().toISOString() });
     try {
       const version = await write(c.place, data, c.version);
+      // Your changes before this one stay yours to take back only if nobody changed the room in between.
+      const onMine = wrote.current?.id === c.place.id && wrote.current.version === c.version;
+      wrote.current = { id: c.place.id, version };
       keep({ id: c.place.id, room: asShown(data), version });
-      now.current.steps = stepped(now.current.steps, { before: c.record, after: data, from: c.version, what });
+      now.current.steps = stepped(onMine ? now.current.steps : noSteps(), {
+        before: c.record,
+        after: data,
+        from: c.version,
+        what,
+      });
       setSteps(now.current.steps);
       setPending(undefined);
       setNotice(undefined);
@@ -314,14 +338,12 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         setNotice(made.why);
         return;
       }
-      await save(edit, made.place, pick ? (pick(made) ?? "") : undefined);
+      await save(c, edit, made.place, pick ? (pick(made) ?? "") : undefined);
     });
 
   // What the server said about each place a thing was dragged to, while the room stays at one version.
   const asked = useRef({ id: "", version: -1, answers: new Map<string, Promise<Checked>>() });
-  const check = (move: Move): Promise<Checked> => {
-    const c = current();
-    if (!c) return Promise.resolve({ why: "There's no room to change." });
+  const check = (move: Move, c: Base): Promise<Checked> => {
     if (asked.current.id !== c.place.id || asked.current.version !== c.version)
       asked.current = { id: c.place.id, version: c.version, answers: new Map() };
     const key = moveKey(move);
@@ -339,8 +361,10 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
       asking.current.next = move;
       return;
     }
+    const c = current();
+    if (!c) return;
     asking.current.busy = true;
-    void check(move)
+    void check(move, c)
       .then((got) => {
         // Only for where it is now: the thing may have been dragged on, or let go and saved, since.
         setPending((p) => (p && moveKey(p) === moveKey(move) ? { ...p, fits: !!got.place, why: got.why } : p));
@@ -373,13 +397,15 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
     setPending({ ...move });
     void run(async () => {
       // Asked of the room as it is once any change before it is saved: the answer for an older room is asked again.
-      const got = await check(move);
+      const c = current();
+      if (!c) return;
+      const got = await check(move, c);
       if (!got.place) {
         setPending((p) => (p && moveKey(p) === moveKey(move) ? undefined : p));
         setNotice(got.why);
         return;
       }
-      await save({ op: "move", ...move }, got.place);
+      await save(c, { op: "move", ...move }, got.place);
     });
   };
 
@@ -408,8 +434,10 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
     };
     setPending({ ...move });
     void run(async () => {
-      const got = await check(move);
-      if (got.place) await save({ op: "move", ...move }, got.place);
+      const c = current();
+      if (!c) return;
+      const got = await check(move, c);
+      if (got.place) await save(c, { op: "move", ...move }, got.place);
       else setPending((p) => (p && moveKey(p) === moveKey(move) ? { ...p, fits: false, why: got.why } : p));
     });
   };
@@ -427,18 +455,23 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   };
   const add = (kind: string) => void change({ op: "add", kind }, (made) => made.item);
 
+  // Undo and redo write over the version your last write left, not the newest the page has heard: if anyone changed
+  // the room since, the server says so, and theirs stands.
   const undo = () =>
     run(async () => {
       const c = current();
       const u = undoing(now.current.steps);
-      if (!c || !u) return;
+      const at = wrote.current;
+      if (!c || !u || at?.id !== c.place.id) return;
       try {
         if (u.step.from === 0) {
           // The change that first kept the place: back to it being drawn fresh.
-          await unkeep(c.place, c.version);
-          keep({ id: c.place.id, room: asShown(u.step.before), version: 0, was: c.version });
+          await unkeep(c.place, at.version);
+          wrote.current = { id: c.place.id, version: 0 };
+          keep({ id: c.place.id, room: asShown(u.step.before), version: 0, was: at.version });
         } else {
-          const version = await write(c.place, u.step.before, c.version);
+          const version = await write(c.place, u.step.before, at.version);
+          wrote.current = { id: c.place.id, version };
           keep({ id: c.place.id, room: asShown(u.step.before), version });
         }
         now.current.steps = u.steps;
@@ -446,23 +479,25 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         setPending(undefined);
         setNotice(undefined);
       } catch (err) {
-        await failed(err, c.place.id);
+        await failed(err, c.place.id, "nothing was taken back");
       }
     });
   const redo = () =>
     run(async () => {
       const c = current();
       const r = redoing(now.current.steps);
-      if (!c || !r) return;
+      const at = wrote.current;
+      if (!c || !r || at?.id !== c.place.id) return;
       try {
-        const version = await write(c.place, r.step.after, c.version);
+        const version = await write(c.place, r.step.after, at.version);
+        wrote.current = { id: c.place.id, version };
         keep({ id: c.place.id, room: asShown(r.step.after), version });
         now.current.steps = r.steps;
         setSteps(r.steps);
         setPending(undefined);
         setNotice(undefined);
       } catch (err) {
-        await failed(err, c.place.id);
+        await failed(err, c.place.id, "nothing was made again");
       }
     });
 
@@ -557,6 +592,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         type="button"
         className="talk-tool"
         aria-expanded={adding}
+        disabled={!kinds}
         onClick={() => setAdding(!adding)}
         title="Furniture, plants, lights and things for the walls"
       >
@@ -612,9 +648,11 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         <output className="room-edit-said">{said}</output>
       ) : (
         <p className="room-edit-keys">
-          {picked
-            ? "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
-            : "Pick something to move it, or add things · drag the floor to look round, the wheel to zoom · Esc when done"}
+          {hangs
+            ? "Drag it along its wall, or onto the other wall · Delete removes it · Ctrl+Z undoes"
+            : picked
+              ? "Drag it to move it, Shift for no grid · R turns it · Delete removes it · Ctrl+Z undoes"
+              : "Pick something to move it, or add things · drag the floor to look round, the wheel to zoom · Esc when done"}
         </p>
       )}
     </div>

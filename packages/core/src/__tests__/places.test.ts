@@ -1487,6 +1487,24 @@ describe("homes made before rooms were drawn from a seed", () => {
     expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
   });
 
+  it("still brings a home up to date after a person tried a change on the page and took it back", async () => {
+    await store(system, firstHome("assistant's room"));
+    const older = homePlace("some other seed", "assistant's room");
+    await store(system, older, 1);
+    // Moved and put back with Edit room's Undo: the second write is the room exactly as it was before the first.
+    const moved = {
+      ...older,
+      props: older.props.slice(1),
+      changes: [{ who: "sam", what: "x", at: "y", person: true }],
+    };
+    await store(owner, moved as Place, 2);
+    await store(owner, older, 3);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+    // One the person didn't take back stands.
+    await store(owner, moved as Place, 5);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(moved);
+  });
+
   it("won't let an undo take back the system's redraw", async () => {
     await store(system, firstHome("assistant's room"));
     const tool = new PlaceTool(
@@ -1942,6 +1960,22 @@ describe("a person changing a place on the page", () => {
     expect(undone.success).toBe(false);
     expect(undone.error).toMatch(/made on the page by sam, so it's theirs to take back/);
     expect((await readHome(state, person, "assistant")).place.changes?.[0]).toMatchObject({ who: "sam", person: true });
+  });
+
+  it("lets the agent take back its own change once the person's change after it is taken back", async () => {
+    const lamps = (p: Place) => p.props.filter((i) => i.kind === "lamp").length;
+    const before = lamps((await readHome(state, person, "assistant")).place);
+    await tool.execute({ action: "add", kind: "lamp" }, as);
+    const { place, version } = await readHome(state, person, "assistant");
+    expect(lamps(place)).toBe(before + 1);
+    // The person moves the plant and takes it back with Edit room's Undo, which writes the room as it was.
+    await state.put(person, { type: PLACE_TYPE, id: homeId("assistant"), data: moved(place) as never }, version);
+    await state.put(person, { type: PLACE_TYPE, id: homeId("assistant"), data: place as never }, version + 1);
+    const undone = await tool.execute({ action: "undo" }, as);
+    expect(undone.success, undone.error).toBe(true);
+    const after = (await readHome(state, person, "assistant")).place;
+    expect(lamps(after)).toBe(before);
+    expect(after.changes?.[0]).toMatchObject({ who: "assistant", what: expect.stringMatching(/^took back "added/) });
   });
 
   it("makes a meeting room's record with the first change, as a member's first change does", async () => {

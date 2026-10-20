@@ -216,8 +216,15 @@ export const GROUPS: { id: string; label: string; kinds: string[] }[] = [
     label: "On the walls",
     kinds: ["window", "picture", "painting", "poster", "pegboard", "clock", "sign"],
   },
-  { id: "screens", label: "Boards and screens", kinds: ["board", "screen", "calendar", "tv", "laptop", "kiosk"] },
+  { id: "screens", label: "Boards and screens", kinds: ["board", "screen", "calendar", "tv", "laptop"] },
 ];
+
+/**
+ * Kinds the catalogue leaves out: a kiosk does something only as one of the
+ * lobby's, which the building gives what it is for, so one from the
+ * catalogue would be a blank that does nothing.
+ */
+export const LEFT_OUT = new Set(["kiosk"]);
 
 /** One kind as the catalogue lists it: what it is called, and where it goes when it isn't the floor. */
 export interface Offered {
@@ -234,7 +241,7 @@ export function catalogue(kinds: Kinds): { id: string; label: string; kinds: Off
     const goes = k.mount === "wall" ? "on a wall" : k.mount === "on" ? "on something" : undefined;
     return { kind, noun: k.noun, ...(goes ? { goes } : {}) };
   };
-  const strays = Object.keys(kinds).filter((k) => !named.has(k));
+  const strays = Object.keys(kinds).filter((k) => !named.has(k) && !LEFT_OUT.has(k));
   return GROUPS.map((g) => ({
     id: g.id,
     label: g.label,

@@ -120,9 +120,16 @@ export function WorldPlace({
     >
       <dl className="world-facts">
         <dt>For</dt>
-        <dd>{room.purpose ?? <span className="world-panel-quiet">Nobody has said yet</span>}</dd>
-        <dt>Theme</dt>
-        <dd>{themeWords(room.theme)}</dd>
+        {/* The lobby is the building's: nobody gives it a purpose or a theme, so it says what it is for itself. */}
+        {id === "lobby" ? (
+          <dd>Where everyone starts: the kiosks, the task board, the big screen and the calendar</dd>
+        ) : (
+          <>
+            <dd>{room.purpose ?? <span className="world-panel-quiet">Nobody has said yet</span>}</dd>
+            <dt>Theme</dt>
+            <dd>{themeWords(room.theme)}</dd>
+          </>
+        )}
         <dt>Changed by</dt>
         <dd>{keepersWords(id, members, canPlace)}</dd>
       </dl>

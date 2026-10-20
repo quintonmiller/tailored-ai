@@ -31,6 +31,8 @@ interface Server {
   /** Who wrote it last, for a refused write's notice, and what it holds. */
   by: { kind: string; name: string };
   data?: Room;
+  /** Held until it settles: the server thinking about a change, while the page may hear of another. */
+  hold?: Promise<void>;
   /** What the server says of a change: the room it makes, or why not. */
   answer: (edit: Record<string, unknown>, place: Room) => { place?: Room; item?: string; why?: string };
 }
@@ -43,7 +45,7 @@ function fakeFetch(url: string, init?: RequestInit): Promise<Response> {
   if (url.endsWith("/builtin:places/edit")) {
     const body = JSON.parse(String(init?.body));
     server.edits.push(body);
-    return json(server.answer(body.edit, body.place));
+    return (server.hold ?? Promise.resolve()).then(() => json(server.answer(body.edit, body.place)));
   }
   if (url.startsWith("/api/state/place/")) {
     const method = init?.method ?? "GET";
@@ -57,6 +59,8 @@ function fakeFetch(url: string, init?: RequestInit): Promise<Response> {
     }
     if (method === "DELETE") {
       server.deletes.push(url);
+      const expected = new URL(url, "http://t").searchParams.get("expectedVersion");
+      if (expected !== null && Number(expected) !== server.version) return json({ error: "changed" }, 409);
       server.version = 0;
       return json({});
     }
@@ -96,6 +100,15 @@ const home = (version = 3, room: Room = DEFAULT_ROOM): EditablePlace => ({
 async function render(place: EditablePlace) {
   await act(async () => root.render(<Harness place={place} />));
   await act(async () => editor.start());
+}
+/** The page hearing of a newer version of the place, as the live stream tells it. */
+const hear = (place: EditablePlace) => act(async () => root.render(<Harness place={place} />));
+/** An agent's change, on the server: the plant taken away. */
+function agentTakesThePlant(): Room {
+  server.version += 1;
+  server.by = { kind: "agent", name: "planner" };
+  server.data = { ...recordOf(DEFAULT_ROOM), props: DEFAULT_ROOM.props.filter((p) => p.id !== "plant") };
+  return server.data;
 }
 const settle = () => act(async () => new Promise((r) => setTimeout(r, 0)));
 const text = () => document.body.textContent ?? "";
@@ -232,7 +245,110 @@ describe("rearranging a room", () => {
     expect(editor.room?.purpose).toBe("Plan the trip");
     await act(async () => button("Undo").click());
     await settle();
-    expect(server.deletes).toEqual(["/api/state/place/room%3Alocal%3Atrip"]);
+    // Only if nobody has changed it since your change made it.
+    expect(server.deletes).toEqual(["/api/state/place/room%3Alocal%3Atrip?expectedVersion=1"]);
+  });
+
+  it("won't undo or redo over an agent's change the page has already heard of", async () => {
+    await render(home());
+    await act(async () => editor.stage?.onSelect("couch"));
+    await act(async () => editor.stage?.onDrop(move([0.3, 0.6])));
+    await settle();
+    // The agent takes the plant away, and the page hears of it before you press Undo.
+    await hear(home(5, agentTakesThePlant()));
+    await act(async () => button("Undo").click());
+    await settle();
+    // Written over your version, not the agent's, so refused: the plant stays gone, and you're told.
+    expect(server.writes[1]).toMatchObject({ expectedVersion: 4 });
+    expect(server.version).toBe(5);
+    expect(text()).toMatch(/planner changed this room while you were rearranging it, so nothing was taken back/);
+    expect(button("Undo").disabled).toBe(true);
+
+    // The same for a redo.
+    await act(async () => editor.stage?.onDrop(move([0.4, 0.6])));
+    await settle();
+    await act(async () => button("Undo").click());
+    await settle();
+    expect(server.version).toBe(7);
+    await hear(home(8, agentTakesThePlant()));
+    await act(async () => button("Redo").click());
+    await settle();
+    expect(server.writes.at(-1)).toMatchObject({ expectedVersion: 7 });
+    expect(server.version).toBe(8);
+    expect(text()).toMatch(/so nothing was made again/);
+  });
+
+  it("lets go of your earlier changes once an agent's comes between, so undo never reaches past it", async () => {
+    await render(home());
+    await act(async () => editor.stage?.onSelect("couch"));
+    await act(async () => editor.stage?.onDrop(move([0.3, 0.6])));
+    await settle();
+    const theirs = agentTakesThePlant();
+    await hear(home(5, theirs));
+    // Your next change is made to the room as the agent left it, and saves.
+    await act(async () => editor.stage?.onDrop(move([0.4, 0.6])));
+    await settle();
+    expect(server.writes[1]).toMatchObject({ expectedVersion: 5 });
+    await act(async () => button("Undo").click());
+    await settle();
+    // Back to the room as the agent left it, and no further.
+    expect(server.writes[2]).toMatchObject({ expectedVersion: 6, data: theirs });
+    expect(button("Undo").disabled).toBe(true);
+  });
+
+  it("writes a change with the version the server was asked about, not one the page heard of meanwhile", async () => {
+    let answer = () => {};
+    server.hold = new Promise((r) => {
+      answer = r;
+    });
+    await render(home());
+    await act(async () => editor.stage?.onSelect("couch"));
+    await act(async () => editor.stage?.onDrop(move([0.3, 0.6])));
+    // While the server thinks, the agent takes the plant away and the page hears of it.
+    await hear(home(4, agentTakesThePlant()));
+    await act(async () => answer());
+    await settle();
+    // Your move was made to the room with the plant: written with that room's version, so refused.
+    expect(server.writes[0]).toMatchObject({ expectedVersion: 3 });
+    expect(server.version).toBe(4);
+    expect(text()).toMatch(/so your last change wasn't saved/);
+  });
+
+  it("won't let a meeting room go back to being drawn over an agent's change since your first", async () => {
+    server.version = 0;
+    const meeting = (version: number): EditablePlace => ({
+      id: "room:local:trip",
+      room: DEFAULT_ROOM,
+      version,
+      scope: "global",
+    });
+    await render(meeting(0));
+    await act(async () => editor.stage?.onSelect("couch"));
+    await act(async () => editor.stage?.onDrop(move([0.3, 0.6])));
+    await settle();
+    await hear(meeting(2));
+    agentTakesThePlant();
+    await act(async () => button("Undo").click());
+    await settle();
+    expect(server.deletes).toEqual(["/api/state/place/room%3Alocal%3Atrip?expectedVersion=1"]);
+    expect(server.version).toBe(2);
+    expect(text()).toMatch(/planner changed this room/);
+  });
+
+  it("hands the room back to the page once it hears of your change, with its doors asked for again", async () => {
+    await render(home());
+    await act(async () => editor.stage?.onSelect("couch"));
+    await act(async () => editor.stage?.onDrop(move([0.3, 0.6])));
+    await settle();
+    expect(editor.room).toBeDefined();
+    await hear(
+      home(4, {
+        ...server.writes[0].data,
+        doors: [{ wall: "left", along: 0, to: "hall:main:homes-1", label: "Homes", kind: "hall" }],
+      }),
+    );
+    // The page's own room, the same record with its fresh doors, is the one shown now.
+    expect(editor.room).toBeUndefined();
   });
 
   it("turns with R, removes with Delete, and stops with Escape", async () => {

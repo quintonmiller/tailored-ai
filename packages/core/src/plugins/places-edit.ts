@@ -17,6 +17,7 @@ import {
   newId,
   newName,
   type Place,
+  type PlaceAction,
   type PlaceItem,
   type Placement,
   type Placing,
@@ -52,6 +53,14 @@ export interface Edited {
 
 /** How near the line of a wall a thing hanging on it must be: the page puts it on the line, to the centimetre. */
 const ON_WALL = 0.06;
+
+/** What each of the lobby's working pieces lets you do from it, for saying why it stays. */
+const DOES: Record<PlaceAction, string> = {
+  "new-agent": "make an agent",
+  "new-task": "make a task",
+  "new-room": "make a room",
+  tasks: "see the open tasks",
+};
 
 /**
  * The doors to keep clear while a person changes a place: the lobby's own
@@ -160,7 +169,10 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
         }
       : KINDS[edit.kind].shaped
         ? { size: [0.5, 0.5, 0.5] as [number, number, number] }
-        : {};
+        : // A task board shows the open tasks and opens them, as the ones rooms are drawn with do.
+          edit.kind === "board"
+          ? { label: "Tasks", action: "tasks" as const }
+          : {};
     const placing: Placing = { kind: edit.kind, ...copied };
     // A copy goes beside what it copies; anything new near the middle, or else wherever it fits.
     const where: Where = like ? { near: like.id } : kind.mount === "floor" ? { middle: true } : {};
@@ -189,6 +201,10 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
   if (!item) return "That isn't in the room any more: someone may have just changed it.";
 
   if (edit.op === "remove") {
+    // The lobby's kiosks and task board are where you make agents, tasks and rooms and see the tasks, inside the
+    // world, and nothing in the catalogue can stand in for one: so they stay, wherever you move them.
+    if (id === LOBBY && item.action)
+      return `${named(item)} is how you ${DOES[item.action]} from the lobby, so it stays. Move it instead.`;
     const { place: next, removed } = removeItem(place, item.id);
     return { place: next, item: item.id, ...(removed.length ? { removed } : {}) };
   }

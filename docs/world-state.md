@@ -118,7 +118,7 @@ Each record has one scope: `global`, `agent:<name>`, `room:<ref>` or
 ## Versions, deletes and history
 
 A record's `version` goes up by one on every write. Pass `expectedVersion` to
-write only if nobody else has since. A delete is a tombstone: the record stops
+write, or delete, only if nobody else has written since. A delete is a tombstone: the record stops
 appearing, and its history keeps the removal. Erasing a record and its history
 outright is a separate admin action, never available to an agent.
 
@@ -229,7 +229,7 @@ Behind the usual bearer auth. A person through the API sees every scope.
 | `POST /api/state/:type` | create: `{id?, scope?, data}`; `201` with the record. An `id` that exists is `409` |
 | `PUT /api/state/:type/:id` | replace the data: `{data, scope?, expectedVersion?}` |
 | `PATCH /api/state/:type/:id` | change some fields: `{changes, expectedVersion?}`; a field set to `null` is removed |
-| `DELETE /api/state/:type/:id` | delete; the history is kept. `404` if there is no such record |
+| `DELETE /api/state/:type/:id` | delete; the history is kept. `?expectedVersion=` deletes it only while it is at that version, else `409`. `404` if there is no such record |
 
 A write that does not fit the type is `400`, with the sentence an agent would
 get. A write whose `expectedVersion` is out of date is `409`. Because

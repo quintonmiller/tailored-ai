@@ -144,12 +144,17 @@ describe("the catalogue", () => {
       ...kinds,
       hammock: { noun: "hammock", mount: "floor", footprint: [2, 1], height: 1 },
       mirror: { noun: "mirror", mount: "wall", footprint: [0.6, 0.03], height: 1 },
+      kiosk: { noun: "kiosk", mount: "floor", footprint: [0.6, 0.5], height: 1.25 },
     };
     const groups = catalogue(more);
     expect(groups.find((g) => g.id === "decor")?.kinds.map((k) => k.kind)).toContain("hammock");
     expect(groups.find((g) => g.id === "wall")?.kinds.map((k) => k.kind)).toContain("mirror");
-    // Every kind there is, once.
-    expect(groups.flatMap((g) => g.kinds.map((k) => k.kind)).sort()).toEqual(Object.keys(more).sort());
+    // Every kind there is, once, but a kiosk: one is only any use as the lobby's.
+    expect(groups.flatMap((g) => g.kinds.map((k) => k.kind)).sort()).toEqual(
+      Object.keys(more)
+        .filter((k) => k !== "kiosk")
+        .sort(),
+    );
     expect(new Set(GROUPS.flatMap((g) => g.kinds)).size).toBe(GROUPS.flatMap((g) => g.kinds).length);
   });
 });

@@ -2388,11 +2388,15 @@ export function createServer(opts: ServerOptions) {
     }
   });
 
-  // Delete. The record's history is kept.
+  // Delete. The record's history is kept. `?expectedVersion=` deletes it only if nobody has changed it since.
   app.delete("/api/state/:type/:id", async (c) => {
     const { type, id } = c.req.param();
+    const asked = c.req.query("expectedVersion");
+    const expected = asked === undefined ? undefined : versionOf(Number(asked));
+    if (asked !== undefined && expected === undefined)
+      return c.json({ error: "`expectedVersion` is a whole number, 0 or more." }, 400);
     try {
-      const removed = await runtime.getStateService().delete(stateCaller, { type, id });
+      const removed = await runtime.getStateService().delete(stateCaller, { type, id }, expected);
       if (!removed) return c.json({ error: `No ${type} record with id "${id}"` }, 404);
       return c.json(removed);
     } catch (err) {

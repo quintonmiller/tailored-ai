@@ -112,6 +112,18 @@ describe.each([
     ]);
   });
 
+  it("deletes only at the expected version, when one is given", async () => {
+    await provider.put(write("trip", { name: "Trip" }));
+    await provider.put(write("trip", { name: "Trip, changed" }));
+    await expect(provider.delete({ type: "plan", id: "trip" }, person, undefined, 1)).rejects.toThrow(
+      StateConflictError,
+    );
+    expect(await provider.get({ type: "plan", id: "trip" })).toMatchObject({ version: 2 });
+    expect((await provider.history({ type: "plan", id: "trip" })).map((c) => c.op)).toEqual(["update", "create"]);
+    expect(await provider.delete({ type: "plan", id: "trip" }, person, undefined, 2)).toMatchObject({ version: 2 });
+    expect(await provider.get({ type: "plan", id: "trip" })).toBeNull();
+  });
+
   it("never reuses a version number when a deleted record is created again", async () => {
     await provider.put(write("trip", { name: "Trip" }));
     await provider.delete({ type: "plan", id: "trip" }, person);

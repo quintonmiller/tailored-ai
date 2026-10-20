@@ -180,10 +180,12 @@ export class SqliteStateProvider implements StateProvider {
     })();
   }
 
-  async delete(ref: StateRef, actor: Actor, source?: Source): Promise<StateRecord | null> {
+  async delete(ref: StateRef, actor: Actor, source?: Source, expectedVersion?: number): Promise<StateRecord | null> {
     return this.db.transaction((): StateRecord | null => {
       const live = this.row(ref);
       if (!live || live.deleted) return null;
+      if (expectedVersion !== undefined && expectedVersion !== live.version)
+        throw new StateConflictError(ref, expectedVersion, live.version);
       const at = this.now().toISOString();
       const version = live.version + 1;
       this.db
