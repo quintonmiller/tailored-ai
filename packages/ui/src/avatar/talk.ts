@@ -130,6 +130,9 @@ export function talkingHere(
   return out;
 }
 
+/** What one of two talking face to face does next: walk over, get up, turn to the other, or wait. */
+export type TalkMove = "join" | "rise" | "face" | "wait";
+
 /**
  * What one of two talking face to face does next (see `keepCompany` on the
  * stage). The one who goes walks over when they are too far apart to talk,
@@ -143,8 +146,6 @@ export function talkingHere(
  * then turns to the one who goes, and gets up to stand with one that came
  * over to it (`rise`), near enough.
  */
-export type TalkMove = "join" | "rise" | "face" | "wait";
-
 export function talkMove(at: {
   goes: boolean;
   /** How far apart they are, in metres. */

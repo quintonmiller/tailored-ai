@@ -122,14 +122,19 @@ export function markWords(mark: { doing: AgentActivity["doing"]; count: number; 
 /**
  * A quiet room of conversation, in words: when it last talked, and how many
  * are in it as the room lists them, people too, as the Rooms page counts
- * them; or, for a room that keeps no list, the agents it wakes. Undefined for
- * a room with neither.
+ * them; or, for a room that keeps no list, the agents it wakes, every one of
+ * them, a body or not. Undefined for a room with neither.
  */
-export function quietWords(p: Pick<MapPlace, "members" | "everyone" | "talked">, now: number): string | undefined {
+export function quietWords(
+  p: Pick<MapPlace, "members" | "everyone" | "subscribed" | "talked">,
+  now: number,
+): string | undefined {
   // When it last talked, when the server knows; quiet otherwise.
   const lead = talkedWords(p.talked, now) ?? "quiet";
   if (p.everyone) return `${lead} · ${p.everyone === 1 ? "1 member" : `${p.everyone} members`}`;
-  if (p.members?.length) return `${lead} · ${p.members.length} subscribed`;
+  // `members` are only those with a body: the count the server sends counts them all.
+  const subscribed = p.subscribed ?? p.members?.length;
+  if (subscribed) return `${lead} · ${subscribed} subscribed`;
   return undefined;
 }
 

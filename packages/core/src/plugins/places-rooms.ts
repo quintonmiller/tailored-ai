@@ -1196,7 +1196,7 @@ export interface Theme {
 export const THEMES: Theme[] = [
   {
     id: "beach",
-    names: ["beach", "beaches", "seaside", "island", "islands", "surf", "surfing", "tropical"],
+    names: ["beach", "beaches", "seaside", "island", "islands", "surf", "surfing", "tropical", "tropics"],
     words: [
       "vacation",
       "vacations",
@@ -1208,6 +1208,10 @@ export const THEMES: Theme[] = [
       "travels",
       "travelling",
       "traveling",
+      "traveler",
+      "travelers",
+      "traveller",
+      "travellers",
       "getaway",
     ],
     hints: [],
@@ -1219,7 +1223,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: "tavern",
-    names: ["tavern", "dungeon", "dungeons", "d&d", "dnd", "rpg", "rpgs", "ttrpg", "ttrpgs"],
+    names: ["tavern", "taverns", "dungeon", "dungeons", "d&d", "dnd", "rpg", "rpgs", "ttrpg", "ttrpgs"],
     words: ["quest", "quests", "adventure", "adventures", "adventuring"],
     hints: ["campaign", "campaigns"],
     palettes: [
@@ -1230,8 +1234,21 @@ export const THEMES: Theme[] = [
   },
   {
     id: "studio",
-    names: ["studio", "podcast", "podcasts", "podcasting"],
-    words: ["music", "audio", "recording", "recordings", "episode", "episodes", "band", "song", "songs", "mixing"],
+    names: ["studio", "studios", "podcast", "podcasts", "podcasting"],
+    words: [
+      "music",
+      "musician",
+      "musicians",
+      "audio",
+      "recording",
+      "recordings",
+      "episode",
+      "episodes",
+      "band",
+      "song",
+      "songs",
+      "mixing",
+    ],
     hints: ["record", "show"],
     palettes: [
       { walls: "#3d3648", floor: "carpet" },
@@ -1241,7 +1258,7 @@ export const THEMES: Theme[] = [
   },
   {
     id: "workshop",
-    names: ["workshop", "code", "coding", "coder", "coders", "devops", "repo", "repos", "repository"],
+    names: ["workshop", "code", "codebase", "coding", "coder", "coders", "devops", "repo", "repos", "repository"],
     words: [
       "dev",
       "devs",
@@ -1254,18 +1271,47 @@ export const THEMES: Theme[] = [
       "software",
       "deploy",
       "deploys",
+      "deploying",
       "deployment",
+      "deployments",
       "bug",
       "bugs",
       "debugging",
     ],
-    hints: ["build", "builds", "review", "reviews", "ops", "pr", "prs", "release", "releases"],
+    // "Business development" and a planning review are no workshop: these need company.
+    hints: [
+      "build",
+      "builds",
+      "development",
+      "review",
+      "reviews",
+      "reviewer",
+      "reviewers",
+      "reviewing",
+      "ops",
+      "pr",
+      "prs",
+      "release",
+      "releases",
+    ],
     palettes: WORK,
   },
   {
     id: "library",
-    names: ["library", "books"],
-    words: ["research", "study", "studying", "reading", "book", "learning", "papers"],
+    names: ["library", "libraries", "books"],
+    words: [
+      "research",
+      "researcher",
+      "researchers",
+      "researching",
+      "study",
+      "studies",
+      "studying",
+      "reading",
+      "book",
+      "learning",
+      "papers",
+    ],
     hints: ["read", "notes", "learn"],
     palettes: BOOKISH,
   },
@@ -1278,10 +1324,14 @@ const PLAIN: Palette[] = [{ walls: "#dfe4ea", floor: "carpet" }, ...COOL, ...BRI
 const WEIGHTS = { names: 3, words: 2, hints: 1 } as const;
 const CALLS_FOR = 2;
 
-/** A room's words as plain lower-case words: "code-review", "codeReview" and "code_review" read alike. */
+/**
+ * A room's words as plain lower-case words: "code-review", "codeReview" and "code_review" read alike. A word is
+ * split only where a capital starts a lower-case word, so "DnD" stays one and "DnDNight" is "DnD Night".
+ */
 function plainWords(text: string): string {
   return text
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([a-z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
     .replace(/[-_.:/#]+/g, " ")
     .toLowerCase();
 }

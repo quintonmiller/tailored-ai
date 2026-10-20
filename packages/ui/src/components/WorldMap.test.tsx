@@ -403,14 +403,22 @@ describe("WorldMap", () => {
       activities: {},
       places: [
         { id: "room:local:trip", name: "trip", kind: "room", agents: [], members: ["planner", "writer"], everyone: 5 },
-        { id: "room:local:ideas", name: "ideas", kind: "room", agents: [], members: ["planner", "writer"] },
+        // Three agents it wakes, one of them without a body.
+        {
+          id: "room:local:ideas",
+          name: "ideas",
+          kind: "room",
+          agents: [],
+          members: ["planner", "writer"],
+          subscribed: 3,
+        },
       ],
     });
     expect(container.querySelector(".world-map-quiet")?.textContent).toMatch(/Nobody is busy/);
     // Five in the room, though only two of them are agents it wakes: the count the Rooms page shows.
     expect(tiles()[0].textContent).toMatch(/quiet · 5 members/);
     // A room that keeps no list of who is in it says what the number is.
-    expect(tiles()[1].textContent).toMatch(/quiet · 2 subscribed/);
+    expect(tiles()[1].textContent).toMatch(/quiet · 3 subscribed/);
   });
 
   it("closes on Escape, and says when the map can't be had", () => {

@@ -462,6 +462,23 @@ export function shownName(item: { name: string }, noun: string | undefined): str
 }
 
 /**
+ * A thing as a change line names it, for the people who read a room's recent
+ * changes: its name, unless that is a copy the room numbered to tell it from
+ * others like it ("the plant 2"). Then it is "the other plant" when there are
+ * two of them, and "a plant" when there are more, as the server words an
+ * agent's changes.
+ */
+export function changeName(room: Pick<Room, "props">, name: string): string {
+  const copy = /^the (.+?)\s+\d+$/i.exec(name);
+  if (!copy) return name;
+  const base = copy[1];
+  const alike = new RegExp(`^the ${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s+\\d+)?$`, "i");
+  const count = room.props.filter((p) => alike.test(p.name)).length;
+  if (count < 2) return name;
+  return count === 2 ? `the other ${base}` : `${/^[aeiou]/i.test(base) ? "an" : "a"} ${base}`;
+}
+
+/**
  * How a change reads after your name in the room's recent changes, the way
  * an agent's does: "moved the couch", "turned the desk", "added the lamp",
  * "made the couch sage". `before` is the room it was made to, and `after`
@@ -481,7 +498,7 @@ export function changeWords(
   if (door) return `${edit.op === "move" ? "moved" : "took out"} the door to ${named(door) ?? "another place"}`;
   if (edit.op === "add") {
     const like = edit.like ? was(edit.like) : undefined;
-    if (like) return `copied ${like.name}`;
+    if (like) return `copied ${changeName(before, like.name)}`;
     const fresh = after.props.find((p) => !was(p.id));
     // A copy's number says there is one already: "added another plant", not "added the plant 2".
     const copy = fresh ? /^the (.+)\s+\d+$/.exec(fresh.name) : null;
@@ -489,15 +506,16 @@ export function changeWords(
     return `added ${fresh?.name ?? `a ${edit.kind.replace(/_/g, " ")}`}`;
   }
   const thing = was(edit.item);
-  const name = thing?.name ?? "something";
+  const name = thing ? changeName(before, thing.name) : "something";
   if (edit.op === "remove") {
-    const went = before.props.filter((p) => p.id !== edit.item && !now(p.id)).map((p) => p.name);
+    const went = before.props.filter((p) => p.id !== edit.item && !now(p.id)).map((p) => changeName(before, p.name));
     return `removed ${name}${went.length ? `, and ${went.join(" and ")} on it` : ""}`;
   }
   if (edit.op === "color") {
     const swatch = palette(before).find((s) => s.color === edit.color.toLowerCase());
     if (swatch?.word) return `made ${name} ${swatch.word}`;
-    if (swatch?.from && swatch.from !== name) return `made ${name} the colour of ${swatch.from}`;
+    if (swatch?.from && swatch.from !== thing?.name)
+      return `made ${name} the colour of ${changeName(before, swatch.from)}`;
     return `repainted ${name}`;
   }
   if (edit.op === "shows") return edit.shows ? `set ${name} to show ${edit.shows}` : `set ${name} back to its own`;
@@ -505,7 +523,7 @@ export function changeWords(
   if (thing && !moved) return `turned ${name}`;
   if (edit.on && edit.on !== thing?.on) {
     const base = after.props.find((p) => p.id === edit.on);
-    if (base) return `moved ${name} onto ${base.name}`;
+    if (base) return `moved ${name} onto ${changeName(after, base.name)}`;
   }
   return `moved ${name}`;
 }

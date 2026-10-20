@@ -865,6 +865,11 @@ export interface MapPlace {
   talked?: string;
   /** How many are in a room of conversation, people and agents, as the room lists them, when it keeps a list. */
   everyone?: number;
+  /**
+   * How many agents a room of conversation wakes, with a body or not, when it keeps no list of who is in it: the
+   * count it has then. `members` are only those with a body.
+   */
+  subscribed?: number;
   /** The place its way in is through: the town for a building, the floor of the office for a room in it. None for the town. */
   via?: string;
   /** A home's owner, in a word, when what it is for can be read (see `places-roles.ts`). */
@@ -1198,7 +1203,7 @@ export async function worldMap(
       kind: "room" as const,
       ...inIt(roomPlaceId(r.ref)),
       members: r.members.filter((m) => hasBody(m)).sort(),
-      ...(r.everyone ? { everyone: r.everyone } : {}),
+      ...(r.everyone ? { everyone: r.everyone } : r.members.length ? { subscribed: r.members.length } : {}),
       area: MAIN,
       ...(talked?.(r) ? { talked: talked(r) } : {}),
       // The purpose its members gave its meeting room, over the room's own.
@@ -2251,17 +2256,32 @@ const MODEL_COLORS = "A model keeps its parts' own colours: change them with the
 const scaledSize = (size: [number, number, number], scale = 1) =>
   size.map((s) => Math.round(s * scale * 100) / 100) as [number, number, number];
 
-/** One tool call against a room, without the store: what it becomes, and what to tell the agent. */
 /**
- * A thing added, as its change reads to a person: "another plant" for a copy
- * the room numbered to tell it from the one it has ("the plant 2"), whose
- * number is for the tools; its name otherwise.
+ * A thing as a change line names it, for the people who read a room's recent
+ * changes: its name, unless that is a copy the room numbered to tell it from
+ * others like it ("the plant 2"), a number that is for the tools. Then it is
+ * "the other plant" when there are two of them, and "a plant" when there are
+ * more. The agent's own reply keeps the name, which it needs to say which.
  */
-function addedWords(before: Place, name: string): string {
-  const copy = /^the (.+)\s+\d+$/.exec(name);
-  return copy && before.props.some((p) => p.name === `the ${copy[1]}`) ? `another ${copy[1]}` : name;
+function changeName(place: Pick<Place, "props">, name: string): string {
+  const copy = /^the (.+?)\s+\d+$/i.exec(name);
+  if (!copy) return name;
+  const base = copy[1];
+  const alike = new RegExp(`^the ${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s+\\d+)?$`, "i");
+  const count = place.props.filter((p) => alike.test(p.name)).length;
+  if (count < 2) return name;
+  return count === 2 ? `the other ${base}` : `${/^[aeiou]/i.test(base) ? "an" : "a"} ${base}`;
 }
 
+/** A thing added, as its change reads: "another plant" for a copy of one the room had, its name otherwise. */
+function addedWords(before: Place, name: string): string {
+  const copy = /^the (.+?)\s+\d+$/i.exec(name);
+  return copy && before.props.some((p) => p.name.toLowerCase() === `the ${copy[1]}`.toLowerCase())
+    ? `another ${copy[1]}`
+    : name;
+}
+
+/** One tool call against a room, without the store: what it becomes, and what to tell the agent. */
 export function applyAction(place: Place, args: Record<string, unknown>, opts: ApplyOptions = {}): Outcome {
   const action = text(args.action)?.toLowerCase() as Action | undefined;
   if (!action || !ACTIONS.includes(action)) return no(`\`action\` is one of: ${ACTIONS.join(", ")}.`);
@@ -2428,7 +2448,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       ...(item.size ? { size: item.size } : {}),
     };
     // Never in front of the door, or over it.
-    const spot = findPlacement(withDoorwayHeld(place), placing, where);
+    const spot = findPlacement(withDoorwayHeld(place), placing, where, { explain: true });
     if (typeof spot === "string") return no(spot);
     item.name = newName(place, kind, colorWord(colorText), text(args.name) ?? model?.name.replace(/_/g, " "));
     if (kind === "sign") item.label = signWords(text(args.name));
@@ -2462,7 +2482,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       ok: true,
       text: `Removed ${item.name}${removed.length ? `, and ${removed.join(", ")} on it` : ""}.`,
       place: next,
-      did: `removed ${item.name}`,
+      did: `removed ${changeName(place, item.name)}`,
     };
   }
 
@@ -2476,7 +2496,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     let spot: ReturnType<typeof findPlacement>;
     const held = withDoorwayHeld(place);
     if (hasPlacement(where)) {
-      spot = findPlacement(held, placing, where);
+      spot = findPlacement(held, placing, where, { explain: true });
     } else if (where.facing !== undefined) {
       // Turning it where it stands.
       spot = findPlacement(held, placing, { x: item.at[0], z: item.at[1], facing: where.facing });
@@ -2491,7 +2511,9 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       ok: true,
       text: `Moved ${say(moved, next)}.`,
       place: next,
-      did: hasPlacement(where) ? `moved ${moved.name}${whereSaid(where)}` : `turned ${moved.name}`,
+      did: hasPlacement(where)
+        ? `moved ${changeName(next, moved.name)}${whereSaid(where)}`
+        : `turned ${changeName(next, moved.name)}`,
     };
   }
 
@@ -2499,6 +2521,8 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
   const changes: string[] = [];
   const did: string[] = [];
   let changed: PlaceItem = { ...item };
+  // Its name in the change lines a person reads; the room has the same things in it before and after.
+  const said = (n: string) => changeName(place, n);
   const name = text(args.name);
   if (name) {
     changed.name = newName(
@@ -2509,7 +2533,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     );
     if (item.kind === "sign") changed.label = signWords(name);
     changes.push(`it is now called ${changed.name}`);
-    did.push(`renamed ${item.name} ${changed.name}`);
+    did.push(`renamed ${said(item.name)} ${changed.name}`);
   }
   const colorText = text(args.color);
   if (colorText && item.model) return no(MODEL_COLORS);
@@ -2518,7 +2542,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     if (!color) return no(`"${colorText}" isn't a colour I know. Use a name like "navy" or "pale green", or #rrggbb.`);
     changed.color = color;
     changes.push(`it is ${colorText}`);
-    did.push(`made ${changed.name} ${colorText}`);
+    did.push(`made ${said(changed.name)} ${colorText}`);
   }
   const scale = number(args.scale);
   if (scale !== undefined) {
@@ -2530,7 +2554,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     if (item.model && item.size)
       changed.size = scaledSize(item.size.map((s) => s / (item.scale ?? 1)) as [number, number, number], changed.scale);
     changes.push(`it is ${scale}× its normal size`);
-    did.push(`resized ${changed.name}`);
+    did.push(`resized ${said(changed.name)}`);
   }
   if (item.model && args.size !== undefined && args.size !== null && args.size !== "")
     return no("A model is as big as its parts make it: change it with `scale`, or its parts with the build tool.");
@@ -2539,18 +2563,18 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
   if (size) {
     changed.size = size;
     changes.push(`it is ${size.join(" × ")} m`);
-    if (scale === undefined) did.push(`resized ${changed.name}`);
+    if (scale === undefined) did.push(`resized ${said(changed.name)}`);
   }
   const shows = showsFrom(item.kind, args.shows);
   if (shows && typeof shows === "object") return no(shows.why);
   if (shows === null) {
     delete changed.shows;
     changes.push("it shows what it shows by itself");
-    did.push(`set ${changed.name} back to its own`);
+    did.push(`set ${said(changed.name)} back to its own`);
   } else if (shows) {
     changed.shows = shows;
     changes.push(`it shows ${shows}`);
-    did.push(`set ${changed.name} to show ${shows}`);
+    did.push(`set ${said(changed.name)} to show ${shows}`);
   }
   if (!changes.length) return no("Say what to change: name, color, scale, shows, or size for a shape.");
   let next = withSpots({ ...place, props: place.props.map((p) => (p.id === item.id ? changed : p)) });
@@ -2569,7 +2593,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     const spot = item.on
       ? findPlacement(held, placing, { on: item.on, facing: item.facing })
       : KINDS[item.kind]?.mount === "wall"
-        ? findPlacement(held, placing, { near: item.name })
+        ? findPlacement(held, placing, { near: item.name }, { explain: true })
         : findPlacement(held, placing, { x: item.at[0], z: item.at[1], facing: item.facing });
     if (typeof spot === "string") return no(`At that size it doesn't fit: ${spot}`);
     next = moveItem(next, item.id, spot);

@@ -164,8 +164,9 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     onSpoken: (conversation, key) => {
       if (!conversation) return;
       // Loading the conversation shows the spoken turn with the rest, and
-      // makes it the one a typed message goes into next.
-      store.loadSession(rowFor(conversation, key));
+      // makes it the one a typed message goes into next. A new chat the turn
+      // started is that conversation now, with what was typed and attached.
+      store.loadSession(rowFor(conversation, key), store.sessionId ? undefined : { fromNew: true });
     },
   });
   overStage.current = scene.showStage && !!scene.worldPanel;
@@ -195,10 +196,13 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     }
   }, [showRoom]);
 
-  // Files attached are the conversation's too, as what is typed is.
-  const { attachments, add, remove, clear, readyIds, busy } = useAttachments(
+  // Files attached are the conversation's too, as what is typed is, and go along with its words when a new chat gets
+  // its id.
+  const { attachments, add, remove, clear, move, readyIds, busy } = useAttachments(
     draftKey(store.selectedAgent, store.sessionId),
   );
+  const { onDraftMoved } = store;
+  useEffect(() => onDraftMoved(move), [onDraftMoved, move]);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 

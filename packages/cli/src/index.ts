@@ -44,7 +44,6 @@ import {
   SubscriptionDispatcher,
   TaskWatcher,
   TypedEventBus,
-  toolReferenceWarnings,
   validateConfig,
 } from "@tailored-ai/core";
 import { checkPortAvailable, createServer, portInUseMessage } from "@tailored-ai/server";
@@ -130,12 +129,12 @@ let _taskWatcherRef:
 /**
  * The tools agents, hooks and permissions name, checked against the tools there are once every plugin has
  * registered its own. Checked with the rest of the config at startup, before any plugin loads, a tool a plugin
- * provides was called "not enabled" on every start though agents used it.
+ * provides was called "not enabled" on every start though agents used it. A project overlay's own are tagged with
+ * the project, as its other warnings are.
  */
 function warnToolReferences(runtime: AgentRuntime): void {
-  const tools = runtime.getResolvableTools().map((t) => t.name);
-  for (const warning of toolReferenceWarnings(runtime.getConfig(), tools)) {
-    console.warn(`[config] Warning: ${warning}`);
+  for (const { warning, project } of runtime.toolWarnings()) {
+    console.warn(`${project ? `[project:${project}]` : "[config]"} Warning: ${warning}`);
   }
 }
 

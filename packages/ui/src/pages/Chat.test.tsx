@@ -50,7 +50,7 @@ function sceneAt(visiting: string | null, showStage = true) {
 
 let root: Root;
 let container: HTMLDivElement;
-const chatPosts: { sessionKey?: string; sessionId?: string; agent?: string }[] = [];
+const chatPosts: { sessionKey?: string; sessionId?: string; agent?: string; mediaIds?: string[] }[] = [];
 /** Whether the fake server continues a conversation named by id, as the real one does. */
 let continuesById = true;
 const messageFetches: string[] = [];
@@ -63,6 +63,10 @@ let agentList: Record<string, unknown> = {};
 let held: Promise<void> | null = null;
 /** A conversation's messages wait for this before they arrive, when set for it. */
 const slowMessages: Record<string, Promise<void>> = {};
+/** When set, the list of conversations waits for this before it arrives. */
+let slowSessions: Promise<void> | null = null;
+/** When set, an upload waits for this before it is done. */
+let slowUpload: Promise<void> | null = null;
 
 const history: Record<string, unknown[]> = {
   "sess-1": [
@@ -116,6 +120,8 @@ beforeEach(() => {
   turnMedia = [];
   agentList = {};
   held = null;
+  slowSessions = null;
+  slowUpload = null;
   fakeScene = null;
   for (const id of Object.keys(slowMessages)) delete slowMessages[id];
   history["sess-d"] = [
@@ -147,9 +153,14 @@ beforeEach(() => {
       }
       if (url.startsWith("/api/ext/builtin:places/transcript/"))
         return new Response(JSON.stringify({ name: "trip", members: ["planner", "writer"], lines: [] }));
-      if (url.startsWith("/api/sessions")) return new Response(JSON.stringify(sessionRows));
-      if (url === "/api/media")
+      if (url.startsWith("/api/sessions")) {
+        await slowSessions;
+        return new Response(JSON.stringify(sessionRows));
+      }
+      if (url === "/api/media") {
+        await slowUpload;
         return new Response(JSON.stringify({ id: "m-1", mimeType: "image/png", bytes: 10, name: "plan.png" }));
+      }
       if (url.startsWith("/api/agents")) return new Response(JSON.stringify(agentList));
       if (url.startsWith("/api/live")) return new Response(JSON.stringify({ enabled: false }));
       return new Response("{}");
@@ -622,6 +633,100 @@ describe("what you type stays with its conversation", () => {
     expect(chips()).toEqual([]);
     await choose("");
     expect(chips()).toEqual(["plan.png"]);
+  });
+
+  const chips = () => [...container.querySelectorAll(".attachment-tray .attachment-name")].map((c) => c.textContent);
+
+  async function attach(name: string) {
+    const picker = container.querySelector(".chat-input-bar input[type=file]") as HTMLInputElement;
+    Object.defineProperty(picker, "files", {
+      value: [new File(["x"], name, { type: "image/png" })],
+      configurable: true,
+    });
+    await act(async () => picker.dispatchEvent(new Event("change", { bubbles: true })));
+    await settle();
+  }
+
+  it("keeps what you typed while your latest conversation with someone is still being found", async () => {
+    await render();
+    let found = () => {};
+    slowSessions = new Promise<void>((r) => {
+      found = r;
+    });
+    await choose("planner");
+    await type("Quick one");
+    await act(async () => found());
+    await settle();
+    // Your chat with the planner as it stands, with what you typed while it was looked for.
+    expect(shown()).toContain("Alfama, near the river.");
+    expect(box().value).toBe("Quick one");
+    await act(async () => {
+      box().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await settle();
+    expect(chatPosts.at(-1)).toMatchObject({ sessionKey: "web:planner:100", agent: "planner" });
+  });
+
+  it("keeps what you typed and attached when a spoken turn starts the new chat", async () => {
+    let spoken: ((conversation: string | undefined, key: string) => void) | undefined;
+    let chatWith: ((name: string) => void) | undefined;
+    fakeScene = (opts) => {
+      spoken = opts.onSpoken;
+      chatWith = opts.onChatWith;
+      return sceneAt(null);
+    };
+    history["sess-w"] = [
+      { role: "user", content: "Can you draft the intro?" },
+      { role: "assistant", content: "Here is a first go." },
+    ];
+    await render();
+    // A new chat with the writer, nobody's conversation yet.
+    await act(async () => chatWith?.("writer"));
+    await settle();
+    await type("And keep it short");
+    await attach("plan.png");
+    await act(async () => spoken?.("sess-w", "web:writer:500"));
+    await settle();
+    expect(shown()).toContain("Here is a first go.");
+    expect(box().value).toBe("And keep it short");
+    expect(chips()).toEqual(["plan.png"]);
+    // And none of it waits in the writer's next new chat.
+    await act(async () => (container.querySelector(".chat-new-btn") as HTMLButtonElement).click());
+    await settle();
+    expect(box().value).toBe("");
+    expect(chips()).toEqual([]);
+  });
+
+  it("keeps a file dropped while a new chat's first reply comes in, with that conversation", async () => {
+    await render();
+    await choose("writer");
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    // Still uploading when the reply is done, too.
+    let uploaded = () => {};
+    slowUpload = new Promise<void>((r) => {
+      uploaded = r;
+    });
+    await send("Hey!");
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: { files: [new File(["x"], "plan.png", { type: "image/png" })], types: ["Files"] },
+    });
+    await act(async () => container.querySelector(".chat-input-bar")?.dispatchEvent(drop));
+    await settle();
+    expect(chips()).toEqual(["plan.png"]);
+    await act(async () => release());
+    await settle();
+    // The new chat has its id now, and the file is still with it, and goes with the next message once it is up.
+    expect(chips()).toEqual(["plan.png"]);
+    await act(async () => uploaded());
+    await settle();
+    expect(container.querySelector(".attachment-chip")?.className).toContain("ready");
+    await send("This one");
+    // In the conversation the first message started.
+    expect(chatPosts.at(-1)).toMatchObject({ sessionKey: chatPosts[0].sessionKey, mediaIds: ["m-1"] });
   });
 
   it("does the same in the floating chat on other pages", async () => {

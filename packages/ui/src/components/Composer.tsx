@@ -44,6 +44,27 @@ export function useAttachments(conversation = "") {
     });
   }, []);
 
+  // An upload that finishes finds its row wherever it is by then: the conversation it was added to may have moved.
+  const settle = useCallback((key: string, done: Partial<PendingAttachment>) => {
+    setByConversation((all) => {
+      for (const [at, list] of Object.entries(all))
+        if (list.some((a) => a.key === key))
+          return { ...all, [at]: list.map((a) => (a.key === key ? { ...a, ...done } : a)) };
+      return all;
+    });
+  }, []);
+
+  /** The conversation they were added to turned out to be another (a new chat got its id): they go along. */
+  const move = useCallback((from: string, to: string) => {
+    if (from === to) return;
+    setByConversation((all) => {
+      const list = all[from];
+      if (!list) return all;
+      const { [from]: _, ...rest } = all;
+      return { ...rest, [to]: [...(rest[to] ?? NONE), ...list] };
+    });
+  }, []);
+
   const add = useCallback(
     async (files: File[]) => {
       // The conversation they were added to, whichever is on screen by the time each upload is done.
@@ -53,17 +74,15 @@ export function useAttachments(conversation = "") {
         change(at, (prev) => [...prev, { key, name: file.name, status: "uploading" }]);
         try {
           const ref = await uploadMedia(file);
-          change(at, (prev) => prev.map((a) => (a.key === key ? { ...a, status: "ready", ref } : a)));
+          settle(key, { status: "ready", ref });
         } catch (err) {
           // A failed upload stays visible as a failed row. Removing it silently
           // would let someone send a message believing an image went with it.
-          change(at, (prev) =>
-            prev.map((a) => (a.key === key ? { ...a, status: "failed", error: (err as Error).message } : a)),
-          );
+          settle(key, { status: "failed", error: (err as Error).message });
         }
       }
     },
-    [conversation, change],
+    [conversation, change, settle],
   );
 
   const remove = useCallback(
@@ -77,7 +96,7 @@ export function useAttachments(conversation = "") {
   const readyIds = attachments.filter((a) => a.status === "ready" && a.ref).map((a) => a.ref?.id ?? "");
   const busy = attachments.some((a) => a.status === "uploading");
 
-  return { attachments, add, remove, clear, readyIds, busy };
+  return { attachments, add, remove, clear, move, readyIds, busy };
 }
 
 export function AttachmentTray(props: { attachments: PendingAttachment[]; onRemove: (key: string) => void }) {

@@ -96,7 +96,7 @@ Why it changed: compaction used to `DELETE FROM messages`, keeping no archive, n
 - Cron job agent references pointing to non-existent agents
 - Invalid default provider
 
-Warnings are printed at CLI startup via `[config] Warning: ...`. Exported from `@tailored-ai/core`.
+Warnings are printed at CLI startup via `[config] Warning: ...`. Exported from `@tailored-ai/core`. The tool references are checked a step later, once plugins have registered their tools (`runtime.toolWarnings()`), so a tool a plugin provides is never called "not enabled"; a project overlay's own are printed as `[project:<id>] Warning: ...`.
 
 ## Tool Parameter Validation
 

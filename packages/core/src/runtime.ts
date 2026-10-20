@@ -15,6 +15,7 @@ import {
   type AgentHook,
   type ModelEntry,
   mergeProjectOverlay,
+  toolReferenceWarnings,
   validateConfig,
 } from "./config.js";
 import { getProject } from "./db/project-queries.js";
@@ -147,6 +148,8 @@ export class AgentRuntime {
   readonly kbDir: string;
 
   private _config: AgentConfig;
+  /** The config as its file has it, before the active project's overlay: what tells the overlay's own warnings apart. */
+  private _baseConfig: AgentConfig;
   // Tools live in _toolRegistry; getTools() reads from it. No separate array.
   private _provider: AIProvider;
   private _model: string;
@@ -254,6 +257,7 @@ export class AgentRuntime {
     this._activeProject = initialProject ?? null;
 
     const merged = mergeProjectOverlay(initialConfig, this._activeProject?.overlay);
+    this._baseConfig = initialConfig;
     this._config = merged;
     this._timeProvider = resolveTimeProvider(merged);
     this._logTimeProvider(this._timeProvider);
@@ -432,6 +436,22 @@ export class AgentRuntime {
       seen.add(t.name);
       return true;
     });
+  }
+
+  /**
+   * The tools agents, hooks and permissions name that aren't among the tools
+   * there are ({@link getResolvableTools}), as warnings, with the active
+   * project's id on those its overlay brings. For the host to ask once every
+   * plugin has registered its tools: `reload` leaves them out, since the first
+   * one runs before a plugin's tools exist and would call each "not enabled".
+   */
+  toolWarnings(): { warning: string; project?: string }[] {
+    const tools = this.getResolvableTools().map((t) => t.name);
+    const project = this._activeProject;
+    const base = project ? new Set(toolReferenceWarnings(this._baseConfig, tools)) : undefined;
+    return toolReferenceWarnings(this._config, tools).map((warning) =>
+      project && !base?.has(warning) ? { warning, project: project.id } : { warning },
+    );
   }
   getProvider(): AIProvider {
     return this._provider;
@@ -775,10 +795,12 @@ export class AgentRuntime {
       const config = mergeProjectOverlay(baseConfig, this._activeProject?.overlay);
 
       // Project-scoped validation: emit overlay warnings with a project prefix so
-      // the user can tell which file introduced a dangling tool/agent reference.
+      // the user can tell which file introduced a dangling agent reference. Not
+      // the tools it names: the first reload runs before plugins register theirs,
+      // so the host checks those once they have (`toolWarnings`).
       if (this._activeProject?.overlay && Object.keys(this._activeProject.overlay).length > 0) {
-        const baseWarnings = new Set(validateConfig(baseConfig));
-        for (const w of validateConfig(config)) {
+        const baseWarnings = new Set(validateConfig(baseConfig, { tools: false }));
+        for (const w of validateConfig(config, { tools: false })) {
           if (!baseWarnings.has(w)) {
             console.warn(`[project:${this._activeProject.id}] Warning: ${w}`);
           }
@@ -811,6 +833,7 @@ export class AgentRuntime {
         provider,
         defaultModel: model,
       });
+      this._baseConfig = baseConfig;
       this._config = config;
       this._timeProvider = timeProvider;
       this._logTimeProvider(timeProvider);

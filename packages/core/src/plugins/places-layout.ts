@@ -782,12 +782,17 @@ function useTrouble(place: Place, placing: Placing, rect: Rect, ignore: Set<stri
   return undefined;
 }
 
-/** What stands where you'd stand to use a thing put here. */
-function standingIn(place: Place, placing: Placing, rect: Rect, ignore: Set<string>): PlaceItem[] {
+/**
+ * What stands where you'd stand to use a thing put here. One at a time, so a
+ * check that needs only the first stops there: placing tries this at every
+ * spot it looks at.
+ */
+function* standingIn(place: Place, placing: Placing, rect: Rect, ignore: Set<string>): Generator<PlaceItem> {
   const use = KINDS[placing.kind]?.use;
-  if (!use) return [];
+  if (!use) return;
   const stand = offset(rect.at, rect.facing, 0, use.offset * (placing.scale ?? 1));
-  return place.props.filter((other) => !ignore.has(other.id) && blocks(other) && contains(rectOf(other), stand, 0.15));
+  for (const other of place.props)
+    if (!ignore.has(other.id) && blocks(other) && contains(rectOf(other), stand, 0.15)) yield other;
 }
 
 /** Whether a floor thing fits at exactly this point, turned this way: what a room drawn from a seed checks each piece with. */
@@ -868,9 +873,9 @@ function wallTrouble(place: Place, placing: Placing, wall: Wall, along: number, 
   if (Math.abs(along) > span / 2 - w / 2 - 0.05) return "It would run off the end of the wall.";
   if (elevation < 0.05 || elevation + h > place.height - 0.05)
     return "It wouldn't fit between the floor and the ceiling.";
-  const [clash] = wallClashes(place, placing, wall, along, elevation);
-  if (clash) return clash.why;
   const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
+  const [clash] = wallClashes(place, placing, wall, along, elevation, ignore);
+  if (clash) return clash.why;
   const at = wallPoint(place, wall, along);
   return useTrouble(place, placing, { at, hw: w / 2, hd: 0.04, facing: WALL_FACING[wall] }, ignore);
 }
@@ -878,19 +883,19 @@ function wallTrouble(place: Place, placing: Placing, wall: Wall, along: number, 
 /**
  * What is in the way of a wall thing on this wall, this far along it and
  * this high up, and why: what hangs where it would, and what stands against
- * the wall tall enough to hide it.
+ * the wall tall enough to hide it. One at a time, so a check that needs only
+ * the first stops there: placing tries this at every stretch of every wall.
  */
-function wallClashes(
+function* wallClashes(
   place: Place,
   placing: Placing,
   wall: Wall,
   along: number,
   elevation: number,
-): { item: PlaceItem; why: string }[] {
+  ignore: Set<string>,
+): Generator<{ item: PlaceItem; why: string }> {
   const [w] = footprintOf(placing);
   const h = heightOf(placing);
-  const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
-  const out: { item: PlaceItem; why: string }[] = [];
   for (const other of place.props) {
     if (ignore.has(other.id)) continue;
     const kind = KINDS[other.kind];
@@ -901,7 +906,7 @@ function wallClashes(
       const oe = other.elevation ?? 0;
       const vertical = elevation < oe + heightOf(other) + 0.05 && oe < elevation + h + 0.05;
       if (vertical && Math.abs(otherAlong - along) < (w + ow) / 2 + 0.05)
-        out.push({ item: other, why: `It would overlap ${other.name}.` });
+        yield { item: other, why: `It would overlap ${other.name}.` };
     } else if (blocks(other) && heightOf(other) > elevation) {
       // A tall bookcase against the wall would hide it.
       const r = rectOf(other);
@@ -910,13 +915,12 @@ function wallClashes(
           ? { at: [along, -place.depth / 2 + 0.2], hw: w / 2, hd: 0.2, facing: 0 }
           : { at: [-place.width / 2 + 0.2, along], hw: 0.2, hd: w / 2, facing: 0 };
       if (overlaps(probe, r))
-        out.push({
+        yield {
           item: other,
           why: isHold(other) ? "It would hang over the door." : `${capital(other.name)} would hide it.`,
-        });
+        };
     }
   }
-  return out;
 }
 
 /** Where on the floor plan a wall thing hangs: this far along the back or left wall. */
@@ -965,12 +969,16 @@ function findOnWall(place: Place, placing: Placing, where: Where, walls: Wall[])
   return undefined;
 }
 
-function placeOnWall(place: Place, placing: Placing, where: Where): Placement | string {
+function placeOnWall(place: Place, placing: Placing, where: Where, explain: boolean): Placement | string {
   if (where.wall === "front" || where.wall === "right")
     return `The ${where.wall} side of the room is open, so there is no wall there to hang it on. Use the back or left wall.`;
   const walls = wallsFor(place, where);
   if (typeof walls === "string") return walls;
-  return findOnWall(place, placing, where, walls) ?? noRoomOnWall(place, placing, where, walls);
+  const at = findOnWall(place, placing, where, walls);
+  if (at) return at;
+  return explain
+    ? noRoomOnWall(place, placing, where, walls)
+    : `There's no free stretch of ${where.wall ? `the ${where.wall} wall` : "wall"} wide enough for it.`;
 }
 
 /** It, a tenth of its size smaller at a time, down to the smallest `scale` there is: biggest first. */
@@ -1021,7 +1029,7 @@ function noRoomOnWall(place: Place, placing: Placing, where: Where, walls: Wall[
   const along = round(Math.max(-end, Math.min(end, middle)));
   const ignore = placing.id ? carried(place, placing.id) : new Set<string>();
   const inWay = [
-    ...wallClashes(place, placing, wall, along, wallElevation(placing)).map((c) => c.item),
+    ...[...wallClashes(place, placing, wall, along, wallElevation(placing), ignore)].map((c) => c.item),
     ...standingIn(
       place,
       placing,
@@ -1270,13 +1278,23 @@ function placeOnFloor(place: Place, placing: Placing, where: Where): Placement |
   return got ?? "The room is too full for it. Remove something, or make the room bigger.";
 }
 
-/** Where something can go, from the tool's words; a sentence saying why not when it can't. */
-export function findPlacement(place: Place, placing: Placing, where: Where): Placement | string {
+/**
+ * Where something can go, from the tool's words; a sentence saying why not
+ * when it can't. `explain` makes that sentence offer ways out, which takes
+ * more searching: what someone will read asks for it, a room drawn from a
+ * seed trying spot after spot does not.
+ */
+export function findPlacement(
+  place: Place,
+  placing: Placing,
+  where: Where,
+  opts?: { explain?: boolean },
+): Placement | string {
   const kind = KINDS[placing.kind];
   if (!kind) return `There's no kind of thing called "${placing.kind}".`;
   if (kind.mount === "wall") {
     if (where.on) return `A ${kind.noun} goes on a wall, not on top of something.`;
-    return placeOnWall(place, placing, where);
+    return placeOnWall(place, placing, where, opts?.explain === true);
   }
   if (where.on || kind.mount === "on") return placeOn(place, placing, where.on, where);
   return placeOnFloor(place, placing, where);
