@@ -11,6 +11,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { serve } from "@hono/node-server";
 import { type AgentConfig, AgentRuntime, type AIProvider, initDatabase } from "@tailored-ai/core";
 import { Hono } from "hono";
@@ -62,11 +64,11 @@ async function open(url: string): Promise<ReadableStreamDefaultReader<Uint8Array
 
 /** Read on until the stream ends: true once it has, false if it is still going after `ms`. */
 async function endsWithin(reader: ReadableStreamDefaultReader<Uint8Array>, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + ms;
+  while (performance.now() < deadline) {
     const next = await Promise.race([
       reader.read().catch(() => ({ done: true as const, value: undefined })),
-      new Promise<null>((r) => setTimeout(() => r(null), deadline - Date.now())),
+      new Promise<null>((r) => setTimeout(() => r(null), deadline - performance.now())),
     ]);
     if (next === null) return false;
     if (next.done) return true;
@@ -115,9 +117,9 @@ describe("stopping the server", () => {
     const state = await open(`${base}/api/state/events`);
     const cards = await open(`${base}/api/interfaces/events`);
 
-    const began = Date.now();
+    const began = performance.now();
     await stop();
-    const took = Date.now() - began;
+    const took = performance.now() - began;
 
     expect(took).toBeLessThan(1500);
     // The page sees its streams end, rather than a connection hanging open on a server that has gone.
@@ -138,9 +140,9 @@ describe("stopping the server", () => {
     await new Promise<void>((r) => (server.listening ? r() : server.once("listening", () => r())));
     const reader = await open(`http://127.0.0.1:${(server.address() as AddressInfo).port}/forever`);
 
-    const began = Date.now();
+    const began = performance.now();
     await stopServer(server as Stoppable, new OpenStreams(), 300);
-    const took = Date.now() - began;
+    const took = performance.now() - began;
 
     expect(took).toBeGreaterThanOrEqual(250);
     expect(took).toBeLessThan(1500);
@@ -173,5 +175,31 @@ describe("stopping the server", () => {
     const late = await app.fetch(new Request("http://t/s"));
     expect(await late.text()).toBe("");
     expect(ran).toEqual(["open", "ended"]);
+  });
+
+  it("lets a finished stream's signal go, with listeners still on it", async () => {
+    // The workflow run route, and the tools of a turn a chat stream runs, leave listeners on the signal they are
+    // given. Made with `AbortSignal.any`, that signal stayed in memory for as long as the server ran, with all each
+    // listener held, once per stream: Node keeps a signal made of others while anything listens on it.
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const app = new Hono();
+    const streams = new OpenStreams();
+    let gone = 0;
+    const watch = new FinalizationRegistry(() => gone++);
+    app.get("/s", (c) =>
+      streams.sse(c, async (stream, ended) => {
+        ended.addEventListener("abort", () => {});
+        watch.register(ended, "ended");
+        await stream.writeSSE({ data: "hi" });
+      }),
+    );
+    const count = 40;
+    for (let i = 0; i < count; i++) expect(await (await app.fetch(new Request("http://t/s"))).text()).toContain("hi");
+    for (let i = 0; i < 20 && gone < count; i++) {
+      gc();
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(gone).toBeGreaterThan(count / 2);
   });
 });

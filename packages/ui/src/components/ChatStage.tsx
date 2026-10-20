@@ -1147,7 +1147,6 @@ export type Panel =
   /** A calendar's full list: one agent's, those of whoever is in the place it hangs in, or everyone's. */
   | { kind: "calendar"; who?: string; here?: true; at?: string };
 
-/** The thing in the room a panel was opened from, as a field to pass on to what it opens next. */
 /**
  * Whether what is open stays as you start talking to `who`: the map always; arriving, what an agent waits on you for,
  * and the card of the agent you arrived at.
@@ -1158,6 +1157,7 @@ export function keptOnArrival(open: Panel, who: string, arriving: boolean): bool
   return open.kind === "need" || (open.kind === "agent" && open.agent === who);
 }
 
+/** The thing in the room a panel was opened from, as a field to pass on to what it opens next. */
 const atOf = (panel: Panel | null): { at?: string } => (panel && "at" in panel && panel.at ? { at: panel.at } : {});
 
 /** How a panel looks for what it is beside: a card by a body, pinned beside a thing, on the plaque, held, docked. */

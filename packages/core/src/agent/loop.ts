@@ -1039,11 +1039,14 @@ function ensureUserMessagePresent(trimmed: Message[], original: Message[]): Mess
 
 /**
  * Arguments in the shape the tool's schema asks for, where what the model
- * meant is plain: one name where a list of names goes is that list, of one.
- * Turned back instead, the call costs a round and teaches little: a model
- * that writes `to: "writer"` tends to write it again. Only a string for a
- * list of strings (or of items the schema doesn't type) is lifted; anything
- * else goes on to validation as it came.
+ * meant is plain: one name where a list of names goes is that list, of one,
+ * and a list written out as JSON text (`"[\"writer\", \"editor\"]"`) is that
+ * list. Turned back instead, the call costs a round and teaches little: a
+ * model that writes `to: "writer"` tends to write it again. Only a string
+ * for a list of strings (or of items the schema doesn't type) is lifted, and
+ * not one that reads as several (with a comma in it, or JSON that isn't a
+ * list of strings): lifted, that would be one wrong item the tool can't tell
+ * from a right one. Anything else goes on to validation as it came.
  */
 export function liftArgs(tool: Tool, args: Record<string, unknown>): Record<string, unknown> {
   const properties = (
@@ -1055,10 +1058,27 @@ export function liftArgs(tool: Tool, args: Record<string, unknown>): Record<stri
     const prop = properties[key];
     if (typeof value !== "string" || prop?.type !== "array") continue;
     if (prop.items?.type !== undefined && prop.items.type !== "string") continue;
+    const list = listIn(value);
+    if (!list) continue;
     if (lifted === args) lifted = { ...args };
-    lifted[key] = [value];
+    lifted[key] = list;
   }
   return lifted;
+}
+
+/** The list of strings one string plainly is (`liftArgs`): a list in JSON, or the one item; none when it is unclear. */
+function listIn(value: string): string[] | undefined {
+  const text = value.trim();
+  if (text.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      return Array.isArray(parsed) && parsed.every((v) => typeof v === "string") ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  // Several in one string, or an object in JSON, is no one item.
+  return text.startsWith("{") || text.includes(",") ? undefined : [value];
 }
 
 /** Validate tool arguments against the tool's parameter schema. Returns an error string or null if valid. */

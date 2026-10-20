@@ -1161,8 +1161,8 @@ and forth stays on. Where their bodies are is looked at again at each
 exchange, so two who end up in the same place (both called to the same
 meeting, say) are face to face from then on. A message that doesn't go
 through hangs up: one that fails, and one turned back before it is sent, say
-because its arguments are the wrong kind (`to` given as a name, not a list)
-or a person refuses the approval. A message an agent sends itself is no
+because its arguments are the wrong kind (two names run together in one
+string where `to` takes a list) or a person refuses the approval. A message an agent sends itself is no
 talk; one to an agent without a body puts the sender on the phone to it. A
 message sent on to a desk room (`rooms.desks`) is said in that room instead,
 so the body goes to that room's meeting room, as for anything said in a room.
@@ -2098,8 +2098,9 @@ The card shows each request the agent is waiting on:
   chats with the agent, so the answer goes where the question is; otherwise
   your chat with the agent as it stands. The question is already quoted at
   the start of your message, and the cursor is in the box after it, ready
-  for your answer. A message a kiosk starts for you puts the cursor there
-  the same way.
+  for your answer; with a reply still coming in, it goes there once the
+  reply is done, unless you have started typing somewhere else by then. A
+  message a kiosk starts for you puts the cursor there the same way.
 
 What you did stays on the card after the agent stops waiting ("Approved.
 planner carries on."), and the `!` goes as soon as its activity changes.

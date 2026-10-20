@@ -644,6 +644,74 @@ describe("what you type stays with its conversation", () => {
     expect(document.activeElement).toBe(box());
   });
 
+  it("puts the cursor after an answer started while a reply comes in, however long the reply takes", async () => {
+    // The box takes no typing while a reply comes in, and the answer waits to go in after it. The cursor waited ten
+    // seconds from the click and gave up, so a reply slower than that (a local model's, often) left it on the page,
+    // a frame callback spinning all the while.
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reply: ((name: string, session: string | undefined, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      reply = opts.onReply;
+      return sceneAt(null);
+    };
+    const question = "About your question: Book the ferry for Saturday morning, or the afternoon one? ";
+    // A box shorter than what is in it, as on a page: the end of the words is off its right edge.
+    const wide = vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(674);
+    const realNow = Date.now.bind(Date);
+    let later = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + later);
+    try {
+      await render();
+      await send("Hey!");
+      await act(async () => reply?.("planner", "sess-p", question));
+      await settle();
+      expect(box().disabled).toBe(true);
+      later = 30_000;
+      await settle();
+      await act(async () => release());
+      await settle();
+      expect(box().value).toBe(question);
+      expect(document.activeElement).toBe(box());
+      expect(box().selectionStart).toBe(question.length);
+      // Scrolled to the end, where the cursor is: a box shows what is typed into it, not where a cursor is put.
+      expect(box().scrollLeft).toBe(674);
+    } finally {
+      wide.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
+  it("leaves the cursor where you put it when you start typing somewhere else while the reply comes in", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reply: ((name: string, session: string | undefined, text: string) => void) | undefined;
+    fakeScene = (opts) => {
+      reply = opts.onReply;
+      return sceneAt(null);
+    };
+    const elsewhere = document.createElement("input");
+    document.body.appendChild(elsewhere);
+    try {
+      await render();
+      await send("Hey!");
+      await act(async () => reply?.("planner", "sess-p", "About your question: "));
+      await settle();
+      elsewhere.focus();
+      await act(async () => release());
+      await settle();
+      // The answer is there to finish, and the cursor where you are typing.
+      expect(box().value).toBe("About your question: ");
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
   it("keeps files attached with the conversation they were added to", async () => {
     await render();
     const picker = container.querySelector(".chat-input-bar input[type=file]") as HTMLInputElement;

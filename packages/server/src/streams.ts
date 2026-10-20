@@ -27,18 +27,30 @@ export class OpenStreams {
    * goes away or the server stops, whichever comes first: what a stream that
    * waits for its end waits on. Ended, the response finishes even while
    * `run` is still busy, and anything it writes after that goes nowhere.
+   *
+   * `ended` is the stream's own signal, not `AbortSignal.any` of the two.
+   * Node keeps a signal made of others alive while anything listens on it,
+   * aborted or not, and after a stream that finishes by itself neither the
+   * request's signal nor the server's ever aborts. What `run` hands on
+   * leaves listeners there (a turn's tools put theirs on the signal they are
+   * given), so each one would have kept its signal, and what the listener
+   * holds, for the life of the process. This one goes with its stream.
    */
   sse(c: Context, run: (stream: SSEStreamingApi, ended: AbortSignal) => Promise<void>): Response {
     return streamSSE(c, async (stream) => {
-      const ended = AbortSignal.any([c.req.raw.signal, this.stopping.signal]);
-      if (ended.aborted) return;
-      const end = () => stream.abort();
-      ended.addEventListener("abort", end, { once: true });
+      const sources = [c.req.raw.signal, this.stopping.signal];
+      if (sources.some((s) => s.aborted)) return;
+      const ending = new AbortController();
+      const end = () => {
+        ending.abort();
+        stream.abort();
+      };
+      for (const s of sources) s.addEventListener("abort", end, { once: true });
       this.open.add(stream);
       try {
-        await run(stream, ended);
+        await run(stream, ending.signal);
       } finally {
-        ended.removeEventListener("abort", end);
+        for (const s of sources) s.removeEventListener("abort", end);
         this.open.delete(stream);
       }
     });

@@ -15,8 +15,18 @@ import { useCovered } from "../hooks/useCovered";
 import type { MediaRef } from "../lib/content.js";
 import { agentOfKey, askedIn, draftKey, rowFor } from "../lib/conversations";
 
-/** How long words written for you wait for the box to type them in to take the cursor. */
+/** How long words written for you wait for the box to type them in to take the cursor, once it takes typing. */
 const TYPE_WAIT_MS = 10_000;
+
+/** Kinds of `<input>` you type words into. */
+const TEXT_INPUTS = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+
+/** Whether `el` is somewhere to type: a text box, a text area, or an editable block. */
+function takesTyping(el: Element | null): boolean {
+  if (el instanceof HTMLTextAreaElement) return true;
+  if (el instanceof HTMLInputElement) return TEXT_INPUTS.has(el.type);
+  return el instanceof HTMLElement && el.isContentEditable;
+}
 
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const store = useChatStore();
@@ -138,13 +148,13 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       // A message written for someone is a chat with them, out of a meeting room's own conversation too. The words
       // are that new conversation's: they wait for it while a reply finishes, and stay in it if you go elsewhere.
       setReading(false);
-      typeWanted.current = Date.now();
+      typeWanted.current = { text, since: 0 };
       store.setSelectedAgent(name === "default" ? "" : name, { fresh: true, draft: text });
     },
     onReply: (name, session, text) => {
       // An answer goes where the question is: the conversation it asked in, which has everything it was about.
       setReading(false);
-      typeWanted.current = Date.now();
+      typeWanted.current = { text, since: 0 };
       const who = name === "default" ? "" : name;
       if (session && session === store.sessionId) return setInput(text);
       // Otherwise your chat with it as it stands, and while a reply is on its way, after it (the switch waits).
@@ -210,31 +220,49 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   useEffect(() => onDraftMoved(move), [onDraftMoved, move]);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Words written for you to finish (an answer to a question, a message started for you) put the cursor where you
-  // type them: in your conversation in the world, or the chat's own box. That box may not be there yet, or not take
-  // typing while a reply comes in, so it is asked for (`typeHere`) until it is, for a little while.
+  // Words written for you to finish (an answer to a question, a message started for you) put the cursor after them,
+  // where you type: in your conversation in the world, or the chat's own box. While a reply comes in, the box takes
+  // no typing and the words wait to go in after it, and the box in the world goes in the page a little after it is
+  // drawn, so the cursor is asked for (`typeHere`) until it is in, for a little while once the box takes typing.
+  // Typing somewhere else first is your choice: the cursor stays where you put it.
   const worldBox = useRef<HTMLInputElement | null>(null);
   const barBox = useRef<HTMLInputElement | null>(null);
   const inWorld = useRef(false);
-  const typeWanted = useRef(0);
+  /** The words waiting for the cursor, and since when the box has taken typing (0: not yet). */
+  const typeWanted = useRef<{ text: string; since: number } | null>(null);
   const typeAgain = useRef(0);
   const typeHere = () => {
-    if (!typeWanted.current) return;
-    if (Date.now() - typeWanted.current > TYPE_WAIT_MS) {
-      typeWanted.current = 0;
+    const want = typeWanted.current;
+    if (!want) return;
+    const box = inWorld.current ? worldBox.current : barBox.current;
+    const focused = document.activeElement;
+    if (focused !== worldBox.current && focused !== barBox.current && takesTyping(focused)) {
+      typeWanted.current = null;
       return;
     }
-    const box = inWorld.current ? worldBox.current : barBox.current;
-    if (box?.isConnected && !box.disabled) {
+    // A reply coming in, however long it takes: no clock runs, and the render as it ends asks again.
+    if (box?.disabled) {
+      want.since = 0;
+      return;
+    }
+    if (!want.since) want.since = Date.now();
+    else if (Date.now() - want.since > TYPE_WAIT_MS) {
+      typeWanted.current = null;
+      return;
+    }
+    if (box?.isConnected && box.value === want.text) {
       box.focus();
       box.setSelectionRange(box.value.length, box.value.length);
+      // A box scrolls to show what is typed into it, not where the cursor is put: the end, and the cursor, in view.
+      box.scrollLeft = box.scrollWidth;
       // Taken: done. Not taken (still being put in place), it is tried again.
       if (document.activeElement === box) {
-        typeWanted.current = 0;
+        typeWanted.current = null;
         return;
       }
     }
-    // The card in the world is put in its place a frame or two after it is drawn: try again then.
+    // The card in the world is put in its place a frame or two after it is drawn, and the words come into the box
+    // with a render after they are written: try again then.
     if (!typeAgain.current)
       typeAgain.current = requestAnimationFrame(() => {
         typeAgain.current = 0;

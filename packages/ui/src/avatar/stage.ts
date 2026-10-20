@@ -144,7 +144,7 @@ import { drawScreen, drawStrip, pageAt, type ScreenCard } from "./screens";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { behindView, blocksView, facingSurface, focusDistance, focusFraming, overWalls, solidInWay } from "./surfaces";
-import { byPhone, heardThrough, standBy, talkingHere, talkMove } from "./talk";
+import { byPhone, heardThrough, presentIn, standBy, talkingHere, talkMove } from "./talk";
 import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
 import {
@@ -2935,8 +2935,7 @@ export async function createStage(
   /** Say who is in the place, when it has changed: those here, and those still walking out. */
   const sayPresent = () => {
     if (!opts.onPresent) return;
-    const agents = [...companions.keys(), ...departing.flatMap((d) => (d.leaving && d.agent ? [d.agent] : []))];
-    const now = [...new Set(agents)].sort();
+    const now = presentIn(companions.keys(), departing);
     if (now.join("\n") === present) return;
     present = now.join("\n");
     opts.onPresent(now);

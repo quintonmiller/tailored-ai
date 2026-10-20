@@ -4,6 +4,7 @@ import { standsClear } from "./doors";
 import {
   byPhone,
   heardThrough,
+  presentIn,
   SPACING,
   STAND_OFF,
   standBy,
@@ -314,5 +315,18 @@ describe("the phone", () => {
     };
     expect(heardThrough("guest", { to: [YOU] }, yours, [YOU])).toBe(YOU);
     expect(heardThrough("guest", { to: ["host"], room: "local:trip" }, yours, [YOU])).toBeUndefined();
+  });
+
+  it("counts a body walking out as still in the place, until it is gone, and a passer-by as nobody you are with", () => {
+    // Sent home, the agent's records say it is home at once, but its body still sits beside you: a call then was
+    // talking on the phone to someone in front of you.
+    expect(presentIn(["host"], [{ agent: "guest", leaving: true }])).toEqual(["guest", "host"]);
+    // One going by in the town, on its way somewhere, is no one here; nor is a body that never had an agent.
+    expect(presentIn(["host"], [{ agent: "guest" }, { leaving: true }])).toEqual(["host"]);
+    // Back again while its last body still walks out: one of it, and in order, so a change is easy to tell.
+    expect(presentIn(["writer", "host"], [{ agent: "writer", leaving: true }])).toEqual(["host", "writer"]);
+    // An empty place, left or come to fresh, says so.
+    expect(presentIn([], [])).toEqual([]);
+    expect(presentIn(new Map([["host", 1]]).keys(), [])).toEqual(["host"]);
   });
 });

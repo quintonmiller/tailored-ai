@@ -390,7 +390,8 @@ Two placement decisions inside `executeToolCall`, both easy to get wrong:
 
 A subscriber sees the arguments after `liftArgs()`: a single string the model
 gave where the schema asks for a list of strings already arrives as the list
-of one (see [agent-loop.md](./agent-loop.md#tool-parameter-validation)).
+of one, and a list written out as JSON text as that list (see
+[agent-loop.md](./agent-loop.md#tool-parameter-validation)).
 
 What must stay authoritative *after* a human says yes does not belong here.
 Those ceilings live inside the tools — `exec`'s allowlist, the path boundary,

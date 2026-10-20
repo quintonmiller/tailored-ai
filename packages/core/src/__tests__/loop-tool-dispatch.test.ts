@@ -292,6 +292,26 @@ describe("one name where a list of names goes", () => {
     expect(liftArgs(tool, { to: 7 })).toEqual({ to: 7 });
   });
 
+  it("reads a list written out as JSON as that list, and leaves a string that reads as several as it came", () => {
+    const tool = addressTool([]);
+    // Lifted as one item, each was a name nobody has, or for another tool's list (tags, paths) a wrong value it
+    // couldn't tell from a right one; turned back, the model writes the list again.
+    expect(liftArgs(tool, { to: '["writer", "editor"]' })).toEqual({ to: ["writer", "editor"] });
+    expect(liftArgs(tool, { to: ' ["writer"] ' })).toEqual({ to: ["writer"] });
+    for (const several of ["writer, editor", "[writer, editor]", '["writer", 7]', '{"to": "writer"}'])
+      expect(liftArgs(tool, { to: several })).toEqual({ to: several });
+  });
+
+  it("turns back names given as one string with commas, for the model to write as a list", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const results: string[] = [];
+    await run(callsProbe({ to: "writer, editor" }), [addressTool(seen)], {
+      onToolResult: (_name: string, output: string) => results.push(output),
+    });
+    expect(seen).toEqual([]);
+    expect(results.join("\n")).toMatch(/should be an array, got string/);
+  });
+
   it("leaves a number where the list goes for validation to turn back", async () => {
     const seen: Array<Record<string, unknown>> = [];
     const results: string[] = [];

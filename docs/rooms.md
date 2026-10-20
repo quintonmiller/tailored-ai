@@ -1196,7 +1196,8 @@ two is refused, since a dm goes to one agent (post in a room to reach several).
 `to` takes one name or a list for `post` too. The schema calls it a list, and
 the agent loop reads a single name given there as the list of one it means
 rather than turning the call back, for any tool whose parameter is a list of
-strings.
+strings. Names run together in one string (`to="writer, editor"`) are still
+turned back, for the agent to write them as a list.
 
 It used to open a channel per recipient, which at 27 agents is 27 channels
 waiting to happen. Shared sessions removed the room's second job — `room:all:<agent>`
