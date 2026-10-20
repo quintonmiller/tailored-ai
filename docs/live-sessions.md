@@ -740,6 +740,34 @@ because each line is a text-to-speech render, which may run on your GPU. **Back 
 the agent's own view. While you visit, your body is
 yours: the agent's turns still run, but its cues have nothing to move.
 
+Going back and forth leaves nothing behind. Each time you start a visit or go
+**Back to** the agent's view, the page builds the stage afresh and lets go of
+all of the one before, its drawing context with it, so an evening of trips
+leaves the page no heavier than the first few did.
+
+##### What a stage lets go of, for work on the world
+
+Each stage (`avatar/stage.ts`) has a renderer of its own, and `dispose()`
+takes down everything the stage made. The catch is what is made once for the
+whole page and drawn by every stage: the shapes and paints bodies wear
+(`avatar/dress.ts`), the one square three.js draws every sprite on, and
+three.js's own lookup table for lit materials. A renderer that draws one of
+these hangs a listener on it, to hear when it is disposed, and that listener
+holds the renderer, its canvas and so the whole stage. Kept for the page, they
+would keep every stage ever taken down. So anything you make once for the page
+and draw in more than one stage goes through `share()` (`avatar/shared.ts`),
+and a stage going disposes all of them (`releaseShared`): every renderer lets
+go, and a stage still drawing them uploads them again on its next frame. A
+cache cleared as a stage goes, as the furniture's materials are
+(`disposeTree`), needs nothing more.
+
+To check, in a headless Chrome: force a garbage collection
+(`HeapProfiler.collectGarbage`), count the detached `.talk-stage` roots and
+`canvas` elements with `Runtime.queryObjects`, and take a heap snapshot for the
+path from the roots to one that should be gone. Let go of every element handle
+your script holds first, `waitForSelector`'s too: DevTools keeps whatever a
+handle points at, and the stage round it.
+
 #### The town, and its doors
 
 The places are joined up in a **town** you walk round outdoors. In the

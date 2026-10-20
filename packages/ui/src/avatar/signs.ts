@@ -12,6 +12,7 @@ import * as THREE from "three";
 import { TAG_LINE_CHARS } from "../lib/did";
 import { doingCss, type Sign } from "./doing";
 import { drawnScale } from "./overhead";
+import { share } from "./shared";
 import { BUBBLE_CHARS, wrap } from "./wrap";
 
 export { wrap };
@@ -27,6 +28,8 @@ function sprite(canvas: HTMLCanvasElement, height: number): THREE.Sprite {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
+  // Every sprite is drawn on one square three.js makes for the whole page, so it is let go of as each stage goes.
+  share(s.geometry);
   s.scale.set((height * canvas.width) / canvas.height, height, 1);
   // Standing on the point it is put at, so lifting it is the screen's up, whatever the camera's angle.
   s.center.set(0.5, 0);
