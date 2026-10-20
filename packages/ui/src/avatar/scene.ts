@@ -88,7 +88,11 @@ export type PropKind =
   | "chart"
   | "agenda"
   | "display"
-  | "monitor";
+  | "monitor"
+  | "cafe_table"
+  | "cafe_chair"
+  | "coffee_cart"
+  | "whiteboard";
 
 export interface Prop {
   id: string;

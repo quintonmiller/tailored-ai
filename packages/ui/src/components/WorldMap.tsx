@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BODY_TYPE, dotColor } from "../avatar/body";
 import type { AgentActivity } from "../avatar/doing";
+import { talkedWords } from "../avatar/routines";
 import type { TownPlan as Plan } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { nameOf } from "../lib/conversations";
@@ -287,12 +288,13 @@ export function WorldMap({
           {p.kind === "town" && (
             <span className="world-map-purpose">The square, the streets, and every building to go into</span>
           )}
-          {p.kind !== "office" && p.kind !== "lobby" && p.kind !== "town" && (
+          {/* Who is in it; out in the town, who is out and about, at the café or on a bench. */}
+          {p.kind !== "office" && p.kind !== "lobby" && (p.kind !== "town" || p.agents.length > 0) && (
             <span className="world-map-agents">
               {p.agents.length === 0 && (
                 <span className="world-map-nobody">
                   {p.kind === "room" && p.members?.length
-                    ? `quiet · ${p.members.length === 1 ? "1 member" : `${p.members.length} members`}`
+                    ? `${talkedWords(p.talked, Date.now()) ?? "quiet"} · ${p.members.length === 1 ? "1 member" : `${p.members.length} members`}`
                     : "nobody here"}
                 </span>
               )}

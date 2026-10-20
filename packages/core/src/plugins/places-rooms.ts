@@ -643,7 +643,7 @@ function clearWays(start: Place): Place {
  * frame for the photos taken there, a calendar of its owner's day, and a
  * to-do list of its owner's tasks.
  */
-type Need = "seat" | "desk" | "window" | "picture" | "calendar" | "todo";
+type Need = "seat" | "desk" | "window" | "picture" | "calendar" | "todo" | "whiteboard";
 
 interface Needed {
   kind: string;
@@ -676,6 +676,13 @@ const NEEDS: Record<Need, Needed> = {
   desk: { kind: "desk", has: (p) => p.spots.some((s) => s.activity === "type") },
   window: { kind: "window", has: (p) => p.props.some((i) => i.kind === "window") },
   picture: { kind: "picture", has: (p) => p.props.some((i) => PHOTO_FRAMES.includes(i.kind)) },
+  // In a meeting room, by the task board: what the room said last is written up on it.
+  whiteboard: {
+    kind: "whiteboard",
+    has: (p) => p.props.some((i) => i.kind === "whiteboard"),
+    near: (p) => p.props.find((i) => i.kind === "board")?.id,
+    smaller: [0.8, 0.6],
+  },
   // By the desk, where a day is planned: on the wall nearest it, as close as there is room.
   calendar: {
     kind: "calendar",
@@ -1320,8 +1327,8 @@ const DRESSING: Record<string, { back: GroupId[]; left: GroupId[] }[]> = {
 /**
  * A room for a conversation several agents share, sized by how many are in
  * it: up to six sit round a round table, more at a long one, a seat for each.
- * The task board hangs on the back wall, and the room is dressed for what it
- * is for (see `THEMES`).
+ * The task board hangs on the back wall with a whiteboard as near it as there
+ * is wall, and the room is dressed for what it is for (see `THEMES`).
  */
 export function meetingRoom(name: string, seats: number, purpose = "", chosen?: string): Place {
   const n = Math.max(2, Math.min(16, Math.floor(seats)));
@@ -1480,6 +1487,7 @@ export function meetingRoom(name: string, seats: number, purpose = "", chosen?: 
     corner: { back: 0.9, left: 0.9 },
     flips: () => rand() < 0.5,
     after,
+    needs: ["whiteboard"],
   });
   // Over the task board, the room's latest lines: what was said lately, by whom, read without walking up to it.
   const board = built.props.find((p) => p.kind === "board");

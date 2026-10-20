@@ -89,6 +89,11 @@ export function useAgentColor(): (agent: string) => string {
   return (agent) => dotColor(agent, colors[agent]);
 }
 
+/** The colours agents chose for their bodies, by agent, kept current: those that chose none aren't in it. */
+export function useChosenColors(): Readonly<Record<string, string>> {
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
 /** The colour an agent chose for its body, if it chose one, kept current. */
 export function useChosenColor(agent: string): string | undefined {
   return useSyncExternalStore(subscribe, snapshot, snapshot)[agent];

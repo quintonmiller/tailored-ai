@@ -200,21 +200,32 @@ export const isEvening = (hour: number) => hour < 7 || hour >= 17;
  * How a building's windows look at an hour, by what is going on inside. A
  * home is lit after dark while its owner is awake, and dark once it sleeps;
  * by day it shows a light only while its owner is at work, so a busy street
- * reads at a glance. Any other building (the town hall, the office, those on
- * main street, a hut) is lit every evening, and by day shows a light only for
- * a busy `doing`; the stage follows only a home's owner, so by day they show
- * the sky.
+ * reads at a glance. Any other building (the office, those on main street, a
+ * hut) is lit while someone is in it, day or night, and dark at night once
+ * it is empty; the town hall is lit every evening. `inside`, when known, is
+ * whether anyone is in it: a home whose owner is out is dark after dark too,
+ * unless someone dropped in. Not known, a home is taken to have its owner in,
+ * and anything else to be lit every evening.
  */
-export function windowLook(kind: BuildingKind, hour: number, doing?: AgentActivity["doing"]): WindowLook {
+export function windowLook(
+  kind: BuildingKind,
+  hour: number,
+  doing?: AgentActivity["doing"],
+  inside?: boolean,
+): WindowLook {
   const busy = doing === "working" || doing === "thinking" || doing === "talking";
   const evening = isEvening(hour);
   if (kind === "house" || kind === "cottage") {
     if (doing === "asleep") return evening ? "dark" : "day";
-    if (evening) return "lit";
+    if (evening) return inside === false ? "dark" : "lit";
     return busy ? "lit" : "day";
   }
-  if (evening) return "lit";
-  return busy ? "lit" : "day";
+  if (inside === undefined || kind === "hall") {
+    if (evening) return "lit";
+    return busy || inside ? "lit" : "day";
+  }
+  if (inside) return "lit";
+  return evening ? "dark" : "day";
 }
 
 /** The sky at an hour: its colour overhead and at the horizon, and whether the stars are out. */
@@ -347,12 +358,18 @@ export function ashore(plan: TownPlan, [x, z]: P, radius: number): P {
  * Undefined for a place with no door on the street.
  */
 export function doorInTown(plan: TownPlan, place: string): P | undefined {
+  const building = buildingOf(plan, place);
+  return building ? outsideDoor(building, 1.1) : undefined;
+}
+
+/** The building a place is in: its own, or the office for a meeting room on one of its floors. None for the town. */
+export function buildingOf(plan: TownPlan, place: string): TownBuilding | undefined {
   const own = plan.buildings.find((b) => b.id === place);
-  if (own) return outsideDoor(own, 1.1);
+  if (own) return own;
   const office = plan.buildings.find((b) => b.kind === "office");
-  if (office && (place.startsWith("room:") || place === "office" || place.startsWith("office:")))
-    return outsideDoor(office, 1.1);
-  return undefined;
+  return office && (place.startsWith("room:") || place === "office" || place.startsWith("office:"))
+    ? office
+    : undefined;
 }
 
 /** A body's walk through the town: from the door of the place it left to the door of the place it went to. */

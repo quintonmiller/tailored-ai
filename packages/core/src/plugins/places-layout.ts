@@ -360,6 +360,19 @@ export const KINDS: Record<string, Kind> = {
   },
   /** A monitor on a desk: any widget, chosen with `shows`; the day's agenda unless told. */
   monitor: { noun: "desk monitor", mount: "on", footprint: [0.56, 0.2], height: 0.44 },
+  // A café: a small round table, a chair to set at it (you sit facing whichever way it faces), and the cart the
+  // coffee comes from.
+  cafe_table: { round: true, noun: "café table", mount: "floor", footprint: [0.7, 0.7], height: 0.74, surface: 0.74 },
+  cafe_chair: { noun: "café chair", mount: "floor", footprint: [0.44, 0.44], height: 0.86, use: sit(0.34, 0, 0.46) },
+  coffee_cart: {
+    noun: "coffee cart",
+    mount: "floor",
+    footprint: [1.8, 0.9],
+    height: 2.4,
+    use: { activity: "look", offset: 0.85 },
+  },
+  /** A whiteboard on the wall: in a meeting room, the page writes up what its room said last. */
+  whiteboard: { noun: "whiteboard", mount: "wall", footprint: [1.5, 0.05], height: 1.0, elevation: 1.05 },
 };
 
 /**

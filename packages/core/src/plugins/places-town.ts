@@ -2,9 +2,10 @@
  * The world as a town you walk round outdoors, with buildings you go into.
  *
  * In the middle is the square: paving round a fountain, benches and lamps,
- * the town hall along its north side with the kiosks in front of it and the
- * task board, the big screen, the calendar and the square's widgets on its
- * front, and stands with more of them at the square's top corners. Through the
+ * a café on its south-east side, the town hall along its north side with the
+ * kiosks in front of it and the task board, the big screen, the calendar and
+ * the square's widgets on its front, and stands with more of them at the
+ * square's top corners. Through the
  * square runs the avenue, east to west. East of the square, on the avenue,
  * is the office, where the rooms agents talk in are; behind it, a park with a
  * pond. Off the avenue run lanes of homes, each agent's a house of its own
@@ -30,7 +31,7 @@
  * `facing` of 0° looks south (+Z), 90° east. Pure: the same places always
  * give the same town.
  */
-import { KINDS, type Place, type PlaceItem, type PlaceSpot, withSpots } from "./places-layout.js";
+import { KINDS, normalizeFacing, type Place, type PlaceItem, type PlaceSpot, withSpots } from "./places-layout.js";
 
 /** The town's place id: the outdoors, as one place. */
 export const TOWN = "town";
@@ -740,6 +741,46 @@ function seededRandom(words: string): () => number {
 // The town as a place to stand in
 // --------------------------------------------------------------------------
 
+/** The café: how far out from the fountain its cart stands, and its tables, in an arc (degrees round from south). */
+const CAFE_CART = 10.1;
+const CAFE_ARC = 8;
+const CAFE_TABLES = [21, 45, 69];
+/** From a café table's middle to a chair's. */
+const CAFE_CHAIR = 0.82;
+const CAFE_COLORS = ["#3c7d5a", "#e9dfc8", "#3c7d5a"];
+/** How far either side of a bench's middle each of its two seats is. */
+const BENCH_SEAT = 0.32;
+
+/**
+ * A bench's two seats, side by side along it (`<bench>-a` and `<bench>-b`):
+ * spots of their own, beside the one the bench brings in its middle, so two
+ * can sit on it together. Where to stand and where to sit come from the
+ * bench's own (see `KINDS`), moved along it.
+ */
+export function benchSeats(bench: PlaceItem): PlaceSpot[] {
+  const use = KINDS.bench.use;
+  if (!use?.seat) return [];
+  const f = (bench.facing * Math.PI) / 180;
+  const ahead: P = [Math.sin(f), Math.cos(f)];
+  const along: P = [Math.cos(f), -Math.sin(f)];
+  const at = (out: number, side: number): P => [
+    round(bench.at[0] + ahead[0] * out + along[0] * side * BENCH_SEAT),
+    round(bench.at[1] + ahead[1] * out + along[1] * side * BENCH_SEAT),
+  ];
+  return (["a", "b"] as const).map((letter, i) => {
+    const side = i ? 1 : -1;
+    return {
+      id: `${bench.id}-${letter}`,
+      name: `on ${bench.name}`,
+      place: bench.name,
+      at: at(use.offset, side),
+      facing: normalizeFacing(bench.facing),
+      activity: "sit" as const,
+      seat: { at: at(use.seat?.offset ?? 0, side), height: use.seat?.height ?? 0.44 },
+    };
+  });
+}
+
 /** The town as a place: the square's kiosks, board, screen, calendar and benches, and the town itself for the page. */
 export type TownPlaceRecord = Place & { town: Town };
 
@@ -747,7 +788,8 @@ export type TownPlaceRecord = Place & { town: Town };
  * The town as the page draws it: a place like any other, its ground the size
  * of the town, with the things in it a room has (the kiosks, the task board,
  * the big screen and the calendar on the town hall's front, benches round the
- * fountain and in the park, palms and umbrellas on the beach), where you start
+ * fountain and the pond, the café's tables, palms and umbrellas on the beach),
+ * seats for two on every bench, where you start
  * on the square, and the town's own plan, which the page builds the buildings,
  * roads, trees and water from.
  */
@@ -828,7 +870,7 @@ export function townPlace(town: Town): TownPlaceRecord {
   kiosk("kiosk-agent", -6.6, "New agent", "new-agent");
   kiosk("kiosk-task", -4.4, "New task", "new-task");
   kiosk("kiosk-room", -2.2, "New room", "new-room");
-  // Benches round the fountain, facing it, and two by the pond.
+  // Benches round the fountain, facing it, and round the pond, facing the water.
   for (const [i, angle] of [45, 135, 225, 315].entries()) {
     const a = (angle * Math.PI) / 180;
     add({
@@ -840,20 +882,51 @@ export function townPlace(town: Town): TownPlaceRecord {
     });
   }
   const pond = town.park.pond;
+  const [halfW, halfD] = [pond.size[0] / 2 + 1.4, pond.size[1] / 2 + 1.4];
+  for (const [id, name, at, facing] of [
+    ["pond-bench", "the bench by the pond", [pond.at[0], pond.at[1] + halfD], 180],
+    ["pond-bench-2", "the other bench by the pond", [pond.at[0] - halfW, pond.at[1]], 90],
+    ["pond-bench-3", "the bench across the pond", [pond.at[0] + halfW, pond.at[1]], 270],
+    ["pond-bench-4", "the bench behind the pond", [pond.at[0], pond.at[1] - halfD], 0],
+  ] as const)
+    add({ id, name, kind: "bench", at: [round(at[0]), round(at[1])], facing });
+  // The café, on the square's south-east side: a coffee cart at the edge, and tables in an arc in front of it, a
+  // chair either side of each, under umbrellas.
   add({
-    id: "pond-bench",
-    name: "the bench by the pond",
-    kind: "bench",
-    at: [pond.at[0], round(pond.at[1] + pond.size[1] / 2 + 1.4)],
-    facing: 180,
+    id: "coffee-cart",
+    name: "the coffee cart",
+    kind: "coffee_cart",
+    at: [round(Math.sin(Math.PI / 4) * CAFE_CART), round(Math.cos(Math.PI / 4) * CAFE_CART)],
+    facing: 225,
   });
-  add({
-    id: "pond-bench-2",
-    name: "the other bench by the pond",
-    kind: "bench",
-    at: [round(pond.at[0] - pond.size[0] / 2 - 1.4), pond.at[1]],
-    facing: 90,
-  });
+  for (const [i, angle] of CAFE_TABLES.entries()) {
+    const a = (angle * Math.PI) / 180;
+    const at: P = [round(Math.sin(a) * CAFE_ARC), round(Math.cos(a) * CAFE_ARC)];
+    const table = `cafe-${i + 1}`;
+    add({ id: table, name: i ? `the café table ${i + 1}` : "the café table", kind: "cafe_table", at, facing: 0 });
+    add({
+      id: `${table}-umbrella`,
+      name: i ? `the café umbrella ${i + 1}` : "the café umbrella",
+      kind: "umbrella",
+      at,
+      facing: 0,
+      color: CAFE_COLORS[i % CAFE_COLORS.length],
+    });
+    // Either side of the table along the arc, facing across it, so two sitting there face each other.
+    for (const [side, letter, which] of [
+      [1, "a", "the chair"],
+      [-1, "b", "the other chair"],
+    ] as const) {
+      const [tx, tz] = [Math.cos(a) * side, -Math.sin(a) * side];
+      add({
+        id: `${table}-${letter}`,
+        name: `${which} at ${i ? `the café table ${i + 1}` : "the café table"}`,
+        kind: "cafe_chair",
+        at: [round(at[0] + tx * CAFE_CHAIR), round(at[1] + tz * CAFE_CHAIR)],
+        facing: round(((Math.atan2(-tx, -tz) * 180) / Math.PI + 360) % 360),
+      });
+    }
+  }
   // On the beach: palms and umbrellas between the huts.
   const sandMiddle = round((town.shore.sand + town.shore.sea) / 2);
   for (const [i, x] of [-11, 3, 19].entries()) {
@@ -883,7 +956,8 @@ export function townPlace(town: Town): TownPlaceRecord {
       height: 3,
       floor: "concrete",
       props,
-      spots: [start],
+      // Two to a bench, so two can sit on one together.
+      spots: [start, ...props.filter((p) => p.kind === "bench").flatMap(benchSeats)],
       start: start.id,
     }),
     town,

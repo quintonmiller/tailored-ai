@@ -207,6 +207,16 @@ const GESTURE_MOVES: Record<string, Move> = {
       head: [-0.2, 0, 0],
     }),
   },
+  // Talking with the hands: the right forearm up, palm out, turning as a point is made; the head tips along.
+  chat: {
+    seconds: 1.6,
+    owns: ["rightUpperArm", "rightLowerArm"],
+    pose: (u) => ({
+      rightUpperArm: [-0.35, 0, -0.95],
+      rightLowerArm: [0, 1.15 + 0.25 * Math.sin(2 * Math.PI * 1.5 * u), 0],
+      head: [0, 0.06 * Math.sin(2 * Math.PI * u), 0.04],
+    }),
+  },
   // Right arm out straight ahead; the stage turns the body to face the target first.
   point: {
     seconds: 2.2,

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PANEL_ROOM } from "../avatar/anchors";
 import { doingCss } from "../avatar/doing";
 import type { StageInput } from "../avatar/stage";
+import { doorInTown } from "../avatar/town";
 import {
   type ChatStageOptions,
   companyOf,
@@ -101,6 +102,14 @@ const stage = vi.hoisted(() => ({
   >(),
   /** What each stage's plaque said, each time it was told. */
   plaques: [] as (string | undefined)[],
+  /** What the stage was told its whiteboards say, each time. */
+  notes: [] as ({ room: string; talked?: string; lines: { who: string; words: string }[] } | undefined)[],
+  /** When each room last talked, as the stage was told for its doors, each time. */
+  talked: [] as Record<string, string>[],
+  /** Which buildings have someone in them, as the stage was told for their windows, each time. */
+  occupied: [] as string[][],
+  /** The last stage's way to ask where a body leaving the town goes. */
+  exitFor: undefined as ((agent: string) => [number, number] | undefined) | undefined,
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (
@@ -123,8 +132,10 @@ vi.mock("../avatar/stage", () => ({
       arriveFrom?: string;
       lights?: string;
       onDoorHover?: (door: { to: string } | undefined, at?: { x: number; y: number }) => void;
+      exitFor?: (agent: string) => [number, number] | undefined;
     },
   ) => {
+    stage.exitFor = opts.exitFor;
     stage.onLine = opts.onLine;
     stage.onDoor = opts.onDoor;
     stage.wears.push(opts.wear ?? []);
@@ -172,6 +183,9 @@ vi.mock("../avatar/stage", () => ({
         stage.calendars.push(view),
       setLights: (l: string) => stage.lights.push(l),
       setGlances: () => {},
+      setNotes: (n: (typeof stage.notes)[number]) => stage.notes.push(n),
+      setTalked: (t: Record<string, string>) => stage.talked.push(t),
+      setOccupied: (b: string[]) => stage.occupied.push(b),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
       onSurfaces: (listener: (views: unknown[]) => void) => {
         stage.surfaces = listener;
@@ -245,6 +259,10 @@ let homeDoorAlong = 1;
 let agentsInfo: Record<string, { online?: { enabled?: boolean } }> = {};
 /** The last thing each agent said, as the server's speech records say. */
 let speechRecords: { id: string; data: { agent: string; text: string; at: string } }[] = [];
+/** Bodies out on their day, as the places plugin's `visit` records say. */
+let outingRecords: { id: string; data: Record<string, unknown> }[] = [];
+/** What rooms said last, as the places plugin's `chatter` records say. */
+let chatterRecords: { id: string; data: Record<string, unknown> }[] = [];
 /** Agents the page was asked to switch to. */
 const chattedWith: string[] = [];
 /** New chats the page was asked to start, with what to say. */
@@ -431,6 +449,10 @@ beforeEach(() => {
   stage.arrivals.length = 0;
   stage.entered.length = 0;
   stage.walks.length = 0;
+  stage.notes.length = 0;
+  stage.talked.length = 0;
+  stage.occupied.length = 0;
+  stage.exitFor = undefined;
   stage.moves.length = 0;
   stage.company.length = 0;
   stage.activities.length = 0;
@@ -452,6 +474,8 @@ beforeEach(() => {
   chattedWith.length = 0;
   agentsInfo = {};
   speechRecords = [];
+  outingRecords = [];
+  chatterRecords = [];
   mapExtra = [];
   plannerAt = "home:planner";
   stage.agents.length = 0;
@@ -543,6 +567,8 @@ beforeEach(() => {
       if (url.startsWith("/api/state/speech")) return new Response(JSON.stringify({ records: speechRecords }));
       if (url.startsWith("/api/state/emote?")) return new Response(JSON.stringify({ records: emoteRecords }));
       if (url.startsWith("/api/state/body?")) return new Response(JSON.stringify({ records: bodyRecords }));
+      if (url.startsWith("/api/state/visit?")) return new Response(JSON.stringify({ records: outingRecords }));
+      if (url.startsWith("/api/state/chatter")) return new Response(JSON.stringify({ records: chatterRecords }));
       if (url === "/api/agents") return new Response(JSON.stringify(agentsInfo));
       if (url === "/api/ext/builtin:places/map")
         return new Response(
@@ -1534,6 +1560,55 @@ describe("the chat page's scene", () => {
     await act(async () => FakeEventSource.last?.emit("change", { type: "visit", id: "planner", op: "delete" }));
     await settle(60);
     expect(stage.walks.at(-1)).toEqual({ agent: "planner", from: walk.to, to: walk.from });
+  });
+
+  it("shows each agent's day: out at its seat, the buildings with someone in them lit, and what a room said on its whiteboard", async () => {
+    const said = new Date(Date.now() - 5 * 60_000).toISOString();
+    activityRecords = [{ id: "planner", data: { agent: "planner", doing: "idle", what: "idle" } }];
+    outingRecords = [
+      {
+        id: "planner",
+        data: {
+          place: "town",
+          until: "2099-01-01T00:00:00Z",
+          spot: "cafe-1-a",
+          errand: "cafe",
+          what: "having a coffee at the café",
+        },
+      },
+    ];
+    chatterRecords = [
+      {
+        id: "room:local:trip",
+        data: {
+          room: "trip",
+          last: said,
+          lines: [{ id: "1", who: "planner", agent: "planner", words: "Flights are booked…", at: said }],
+        },
+      },
+    ];
+    await render();
+    await act(async () => stage.onDoor?.({ to: "town" }));
+    await settle(60);
+    const planner = stage.activities.at(-1)?.planner as unknown as { what: string; routine?: Record<string, unknown> };
+    expect(planner).toMatchObject({
+      what: "having a coffee at the café",
+      routine: { errand: "cafe", spot: "cafe-1-a" },
+    });
+    // Writer is in the trip's meeting room, on the office's floor: the office is lit, and both homes with someone in.
+    expect(stage.occupied.at(-1)).toEqual(["home:planner", "home:talker", "office"]);
+    // Leaving the town, a body walks to the door of where it went: home, as the map says.
+    expect(stage.exitFor?.("planner")).toEqual(doorInTown(townPlan as never, "home:planner"));
+    // The card on the trip's door, and its whiteboard inside.
+    expect(stage.talked.at(-1)?.["room:local:trip"]).toBe(said);
+    await act(async () => stage.onDoor?.({ to: "room:local:trip" }));
+    await settle(60);
+    expect(stage.notes.at(-1)).toEqual({
+      room: "trip",
+      // Counted from the start of this minute: four or five minutes, by where in the minute it is.
+      talked: expect.stringMatching(/^talked [45] min ago$/),
+      lines: [{ who: "planner", agent: "planner", words: "Flights are booked…", ink: expect.any(String) }],
+    });
   });
 
   it("lights a home as a home, and the town by the sky and its street lamps", async () => {

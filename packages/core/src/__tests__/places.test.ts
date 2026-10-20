@@ -14,6 +14,12 @@ import {
   applyAction,
   bodyAt,
   buildWorld,
+  CHATTER_LINES,
+  CHATTER_SCHEMA,
+  CHATTER_TYPE,
+  type Chatter,
+  Chatters,
+  firstWords,
   followTalk,
   homeId,
   latestLines,
@@ -32,6 +38,7 @@ import {
   TALK_TYPE,
   Talks,
   TRANSCRIPT_LINES,
+  talkedAt,
   talkNow,
   talkOf,
   transcript,
@@ -44,6 +51,7 @@ import {
   whoIsIn,
   withChange,
   withLooks,
+  withMurmurs,
   worldMap,
 } from "../plugins/places.js";
 import { BODY_TYPE, type Chosen, looksOf, wornBy } from "../plugins/places-body.js";
@@ -726,6 +734,56 @@ describe("bodies going where the talk is", () => {
     // Without the rooms to check membership against, nobody is kept there on whereabouts.
     expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
     expect(await whoIsIn(state, owner, trip, hasBody)).toEqual([]);
+  });
+
+  describe("outings, which give way to work", () => {
+    const out = { place: "town", until: "2026-10-19T03:00:00Z", spot: "cafe-1-a", errand: "cafe" as const };
+
+    it("puts a body out in the town, out of its home, and on the map", async () => {
+      await presence.keep("host", out);
+      expect(await bodyAt(state, owner, "host")).toBe("town");
+      expect(await whereIs(state, owner, "host")).toBe(homeId("host"));
+      expect(await whoIsIn(state, owner, "town", hasBody)).toEqual(["host"]);
+      const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+      expect(map.find((p) => p.id === "town")?.agents).toEqual(["host"]);
+      expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual([]);
+    });
+
+    it("never writes over a visit to talk, nor ends one", async () => {
+      await presence.visit("host", "local:trip");
+      await presence.keep("host", out);
+      expect(await bodyAt(state, owner, "host")).toBe(trip);
+      await presence.keep("host", null);
+      expect(await bodyAt(state, owner, "host")).toBe(trip);
+    });
+
+    it("ends at once when work starts, leaving a visit to talk as it is", async () => {
+      await presence.keep("host", out);
+      await presence.yieldTo("host");
+      expect(await visit("host")).toBeNull();
+      expect(await bodyAt(state, owner, "host")).toBe(homeId("host"));
+      await presence.visit("guest", "local:trip");
+      await presence.yieldTo("guest");
+      expect(await bodyAt(state, owner, "guest")).toBe(trip);
+    });
+
+    it("gives way to talk: saying something takes the body to the meeting room, wherever it was out", async () => {
+      await presence.keep("host", out);
+      // Woken in a room it isn't in: it is out until its turn starts.
+      await presence.stay("host", "local:trip");
+      expect(await bodyAt(state, owner, "host")).toBe("town");
+      await presence.visit("host", "local:trip");
+      expect(await visit("host")).toMatchObject({ data: { place: trip } });
+      expect((await visit("host"))?.data.errand).toBeUndefined();
+    });
+
+    it("becomes a visit to talk when the room it is sitting about in wakes it, so its turn doesn't send it home", async () => {
+      await presence.keep("host", { place: trip, until: "2026-10-19T03:00:00Z", spot: "seat-1", errand: "meeting" });
+      await presence.stay("host", "local:trip");
+      expect((await visit("host"))?.data).toEqual({ place: trip, until: new Date(Date.now() + QUIET).toISOString() });
+      await presence.yieldTo("host");
+      expect(await bodyAt(state, owner, "host")).toBe(trip);
+    });
   });
 
   it("reads a visit's end from its record alone", () => {
@@ -2154,5 +2212,88 @@ describe("what a body wears, and the home that suits what an agent is for", () =
       (await state.get(owner, other))?.version,
     );
     expect((await readHome(state, owner, "travel-agent", homes)).place).toEqual(theirs);
+  });
+});
+
+describe("what a room said last", () => {
+  const types = [
+    {
+      name: CHATTER_TYPE,
+      scope: "global" as const,
+      provider: "memory",
+      schema: CHATTER_SCHEMA as never,
+      access: { read: ["user"], write: [] },
+    },
+  ];
+  const line = (id: string, at: string, words = `line ${id}`) => ({ id, who: "planner", agent: "planner", words, at });
+
+  it("keeps the first few words of a line, on one line", () => {
+    expect(firstWords("Let's   move\nthe launch to Thursday, since the venue fell through and we need time")).toBe(
+      "Let's move the launch to Thursday, since the…",
+    );
+    expect(firstWords("Done.")).toBe("Done.");
+    // Cut after a comma, it trails off without it.
+    expect(firstWords("Next pick is The Left Hand of Darkness, copies are reserved.")).toBe(
+      "Next pick is The Left Hand of Darkness…",
+    );
+    expect(firstWords("x".repeat(90))).toHaveLength(61);
+  });
+
+  it("keeps the latest few lines, oldest first, each once, and when the room last talked", () => {
+    let c: Chatter | undefined;
+    for (let i = 1; i <= 6; i++) c = withMurmurs(c, "trip", [line(String(i), `2026-10-19T02:0${i}:00Z`)]);
+    c = withMurmurs(c, "trip", [line("6", "2026-10-19T02:06:00Z")]);
+    expect(c?.lines.map((l) => l.id)).toEqual(["3", "4", "5", "6"].slice(-CHATTER_LINES));
+    expect(c?.last).toBe("2026-10-19T02:06:00Z");
+  });
+
+  it("says when a room last talked: what it said, or failing that when it last woke someone", () => {
+    const c = withMurmurs(undefined, "trip", [line("1", "2026-10-19T02:00:00Z")]);
+    expect(talkedAt(c, [null])).toBe("2026-10-19T02:00:00Z");
+    expect(talkedAt(undefined, ["2026-10-19 03:00:00", null])).toBe("2026-10-19T03:00:00Z");
+    expect(talkedAt(c, ["2026-10-19 03:00:00"])).toBe("2026-10-19T03:00:00Z");
+    expect(talkedAt(undefined, [null])).toBeUndefined();
+  });
+
+  it("writes lines heard close together without losing any, and reads a room's last lines once when there are none", async () => {
+    const state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    const said = new Chatters(() => state);
+    await Promise.all([
+      said.hear("local:trip", "trip", [line("1", "2026-10-19T02:01:00Z")]),
+      said.hear("local:trip", "trip", [line("2", "2026-10-19T02:02:00Z")]),
+    ]);
+    const kept = await state.get(
+      { actor: { kind: "user", name: "owner" } },
+      { type: CHATTER_TYPE, id: "room:local:trip" },
+    );
+    expect((kept?.data as unknown as Chatter).lines.map((l) => l.id)).toEqual(["1", "2"]);
+    // Agents can't read it: what is said in a room stays with the room.
+    await expect(
+      state.get({ actor: { kind: "agent", name: "writer" } }, { type: CHATTER_TYPE, id: "room:local:trip" }),
+    ).rejects.toThrow();
+    // A room nothing was heard from since the start: its last lines, read from the room once.
+    const db = initDatabase(":memory:");
+    const store = new RoomStore(db);
+    const backend = new LocalRoomBackend(db, store);
+    store.upsertRoom({ ref: { backend: "local", id: "other" }, name: "other" });
+    await backend.post("other", { body: "Shall we book the train before the prices go up again?", speaker: "planner" });
+    const read = vi.spyOn(backend, "fetchSince");
+    const ids = () => new IdentityResolver({ agentNames: ["planner"] });
+    const room = store.getRoomByRef("local:other") as TalkRoom;
+    await said.seed(room, backend, ids);
+    await said.seed(room, backend, ids);
+    expect(read).toHaveBeenCalledTimes(1);
+    const seeded = await state.get(
+      { actor: { kind: "user", name: "owner" } },
+      { type: CHATTER_TYPE, id: "room:local:other" },
+    );
+    expect(seeded?.data).toMatchObject({
+      room: "other",
+      lines: [{ who: "planner", agent: "planner", words: "Shall we book the train before the prices…" }],
+    });
+    db.close();
   });
 });

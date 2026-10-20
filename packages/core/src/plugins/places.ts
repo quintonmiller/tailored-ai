@@ -61,6 +61,7 @@ import { stateTypeRegistry } from "../state/registry.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { type Actor, type StateChange, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import { runtimeTimeProvider } from "../time/provider.js";
+import { zonedParts } from "../time/zoned.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
 import { whyAsleep } from "./activity.js";
@@ -147,6 +148,23 @@ import {
   themeFor,
   themeNamed,
 } from "./places-rooms.js";
+import {
+  bedIn,
+  type DENSITY,
+  type Doing,
+  dmOf,
+  ERRANDS,
+  type Everyone,
+  hoursOf,
+  isOuting,
+  parseRoutines,
+  Routines,
+  type Seat,
+  seatsIn,
+  tiesFrom,
+  townSeats,
+  type Visit,
+} from "./places-routines.js";
 import { everyWords, gatherDone, parseTend, quiet, Tender, tendMessage } from "./places-tend.js";
 import { TOWN, type Town, townPlace } from "./places-town.js";
 import {
@@ -177,6 +195,9 @@ export const meta: PluginMeta = {
     { kind: "stateType", id: "todo" },
     { kind: "stateType", id: "habit" },
     { kind: "stateType", id: "note" },
+    { kind: "stateType", id: "visit" },
+    { kind: "stateType", id: "talk" },
+    { kind: "stateType", id: "chatter" },
     { kind: "tool", id: "place" },
     { kind: "tool", id: "body" },
     { kind: "tool", id: "build" },
@@ -711,6 +732,8 @@ export interface MapPlace {
   purpose?: string;
   /** A room of conversation's members with a body, wherever their bodies are. */
   members?: string[];
+  /** When a room of conversation last talked (see {@link talkedAt}), for the plate on its door. */
+  talked?: string;
   /** The place its way in is through: the town for a building, the floor of the office for a room in it. None for the town. */
   via?: string;
   /** A home's owner, in a word, when what it is for can be read (see `places-roles.ts`). */
@@ -766,6 +789,102 @@ export function saidLines(messages: RoomMessage[], identities: IdentityResolver,
       ...(m.media?.length ? { files: m.media.length } : {}),
     };
   });
+}
+
+/**
+ * What a room of conversation said last, for its meeting room's whiteboard
+ * and the plate on its door: one record per room (id `room:<backend>:<id>`),
+ * the first few words of its latest few lines and who said them, and when it
+ * last talked. Kept by the places plugin from what the rooms hear, in memory,
+ * so a restart starts it again; a meeting room looked at before anything new
+ * is said reads its room's last few lines once. Only people read it, as with
+ * `speech`: an agent outside a room doesn't read what is said in it.
+ */
+export const CHATTER_TYPE = "chatter";
+/** Lines a whiteboard shows. */
+export const CHATTER_LINES = 4;
+/** Words, and characters, of a line kept: its first few, not what it said. */
+const CHATTER_WORDS = 8;
+const CHATTER_CHARS = 60;
+
+/** One line of a room's chatter: who said it, how it began, and when. */
+export interface Murmur {
+  /** The message's id, so a line heard twice is kept once. */
+  id: string;
+  who: string;
+  /** The agent behind `who`, when there is one: what the page colours the name by. */
+  agent?: string;
+  words: string;
+  at: string;
+}
+
+/** A `chatter` record's data. */
+export interface Chatter {
+  room: string;
+  /** When the room last talked. */
+  last: string;
+  lines: Murmur[];
+}
+
+export const CHATTER_SCHEMA = {
+  type: "object",
+  required: ["room", "last", "lines"],
+  properties: {
+    room: { type: "string", maxLength: 128 },
+    last: { type: "string" },
+    lines: {
+      type: "array",
+      maxItems: CHATTER_LINES,
+      items: {
+        type: "object",
+        required: ["id", "who", "words", "at"],
+        properties: {
+          id: { type: "string", maxLength: 128 },
+          who: { type: "string", maxLength: 128 },
+          agent: { type: "string", maxLength: 128 },
+          words: { type: "string", maxLength: CHATTER_CHARS + 2 },
+          at: { type: "string" },
+        },
+      },
+    },
+  },
+} as const;
+
+/** The first few words of what was said, on one line: a glimpse for a whiteboard, never the whole of it. */
+export function firstWords(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  let out = "";
+  for (const word of flat.split(" ").slice(0, CHATTER_WORDS)) {
+    const next = out ? `${out} ${word}` : word;
+    if (next.length > CHATTER_CHARS) break;
+    out = next;
+  }
+  if (!out) out = flat.slice(0, CHATTER_CHARS);
+  // Cut short, it trails off: "Next pick is The Left Hand of Darkness…", not "Darkness,…".
+  return out.length < flat.length ? `${out.replace(/[\s,;:.!?-]+$/, "")}…` : out;
+}
+
+/** A room's chatter with lines added: the newest last, no more than {@link CHATTER_LINES}, each message once. */
+export function withMurmurs(was: Chatter | undefined, room: string, heard: Murmur[]): Chatter {
+  const lines = [...(was?.lines ?? [])];
+  for (const line of heard) if (!lines.some((l) => l.id === line.id)) lines.push(line);
+  lines.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const kept = lines.slice(-CHATTER_LINES);
+  const times = [was?.last, ...kept.map((l) => l.at)].filter((t): t is string => !!t && Number.isFinite(Date.parse(t)));
+  const last = times.sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? new Date(0).toISOString();
+  return { room, last, lines: kept };
+}
+
+/**
+ * When a room last talked, as an ISO time: its chatter's, or else the last
+ * time it woke one of its members, which is kept across restarts. Undefined
+ * for a room that has never done either.
+ */
+export function talkedAt(chatter: Chatter | undefined, woke: (string | null)[]): string | undefined {
+  const times = [chatter?.last, ...woke.map((w) => (w ? isoTime(w) : undefined))].filter(
+    (t): t is string => !!t && Number.isFinite(Date.parse(t)) && Date.parse(t) > 0,
+  );
+  return times.sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1);
 }
 
 /**
@@ -851,6 +970,7 @@ export async function worldMap(
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
   built?: World,
+  talked?: (room: TalkRoom) => string | undefined,
 ): Promise<MapPlace[]> {
   const world = built ?? (await buildWorld(service, caller, agents, rooms, hasBody));
   const area = (id: string) => world.areaOf.get(id) ?? MAIN;
@@ -864,11 +984,13 @@ export async function worldMap(
     const p = purposeOf.get(id) || fallback;
     return p ? { purpose: p } : {};
   };
-  // Where each body is: somewhere that still exists, or home. In a meeting room, it is out of its home.
+  // Where each body is: somewhere that still exists, or home. In a meeting room, or out in the town, it is out of
+  // its home.
   const where = (a: string) => {
     const id = gone.get(a);
     const there =
-      id && (sharedIds.has(id) || roomIds.has(id) || (id.startsWith("home:") && bodies.includes(id.slice(5))));
+      id &&
+      (id === TOWN || sharedIds.has(id) || roomIds.has(id) || (id.startsWith("home:") && bodies.includes(id.slice(5))));
     return there ? id : homeId(a);
   };
   const inside = new Map<string, string[]>();
@@ -882,7 +1004,7 @@ export async function worldMap(
   };
   const inIt = (id: string) => ({ agents: (inside.get(id) ?? []).sort() });
   return [
-    { id: TOWN, name: "the town", kind: "town" as const, agents: [], area: MAIN },
+    { id: TOWN, name: "the town", kind: "town" as const, ...inIt(TOWN), area: MAIN },
     { id: LOBBY, name: "the town hall", kind: "lobby" as const, agents: [], area: MAIN, ...via(LOBBY) },
     ...world.floors.map((f) => ({
       id: f.id,
@@ -918,6 +1040,7 @@ export async function worldMap(
       ...inIt(roomPlaceId(r.ref)),
       members: r.members.filter((m) => hasBody(m)).sort(),
       area: MAIN,
+      ...(talked?.(r) ? { talked: talked(r) } : {}),
       // The purpose its members gave its meeting room, over the room's own.
       ...purpose(roomPlaceId(r.ref), r.purpose),
       ...via(roomPlaceId(r.ref)),
@@ -992,7 +1115,9 @@ async function sceneOf(
   }
   if (id === TOWN) {
     if (!world) return null;
-    return { id, place: townOf(world.town), agents: [], version: 0, scope: "global" };
+    // Whoever is out: at the café, on a bench, in the park.
+    const agents = await whoIsIn(service, caller, id, hasBody, undefined, rooms);
+    return { id, place: townOf(world.town), agents, version: 0, scope: "global" };
   }
   const floor = world?.floors.find((f) => f.id === id);
   if (floor) {
@@ -1096,14 +1221,21 @@ export class Presence {
     return done;
   }
 
-  /** Visit a place. Arriving, the body goes there, or stays a while longer if it is there already; otherwise only a visit there is kept on. */
+  /**
+   * Visit a place. Arriving, the body goes there, or stays a while longer if
+   * it is there already; otherwise only a visit there is kept on. An outing
+   * gives way: arriving ends it, and one in the very room that woke the agent
+   * becomes a visit to talk there.
+   */
   private async go(agent: string, id: string, arrive: boolean): Promise<void> {
     const service = this.opts.state();
     const ref = { type: VISIT_TYPE, id: agent };
     const found = await service.get(PRESENCE_CALLER, ref);
     const now = this.now();
-    const same = visitOf(found?.data, now) === id;
-    if (!same && !arrive) return;
+    const there = visitOf(found?.data, now) === id;
+    const outing = isOuting(found?.data);
+    const same = there && !outing;
+    if (!same && !arrive && !(there && outing)) return;
     const until = typeof found?.data.until === "string" ? Date.parse(found.data.until) : Number.NaN;
     if (same && until - now > this.opts.quietMs - VISIT_REFRESH_MS) return;
     try {
@@ -1116,6 +1248,39 @@ export class Presence {
       // Ended a moment ago, by the place tool or the page: that stands until it next says something.
       if (!(err instanceof StateConflictError)) throw err;
     }
+  }
+
+  /**
+   * An outing for an agent with nothing to do (see `places-routines.ts`), or
+   * the end of one (null). A visit to talk stands: an outing never writes
+   * over one, nor ends it.
+   */
+  keep(agent: string, outing: Visit | null): Promise<void> {
+    return this.inTurn(agent, async () => {
+      const service = this.opts.state();
+      const ref = { type: VISIT_TYPE, id: agent };
+      const found = await service.get(PRESENCE_CALLER, ref);
+      if (visitOf(found?.data, this.now()) && !isOuting(found?.data)) return;
+      try {
+        if (outing)
+          await service.put(PRESENCE_CALLER, { ...ref, scope: "global", data: { ...outing } }, found?.version ?? 0);
+        else if (found) await service.delete(PRESENCE_CALLER, ref, found.version);
+      } catch (err) {
+        // Changed a moment ago, by a talk or the page: that stands until the next look.
+        if (!(err instanceof StateConflictError)) throw err;
+      }
+    });
+  }
+
+  /** Work started: an outing, or a night's sleep, ends at once, and the body is where it lives. A visit to talk goes on. */
+  yieldTo(agent: string): Promise<void> {
+    if (!this.opts.hasBody(agent)) return Promise.resolve();
+    return this.inTurn(agent, async () => {
+      const service = this.opts.state();
+      const ref = { type: VISIT_TYPE, id: agent };
+      const found = await service.get(PRESENCE_CALLER, ref);
+      if (found && isOuting(found.data)) await service.delete(PRESENCE_CALLER, ref, found.version).catch(() => {});
+    });
   }
 
   /** End the visits that have run out: each body back where it lives. */
@@ -1149,6 +1314,82 @@ export class Presence {
 }
 
 const PRESENCE_CALLER: StateCaller = { actor: { kind: "plugin", name: "places" }, source: { surface: "events" } };
+
+/**
+ * Rooms' chatter (see {@link CHATTER_TYPE}), kept from what the rooms hear.
+ * One room's lines change in order, so two messages close together never
+ * write over each other.
+ */
+export class Chatters {
+  private readonly chains = new Map<string, Promise<void>>();
+  private readonly seeded = new Set<string>();
+
+  constructor(private readonly state: () => StateService) {}
+
+  /** Lines a room said, by its `<backend>:<id>`: added to its record, newest last. */
+  hear(ref: string, room: string, lines: Murmur[]): Promise<void> {
+    const id = roomPlaceId(ref);
+    const done = (this.chains.get(id) ?? Promise.resolve())
+      .then(async () => {
+        const service = this.state();
+        const found = await service.get(PRESENCE_CALLER, { type: CHATTER_TYPE, id });
+        const data = withMurmurs(found?.data as unknown as Chatter | undefined, room, lines);
+        await service.put(
+          PRESENCE_CALLER,
+          { type: CHATTER_TYPE, id, scope: "global", data: data as unknown as Record<string, unknown> },
+          found?.version ?? 0,
+        );
+      })
+      .catch((err: unknown) => {
+        if (!(err instanceof StateConflictError))
+          console.warn(`[places] could not keep what #${room} said: ${(err as Error).message}`);
+      });
+    this.chains.set(id, done);
+    return done;
+  }
+
+  /**
+   * A room nothing has been heard from since the start: its last few lines,
+   * read once from its transport, so its whiteboard isn't blank until the
+   * next thing is said. Read only, as the transcript is.
+   */
+  async seed(
+    room: TalkRoomRecord,
+    backend: RoomBackend | undefined,
+    identities: () => IdentityResolver,
+  ): Promise<void> {
+    const ref = formatRoomRef(room.ref);
+    if (this.seeded.has(ref) || !backend) return;
+    this.seeded.add(ref);
+    try {
+      if (await this.state().get(PRESENCE_CALLER, { type: CHATTER_TYPE, id: roomPlaceId(ref) })) return;
+      const lines = saidLines(
+        await backend.fetchSince(room.ref.id, null, CHATTER_LINES),
+        identities(),
+        room.ref.backend,
+      );
+      if (!lines.length) return;
+      await this.hear(
+        ref,
+        room.name,
+        lines.map((l) => ({
+          id: l.id,
+          who: l.who,
+          ...(l.agent ? { agent: l.agent } : {}),
+          words: firstWords(l.text),
+          at: l.at,
+        })),
+      );
+    } catch (err) {
+      console.warn(`[places] could not read what #${room.name} said last: ${(err as Error).message}`);
+    }
+  }
+
+  /** Resolves once everything heard so far is written. */
+  async settled(): Promise<void> {
+    await Promise.all([...this.chains.values()]);
+  }
+}
 
 // --------------------------------------------------------------------------
 // Talking: face to face nearby, on the phone from afar
@@ -1486,6 +1727,11 @@ export const VISIT_SCHEMA = {
   properties: {
     place: { type: "string", maxLength: 128 },
     until: { type: "string" },
+    // An outing (see `places-routines.ts`): the seat it is in, what it is doing there and with whom, in words too.
+    spot: { type: "string", maxLength: 128 },
+    errand: { type: "string", enum: [...ERRANDS, "sleep"] },
+    with: { type: "array", items: { type: "string", maxLength: 128 }, maxItems: 16 },
+    what: { type: "string", maxLength: 200 },
   },
 } as const;
 
@@ -2534,6 +2780,17 @@ const plugin: Plugin = (ctx) => {
   });
 
   ctx.stateTypes.register({
+    name: CHATTER_TYPE,
+    description:
+      "What a room agents talk in said last: how its latest few lines began and who said them, and when it last talked, for its meeting room's whiteboard and door. Kept by the places plugin; gone on restart. People only: closed to agents.",
+    scope: "global",
+    title: "room",
+    provider: "memory",
+    schema: CHATTER_SCHEMA as never,
+    access: { read: ["user"], write: [] },
+  });
+
+  ctx.stateTypes.register({
     name: MODEL_TYPE,
     description:
       "A model an agent made for the 3D world out of simple parts, some with a face people use there: `<agent>:<name>`, in its maker's scope. Agents make them with the build tool and add them to rooms with the place tool.",
@@ -2674,6 +2931,23 @@ const plugin: Plugin = (ctx) => {
     };
   };
 
+  // What each room said last, by its meeting room's id, and when a room last talked: for whiteboards and doors.
+  const said = new Chatters(() => runtime.getStateService());
+  const chatterOf = async (service: StateService) => {
+    const records = await service
+      .query(PLUGIN_CALLER, { type: CHATTER_TYPE, limit: 500 })
+      .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+    return new Map(records.map((r) => [r.id, r.data as unknown as Chatter]));
+  };
+  const lastTalked = (said: Map<string, Chatter>) => (room: TalkRoom) =>
+    talkedAt(
+      said.get(roomPlaceId(room.ref)),
+      runtime
+        .getRoomStore()
+        .listSubscriptionsForRoom(room.ref)
+        .map((s) => s.lastWokeAt),
+    );
+
   ctx.http.register({
     method: "GET",
     path: "map",
@@ -2682,8 +2956,9 @@ const plugin: Plugin = (ctx) => {
       const rooms = talkRooms();
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const chosen = await chosenBodies(service, PLUGIN_CALLER);
+      const talked = lastTalked(await chatterOf(service));
       const places = withLooks(
-        await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world),
+        await worldMap(service, PLUGIN_CALLER, agentNames(), rooms, hasBody, world, talked),
         roleOf,
         chosen,
       );
@@ -2702,6 +2977,11 @@ const plugin: Plugin = (ctx) => {
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const found = await scene(service, PLUGIN_CALLER, id, rooms, hasBody, world, homes);
       if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
+      // A meeting room nothing has been heard from since the start: what its room said last goes up on its whiteboard.
+      if (id.startsWith("room:")) {
+        const room = runtime.getRoomStore().getRoomByRef(id.slice("room:".length));
+        if (room) void said.seed(room, getRoomBackend(room.ref.backend), identities);
+      }
       const chosen = await chosenBodies(service, PLUGIN_CALLER);
       const known = bodyModels();
       // The town's houses say what their owners do, so what stands by each can show it.
@@ -2881,7 +3161,7 @@ const plugin: Plugin = (ctx) => {
 
   // What the plugin leaves running, each stopped when it is unloaded.
   const stops: (() => void)[] = [];
-  const cfg = (ctx.config ?? {}) as { quietMinutes?: number; tend?: unknown };
+  const cfg = (ctx.config ?? {}) as { quietMinutes?: number; tend?: unknown; routines?: unknown };
 
   /** Why an agent is asleep in the world: the global pause, or an online agent's own switch; null when it is awake. */
   const asleep = (agent: string) => {
@@ -2915,8 +3195,12 @@ const plugin: Plugin = (ctx) => {
   sweeps.push(() => endStays(runtime.getStateService()));
   // Bodies go where the talk is: to a room's meeting room while they talk there, and home after a quiet spell.
   const quietMinutes = typeof cfg.quietMinutes === "number" ? cfg.quietMinutes : QUIET_MINUTES;
-  if (quietMinutes > 0) {
-    const presence = new Presence({ state: () => runtime.getStateService(), hasBody, quietMs: quietMinutes * 60_000 });
+  const presence = new Presence({
+    state: () => runtime.getStateService(),
+    hasBody,
+    quietMs: Math.max(0, quietMinutes) * 60_000,
+  });
+  if (quietMinutes > 0)
     subs.push(
       ctx.events.on("room.woke", (e) => void presence.stay(e.agent, e.roomRef)),
       ctx.events.on("room.message", (e) => {
@@ -2924,7 +3208,167 @@ const plugin: Plugin = (ctx) => {
         if (e.speaker && agentNames().includes(e.speaker)) void presence.visit(e.speaker, e.roomRef);
       }),
     );
-    sweeps.push(() => presence.sweep());
+  sweeps.push(() => presence.sweep());
+  // Work wins: a turn starting ends any outing at once, and the body is home, or where the talk is.
+  subs.push(ctx.events.on("agent.turn_started", (e) => void presence.yieldTo(e.agent || "default")));
+
+  // What each room says, for its whiteboard and door: the first few words of its latest lines, people only.
+  subs.push(
+    ctx.events.on("room.message", (e) => {
+      const room = runtime.getRoomStore().getRoomByRef(e.roomRef);
+      if (!room) return;
+      const who = e.speaker || "someone";
+      void said.hear(e.roomRef, room.name, [
+        {
+          id: e.messageId,
+          who,
+          ...(agentNames().includes(who) ? { agent: who } : {}),
+          words: firstWords(e.body),
+          at: new Date().toISOString(),
+        },
+      ]);
+    }),
+  );
+
+  // Everything a routine's look needs (see `decide` in `places-routines.ts`), read fresh, but for what changes slowly:
+  // homes are read again every ten minutes, and who knows whom every hour.
+  const homesKept = new Map<string, { place: Place; at: number }>();
+  let ties: { map: Map<string, string[]>; at: number } | undefined;
+  const routineLook = (density: keyof typeof DENSITY) => async (): Promise<Everyone> => {
+    const service = runtime.getStateService();
+    const rooms = talkRooms();
+    const agents = agentNames().filter((a) => hasBody(a));
+    const clock = runtimeTimeProvider(runtime);
+    const now = clock.now();
+    const local = zonedParts(now, clock.timeZone());
+    const all = async (type: string) =>
+      service.query(PLUGIN_CALLER, { type, limit: 500 }).catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+    const activities = new Map((await all("activity")).map((r) => [r.id, r.data as unknown as Doing]));
+    const visits = new Map(
+      (await all(VISIT_TYPE)).flatMap((r) =>
+        visitOf(r.data, now.getTime()) ? [[r.id, r.data as unknown as Visit] as const] : [],
+      ),
+    );
+    // Where an agent chose to be itself stands: a spot it stays at, a place it went to for a while, or one it lives in.
+    const chose = new Set<string>();
+    for (const r of await all(BODY_TYPE)) {
+      const body = r.data as { spot?: { until?: string }; away?: { until: string } };
+      const until = (u: string | undefined) => !ranOut(u, now.getTime());
+      if ((body.spot && until(body.spot.until)) || (body.away && until(body.away.until))) chose.add(r.id);
+    }
+    for (const r of await all(WHEREABOUTS_TYPE))
+      if (typeof r.data.place === "string" && r.data.place !== homeId(r.id)) chose.add(r.id);
+    // Homes, and their beds and seats.
+    const homesNow = new Map<string, { place: string; bed?: string }>();
+    const seats: Seat[] = [];
+    for (const agent of agents) {
+      let kept = homesKept.get(agent);
+      if (!kept || now.getTime() - kept.at > HOMES_FRESH_MS) {
+        // Read only: a home nobody has looked at yet is drawn as it will be, and not written for a routine.
+        const found = await service.get(PLUGIN_CALLER, { type: PLACE_TYPE, id: homeId(agent) }).catch(() => null);
+        const name = agent === "default" ? "your room" : `${agent}'s room`;
+        const place = found ? (found.data as unknown as Place) : drawHome(homeId(agent), name, homes(agent));
+        kept = { place, at: now.getTime() };
+        homesKept.set(agent, kept);
+      }
+      const bed = bedIn(kept.place);
+      homesNow.set(agent, { place: homeId(agent), ...(bed ? { bed } : {}) });
+      seats.push(
+        ...seatsIn(homeId(agent), kept.place, {
+          kind: "friend",
+          where: agent === "default" ? "the default agent" : agent,
+          host: agent,
+        }),
+      );
+    }
+    // The town's café and benches.
+    const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
+    seats.push(...townSeats(TOWN, townOf(world.town)));
+    // Shared places, to read in.
+    for (const r of await all(PLACE_TYPE)) {
+      if (!r.id.startsWith(SHARED)) continue;
+      const place = r.data as unknown as Place;
+      seats.push(...seatsIn(r.id, place, { kind: "read", where: `in ${place.name ?? r.id}` }));
+    }
+    // The meeting rooms of rooms that talked lately, for their members.
+    const talked = lastTalked(await chatterOf(service));
+    for (const room of rooms) {
+      const last = Date.parse(talked(room) ?? "");
+      if (!Number.isFinite(last) || now.getTime() - last > LIVELY_MS) continue;
+      const id = roomPlaceId(room.ref);
+      const kept = await service.get(PLUGIN_CALLER, { type: PLACE_TYPE, id }).catch(() => null);
+      const place = kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place;
+      seats.push(
+        ...seatsIn(id, place, {
+          kind: "meeting",
+          where: `#${room.name}'s meeting room`,
+          members: room.members.filter((m) => hasBody(m)),
+        }),
+      );
+    }
+    if (!ties || now.getTime() - ties.at > TIES_FRESH_MS)
+      ties = { map: tiesFrom(rooms, directMessages()), at: now.getTime() };
+    const known = ties.map;
+    return {
+      agents,
+      now: {
+        at: now.getTime(),
+        day: Math.floor(Date.UTC(local.year, local.month - 1, local.day) / 86_400_000),
+        minute: local.hour * 60 + local.minute,
+      },
+      density,
+      dayOf: (agent) => {
+        const role = roleOf(agent)?.id;
+        const online = agent === "default" ? undefined : runtime.getConfig().agents?.[agent]?.online;
+        const window = online?.enabled ? online.cadence?.window : undefined;
+        return { agent, ...(role ? { role } : {}), hours: hoursOf(agent, role, window), density };
+      },
+      activities,
+      visits,
+      seats,
+      ties: (agent) => known.get(agent) ?? [],
+      homes: homesNow,
+      sentHome: new Map([...sentHome].filter(([, until]) => until > now.getTime())),
+      chose,
+    };
+  };
+  // Agents a person sent home from an outing (the menu's "Send home"): home until that outing would have ended.
+  const sentHome = new Map<string, number>();
+  subs.push(
+    ctx.events.on("state.changed", (e) => {
+      if (e.type !== VISIT_TYPE || e.op !== "delete" || e.actor.kind !== "user" || !isOuting(e.before)) return;
+      const until = Date.parse(String(e.before?.until ?? ""));
+      if (Number.isFinite(until)) sentHome.set(e.id, until);
+    }),
+  );
+  // Who messages whom directly, and how much: the `dm:<from>:<to>` sessions' messages, counted.
+  const directMessages = () => {
+    try {
+      const rows = runtime.db
+        .prepare(
+          "SELECT s.key AS key, COUNT(m.id) AS n FROM sessions s JOIN messages m ON m.session_id = s.id WHERE s.key LIKE 'dm:%' GROUP BY s.id",
+        )
+        .all() as { key: string; n: number }[];
+      return rows.flatMap((r) => {
+        const dm = dmOf(r.key);
+        return dm ? [{ ...dm, count: r.n }] : [];
+      });
+    } catch {
+      return [];
+    }
+  };
+
+  // What agents do with their day when they have nothing to do: out to the café, the park, a meeting room, a friend's,
+  // and home to bed (`places-routines.ts`). On unless turned off.
+  const density = parseRoutines(cfg.routines);
+  if (density && typeof density === "object") console.warn(`[places] routines are as usual: ${density.problem}`);
+  if (density !== null) {
+    const routines = new Routines({
+      look: routineLook(typeof density === "string" ? density : "normal"),
+      keep: (agent, visit) => presence.keep(agent, visit),
+    });
+    routines.start();
+    stops.push(() => routines.stop());
   }
   // Each morning, in the deployment's time zone, the habit trackers start the day unticked (`turnHabits`). Looked
   // at when TAI starts and whenever the day changes, so a day missed while it was off is still counted.
@@ -3024,5 +3468,10 @@ const plugin: Plugin = (ctx) => {
 
 /** How often talks and visits that are over are ended, so a page sees the phone go down and the body go home. */
 const SWEEP_MS = 20_000;
+/** A room that talked within this long is lively: its members sit about in its meeting room on their routines. */
+const LIVELY_MS = 6 * 3_600_000;
+/** How long a routine trusts what it read of a home, and of who knows whom. */
+const HOMES_FRESH_MS = 10 * 60_000;
+const TIES_FRESH_MS = 3_600_000;
 
 export default plugin;

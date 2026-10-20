@@ -2,7 +2,8 @@
  * What floats over a body: a tag with its name and what it is doing, and a
  * sign for its state — thinking dots, a speech bubble, a phone while it talks
  * to someone somewhere else, an exclamation when it is waiting on you, a
- * question when it is stuck, and Zs while it sleeps.
+ * question when it is stuck, Zs while it sleeps, and two small bubbles while
+ * it keeps someone company out.
  * Drawn on canvases into sprites, so they always face the camera and stay
  * readable from any angle. Each stands on the top of the head; how big it is
  * drawn and how far up it goes are the screen's to say (`overhead.ts`).
@@ -63,6 +64,8 @@ function disposeSprite(s: THREE.Sprite) {
 
 /** The blue a phone is drawn in, on a sign, a bubble or a tag: the talking colour. */
 const PHONE_BLUE = "#3d7bd9";
+/** The dots of a chat between two out together: warm, so it isn't taken for a talk about work. */
+const CHAT_DOTS = "#b0703c";
 
 /**
  * A telephone handset, `size` pixels square with its top left at `x`, `y`:
@@ -332,6 +335,29 @@ function drawSign(sign: Sign): HTMLCanvasElement {
     case "stuck":
       disc(doingCss("stuck"), "?");
       break;
+    case "chat": {
+      // Two small bubbles, one behind the other, each with its dots: two keeping each other company, in no words.
+      const bubble = (x: number, y: number, w: number, h: number, fill: string, dot: string, tail: number) => {
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, h / 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x + tail, y + h - 4);
+        ctx.lineTo(x + tail - 6, y + h + 16);
+        ctx.lineTo(x + tail + 16, y + h - 2);
+        ctx.fill();
+        ctx.fillStyle = dot;
+        for (const k of [0.3, 0.5, 0.7]) {
+          ctx.beginPath();
+          ctx.arc(x + w * k, y + h / 2, h * 0.1, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      };
+      bubble(46, 14, 74, 46, "rgba(255, 236, 214, 0.95)", CHAT_DOTS, 50);
+      bubble(8, 50, 74, 46, "rgba(250, 250, 255, 0.97)", CHAT_DOTS, 22);
+      break;
+    }
     case "sleep":
       ctx.fillStyle = "#cfe0ff";
       ctx.strokeStyle = "rgba(20, 22, 40, 0.6)";

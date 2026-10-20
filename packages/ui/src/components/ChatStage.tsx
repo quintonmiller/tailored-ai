@@ -31,15 +31,23 @@ import type { AgentActivity } from "../avatar/doing";
 import type { TaskMove } from "../avatar/Faces";
 import { MODEL_TYPE, type ModelDef } from "../avatar/models";
 import type { BodyState } from "../avatar/motion";
+import {
+  type Chatter,
+  notesFrom,
+  type Outing,
+  occupied as occupiedBy,
+  talkedAt,
+  withRoutines,
+} from "../avatar/routines";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
 import type { Companion, UseSpot } from "../avatar/stage";
 import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
-import { isOutdoors, tripsBetween } from "../avatar/town";
+import { doorInTown, isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import type { WorldData } from "../avatar/widgets";
 import { changeBody, makeGesture } from "../lib/body";
-import { useAgentColor } from "../lib/body-colors";
+import { useAgentColor, useChosenColors } from "../lib/body-colors";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
@@ -1347,6 +1355,12 @@ export function useChatStage({
     setNear(undefined);
   }, [visiting]);
   const doings = useRecords<AgentActivity>("activity", showStage);
+  // What every agent's day has it doing while it has nothing else to (`routines.ts`): out on an errand, or asleep for
+  // the night; and what each room said last, for its whiteboard and its door.
+  const outings = useRecords<Outing>("visit", showStage);
+  const chatter = useRecords<Chatter>("chatter", showStage);
+  const today = useMinute(showStage);
+  const chosenColors = useChosenColors();
   // What every agent is doing as the world shows it: a question on a task answered (here, or on the Tasks page) is
   // done with, and one still waiting on you is, whatever became of the turn that asked it.
   const activities = useMemo(() => withQuestions(doings, allTasks), [doings, allTasks]);
@@ -1462,6 +1476,35 @@ export function useChatStage({
   );
 
   const controls = useRef<AvatarControls | null>(null);
+  // Where each body last was other than out in the town: one that comes out walks from that door to its seat.
+  const lastIn = useRef(new Map<string, string>());
+  for (const p of map.places) if (p.id !== "town") for (const a of p.agents) lastIn.current.set(a, p.id);
+  const townCompany = useMemo((): Companion[] => {
+    const plan = map.town;
+    if (placeId !== "town" || !plan) return company;
+    return company.map((c) => {
+      const from = doorInTown(plan, lastIn.current.get(c.agent) ?? `home:${c.agent || "default"}`);
+      return from ? { ...c, from } : c;
+    });
+  }, [company, placeId, map.town]);
+  // And one that goes walks to the door of where it went, its home when the map hasn't heard yet.
+  const mapRef = useRef(map);
+  mapRef.current = map;
+  const exitFor = useCallback((agent: string) => {
+    const { places, town } = mapRef.current;
+    if (!town) return undefined;
+    const now = places.find((p) => p.agents.includes(agent))?.id;
+    return doorInTown(town, now && now !== "town" ? now : `home:${agent || "default"}`);
+  }, []);
+  // Who is in each building, for its windows; when each room last talked, for the card on its door; and in a meeting
+  // room, what its room said last, for its whiteboard.
+  const inside = useMemo(() => (map.town ? [...occupiedBy(map.places, map.town)].sort() : undefined), [map]);
+  const talked = useMemo(() => talkedAt(chatter, map.places), [chatter, map.places]);
+  const notes = useMemo(() => {
+    if (!placeId?.startsWith("room:")) return undefined;
+    const name = map.places.find((p) => p.id === placeId)?.name ?? room.name ?? "";
+    return notesFrom(chatter[placeId] as Chatter | undefined, name, today, chosenColors);
+  }, [placeId, chatter, map.places, room.name, today, chosenColors]);
   // Out in the town, bodies going from one place to another walk the streets: each time the map hears that someone
   // went somewhere, from the door of where they were to the door of where they went.
   const whereWas = useRef<Map<string, string> | null>(null);
@@ -1637,8 +1680,21 @@ export function useChatStage({
   });
   spokeRef.current = you.spoke;
   const talks = useMemo(() => (you.talk ? { ...talkRecords, [YOU]: you.talk } : talkRecords), [talkRecords, you.talk]);
-  // What every agent is doing as the world shows it, talks and all: on bodies, on the map, on a card.
-  const shownActivities = useMemo(() => withTalks(activities, talks, now), [activities, talks, now]);
+  // What every agent is doing as the world shows it, talks and days and all: on the map, on a card.
+  const shownActivities = useMemo(
+    () => withRoutines(withTalks(activities, talks, now), outings, today),
+    [activities, talks, now, outings, today],
+  );
+  // And on the bodies here, each out at its seat with its company. On its own page, the agent you talk to is with
+  // you, whatever its day says, unless it is asleep for the night.
+  const stageActivities = useMemo(() => {
+    const talking = withTalks(activities, talks, now);
+    const all = withRoutines(talking, outings, today, placeId ?? undefined);
+    const mine = all[shown];
+    if (showing.visiting || !mine?.routine || mine.routine.errand === "sleep") return all;
+    const { [shown]: _, ...rest } = all;
+    return talking[shown] ? { ...rest, [shown]: talking[shown] } : rest;
+  }, [activities, talks, now, outings, today, placeId, shown, showing.visiting]);
   const saidAll = useMemo(() => newest(said, you.lines), [said, you.lines]);
 
   // A quiet moment, while the page is in view: the agent chooses what it does.
@@ -2285,13 +2341,13 @@ export function useChatStage({
         place={placeId}
         arriveFrom={showing.visiting ? cameFrom : undefined}
         onDoor={onDoor}
-        company={company}
+        company={townCompany}
         agent={showing.visiting ? "you" : shown}
         // Your own body wears nothing of the agent's, and looks and carries itself its own way.
         {...(!showing.visiting && own.wear ? { wear: own.wear } : {})}
         {...(!showing.visiting && own.looks ? { looks: own.looks } : {})}
         emotes={emotes}
-        activities={shownActivities}
+        activities={stageActivities}
         speech={saidAll}
         menuFor={menuFor}
         visitor={!!showing.visiting}
@@ -2305,6 +2361,10 @@ export function useChatStage({
         onTaskMove={moveTask}
         {...(calendarView ? { calendar: calendarView } : {})}
         {...(world ? { world, onApprove: approve } : {})}
+        {...(notes ? { notes } : {})}
+        talked={talked}
+        {...(inside ? { occupied: inside } : {})}
+        exitFor={exitFor}
         onUse={onUse}
         onLine={hearLine}
         overlay={
