@@ -40,8 +40,11 @@ import { OFFICE } from "./places-world.js";
 export type Edit =
   /** Put a thing here, turned this way: on the floor, along the back or left wall, or on top of `on`. */
   | { op: "move"; item: string; at: [number, number]; facing: number; on?: string }
-  /** A new thing of a kind, somewhere free near the middle; `like`, a copy of that thing, beside it. */
-  | { op: "add"; kind: string; like?: string }
+  /**
+   * A new thing of a kind, somewhere free near the middle; `like`, a copy of that thing, beside it. A model an agent
+   * made is added by its record's id, `model`; the server fills in its kind, the box it fills and its name.
+   */
+  | { op: "add"; kind: string; like?: string; model?: string; size?: [number, number, number]; name?: string }
   | { op: "remove"; item: string }
   | { op: "color"; item: string; color: string };
 
@@ -93,8 +96,14 @@ export function editFrom(body: unknown): Edit | string {
       return { op: "move", item, at: e.at, facing: e.facing, ...(text(e.on) ? { on: text(e.on) } : {}) };
     case "add": {
       const kind = text(e.kind);
-      if (!kind) return "Adding needs `kind`.";
-      return { op: "add", kind, ...(text(e.like) ? { like: text(e.like) } : {}) };
+      const model = text(e.model);
+      if (!kind && !model) return "Adding needs `kind`, or a `model`.";
+      return {
+        op: "add",
+        kind: kind ?? "model",
+        ...(text(e.like) ? { like: text(e.like) } : {}),
+        ...(model ? { model } : {}),
+      };
     }
     case "remove":
       return item ? { op: "remove", item } : "Removing needs `item`.";
@@ -165,6 +174,7 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
     if (place.props.length >= LIMITS.items) return `A room holds at most ${LIMITS.items} things. Take one away first.`;
     const like = edit.like ? place.props.find((p) => p.id === edit.like) : undefined;
     if (edit.like && !like) return "The thing to copy isn't in the room any more.";
+    if (kind.model && !like && !(edit.model && edit.size)) return "Say which model to add.";
     const copied = like
       ? {
           ...(like.color ? { color: like.color } : {}),
@@ -172,13 +182,16 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
           ...(like.size ? { size: like.size } : {}),
           ...(like.label ? { label: like.label } : {}),
           ...(like.action ? { action: like.action } : {}),
+          ...(like.model ? { model: like.model } : {}),
         }
-      : KINDS[edit.kind].shaped
-        ? { size: [0.5, 0.5, 0.5] as [number, number, number] }
-        : // A task board shows the open tasks and opens them, as the ones rooms are drawn with do.
-          edit.kind === "board"
-          ? { label: "Tasks", action: "tasks" as const }
-          : {};
+      : edit.model && edit.size
+        ? { model: edit.model, size: edit.size }
+        : KINDS[edit.kind].shaped
+          ? { size: [0.5, 0.5, 0.5] as [number, number, number] }
+          : // A task board shows the open tasks and opens them, as the ones rooms are drawn with do.
+            edit.kind === "board"
+            ? { label: "Tasks", action: "tasks" as const }
+            : {};
     const placing: Placing = { kind: edit.kind, ...copied };
     // A copy goes beside what it copies; anything new near the middle, or else wherever it fits.
     const where: Where = like ? { near: like.id } : kind.mount === "floor" ? { middle: true } : {};
@@ -187,7 +200,7 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
     if (typeof spot === "string") return spot;
     const added: PlaceItem = {
       id: newId(place, edit.kind),
-      name: newName(place, edit.kind, undefined, like?.name),
+      name: newName(place, edit.kind, undefined, like?.name ?? edit.name),
       kind: edit.kind,
       ...copied,
       at: spot.at,
@@ -216,6 +229,7 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
   }
 
   if (edit.op === "color") {
+    if (item.model) return `${named(item)} keeps its parts' own colours, which its agent chose.`;
     const next = { ...place, props: place.props.map((p) => (p.id === item.id ? { ...p, color: edit.color } : p)) };
     return { place: next, item: item.id };
   }

@@ -8696,6 +8696,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .room-edit-kinds button:hover, .room-edit-kinds button:focus-visible { border-color: var(--accent); outline: none; }
 .room-edit-kinds button:disabled { opacity: 0.5; cursor: default; }
 .room-edit-goes { font-size: 10px; color: var(--text-dim); }
+.room-edit-more { margin-top: 6px; font-size: 12px; }
 
 /* The map: every place, to go to in one click. */
 .world-map { position: absolute; top: 44px; left: 8px; bottom: 8px; z-index: 6; width: min(420px, calc(100% - 16px)); display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); }
@@ -9290,6 +9291,40 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sf-far-title { margin: 6px 0 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 760 36px/1.1 var(--sf-font); letter-spacing: -0.02em; color: #3b4252; }
 .sf-far-bars { display: flex; flex-direction: column; gap: 10px; }
 .sf-far-bar { height: 26px; border-radius: 4px 4px 9px 4px; background: var(--note); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1); }
+
+/* A face on a model an agent made: the agent's interface, drawn by the chat's own renderer, on paper, its type sized
+   to the face, so a to-do board on a wall and a card on a desk both read. Paper takes on lamplight after dark. */
+.sf-face-page {
+  position: absolute; inset: 0; container-type: size; overflow: hidden; padding: 6cqmin 7cqmin;
+  background: var(--sf-paper); color: var(--sf-paper-ink); filter: var(--surface-paper, none); color-scheme: light;
+  --text: var(--sf-paper-ink); --text-dim: var(--sf-paper-dim); --border: var(--sf-paper-rule); --accent: #2f6fd6;
+  --bg: #fff; --bg-hover: rgba(30, 40, 60, 0.07); --green: #2e9e5b; --red: #b4321f;
+}
+.world-surface[data-focused="true"] .sf-face-page { overflow-y: auto; scrollbar-width: thin; }
+.sf-face-page .iface { margin: 0; padding: 0; gap: 2.4cqh; background: none; border: 0; border-radius: 0; font-size: clamp(11px, 6.4cqh, 26px); }
+.sf-face-page .iface-card-title { font-size: clamp(13px, 8.6cqh, 34px); font-weight: 720; line-height: 1.15; color: var(--sf-paper-ink); }
+.sf-face-page .iface-details { font-size: 1em; font-style: normal; color: var(--sf-paper-dim); }
+.sf-face-page .iface-list { gap: 1.6cqh; margin: 0; }
+.sf-face-page .iface-list li { padding-bottom: 1.4cqh; border-bottom: 1px solid var(--sf-paper-rule); }
+.sf-face-page .iface-list li:last-child { border-bottom: 0; }
+.sf-face-page .iface-list-item { gap: 0.6em; font-size: 1em; line-height: 1.25; }
+/* A tick box drawn here rather than the browser's, so it is as big as the words beside it and reads as ink on paper. */
+.sf-face-page .iface-list-item input {
+  appearance: none; flex: none; display: grid; place-content: center; width: 1em; height: 1em; margin: 0; font-size: inherit;
+  border: max(2px, 0.09em) solid #98a2b3; border-radius: 0.2em; background: #fff; cursor: pointer;
+}
+.sf-face-page .iface-list-item input:checked { background: #2e9e5b; border-color: #2e9e5b; }
+.sf-face-page .iface-list-item input:checked::before {
+  content: ""; width: 0.5em; height: 0.26em; border: solid #fff; border-width: 0 0 max(2px, 0.11em) max(2px, 0.11em);
+  transform: translateY(-0.05em) rotate(-45deg);
+}
+.sf-face-page .iface-list-item input:disabled { cursor: default; opacity: 0.6; }
+.sf-face-page .iface-list-item input:checked + span { color: var(--sf-paper-dim); text-decoration: line-through; text-decoration-thickness: 2px; }
+.sf-face-page .iface-card-fields { gap: 0.5em 0.9em; font-size: 1em; }
+.sf-face-page .iface-table { font-size: 0.85em; }
+.sf-face-page .iface-table-wrap { border-color: var(--sf-paper-rule); }
+.sf-face-page .ask-choice { font-size: 0.9em; padding: 0.35em 0.9em; }
+.sf-face-page .iface-status, .sf-face-page .iface-error { font-size: 0.8em; }
 
 /* The calendar: paper, with today's date on a coloured band. */
 .sf-calendar { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--sf-paper); color: var(--sf-paper-ink); filter: var(--surface-paper, none); }

@@ -1,9 +1,11 @@
 /**
  * A card bound to a world-state record shows the record: its title field as
- * the title, every other field as a line. Rebuilt from the record whenever a
- * surface redraws it, so the card says what is true now, not what was true
- * when it was sent.
+ * the title, every other field as a line, or only the fields its binding
+ * names, and one as its text when the binding names a `body`. Rebuilt from
+ * the record whenever a surface redraws it, so the card says what is true
+ * now, not what was true when it was sent.
  */
+import type { BoundRecord } from "../content/types.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import type { FieldCondition, StateRecord } from "../state/types.js";
 import { MAX_LIST_ITEMS } from "./kinds.js";
@@ -15,6 +17,8 @@ export function boundCardProps(
   props: Record<string, unknown>,
   record: StateRecord,
   titleField: string | undefined,
+  /** Which of the record's fields it shows, as the binding says (`BoundRecord`). */
+  show: Pick<BoundRecord, "fields" | "body"> = {},
 ): Record<string, unknown> {
   // The record names itself when its type has a title field, so the title
   // stays right after a rename; the agent's title is for types without one.
@@ -25,15 +29,20 @@ export function boundCardProps(
       : typeof props.title === "string" && props.title.trim()
         ? props.title
         : `${record.type} ${record.id}`;
-  const fields = Object.entries(record.data)
-    .filter(([key]) => key !== titleField)
+  const keys = show.fields ?? Object.keys(record.data).filter((key) => key !== titleField && key !== show.body);
+  const fields = keys
+    .filter((key) => record.data[key] !== undefined)
     .slice(0, MAX_CARD_FIELDS)
-    .map(([key, value]) => ({ label: key, value: typeof value === "string" ? value : JSON.stringify(value) }));
+    .map((key) => ({ label: key, value: fieldText(record.data[key]) }));
+  const body = show.body && record.data[show.body] != null ? fieldText(record.data[show.body]) : undefined;
   // The agent's other props pass through, so the kind's schema still catches
-  // a typo instead of it vanishing; its fields give way to the record's.
+  // a typo instead of it vanishing; its fields give way to the record's, and
+  // its text to the record's when the binding names one.
   const { fields: _given, ...rest } = props;
-  return { ...rest, title, ...(fields.length ? { fields } : {}) };
+  return { ...rest, title, ...(body ? { body } : {}), ...(fields.length ? { fields } : {}) };
 }
+
+const fieldText = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
 
 /** Records a list shows when its agent names no `limit`. Small: every one is a button on Discord. */
 const DEFAULT_LIST_LIMIT = 10;

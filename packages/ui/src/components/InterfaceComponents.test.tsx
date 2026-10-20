@@ -11,7 +11,7 @@ import type { ComponentSpec } from "../lib/content.js";
 const send = vi.fn();
 vi.mock("./ChatContext", () => ({ useChatStore: () => ({ send }) }));
 
-import { InterfaceComponents } from "./InterfaceComponents";
+import { boundView, InterfaceComponents } from "./InterfaceComponents";
 
 // React's act() needs to be told it is running under a test harness.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -296,6 +296,22 @@ describe("bound cards and state buttons", () => {
     expect(container.textContent).toContain("Done: Start");
     expect(fields()).toEqual(["status=active"]);
     expect(button("Start").disabled).toBe(false);
+  });
+});
+
+describe("a bound card's fields", () => {
+  it("shows only those its binding names, and one as its text, as core does", () => {
+    const data = { title: "Notes", note: "Tickets are in the top drawer.", seen: false };
+    expect(boundView({ title: "x" }, data, "title", { body: "note", fields: [] })).toEqual({
+      title: "Notes",
+      body: "Tickets are in the top drawer.",
+      fields: [],
+    });
+    expect(boundView({}, data, "title", { fields: ["seen"] }).fields).toEqual([{ label: "seen", value: "false" }]);
+    expect(boundView({}, data, "title").fields).toEqual([
+      { label: "note", value: "Tickets are in the top drawer." },
+      { label: "seen", value: "false" },
+    ]);
   });
 });
 

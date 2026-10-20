@@ -37,8 +37,12 @@ export interface ComponentSpec {
   /** The text form core wrote; what to show for a kind this UI cannot draw. */
   fallback: string;
   expiresAt?: string;
-  /** The world-state record it shows, kept current as the record changes. */
-  bind?: { type: string; id: string };
+  /**
+   * The world-state record it shows, kept current as the record changes: each
+   * of `fields` as a line (every field but the title when there are none), and
+   * `body`, when named, as its text.
+   */
+  bind?: { type: string; id: string; fields?: string[]; body?: string };
   /** The world-state query a list shows, kept current as records of its type change. */
   query?: { type: string; where?: Record<string, unknown>; limit?: number; scopes?: string[] };
 }

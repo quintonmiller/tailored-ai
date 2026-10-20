@@ -348,6 +348,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
                   updatedBy: change.actor,
                 },
                 titleField,
+                record.spec.bind,
               ),
             );
       if (message) for (const post of posts) this.editPost(post, message);

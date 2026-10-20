@@ -62,6 +62,7 @@ import { faceToFace, sideFor } from "./greet";
 import { type Fit, Handles, type Patch } from "./handles";
 import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, likesOf, seeded, stayLength } from "./idle";
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
+import { buildModel } from "./models";
 import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
 import { nearestUse, shown, type Use } from "./pick";
@@ -392,7 +393,10 @@ const WALL_KINDS = new Set([
   "screen",
   "calendar",
   "map",
+  "wall_model",
 ]);
+/** The kinds a model an agent made is, by where it goes: drawn from its parts (`models.ts`). */
+const MODEL_KINDS = new Set(["model", "wall_model", "small_model"]);
 /** What a click on a thing does when the room doesn't say: a screen and a calendar open what they show. */
 const USES: Partial<Record<string, string>> = { screen: "screen", calendar: "calendar" };
 /** Things flat on the floor, walked over. */
@@ -725,7 +729,22 @@ export async function createStage(
     // page laid on something that went with the old furniture goes with it: the page lays it again on the new.
     layer.markStale((s) => !!s.prop || !inScene(s.anchor));
     for (const prop of room.props) {
-      const built = buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label, scale: prop.scale });
+      // A model an agent made is drawn from its parts, fitted into the box the room gave it; its faces are surfaces.
+      const model = MODEL_KINDS.has(prop.kind) ? buildModel(room.models?.[prop.model ?? ""], prop.size) : undefined;
+      const built = model
+        ? { group: model.group }
+        : buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label, scale: prop.scale });
+      for (const face of model?.faces ?? [])
+        if (face.spec)
+          layer.add({
+            id: `${surfacePlace}:${prop.id}:${face.part}`,
+            anchor: face.anchor,
+            size: face.surface,
+            face: face.mesh,
+            prop,
+            component: face.spec,
+            label: prop.name ?? face.spec.kind,
+          });
       if (built.screen) {
         if (prop.kind === "screen") screens.push(built.screen);
         else if (prop.kind === "calendar") calendars.push(built.screen);

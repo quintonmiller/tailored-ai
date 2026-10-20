@@ -4,7 +4,10 @@ import {
   changeWords,
   type Edit,
   type Kinds,
+  type MadeModel,
   type Move,
+  madeByAgents,
+  madeHere,
   moveKey,
   noSteps,
   palette,
@@ -16,6 +19,7 @@ import {
   undoing,
   withYourChange,
 } from "../avatar/editing";
+import type { ModelDef } from "../avatar/models";
 import type { Room } from "../avatar/scene";
 import type { StageEdit } from "../avatar/stage";
 import { WorldPanel } from "./WorldPanel";
@@ -45,9 +49,12 @@ export interface EditablePlace {
   lent?: string[];
 }
 
-/** The record a room is kept as: without its doors, which the server works out, or anything it only borrows. */
+/**
+ * The record a room is kept as: without its doors, which the server works out, the models it is sent with, which
+ * are records of their own, or anything it only borrows.
+ */
 export function recordOf(room: Room, lent: string[] = []): Room {
-  const { doors: _doors, ...rest } = room;
+  const { doors: _doors, models: _models, ...rest } = room;
   const out: Record<string, unknown> = { ...rest };
   for (const field of lent) delete out[field];
   return out as unknown as Room;
@@ -57,6 +64,8 @@ export function recordOf(room: Room, lent: string[] = []): Room {
 interface Checked {
   place?: Room;
   item?: string;
+  /** A model it added from the catalogue, by id, so the room draws it at once. */
+  models?: Record<string, ModelDef>;
   /** Why it can't be made, in the server's words. */
   why?: string;
 }
@@ -116,12 +125,23 @@ async function readRecord(
   }
 }
 
-/** Every kind of thing, and what agents call the person: asked once, when the page first rearranges a room. */
-let kindsAsked: Promise<{ kinds: Kinds; person: string }> | undefined;
-function askKinds(): Promise<{ kinds: Kinds; person: string }> {
+/** What the catalogue offers: every kind of thing, the models agents made, and what agents call the person. */
+interface Offer {
+  kinds: Kinds;
+  models?: MadeModel[];
+  person: string;
+}
+
+/**
+ * The catalogue, asked when the page first rearranges a room, and kept while it is open; asked again each time
+ * after, since agents make new models while you aren't looking.
+ */
+let kindsAsked: Promise<Offer> | undefined;
+function askKinds(fresh = false): Promise<Offer> {
+  if (fresh) kindsAsked = undefined;
   kindsAsked ??= fetch("/api/ext/builtin:places/edit/kinds").then(async (res) => {
     if (!res.ok) throw new Error(`The kinds of thing couldn't be had (${res.status}).`);
-    return (await res.json()) as { kinds: Kinds; person: string };
+    return (await res.json()) as Offer;
   });
   kindsAsked.catch(() => {
     kindsAsked = undefined;
@@ -183,9 +203,11 @@ export interface RoomEditor {
 /** Rearranging the place on screen: `place` is it as the page last heard, undefined when it can't be rearranged. */
 export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   const [editing, setEditing] = useState(false);
-  const [kinds, setKinds] = useState<{ kinds: Kinds; person: string } | null>(null);
+  const [kinds, setKinds] = useState<Offer | null>(null);
   const [local, setLocal] = useState<Saved | null>(null);
   const [selected, setSelected] = useState<string | undefined>(undefined);
+  /** Whether the catalogue shows the models of agents this place isn't for. */
+  const [othersShown, setOthersShown] = useState(false);
   const [pending, setPending] = useState<Pending | undefined>(undefined);
   const [steps, setSteps] = useState<Steps<Room>>(noSteps);
   const [notice, setNotice] = useState<string | undefined>(undefined);
@@ -235,12 +257,23 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
     const use = l && ahead(l, p) ? l : undefined;
     return { place: p, record: recordOf(use?.room ?? p.room, p.lent), version: use?.version ?? p.version };
   };
-  /** Shown as saved: the record, with its doors and anything lent to it, as the page last had them. */
-  const asShown = (data: Room): Room => {
+  /**
+   * Shown as saved: the record, with its doors, its models (and any `added` with this change) and anything lent to
+   * it, as the page last had them.
+   */
+  const asShown = (data: Room, added?: Record<string, ModelDef>): Room => {
     const p = now.current.place;
+    const l = latest.current;
     const extra: Record<string, unknown> = {};
     for (const field of p?.lent ?? []) extra[field] = (p?.room as unknown as Record<string, unknown>)[field];
-    return { ...data, ...extra, ...(p?.room.doors ? { doors: p.room.doors } : {}) };
+    const had = { ...p?.room.models, ...(l && p && l.id === p.id ? l.room.models : {}) };
+    const models = { ...had, ...added };
+    return {
+      ...data,
+      ...extra,
+      ...(p?.room.doors ? { doors: p.room.doors } : {}),
+      ...(Object.keys(models).length ? { models } : {}),
+    };
   };
 
   // Changes go one at a time, each made to the room as the last left it: a quick second drag never writes over the
@@ -256,8 +289,8 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   const start = useCallback(() => {
     setEditing(true);
     setNotice(undefined);
-    // Picking and adding wait for the kinds of thing, asked once; if they can't be had, the bar says why.
-    askKinds()
+    // Picking and adding wait for the kinds of thing; if they can't be had, the bar says why.
+    askKinds(true)
       .then(setKinds)
       .catch((err: unknown) => setNotice(err instanceof Error ? err.message : String(err)));
   }, []);
@@ -302,7 +335,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
    * pick after. Written with the version `c` was at, so a change anyone made
    * while the server was being asked isn't written over.
    */
-  const save = async (c: Base, edit: Edit, after: Room, picked?: string) => {
+  const save = async (c: Base, edit: Edit, after: Room, picked?: string, added?: Record<string, ModelDef>) => {
     const k = now.current.kinds;
     if (!k) return;
     const what = changeWords(edit, c.record, after);
@@ -312,7 +345,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
       // Your changes before this one stay yours to take back only if nobody changed the room in between.
       const onMine = wrote.current?.id === c.place.id && wrote.current.version === c.version;
       wrote.current = { id: c.place.id, version };
-      keep({ id: c.place.id, room: asShown(data), version });
+      keep({ id: c.place.id, room: asShown(data, added), version });
       now.current.steps = stepped(onMine ? now.current.steps : noSteps(), {
         before: c.record,
         after: data,
@@ -338,7 +371,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         setNotice(made.why);
         return;
       }
-      await save(c, edit, made.place, pick ? (pick(made) ?? "") : undefined);
+      await save(c, edit, made.place, pick ? (pick(made) ?? "") : undefined, made.models);
     });
 
   // What the server said about each place a thing was dragged to, while the room stays at one version.
@@ -454,6 +487,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
     if (prop) void change({ op: "color", item: prop.id, color });
   };
   const add = (kind: string) => void change({ op: "add", kind }, (made) => made.item);
+  const addModel = (model: string) => void change({ op: "add", kind: "model", model }, (made) => made.item);
 
   // Undo and redo write over the version your last write left, not the newest the page has heard: if anyone changed
   // the room since, the server says so, and theirs stands.
@@ -561,6 +595,13 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   const picked = thing(selected);
   const swatches = useMemo(() => (shown ? palette(shown) : []), [shown]);
   const groups = useMemo(() => (kinds ? catalogue(kinds.kinds) : []), [kinds]);
+  const here = useMemo(() => (id && shown ? madeHere(id, shown) : []), [id, shown]);
+  const made = useMemo(
+    () => (kinds ? madeByAgents(kinds.models ?? [], kinds.kinds, here) : { here: [], others: [] }),
+    [kinds, here],
+  );
+  // A model keeps its parts' own colours: there is nothing to repaint.
+  const fixedColours = !!picked?.model;
   const hangs = !!picked && kinds?.kinds[picked.kind]?.mount === "wall";
   // A thing being put somewhere it can't go says why; otherwise the last thing the server or a save said.
   const said = pending?.fits === false ? pending.why : notice;
@@ -629,7 +670,7 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
           Remove
         </button>
       </div>
-      <fieldset className="room-edit-swatches" aria-label="Colours" disabled={off}>
+      <fieldset className="room-edit-swatches" aria-label="Colours" disabled={off || fixedColours}>
         {swatches.map((s) => (
           <button
             key={s.color}
@@ -664,6 +705,41 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         <p className="world-panel-quiet">
           Pick one: it goes somewhere free near the middle, ready to drag where you want it.
         </p>
+        {/* What the agents made first: this place's own agents' things, and everyone else's folded until asked for. */}
+        {made.here.length + made.others.length > 0 && (
+          <section className="room-edit-group" aria-label="Made by agents">
+            <h3>Made by agents</h3>
+            <div className="room-edit-kinds">
+              {[...made.here, ...(othersShown ? made.others : [])].map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  disabled={busy}
+                  title={[m.about, m.goes ? `Goes ${m.goes}` : undefined].filter(Boolean).join(" · ") || undefined}
+                  onClick={() => addModel(m.id)}
+                >
+                  {m.label.charAt(0).toUpperCase() + m.label.slice(1)}
+                  <span className="room-edit-goes">
+                    by {m.by}
+                    {m.goes ? ` · ${m.goes}` : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {made.others.length > 0 && (
+              <button
+                type="button"
+                className="world-panel-inline world-panel-link room-edit-more"
+                aria-expanded={othersShown}
+                onClick={() => setOthersShown((v) => !v)}
+              >
+                {othersShown
+                  ? "Fewer"
+                  : `${made.here.length ? "More by other agents" : "By agents"} (${made.others.length})`}
+              </button>
+            )}
+          </section>
+        )}
         {groups.map((g) => (
           <section key={g.id} className="room-edit-group" aria-label={g.label}>
             <h3>{g.label}</h3>

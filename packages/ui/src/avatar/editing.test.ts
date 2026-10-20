@@ -6,6 +6,8 @@ import {
   footprint,
   GROUPS,
   type Kinds,
+  madeByAgents,
+  madeHere,
   noSteps,
   onFloor,
   onTop,
@@ -156,6 +158,63 @@ describe("the catalogue", () => {
         .sort(),
     );
     expect(new Set(GROUPS.flatMap((g) => g.kinds)).size).toBe(GROUPS.flatMap((g) => g.kinds).length);
+  });
+
+  it("offers agents' models by their own names and whose they are, never a blank model among the decor", () => {
+    const withModels: Kinds = {
+      ...kinds,
+      model: { noun: "model", mount: "floor", footprint: [0.5, 0.5], height: 0.5, shaped: true },
+      wall_model: { noun: "model", mount: "wall", footprint: [0.5, 0.05], height: 0.5, shaped: true },
+    };
+    expect(catalogue(withModels).flatMap((g) => g.kinds.map((k) => k.kind))).not.toContain("model");
+    expect(catalogue(withModels).flatMap((g) => g.kinds.map((k) => k.kind))).not.toContain("wall_model");
+    expect(
+      madeByAgents(
+        [
+          { id: "planner:reading_nook", name: "reading_nook", owner: "planner", kind: "model", size: [1, 1, 1] },
+          {
+            id: "planner:todo_board",
+            name: "todo_board",
+            owner: "planner",
+            kind: "wall_model",
+            size: [1.1, 0.8, 0.1],
+            faces: 1,
+            about: "A to-do list",
+          },
+        ],
+        withModels,
+        ["planner"],
+      ),
+    ).toEqual({
+      here: [
+        { id: "planner:reading_nook", label: "reading nook", by: "planner" },
+        { id: "planner:todo_board", label: "todo board", by: "planner", goes: "on a wall", about: "A to-do list" },
+      ],
+      others: [],
+    });
+  });
+
+  it("offers the models of whoever a place is for first, and everyone else's apart", () => {
+    const made = (owner: string) => ({
+      id: `${owner}:todo_board`,
+      name: "todo_board",
+      owner,
+      kind: "model",
+      size: [1, 1, 1] as [number, number, number],
+    });
+    const offered = madeByAgents([made("writer"), made("planner"), made("reviewer")], kinds, ["planner"]);
+    expect(offered.here.map((m) => m.by)).toEqual(["planner"]);
+    expect(offered.others.map((m) => m.by)).toEqual(["writer", "reviewer"]);
+    // A home is its agent's; any place is for the agents whose models are in it already.
+    const def = {
+      name: "lamp",
+      owner: "writer",
+      mount: "floor" as const,
+      parts: [],
+      size: [1, 1, 1] as [number, number, number],
+    };
+    expect(madeHere("home:planner", { models: { "writer:lamp": def } }).sort()).toEqual(["planner", "writer"]);
+    expect(madeHere("room:discord:123", {})).toEqual([]);
   });
 });
 

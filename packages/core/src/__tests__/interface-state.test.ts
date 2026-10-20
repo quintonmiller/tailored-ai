@@ -132,6 +132,50 @@ describe("boundCardProps", () => {
     expect(boundCardProps({ title: "Mine" }, record({ status: "draft" }), undefined).title).toBe("Mine");
     expect(boundCardProps({}, record({ status: "draft" }), undefined).title).toBe("plan trip");
   });
+
+  it("shows only the fields its binding names, in that order, and the one it names as its text", () => {
+    const data = { name: "Lisbon", status: "draft", nights: 4, summary: "A week by the sea", token: "x1" };
+    expect(
+      boundCardProps({ title: "T" }, record(data), "name", { fields: ["nights", "status", "gone"], body: "summary" }),
+    ).toEqual({
+      title: "Lisbon",
+      body: "A week by the sea",
+      fields: [
+        { label: "nights", value: "4" },
+        { label: "status", value: "draft" },
+      ],
+    });
+    // Its text named and no fields: every other field, but not its text again.
+    expect(
+      boundCardProps({}, record({ name: "L", summary: "S", status: "draft" }), "name", { body: "summary" }),
+    ).toEqual({ title: "L", body: "S", fields: [{ label: "status", value: "draft" }] });
+    expect(boundCardProps({}, record({ name: "L", status: "draft" }), "name", { fields: [] })).toEqual({ title: "L" });
+  });
+});
+
+describe("a card naming which of its record's fields it shows", () => {
+  it("keeps what it names on the card, so it shows the same however often it is redrawn", async () => {
+    await state.patch(system, { type: "plan", id: "trip" }, { note: "Pack light." });
+    const sent = await run({
+      action: "send",
+      kind: "card",
+      bind: { type: "plan", id: "trip", fields: ["status"], body: "note" },
+    });
+    expect(sent.success, sent.error).toBe(true);
+    const spec = sentSpec(sent.output);
+    expect(spec.bind).toEqual({ type: "plan", id: "trip", fields: ["status"], body: "note" });
+    expect(spec.props).toEqual({
+      title: "Lisbon trip",
+      body: "Pack light.",
+      fields: [{ label: "status", value: "draft" }],
+    });
+    const updated = await run({ action: "update", id: spec.id, props: {} });
+    expect(updated.success, updated.error).toBe(true);
+    expect(store.get(spec.id)?.spec.bind).toEqual(spec.bind);
+    expect(store.get(spec.id)?.spec.props.body).toBe("Pack light.");
+    const wrong = await run({ action: "send", kind: "card", bind: { type: "plan", id: "trip", fields: [1] } });
+    expect(wrong.error).toMatch(/`bind.fields` is a list/);
+  });
 });
 
 describe("pressing a state button", () => {

@@ -25,6 +25,7 @@ import {
 import type { Cue } from "../avatar/cues";
 import type { AgentActivity } from "../avatar/doing";
 import type { TaskMove } from "../avatar/Faces";
+import { MODEL_TYPE, type ModelDef } from "../avatar/models";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
@@ -103,6 +104,8 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
     if (!enabled) return;
     let gone = false;
     let id: string | undefined;
+    // The room as last shown, for whether a model that changed is drawn in it.
+    let shown: Room = DEFAULT_ROOM;
     // Only the latest answer counts: an older one arriving late would show the room as it was. A whole answer
     // still owed when a later ask is for the doors alone is taken whole.
     let asked = 0;
@@ -127,6 +130,7 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
             looks: looksIn(body, body?.id),
             ...recordOfPlace(body),
           };
+          shown = next.room;
           setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
         })
         .catch(() => {
@@ -136,19 +140,24 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
     void load();
     const off = subscribeStateChanges((change) => {
       // Someone came or went, maybe this agent itself: where it is and who is there are asked again. And for
-      // someone choosing what a body here wears, or how it looks and carries itself.
+      // someone choosing what a body here wears, or how it looks and carries itself, making over a model that stands
+      // here, or changing a record a face here shows, so its picture from across the room says what is true now.
       if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
+      else if (drawsModel(shown, change) || facesShow(shown, change.type)) void load();
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
-        // Shown as changed at once; and since where its door goes depends on what is in it, asked again for that.
+        // Shown as changed at once; and since where its door goes depends on what is in it, asked again for that,
+        // and whole for a model it has now that the page hasn't been sent.
+        const next = withModels(change.after as unknown as Room, shown);
+        shown = next.room;
         setScene((s) => ({
           ...s,
           // As on a visit: a meeting room's purpose stays its room's while the record has none of its own.
-          room: { ...lentTo(change.after as unknown as Room, s), doors: s.room.doors },
+          room: { ...lentTo(next.room, s), doors: s.room.doors },
           version: change.version,
         }));
-        void load(true);
+        void load(!next.missing);
       }
     });
     return () => {
@@ -181,7 +190,36 @@ export interface SceneInfo {
 /** The room the server sent, with its doors; the built-in room when it sent none. */
 export function roomOf(info: PlaceInfo | null | undefined): Room {
   if (!info?.place) return DEFAULT_ROOM;
-  return info.doors?.length ? { ...info.place, doors: info.doors } : info.place;
+  const models = info.models && Object.keys(info.models).length ? { models: info.models } : {};
+  return info.doors?.length ? { ...info.place, doors: info.doors, ...models } : { ...info.place, ...models };
+}
+
+/**
+ * A place's record as it changed, drawn with the models it had: and whether
+ * that is enough, or it now has a model the page hasn't been sent and has to
+ * be asked for again.
+ */
+export function withModels(record: Room, was: Room): { room: Room; missing: boolean } {
+  const models = was.models;
+  const missing = record.props.some((p) => p.model && !models?.[p.model]);
+  return { room: models ? { ...record, models } : record, missing };
+}
+
+/** Whether a change is to a model drawn in the room: it is asked for again, to show it as it is now. */
+export function drawsModel(room: Room, change: { type: string; id: string }): boolean {
+  return change.type === MODEL_TYPE && room.props.some((p) => p.model === change.id);
+}
+
+/**
+ * Whether a face on a model in the room shows records of this type: a list's
+ * or a table's, or a card's record. The room is asked for again when one
+ * changes, so the face's picture from across the room is drawn from the
+ * records as they are now.
+ */
+export function facesShow(room: Room, type: string): boolean {
+  return Object.values(room.models ?? {}).some((m) =>
+    m.parts?.some((p) => p.face?.spec?.query?.type === type || p.face?.spec?.bind?.type === type),
+  );
 }
 
 const areaOf = (info: PlaceInfo | null | undefined) => (info?.area ? { area: info.area } : {});
@@ -915,6 +953,7 @@ export function useScene(id: string | null): SceneInfo | null {
     // As for the agent's own place (`useRoom`): the latest answer only, and a whole one if one is owed.
     let asked = 0;
     let owed = false;
+    let shown: Room = DEFAULT_ROOM;
     /** Ask for the place; `ifDoorsMoved`, only take the answer when its doors aren't where they were. */
     const load = (ifDoorsMoved = false) => {
       const n = ++asked;
@@ -926,6 +965,7 @@ export function useScene(id: string | null): SceneInfo | null {
           if (gone || n !== asked) return;
           owed = false;
           const next = { room: roomOf(body), company: companyOf(body), id, ...areaOf(body), ...recordOfPlace(body) };
+          shown = next.room;
           setScene((s) => (doorsOnly && s && sameDoors(s.room.doors, next.room.doors) ? s : steady(s, next)));
         })
         .catch(() => {
@@ -935,6 +975,7 @@ export function useScene(id: string | null): SceneInfo | null {
     void load();
     const off = subscribeStateChanges((change) => {
       if (comeOrGone(change.type) || change.type === WEAR_TYPE || change.type === BODY_TYPE) void load();
+      else if (drawsModel(shown, change) || facesShow(shown, change.type)) void load();
       // A place made, gone, or moved to another area elsewhere may add or take away a door here.
       if (
         change.type === "place" &&
@@ -945,17 +986,19 @@ export function useScene(id: string | null): SceneInfo | null {
       if (change.type !== "place" || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
       else {
+        const next = withModels(change.after as unknown as Room, shown);
+        shown = next.room;
         setScene((s) =>
           s
             ? {
                 ...s,
                 // A meeting room's purpose is its room's until its members give it one: still lent, if the record has none.
-                room: { ...lentTo(change.after as unknown as Room, s), doors: s.room.doors },
+                room: { ...lentTo(next.room, s), doors: s.room.doors },
                 version: change.version,
               }
             : s,
         );
-        void load(true);
+        void load(!next.missing);
       }
     });
     return () => {
@@ -1013,6 +1056,8 @@ export interface PlaceInfo extends Omit<BodyLooks, "wear"> {
   scope?: string;
   editable?: boolean;
   lent?: string[];
+  /** The models agents made that things in it are, by record id, each face with its component. */
+  models?: Record<string, ModelDef>;
 }
 
 /**

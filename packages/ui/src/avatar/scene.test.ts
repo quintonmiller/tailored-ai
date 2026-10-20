@@ -503,6 +503,61 @@ describe("what a change did to a room's things", () => {
     expect(roomChanges(before, before)).toEqual({ fresh: new Set(), moved: new Map() });
   });
 
+  it("grows in again a model made over since, wherever it stands", () => {
+    const shelf = {
+      id: "shelf",
+      name: "the bookcase",
+      kind: "model" as const,
+      model: "planner:bookcase",
+      at: [0, 0] as [number, number],
+      facing: 0,
+    };
+    const def = {
+      name: "bookcase",
+      owner: "planner",
+      mount: "floor" as const,
+      size: [1, 2, 0.3] as [number, number, number],
+      parts: [],
+    };
+    const before: Room = { ...DEFAULT_ROOM, props: [shelf], models: { "planner:bookcase": def } };
+    const after: Room = { ...before, models: { "planner:bookcase": { ...def, size: [1, 2.2, 0.3] } } };
+    expect([...roomChanges(before, after).fresh]).toEqual(["shelf"]);
+    expect(roomChanges(before, { ...before }).fresh.size).toBe(0);
+  });
+
+  it("doesn't grow in again a model whose face only shows other records now", () => {
+    const board = {
+      id: "board",
+      name: "the todo board",
+      kind: "wall_model" as const,
+      model: "planner:todo_board",
+      at: [0, -2] as [number, number],
+      facing: 0,
+    };
+    const face = (items: string[]) => ({
+      kind: "list",
+      spec: { id: "c-1", kind: "list", props: { title: "To do", items }, fallback: "" },
+    });
+    const def = (items: string[]) => ({
+      name: "todo_board",
+      owner: "planner",
+      mount: "wall" as const,
+      size: [1.1, 0.8, 0.09] as [number, number, number],
+      parts: [
+        {
+          shape: "box" as const,
+          size: [1, 0.7, 0.01] as [number, number, number],
+          at: [0, 0.4, 0.05] as [number, number, number],
+          color: "#f6f1e3",
+          face: face(items),
+        },
+      ],
+    });
+    const before: Room = { ...DEFAULT_ROOM, props: [board], models: { "planner:todo_board": def([]) } };
+    const after: Room = { ...before, models: { "planner:todo_board": def(["Book the ferry"]) } };
+    expect(roomChanges(before, after).fresh.size).toBe(0);
+  });
+
   it("shows nothing changing on going to another place, or on the first room after the stand-in", () => {
     // Two homes drawn from the same kit: a plant and a lamp in each, in different spots.
     const home = (x: number): Room => ({

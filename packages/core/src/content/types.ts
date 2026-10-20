@@ -74,6 +74,20 @@ export interface ActionSpec {
 }
 
 /**
+ * The world-state record a card shows, and how: its title field as the title,
+ * then each of `fields` as a line (every other field when there are none), and
+ * `body`, when named, as the card's text rather than a line.
+ */
+export interface BoundRecord {
+  type: string;
+  id: string;
+  /** The record's fields to show as lines, in order. Unset: every field but the title and `body`. */
+  fields?: string[];
+  /** The record's field shown as the card's text, unlabelled: a note's own words. */
+  body?: string;
+}
+
+/**
  * An interface an agent sent: a question with choices, a form, a
  * confirmation, a card. Data, not code — each surface owns how a kind is
  * drawn, and every kind has a text form that works anywhere.
@@ -99,7 +113,7 @@ export interface ComponentSpec {
    * it from the record whenever the record changes; the props hold the record
    * as it was when the component was sent.
    */
-  bind?: { type: string; id: string };
+  bind?: BoundRecord;
   /**
    * The world-state query a list shows: every record of `type` matching
    * `where`, up to `limit`, among the scopes its agent could see when it sent

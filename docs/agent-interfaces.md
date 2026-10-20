@@ -86,6 +86,12 @@ interface(action: "send", kind: "card",
   the agent gives are left out, and it is told so, since the record supplies
   them; a local model copied the record into `fields` on every run, and a
   refusal cost it a round each time.
+- **Choosing what it shows:** `bind.fields` names the record's fields to
+  show, in that order, and `bind.body` one to show as the card's text, with
+  no label: `bind: { type: "note", id: "fridge", body: "note", fields: [] }`
+  shows the note's own words under its title and nothing else, not a `seen`
+  flag its button writes. The choice is kept with the card, so every redraw
+  shows the same.
 - **Who can bind what:** the record is read as the agent, so a card can only
   show what the agent's own `state` tool could read. A record it can't see is
   refused, with the same sentence the tool would give.
