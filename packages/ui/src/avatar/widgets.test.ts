@@ -27,6 +27,7 @@ import {
   statusGlance,
   tickerFromSpeech,
   tickerFromTranscript,
+  tickerGlance,
   todoFor,
   todoTitle,
   type WorldData,
@@ -75,11 +76,12 @@ describe("who is doing what", () => {
 
   it("puts every agent in the group for what it is doing, in the order the board shows them", () => {
     const groups = whoGroups(activities, ["newcomer"], NOW);
-    expect(groups.map((g) => g.id)).toEqual(["waiting", "working", "talking", "idle", "asleep"]);
+    expect(groups.map((g) => g.id)).toEqual(["waiting", "stuck", "working", "talking", "idle", "asleep"]);
     const of = (id: string) => groups.find((g) => g.id === id)?.rows.map((r) => r.agent);
-    // Waiting longest first; busy longest at it first, stuck counted as at work.
+    // Waiting longest first; a failed turn apart from the busy, since it needs a person too; busy longest at it first.
     expect(of("waiting")).toEqual(["reviewer", "tester"]);
-    expect(of("working")).toEqual(["coder", "planner", "writer"]);
+    expect(of("stuck")).toEqual(["coder"]);
+    expect(of("working")).toEqual(["planner", "writer"]);
     expect(of("talking")).toEqual([]);
     // Idle by what it did last, newest first; one never heard from last.
     expect(of("idle")).toEqual(["sorter", "mailer", "newcomer"]);
@@ -96,9 +98,14 @@ describe("who is doing what", () => {
 
   it("from across a room: how many are busy, and who waits on you", () => {
     const card = statusGlance(whoGroups(activities, [], NOW));
-    expect(card.big).toMatchObject({ text: "3 busy", tone: "warn" });
-    expect(card.big?.sub).toContain("2 waiting on you");
+    expect(card.big).toMatchObject({ text: "2 busy", tone: "bad" });
+    expect(card.big?.sub).toContain("2 waiting on you · 1 stuck");
     expect(card.rows?.[0]).toMatchObject({ text: "reviewer", tag: { text: "you" } });
+    const { reviewer: _r, tester: _t, ...unasked } = activities;
+    expect(statusGlance(whoGroups(unasked, [], NOW)).rows?.[0]).toMatchObject({
+      text: "coder",
+      tag: { text: "stuck" },
+    });
     expect(statusGlance(whoGroups({}, ["a"], NOW)).big).toMatchObject({ text: "All quiet", tone: "dim" });
   });
 });
@@ -237,6 +244,26 @@ describe("a room ticker", () => {
     ]);
     expect(lines.map((l) => l.id)).toEqual(["3", "1"]);
     expect(lines[1]).not.toHaveProperty("agent");
+    expect(lines[1]).not.toHaveProperty("room");
+    // Said in the same second, the later line still comes first.
+    const same = tickerFromTranscript([
+      { id: "a", who: "reviewer", text: "Two fixes", at: ago(1) },
+      { id: "b", who: "writer", text: "Fixed both", at: ago(1) },
+    ]);
+    expect(same.map((l) => l.id)).toEqual(["b", "a"]);
+  });
+
+  it("takes every room's lines with the room each was said in, kept apart where two rooms' ids are the same", () => {
+    const lines = tickerFromTranscript([
+      { id: "7", who: "sam", text: "Window seats", at: ago(9), roomName: "trip" },
+      { id: "7", who: "writer", agent: "writer", text: "Under budget", at: ago(2), roomName: "budget" },
+    ]);
+    expect(lines.map((l) => [l.room, l.text])).toEqual([
+      ["budget", "Under budget"],
+      ["trip", "Window seats"],
+    ]);
+    expect(new Set(lines.map((l) => l.id)).size).toBe(2);
+    expect(tickerGlance(lines, "Every room").rows?.[0]?.meta).toBe("writer · #budget");
   });
 });
 
@@ -290,6 +317,12 @@ describe("what a widget shows from across a room", () => {
     expect(glanceFor({ face: "dashboard" }, world())).toBeUndefined();
   });
 
+  it("leaves out a ticker's name in the meeting room it shows, so its line has the strip", () => {
+    expect(glanceFor({ face: "ticker" }, world())?.title).toBe("#trip");
+    const here = world({ ticker: () => ({ title: "#trip", here: true, lines: [] }) });
+    expect(glanceFor({ face: "ticker" }, here)?.title).toBe("");
+  });
+
   it("narrows to whose place it is", () => {
     const feed: FeedItem[] = [
       { id: "1", kind: "turn", agent: "writer", text: "x", at: ago(1) },
@@ -307,8 +340,10 @@ describe("what a widget shows from across a room", () => {
 
   it("goes through a chart's four measures by the clock unless it was given one", () => {
     expect(chartMeasure("time", 0)).toBe("time");
+    // On the minute, as the page's clock for the widgets moves.
     expect(chartMeasure(undefined, 0)).toBe("tokens");
-    expect(chartMeasure(undefined, 15_000)).toBe("turns");
-    expect(chartMeasure(undefined, 60_000)).toBe("tokens");
+    expect(chartMeasure(undefined, 60_000)).toBe("turns");
+    expect(chartMeasure(undefined, 3 * 60_000)).toBe("time");
+    expect(chartMeasure(undefined, 4 * 60_000)).toBe("tokens");
   });
 });

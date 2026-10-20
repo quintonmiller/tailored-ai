@@ -27,7 +27,7 @@ export interface FeedItem {
   /** More, when there is: what a search was for, which room. */
   detail?: string;
   at: string;
-  /** The room a post went to, by `<backend>:<id>`. */
+  /** The room a post went to, as the agent named it in the call. */
   room?: string;
   /** The task it finished. */
   task?: string;
@@ -141,7 +141,8 @@ export function recentFeed(
       if (call.name === "room" && (action === "post" || action === "dm")) {
         const said = glimpse(call.args.body ?? call.args.message ?? call.args.text);
         const room = typeof call.args.room === "string" ? call.args.room : undefined;
-        const to = typeof call.args.agent === "string" ? call.args.agent : undefined;
+        // Who a message went to, under any of the names the room tool takes it by.
+        const to = [call.args.agent, call.args.to, call.args.member].find((v): v is string => typeof v === "string");
         out.push({
           id,
           kind: "post",

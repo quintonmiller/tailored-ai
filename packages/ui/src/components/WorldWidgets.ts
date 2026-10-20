@@ -20,15 +20,20 @@ import {
   tickerFromTranscript,
   type WallPhoto,
 } from "../avatar/widgets";
-import type { MapPlace } from "../lib/wayfinding";
+import { isCommon, type MapPlace } from "../lib/wayfinding";
 
 /** How often the widgets ask again for what they show. */
 export const WIDGET_REFRESH_MS = 60_000;
 
+/** Nothing yet, the same object each time, so what is made from it isn't made again. */
+const NOTHING: Loaded<never> = {};
+
 /**
  * A JSON endpoint, asked for while `enabled` and again every minute (and
  * whenever `again` changes): what it last sent, and why the last ask failed.
- * Answers that arrive after a newer ask are let go.
+ * Answers that arrive after a newer ask are let go, and what came from
+ * another URL is never shown for this one: a ticker walked from one meeting
+ * room to the next starts empty rather than showing the last room's lines.
  */
 export function usePolled<T>(
   url: string | undefined,
@@ -36,7 +41,7 @@ export function usePolled<T>(
   pick: (body: unknown) => T,
   again?: unknown,
 ): Loaded<T> {
-  const [got, setGot] = useState<Loaded<T>>({});
+  const [got, setGot] = useState<{ url?: string; loaded: Loaded<T> }>({ loaded: NOTHING });
   const pickRef = useRef(pick);
   pickRef.current = pick;
   // biome-ignore lint/correctness/useExhaustiveDependencies: `again` changing is how a caller asks again sooner.
@@ -50,10 +55,11 @@ export function usePolled<T>(
         const res = await fetch(url);
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
         const data = pickRef.current(await res.json());
-        if (!gone && n === asked) setGot({ data });
+        if (!gone && n === asked) setGot({ url, loaded: { data } });
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
-        if (!gone && n === asked) setGot((was) => ({ ...was, error }));
+        if (!gone && n === asked)
+          setGot((was) => ({ url, loaded: was.url === url ? { ...was.loaded, error } : { error } }));
       }
     };
     void load();
@@ -65,14 +71,16 @@ export function usePolled<T>(
   }, [url, enabled, again]);
   // Going to a place with none of these widgets and back starts afresh rather than showing what is long gone.
   useEffect(() => {
-    if (!enabled) setGot({});
+    if (!enabled) setGot({ loaded: NOTHING });
   }, [enabled]);
-  return got;
+  return got.url === url ? got.loaded : NOTHING;
 }
 
 const itemsOf = (body: unknown) => ((body as { items?: FeedItem[] })?.items ?? []) as FeedItem[];
 const photosOf = (body: unknown) => ((body as { photos?: WallPhoto[] })?.photos ?? []) as WallPhoto[];
 const statsOf = (body: unknown) => body as StatsData;
+type RoomLines = { id: string; who: string; agent?: string; text: string; at: string; roomName?: string }[];
+const linesOf = (body: unknown) => ((body as { lines?: RoomLines })?.lines ?? []) as RoomLines;
 
 /** Which widgets the things in a place show, as their faces and what each is of. */
 export function facesIn(props: Prop[]): FaceChoice[] {
@@ -94,10 +102,11 @@ export function tickerRoom(arg: string | undefined, places: MapPlace[]): MapPlac
 /**
  * The fetched half of what the widgets in a place show: the feed, the
  * numbers behind the charts, the photos, the transcripts of the rooms its
- * tickers show, and the projects' names; each asked for only when a widget
- * in the place needs it. `speech` is what each agent last said, for a
- * ticker of every room; `newest` the time of the latest line in a room, to
- * read its transcript again as soon as someone says something there.
+ * tickers show (every room's latest lines, for a ticker of every room), and
+ * the projects' names; each asked for only when a widget in the place needs
+ * it. `speech` is what each agent last said, for a ticker of a room the
+ * place doesn't read on a schedule, and the time of the latest line in a
+ * room, to read its transcript again as soon as someone says something.
  */
 export function useWidgetFeeds(opts: {
   enabled: boolean;
@@ -124,6 +133,9 @@ export function useWidgetFeeds(opts: {
 
   // The room a ticker shows with nothing named: the meeting room it hangs in. One named elsewhere: that room.
   const own = placeId?.startsWith("room:") ? placeId : undefined;
+  // Outside a meeting room, a ticker with nothing named shows every room, from the server's gathering of their lines.
+  const everyRoom = !own && faces.some((f) => f.face === "ticker" && !f.arg);
+  const lately = usePolled("/api/ext/builtin:places/lines", enabled && everyRoom, linesOf);
   const rooms = useMemo(() => {
     const ids = new Set<string>();
     for (const f of faces) {
@@ -155,8 +167,14 @@ export function useWidgetFeeds(opts: {
           title: `#${transcript.data?.name ?? places.find((p) => p.id === first)?.name ?? ref ?? "room"}`,
           lines: tickerFromTranscript(transcript.data?.lines ?? []),
           ...(transcript.error ? { error: transcript.error } : {}),
+          ...(first === own ? { here: true } : {}),
         }
       : undefined;
+    const every: TickerData = {
+      title: "Every room",
+      lines: tickerFromTranscript(lately.data ?? []),
+      ...(lately.error ? { error: lately.error } : {}),
+    };
     return (arg?: string): TickerData => {
       const named = tickerRoom(arg, places);
       const id = named?.id ?? (arg ? undefined : own);
@@ -166,9 +184,9 @@ export function useWidgetFeeds(opts: {
         const name = named?.name ?? places.find((p) => p.id === id)?.name ?? id.slice("room:".length);
         return { title: `#${name}`, lines: tickerFromSpeech(speech, id.slice("room:".length)) };
       }
-      return { title: arg ? `No room called “${arg}”` : "Every room", lines: arg ? [] : tickerFromSpeech(speech) };
+      return arg ? { title: `No room called “${arg}”`, lines: [] } : every;
     };
-  }, [first, ref, transcript, places, own, speech]);
+  }, [first, ref, transcript, places, own, speech, lately]);
 
   const [projects, setProjects] = useState<Record<string, string>>({});
   const boards = shows.has("tasks");
@@ -195,10 +213,11 @@ export function useWidgetFeeds(opts: {
 /**
  * Whose things the widgets in a place show: a home's owner's; a meeting
  * room's members', wherever their bodies are; whoever is there in a shared
- * place; and everyone's in the lobby, or anywhere nobody is.
+ * place; and everyone's on the square and in the town hall's lobby, as their
+ * boards and calendars show, or anywhere nobody is.
  */
 export function whoseIn(placeId: string | undefined, here: string[], places: MapPlace[]): string[] | undefined {
-  if (!placeId || placeId === "lobby") return undefined;
+  if (!placeId || isCommon(placeId)) return undefined;
   if (placeId.startsWith("home:")) return [placeId.slice("home:".length)];
   const members = placeId.startsWith("room:") ? places.find((p) => p.id === placeId)?.members : undefined;
   if (members?.length) return members;

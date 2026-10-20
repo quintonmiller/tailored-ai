@@ -106,6 +106,25 @@ describe("the feed", () => {
     expect(recentFeed(db, describeTool, { limit: 500 }).find((i) => i.kind === "tool")?.detail).toBe("tram 28");
   });
 
+  it("says who a message went to, under any name the room tool takes it by", () => {
+    session("s1", "planner");
+    message(
+      "s1",
+      "assistant",
+      null,
+      [{ id: "c1", name: "room", arguments: { action: "dm", to: "writer", body: "Draft?" } }],
+      3,
+    );
+    message(
+      "s1",
+      "assistant",
+      null,
+      [{ id: "c2", name: "room", arguments: { action: "dm", member: "reviewer", body: "Ready" } }],
+      2,
+    );
+    expect(recentFeed(db, describeTool).map((i) => i.detail)).toEqual(["to reviewer", "to writer"]);
+  });
+
   it("cuts what was said to its first line with words in it", () => {
     expect(glimpse("\n\n  First   line  \nsecond")).toBe("First line");
     expect(glimpse("x".repeat(200), 10)).toBe(`${"x".repeat(9)}…`);
@@ -180,9 +199,9 @@ describe("time by activity", () => {
     expect(timeKey({ doing: "asleep", what: "asleep" })).toBeUndefined();
   });
 
-  it("is tallied by the activity tracker as one activity gives way to the next", async () => {
-    const events = new TypedEventBus();
-    const state = new StateService({
+  /** The activity records a tracker writes, kept in memory as the plugin keeps them. */
+  const activityState = () =>
+    new StateService({
       getConfig: () => ({
         state: {
           backend: "sqlite",
@@ -199,6 +218,10 @@ describe("time by activity", () => {
       }),
       db,
     });
+
+  it("is tallied by the activity tracker as one activity gives way to the next", async () => {
+    const events = new TypedEventBus();
+    const state = activityState();
     let now = t0;
     const tally = new TimeTally(t0 - H);
     const tracker = new ActivityTracker({
@@ -219,5 +242,32 @@ describe("time by activity", () => {
     const rows = tally.rows([], now);
     expect(rows).toEqual([{ hour: "2026-10-20T09:00:00Z", agent: "planner", what: "thinking", ms: 4 * 60_000 }]);
     tracker.stop();
+  });
+
+  it("counts what a stopped tracker was in the middle of once, however long it is still asked", async () => {
+    // A reload stops the tracker and starts another; anything still holding the old one reads nothing ongoing.
+    const events = new TypedEventBus();
+    const state = activityState();
+    let now = t0;
+    const tally = new TimeTally(t0 - H);
+    const first = new ActivityTracker({
+      events,
+      state: () => state,
+      agents: () => ["planner"],
+      asleep: () => null,
+      settleMs: 0,
+      tally,
+      now: () => new Date(now),
+    });
+    await first.start();
+    events.emit("agent.turn_started", { sessionId: "s1", agent: "planner", projectId: null });
+    await first.settled();
+    now = t0 + 4 * 60_000;
+    first.stop();
+    now = t0 + 10 * 60_000;
+    expect(first.ongoing()).toEqual([]);
+    expect(tally.rows(first.ongoing(), now)).toEqual([
+      { hour: "2026-10-20T09:00:00Z", agent: "planner", what: "thinking", ms: 4 * 60_000 },
+    ]);
   });
 });

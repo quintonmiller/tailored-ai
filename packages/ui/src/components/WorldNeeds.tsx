@@ -8,7 +8,7 @@ import {
 } from "../api";
 import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
-import { answerable, type Need, ownFlow, questionIn } from "../lib/needs";
+import { ANSWERED_ELSEWHERE, answerable, type Need, ownFlow, questionIn } from "../lib/needs";
 import { lasting } from "../lib/tasks";
 import { ApprovalArgs } from "./ApprovalArgs";
 import { WorldPanel } from "./WorldPanel";
@@ -254,7 +254,7 @@ function ApprovalNeed({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approved, ...(why ? { reason: why } : {}) }),
       });
-      if (res.status === 404) onDone("Already answered somewhere else.");
+      if (res.status === 404) onDone(ANSWERED_ELSEWHERE);
       else if (!res.ok) throw new Error(`the server said ${res.status}`);
       else
         onDone(

@@ -74,6 +74,12 @@ export interface Building {
   style: number;
   /** The street its door is on, which is what the door out of it says: "Maple Lane", "the square". */
   street: string;
+  /**
+   * The pilasters along its front, as x from its middle, and how wide each
+   * is: the town hall's. The page draws them; nothing hung on the front
+   * crosses one.
+   */
+  pillars?: { x: number[]; width: number };
 }
 
 /** A road's centre line, sampled along it, and how wide it is. */
@@ -394,6 +400,8 @@ export function overlaps(
 /** The town hall's footprint: the north side of the square, facing south across it. */
 const HALL_AT: P = [0, -20];
 const HALL_SIZE: [number, number, number] = [18, 9, 6.5];
+/** The town hall's pilasters: at either end of its front and either side of its door. */
+export const HALL_PILLARS = { x: [-HALL_SIZE[0] / 2 + 0.3, -1.4, 1.4, HALL_SIZE[0] / 2 - 0.3], width: 0.55 };
 /** The office: on the avenue east of the square, facing south across it. */
 const OFFICE_AT: P = [24, -10.5];
 const OFFICE_SIZE: [number, number, number] = [14, 10, 9];
@@ -414,6 +422,7 @@ export function layTown(input: TownInput, ids: { hall: string; office: string })
     label: "Town hall",
     style: 0.5,
     street: "The square",
+    pillars: HALL_PILLARS,
   });
   if (input.office)
     buildings.push({
@@ -747,13 +756,22 @@ export function townPlace(town: Town): TownPlaceRecord {
   const add = (item: Omit<PlaceItem, "name"> & { name?: string }) =>
     props.push({ name: `the ${KINDS[item.kind].noun}`, ...item } as PlaceItem);
   const front = HALL_AT[1] + HALL_SIZE[1] / 2 + 0.03;
-  // On the town hall's front, either side of its door: the big screen, the board of open tasks, the calendar.
-  add({ id: "screen", name: "the big screen", kind: "screen", at: [-5, front], facing: 0, scale: 2.2, elevation: 1.7 });
+  // On the town hall's front, either side of its door: the big screen, the board of open tasks, the calendar. Each in
+  // a bay between the pilasters (`HALL_PILLARS`), with the square's widgets, spaced evenly along it.
+  add({
+    id: "screen",
+    name: "the big screen",
+    kind: "screen",
+    at: [-3.9, front],
+    facing: 0,
+    scale: 2.2,
+    elevation: 1.7,
+  });
   add({
     id: "board",
     name: "the task board",
     kind: "board",
-    at: [4.2, front],
+    at: [5.2, front],
     facing: 0,
     scale: 1.4,
     elevation: 1.2,
@@ -770,14 +788,14 @@ export function townPlace(town: Town): TownPlaceRecord {
     elevation: 1.35,
   });
   // The widgets the square has, for a glance from anywhere on it: who is doing what, left of the big screen, and what
-  // waits on you, right of the door; over the door, the latest lines from every room, like a marquee; and on stands
-  // at the square's top corners, turned to its middle, what got done lately and the numbers behind it.
-  // Bigger than indoors, as everything on the hall's front is, to read from across the square.
+  // waits on you, right of the door; over the door, between its pilasters, the latest lines from every room, like a
+  // marquee; and on stands at the square's top corners, turned to its middle, what got done lately and the numbers
+  // behind it. Bigger than indoors, as everything on the hall's front is, to read from across the square.
   add({
     id: "status",
     name: "the status board",
     kind: "status_board",
-    at: [-7.95, front],
+    at: [-7.04, front],
     facing: 0,
     scale: 1.25,
     elevation: 1.3,
@@ -786,12 +804,12 @@ export function townPlace(town: Town): TownPlaceRecord {
     id: "needs",
     name: "the needs-you board",
     kind: "needs_board",
-    at: [1.95, front],
+    at: [2.95, front],
     facing: 0,
     scale: 1.4,
     elevation: 1.3,
   });
-  add({ id: "ticker", name: "the ticker", kind: "ticker", at: [0, front], facing: 0, scale: 1.6, elevation: 3.1 });
+  add({ id: "ticker", name: "the ticker", kind: "ticker", at: [0, front], facing: 0, scale: 1.1, elevation: 3.1 });
   const stand = { kind: "display", scale: 1.8 } as const;
   add({ ...stand, id: "feed", name: "the activity stand", shows: "feed", at: [-9.4, -10.4], facing: 42 });
   add({ ...stand, id: "chart", name: "the chart stand", shows: "chart", at: [9.4, -10.4], facing: -42 });

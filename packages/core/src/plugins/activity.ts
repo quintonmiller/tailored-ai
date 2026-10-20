@@ -439,6 +439,8 @@ export class ActivityTracker {
     // What agents are in the middle of counts up to now: a tracker started after this one starts afresh.
     const now = this.now().getTime();
     for (const o of this.ongoing()) this.opts.tally?.add(o.agent, o.what, o.since, now);
+    // Counted once: a stopped tracker has nothing ongoing, so a route still holding it can't count it again.
+    this.written.clear();
     this.stopped = true;
     for (const sub of this.subs) sub.dispose();
     for (const timer of this.pending.values()) clearTimeout(timer);
@@ -816,6 +818,14 @@ const SLEEP_CHECK_MS = 5_000;
  */
 const TALLY = new TimeTally();
 
+/**
+ * The tracker of the plugin's latest run. The server mounts a route's
+ * handler once, at startup, and a reload runs the plugin again with a new
+ * tracker, so the routes read the one running now from here rather than the
+ * one they were registered with.
+ */
+let live: ActivityTracker | undefined;
+
 /** How long the charts' numbers are kept before they are read again: they change by the hour, not the second. */
 const STATS_MS = 30_000;
 
@@ -884,13 +894,16 @@ const plugin: Plugin = (ctx) => {
     tally: TALLY,
   });
   void tracker.start();
+  live = tracker;
 
   // What agents did lately and the numbers behind the charts, for the widgets in the 3D world. Under
   // /api/ext/builtin:activity/. Read from what the server keeps, so only people read them, as the page does.
   ctx.http.register({
     method: "GET",
     path: "feed",
-    handler: () => ({ json: { items: recentFeed(runtime.db, (tool, args) => tracker.looks(tool, args)) } }),
+    handler: () => ({
+      json: { items: recentFeed(runtime.db, (tool, args) => (live ?? tracker).looks(tool, args)) },
+    }),
   });
   let kept: { at: number; days: number; stats: Omit<Stats, "time" | "since"> } | undefined;
   ctx.http.register({
@@ -902,7 +915,11 @@ const plugin: Plugin = (ctx) => {
       if (!kept || kept.days !== days || now - kept.at > STATS_MS)
         kept = { at: now, days, stats: hourlyStats(runtime.db, days) };
       return {
-        json: { ...kept.stats, time: TALLY.rows(tracker.ongoing(), now), since: new Date(TALLY.since).toISOString() },
+        json: {
+          ...kept.stats,
+          time: TALLY.rows(live?.ongoing() ?? [], now),
+          since: new Date(TALLY.since).toISOString(),
+        },
       };
     },
   });
@@ -912,6 +929,7 @@ const plugin: Plugin = (ctx) => {
   return () => {
     clearInterval(timer);
     tracker.stop();
+    if (live === tracker) live = undefined;
   };
 };
 

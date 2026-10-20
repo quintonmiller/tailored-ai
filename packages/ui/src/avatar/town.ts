@@ -43,6 +43,8 @@ export interface TownBuilding {
   role?: string;
   style: number;
   street: string;
+  /** The pilasters along its front, as x from its middle, and how wide each is: the town hall's. */
+  pillars?: { x: number[]; width: number };
 }
 
 export interface TownRoad {

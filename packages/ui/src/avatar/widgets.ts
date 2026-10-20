@@ -158,14 +158,16 @@ export function faceOf(prop: { kind: string; shows?: string }): FaceChoice | und
 
 /** A group on the status board, and the doings it gathers. */
 export interface WhoGroupSpec {
-  id: "working" | "waiting" | "talking" | "idle" | "asleep";
+  id: "waiting" | "stuck" | "working" | "talking" | "idle" | "asleep";
   title: string;
   doings: AgentActivity["doing"][];
 }
 
+/** The groups, in the board's order: what needs a person first, a turn that failed or stalled straight after. */
 export const WHO_GROUPS: WhoGroupSpec[] = [
   { id: "waiting", title: "Waiting on you", doings: ["waiting"] },
-  { id: "working", title: "Working", doings: ["working", "thinking", "stuck"] },
+  { id: "stuck", title: "Stuck", doings: ["stuck"] },
+  { id: "working", title: "Working", doings: ["working", "thinking"] },
   { id: "talking", title: "Talking", doings: ["talking"] },
   { id: "idle", title: "Idle", doings: ["idle"] },
   { id: "asleep", title: "Asleep", doings: ["asleep"] },
@@ -402,6 +404,7 @@ export interface TickerLine {
   agent?: string;
   text: string;
   at: string;
+  /** On a ticker of every room, the room it was said in, by name. */
   room?: string;
 }
 
@@ -420,21 +423,34 @@ export function tickerFromSpeech(
 ): TickerLine[] {
   return Object.entries(said)
     .filter(([, s]) => !!s.room && (!room || s.room === room) && !!s.text)
-    .map(([agent, s]) => ({ id: `${agent}:${s.at}`, who: nameOf(agent), agent, text: s.text, at: s.at, room: s.room }))
+    .map(([agent, s]) => ({ id: `${agent}:${s.at}`, who: nameOf(agent), agent, text: s.text, at: s.at }))
     .sort((a, b) => whenMs(b.at) - whenMs(a.at))
     .slice(0, limit);
 }
 
-/** A room's latest lines, as a meeting room's transcript has them, newest first. */
+/**
+ * A room's latest lines, as a meeting room's transcript has them, newest
+ * first; or every room's, as the server gathers them, each with the name of
+ * the room it was said in.
+ */
 export function tickerFromTranscript(
-  lines: { id: string; who: string; agent?: string; text: string; at: string }[],
+  lines: { id: string; who: string; agent?: string; text: string; at: string; roomName?: string }[],
   limit = TICKER_LINES,
 ): TickerLine[] {
-  return [...lines]
-    .filter((l) => !!l.text?.trim())
-    .sort((a, b) => whenMs(b.at) - whenMs(a.at))
+  // Lines said in the same second keep the transcript's order, oldest first, so the later one still comes first here.
+  return lines
+    .map((l, i) => ({ l, i }))
+    .filter(({ l }) => !!l.text?.trim())
+    .sort((a, b) => whenMs(b.l.at) - whenMs(a.l.at) || b.i - a.i)
     .slice(0, limit)
-    .map((l) => ({ id: l.id, who: l.who, ...(l.agent ? { agent: l.agent } : {}), text: l.text, at: l.at }));
+    .map(({ l }) => ({
+      id: l.roomName ? `${l.roomName}:${l.id}` : l.id,
+      who: l.who,
+      ...(l.agent ? { agent: l.agent } : {}),
+      text: l.text,
+      at: l.at,
+      ...(l.roomName ? { room: l.roomName } : {}),
+    }));
 }
 
 // --------------------------------------------------------------------------
@@ -491,14 +507,17 @@ export function statusGlance(groups: WhoGroup[]): ScreenCard {
   const count = (id: WhoGroup["id"]) => groups.find((g) => g.id === id)?.rows.length ?? 0;
   const busy = count("working") + count("talking");
   const waiting = groups.find((g) => g.id === "waiting")?.rows ?? [];
+  const stuck = groups.find((g) => g.id === "stuck")?.rows ?? [];
+  const first = [
+    ...waiting.map((r) => ({ text: nameOf(r.agent), meta: r.what, tag: { text: "you", tone: "warn" as Tone } })),
+    ...stuck.map((r) => ({ text: nameOf(r.agent), meta: r.what, tag: { text: "stuck", tone: "bad" as Tone } })),
+  ].slice(0, 2);
   const rows: ScreenRow[] = [
-    ...waiting
-      .slice(0, 2)
-      .map((r) => ({ text: nameOf(r.agent), meta: r.what, tag: { text: "you", tone: "warn" as Tone } })),
+    ...first,
     ...groups
       .filter((g) => g.id === "working" || g.id === "talking")
       .flatMap((g) => g.rows)
-      .slice(0, 3 - Math.min(2, waiting.length))
+      .slice(0, 3 - first.length)
       .map((r) => ({
         text: nameOf(r.agent),
         meta: r.what,
@@ -510,8 +529,8 @@ export function statusGlance(groups: WhoGroup[]): ScreenCard {
     title: "Who's doing what",
     big: {
       text: busy ? `${busy} busy` : "All quiet",
-      sub: `${count("idle")} idle · ${count("asleep")} asleep${waiting.length ? ` · ${waiting.length} waiting on you` : ""}`,
-      tone: waiting.length ? "warn" : busy ? "ok" : "dim",
+      sub: `${count("idle")} idle · ${count("asleep")} asleep${waiting.length ? ` · ${waiting.length} waiting on you` : ""}${stuck.length ? ` · ${stuck.length} stuck` : ""}`,
+      tone: stuck.length ? "bad" : waiting.length ? "warn" : busy ? "ok" : "dim",
     },
     rows,
   };
@@ -567,7 +586,11 @@ export function photosGlance(photos: WallPhoto[] | undefined): ScreenCard {
 export function tickerGlance(lines: TickerLine[], title: string): ScreenCard {
   const first = lines[0];
   if (!first) return { id: "ticker", title, empty: "Quiet so far" };
-  return { id: "ticker", title, rows: lines.slice(0, 2).map((l) => ({ text: l.text, meta: l.who })) };
+  return {
+    id: "ticker",
+    title,
+    rows: lines.slice(0, 2).map((l) => ({ text: l.text, meta: l.room ? `${l.who} · #${l.room}` : l.who })),
+  };
 }
 
 /** The clock from across a room: the time, and what comes next. */
@@ -595,6 +618,8 @@ export interface TickerData {
   title: string;
   lines: TickerLine[];
   error?: string;
+  /** The meeting room it hangs in is the room it shows: its name says nothing the room doesn't. */
+  here?: boolean;
 }
 
 /** Everything the widgets in a place show, from the page: one fetch of each for every widget in view. */
@@ -624,8 +649,13 @@ export interface WorldData {
   now: number;
 }
 
-/** What a chart shows: the measure it was given, or, going through all four, the one the clock says. */
-export function chartMeasure(arg: string | undefined, now: number, every = 15_000): Measure {
+/**
+ * What a chart shows: the measure it was given, or, going through all four,
+ * the one the clock says, a minute each. The page's clock for the widgets
+ * moves on by the minute, so a chart and the picture drawn of it turn over
+ * together.
+ */
+export function chartMeasure(arg: string | undefined, now: number, every = 60_000): Measure {
   return measureOf(arg) ?? (MEASURES[Math.floor(now / every) % MEASURES.length]?.id as Measure);
 }
 
@@ -658,7 +688,8 @@ export function glanceFor(choice: FaceChoice, world: WorldData): ScreenCard | un
       return photosGlance(world.photos.data);
     case "ticker": {
       const t = world.ticker(choice.arg);
-      return tickerGlance(t.lines, t.title);
+      // In the meeting room it shows, no name: the room's line has the whole strip.
+      return tickerGlance(t.lines, t.here ? "" : t.title);
     }
     case "chart":
       return chartGlance(world.stats.data, chartMeasure(choice.arg, world.now), world.now, who);

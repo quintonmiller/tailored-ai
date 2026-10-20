@@ -17,8 +17,10 @@ import {
   doneToday,
   type OwnAgent,
   onDay,
+  repeatDays,
   upcoming,
   type Wake,
+  withRepeats,
 } from "./calendar";
 import type { AgentActivity } from "./doing";
 
@@ -350,5 +352,68 @@ describe("a calendar read close up", () => {
     );
     expect(on.wakes.map((w) => w.key)).toEqual(["early", "late"]);
     expect(on.done.map((d) => d.key)).toEqual(["d2", "d1"]);
+  });
+
+  it("tells the days a repeat comes round on, once a day at one time, from a cron line or the words it was booked with", () => {
+    expect(repeatDays("0 7 * * *")).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(repeatDays("30 9 * * 1-5")).toEqual([1, 2, 3, 4, 5]);
+    expect(repeatDays("0 8 * * 0,6")).toEqual([0, 6]);
+    expect(repeatDays("0 8 * * 7")).toEqual([0]);
+    expect(repeatDays("every day at 7am")).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(repeatDays("weekdays at 9am")).toEqual([1, 2, 3, 4, 5]);
+    expect(repeatDays("every weekday at 9am")).toEqual([1, 2, 3, 4, 5]);
+    expect(repeatDays("every Monday at 8:30")).toEqual([1]);
+    // More than once a day, every few days, or a cron line that isn't one time a day: it can't be told.
+    for (const every of [
+      "every 30 minutes",
+      "every 3 days",
+      "*/15 * * * *",
+      "0 9 1 * *",
+      "0 9-17 * * *",
+      "every 30 min",
+    ])
+      expect(repeatDays(every), every).toBeUndefined();
+  });
+
+  it("puts a repeat on each later day it comes round on, at its time of day, and leaves one it can't tell once", () => {
+    const start = dayStart(now);
+    const at = (days: number, h: number) => new Date(2026, 9, 20 + days, h).getTime();
+    const daily: Wake = {
+      key: "cron:brief",
+      agent: "planner",
+      at: at(1, 7),
+      kind: "cron",
+      what: "brief",
+      every: "0 7 * * *",
+    };
+    const weekdays: Wake = {
+      key: "booked:standup",
+      agent: "writer",
+      at: at(0, 16),
+      kind: "booked",
+      what: "standup",
+      every: "weekdays at 4pm",
+    };
+    const often: Wake = {
+      key: "turn:planner",
+      agent: "planner",
+      at: at(0, 16),
+      kind: "turn",
+      what: "turn",
+      every: "every 30 min",
+    };
+    const week = withRepeats([daily, weekdays, often], start + 7 * 86_400_000);
+    // The daily one from tomorrow (its next time) to the week's last day; 20 October 2026 is a Tuesday.
+    const dailies = week.filter((w) => w.key.startsWith("cron:brief"));
+    expect(dailies.map((w) => new Date(w.at).getDate())).toEqual([21, 22, 23, 24, 25, 26]);
+    expect(dailies.every((w) => new Date(w.at).getHours() === 7)).toBe(true);
+    expect(dailies[0]?.again).toBeUndefined();
+    expect(dailies[1]?.again).toBe(true);
+    // Weekdays only: no Saturday the 24th or Sunday the 25th.
+    expect(week.filter((w) => w.key.startsWith("booked:standup")).map((w) => new Date(w.at).getDate())).toEqual([
+      20, 21, 22, 23, 26,
+    ]);
+    expect(week.filter((w) => w.key.startsWith("turn:"))).toHaveLength(1);
+    expect(onDay(dayStart(at(4, 0)), week, []).wakes.map((w) => w.what)).toEqual(["brief"]);
   });
 });

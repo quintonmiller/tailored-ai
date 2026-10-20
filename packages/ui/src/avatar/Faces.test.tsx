@@ -7,7 +7,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { Need } from "../lib/needs";
+import { ANSWERED_ELSEWHERE, type Need } from "../lib/needs";
 import type { BoardTask } from "./boards";
 import type { CalendarView } from "./calendar";
 import { type FaceData, pinnedWidget, SurfacePortals, type SurfaceStage } from "./Faces";
@@ -472,7 +472,7 @@ describe("the widgets", () => {
     const idle = [...board.el.querySelectorAll(".sw-quiet.is-idle .sw-agent")].map((a) => a.textContent);
     expect(idle).toEqual(["writer"]);
     press(board.el.querySelector(".sw-row") as Element, "click");
-    expect(onUse).toHaveBeenCalledWith("go", { agent: "reviewer" });
+    expect(onUse).toHaveBeenCalledWith("go", { agent: "reviewer" }, "status_board");
   });
 
   it("narrows the feed to one kind when read close up, and a finished task opens its card", () => {
@@ -489,7 +489,7 @@ describe("the widgets", () => {
     press(done, "click");
     expect(rows()).toHaveLength(1);
     press(rows()[0] as Element, "click");
-    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-4" });
+    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-4" }, "feed");
   });
 
   it("keeps showing what the feed had when asking again fails, and says so", () => {
@@ -538,6 +538,42 @@ describe("the widgets", () => {
     });
     expect(onApprove).toHaveBeenCalledWith(ok, true);
     expect(board.el.querySelector(".sw-need-said")?.textContent).toBe("Approved");
+  });
+
+  it("approves on the needs-you board only a call it shows in full, and never denies on a double click", async () => {
+    const onApprove = vi.fn((need: Need) =>
+      need.request === "r6" ? Promise.reject(new Error(ANSWERED_ELSEWHERE)) : Promise.resolve(),
+    );
+    const call = (request: string, toolArgs: Record<string, unknown>): Need => ({
+      key: `approval:${request}`,
+      agent: "coder",
+      kind: "approval",
+      what: "waiting for your OK",
+      tool: "exec",
+      request,
+      approval: { requestId: request, toolName: "exec", toolArgs },
+    });
+    const many = call("r4", { command: "ls", cwd: "/srv", timeout: 30, env: { CI: "1" } });
+    const long = call("r5", { command: `echo ${"x".repeat(200)}` });
+    const gone = call("r6", { command: "ls" });
+    const board = widget("needs_board", { focused: true, px: [717, 493] });
+    draw([board], { tasks: [], world: world({ needs: [many, long, gone] }), onApprove });
+    const needs = [...board.el.querySelectorAll(".sw-need")];
+    const buttons = (n: Element) => [...n.querySelectorAll("button")].map((b) => b.textContent);
+    // A fourth argument, or one cut short, is approved on the card that shows it all.
+    expect(buttons(needs[0] as Element)).toEqual(["Deny", "Details"]);
+    expect(needs[0]?.textContent).toContain("+1 more");
+    expect(needs[0]?.textContent).toContain("approve it from Details");
+    expect(buttons(needs[1] as Element)).toEqual(["Deny", "Details"]);
+    expect(buttons(needs[2] as Element)).toEqual(["Approve", "Deny", "Details"]);
+    const deny = needs[0]?.querySelector("button") as Element;
+    press(deny, "click", { detail: 2 });
+    expect(onApprove).not.toHaveBeenCalled();
+    // One answered somewhere else first says so, not what the server said.
+    await act(async () => {
+      (needs[2]?.querySelector("button") as HTMLElement).click();
+    });
+    expect(needs[2]?.querySelector(".sw-need-said")?.textContent).toBe(ANSWERED_ELSEWHERE);
   });
 
   it("lists a home's open tasks on its to-do list, what is in hand first", () => {
@@ -591,6 +627,36 @@ describe("the widgets", () => {
     expect(strip.el.querySelectorAll(".sw-ticker-row")).toHaveLength(1);
     draw([{ ...strip, focused: true }], { tasks: [], world: world({ ticker: () => ({ title: "#trip", lines }) }) });
     expect(strip.el.querySelectorAll(".sw-ticker-row")).toHaveLength(2);
+    expect(strip.el.querySelector(".sw-ticker-in")).toBeNull();
+  });
+
+  it("keeps only the photo up and the ones either side of it in a photo wall's frame, however many there are", () => {
+    const photos = Array.from({ length: 30 }, (_, i) => ({
+      media: `m${i}`,
+      what: `photo ${i}`,
+      at: at(i + 1),
+      place: "home:planner",
+      placeName: "planner's home",
+      by: "planner",
+    }));
+    const wall = widget("photo_wall", { focused: true, px: [1037, 621] });
+    draw([wall], { tasks: [], world: world({ photos: { data: photos } }) });
+    const framed = () => [...wall.el.querySelectorAll(".sw-photo-frame img")];
+    expect(framed().length).toBeLessThanOrEqual(3);
+    expect(wall.el.querySelectorAll(".sw-photo-frame img.is-up")).toHaveLength(1);
+    // A print clicked is the big one; the one it took over from stays a moment, to fade out.
+    const was = wall.el.querySelector(".sw-photo-frame img.is-up")?.getAttribute("src");
+    press(wall.el.querySelectorAll(".sw-polaroid")[7] as Element, "click");
+    expect(wall.el.querySelector(".sw-photo-frame img.is-up")?.getAttribute("src")).toBe("/api/media/m7");
+    expect(framed().length).toBeLessThanOrEqual(3);
+    if (was !== "/api/media/m7") expect(framed().map((i) => i.getAttribute("src"))).toContain(was);
+  });
+
+  it("says which room each line on a ticker of every room was said in", () => {
+    const lines = [{ id: "a", who: "sam", text: "Window seats", at: at(2), room: "trip" }];
+    const strip = widget("ticker", { px: [1114, 230] });
+    draw([strip], { tasks: [], world: world({ ticker: () => ({ title: "Every room", lines }) }) });
+    expect(strip.el.querySelector(".sw-ticker-in")?.textContent).toBe("#trip");
   });
 
   it("zooms a widget to fit something it wasn't made for, and leaves one on its own kind as it is", () => {

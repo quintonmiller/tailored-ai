@@ -360,6 +360,8 @@ describe("what a person can set a widget to show", () => {
     const choices = showsChoices("display") ?? [];
     expect(choices[0]).toEqual({ value: "", label: "Who's doing what" });
     expect(choices.map((c) => c.value)).toContain("chart: tokens");
+    // A chart that goes through all four, as the stands the building puts up are, can be chosen again.
+    expect(choices.find((c) => c.value === "chart")?.label).toBe("Chart: all four, in turn");
     expect(showsChoices("monitor")?.[0]?.label).toBe("The clock and agenda");
   });
 

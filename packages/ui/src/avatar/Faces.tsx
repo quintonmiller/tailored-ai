@@ -30,7 +30,17 @@ import { clockTime } from "../lib/did";
 import type { Need } from "../lib/needs";
 import { GROUPS, type Group } from "../lib/tasks";
 import { type BoardTask, type ColumnSpan, columnAt, columnsFor, moveTo } from "./boards";
-import { byDay, type CalendarMode, type CalendarView, calendarDays, type Done, onDay, type Wake } from "./calendar";
+import {
+  byDay,
+  type CalendarMode,
+  type CalendarView,
+  calendarDays,
+  type Done,
+  onDay,
+  repeatDays,
+  type Wake,
+  withRepeats,
+} from "./calendar";
 import type { Prop } from "./scene";
 import { PAGE_MS, pageAt, type ScreenCard, screenWidgets, type Tone } from "./screens";
 import type { Stage, SurfaceView, UseSpot } from "./stage";
@@ -299,6 +309,9 @@ function BoardFace({ heading }: { heading: string }) {
   const shown = surface.focused ? boardFiltered(all as FilterTask[], filter) : all;
   const columns = columnsFor(shown, surface.focused ? Number.POSITIVE_INFINITY : NOTES_SHOWN);
   const open = shown.filter((t) => !GROUPS[3].statuses.includes(t.status)).length;
+  // Work in progress: what is under Doing, said in the board's heading, where it never squeezes a column's name.
+  const doing = columns.find((c) => c.id === "doing");
+  const wip = doing ? doing.notes.length + doing.more : 0;
   const people = surface.focused ? assigneesOf(all) : [];
   const projects = surface.focused ? projectsOf(all as FilterTask[]) : [];
 
@@ -367,7 +380,11 @@ function BoardFace({ heading }: { heading: string }) {
       <header className="sf-board-head">
         <span className="sf-board-title">{heading}</span>
         <span className="sf-board-sum">
-          {open} open · {shown.length - open} done
+          {open} open ·{" "}
+          <span className="sf-board-wip" title="Work in progress">
+            {wip} in progress
+          </span>{" "}
+          · {shown.length - open} done
         </span>
       </header>
       {surface.focused && (people.length > 1 || projects.length > 1) && (
@@ -445,14 +462,7 @@ function BoardFace({ heading }: { heading: string }) {
             >
               <span className="sf-col-dot" aria-hidden="true" />
               <span className="sf-col-title">{col.title}</span>
-              <span
-                className={`sf-col-count${col.id === "doing" && surface.focused ? " is-wip" : ""}`}
-                title={col.id === "doing" ? "Work in progress" : undefined}
-              >
-                {col.id === "doing" && surface.focused
-                  ? `WIP ${col.notes.length + col.more}`
-                  : col.notes.length + col.more}
-              </span>
+              <span className="sf-col-count">{col.notes.length + col.more}</span>
             </button>
             <div className="sf-col-notes">
               {col.notes.map((task, i) => (
@@ -921,8 +931,10 @@ function firstDayOfWeek(): number {
  * A calendar read close up: its day, its week from today, or its month, picked
  * by the tabs under its band. A day lists its wakes by the hour and what got
  * done; the week, a column a day; the month, a square a day with how many
- * wakes and how much got done, a square opening its day. Only a wake's next
- * time is known, so a wake that repeats shows once, saying how often.
+ * wakes and how much got done, a square opening its day. A wake that comes
+ * round once a day at one time shows on each day it comes round on; one
+ * that repeats some other way shows at its next time, saying how often, and
+ * the days without anything say nothing else is booked rather than nothing.
  */
 function CalendarRead({
   view,
@@ -941,6 +953,14 @@ function CalendarRead({
     return [...view.done, ...(view.history ?? []).filter((d) => !seen.has(d.key))];
   }, [view.done, view.history]);
   const days = calendarDays(mode, day ?? view.now, firstDayOfWeek());
+  const until = days.at(-1)?.start;
+  const wakes = useMemo(
+    () => (until === undefined ? view.wakes : withRepeats(view.wakes, until + 36 * 3_600_000)),
+    [view.wakes, until],
+  );
+  // A repeat that couldn't be put on each day it comes round on may come round on any of them.
+  const unsure = wakes.some((w) => w.every && !repeatDays(w.every));
+  const none = unsure ? "Nothing else booked" : "Nothing booked";
   const dayLabel = (start: number, long = false) =>
     new Date(start).toLocaleDateString(
       [],
@@ -970,12 +990,14 @@ function CalendarRead({
       {mode === "day" &&
         (() => {
           const start = days[0]?.start ?? view.now;
-          const on = onDay(start, view.wakes, done);
+          const on = onDay(start, wakes, done);
           return (
             <div className="sf-cal-day-view">
               <h4 className="sf-cal-head">{dayLabel(start, true)}</h4>
               {on.wakes.map(wake)}
-              {!on.wakes.length && <p className="sf-cal-empty">No wakes booked</p>}
+              {!on.wakes.length && (
+                <p className="sf-cal-empty">{unsure ? "No other wakes booked" : "No wakes booked"}</p>
+              )}
               {on.done.length > 0 && <h4 className="sf-cal-head">Done</h4>}
               {on.done.map(finished)}
             </div>
@@ -984,7 +1006,7 @@ function CalendarRead({
       {mode === "week" && (
         <div className="sf-cal-week">
           {days.map((d) => {
-            const on = onDay(d.start, view.wakes, done);
+            const on = onDay(d.start, wakes, done);
             return (
               <section key={d.start} className={`sf-cal-col${d.today ? " is-today" : ""}`}>
                 <button
@@ -1014,7 +1036,7 @@ function CalendarRead({
                     </button>
                   ))}
                   {on.done.length > 0 && <span className="sf-cal-chip is-done">✓ {on.done.length} done</span>}
-                  {!on.wakes.length && !on.done.length && <span className="sf-cal-col-none">Nothing booked</span>}
+                  {!on.wakes.length && !on.done.length && <span className="sf-cal-col-none">{none}</span>}
                 </div>
               </section>
             );
@@ -1029,7 +1051,7 @@ function CalendarRead({
             </span>
           ))}
           {days.map((d) => {
-            const on = onDay(d.start, view.wakes, done);
+            const on = onDay(d.start, wakes, done);
             return (
               <button
                 type="button"

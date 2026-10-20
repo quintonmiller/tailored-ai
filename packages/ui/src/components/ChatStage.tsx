@@ -43,11 +43,11 @@ import { useAgentColor } from "../lib/body-colors";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
-import { type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
+import { ANSWERED_ELSEWHERE, answerable, type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
 import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
-import { trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
+import { isCommon, trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
@@ -649,14 +649,6 @@ export function whereWords(agent: string, places: MapPlace[], here: string | und
   if (spot.id === here) return "here";
   if (spot.kind === "room") return `in #${spot.name}`;
   return spot.kind === "home" && spot.owner === agent ? "at home" : `in ${spot.name}`;
-}
-
-/**
- * Whether a place is everyone's: the town square and the lobby inside its town hall. Their boards and calendars show
- * every agent's, since nobody lives there and agents only pass through.
- */
-export function isCommon(place: string | undefined): boolean {
-  return place === "lobby" || place === "town";
 }
 
 /** Which tasks a place's boards show: everyone's on the square and in the lobby, otherwise those of whoever is there. */
@@ -1769,10 +1761,19 @@ export function useChatStage({
       minute,
     ],
   );
-  // Approved or denied from a needs-you board: as the card answers it, the agent's turn going on at once.
+  // Approved or denied from a needs-you board: as the card answers it, the agent's turn going on at once. Whatever face
+  // asks, nothing with a stricter flow of its own, or whose details the page doesn't have, is approved from here: the
+  // card's rule, kept where every face's answer goes through.
   const approve = useCallback(async (need: Need, approved: boolean) => {
     if (!need.request) throw new Error("There's no request to answer.");
-    await resolveApproval(need.request, approved);
+    if (approved && !answerable(need)) throw new Error("This one is approved in the chat that asked for it.");
+    try {
+      await resolveApproval(need.request, approved);
+    } catch (err) {
+      // Gone from the server: answered already, in another tab, the chat or Discord.
+      if (err instanceof Error && /^404\b/.test(err.message)) throw new Error(ANSWERED_ELSEWHERE);
+      throw err;
+    }
   }, []);
   // Going to an agent's body, for the status board: the function is made further down, each time the page draws.
   const goSeeRef = useRef<(who: string) => boolean>(() => false);

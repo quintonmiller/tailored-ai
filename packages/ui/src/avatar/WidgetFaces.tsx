@@ -14,7 +14,7 @@ import { type MouseEvent, type ReactNode, type RefObject, useEffect, useMemo, us
 import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
 import { clockTime } from "../lib/did";
-import { answerable, type Need, ownFlow } from "../lib/needs";
+import { ANSWERED_ELSEWHERE, answerable, type Need, ownFlow } from "../lib/needs";
 import { ago, lasting, statusLabel } from "../lib/tasks";
 import {
   type ChartDay,
@@ -185,32 +185,37 @@ function useClock(seconds: boolean): number {
 // --------------------------------------------------------------------------
 
 /**
- * Every agent, grouped by what it is doing: waiting on you, working,
- * talking, each a card with a line for each agent (what, and for how long);
- * idle and asleep as rows of names at the foot, the most recently busy
- * first. From across the room, a big number for each group. An agent opens
- * its card; brought up close, its place is one click on.
+ * Every agent, grouped by what it is doing: waiting on you, stuck (a turn
+ * that failed or stalled), working, talking, each a card with a line for
+ * each agent (what, and for how long); idle and asleep as rows of names at
+ * the foot, the most recently busy first. From across the room, a big
+ * number for each group, and one for the stuck only while some are. An
+ * agent opens its card; brought up close, its place is one click on.
  */
 function StatusFace({ world, surface, actions }: FaceProps) {
   const groups = useMemo(() => whoGroups(world.activities, world.agents, world.now), [world]);
-  const active = groups.filter((g) => g.id === "waiting" || g.id === "working" || g.id === "talking");
   const quiet = groups.filter((g) => g.id === "idle" || g.id === "asleep");
-  const busy = active.reduce((n, g) => n + (g.id === "waiting" ? 0 : g.rows.length), 0);
-  const waiting = groups.find((g) => g.id === "waiting")?.rows.length ?? 0;
+  const active = groups.filter((g) => !quiet.includes(g));
+  const count = (id: string) => groups.find((g) => g.id === id)?.rows.length ?? 0;
+  const busy = count("working") + count("talking");
+  const waiting = count("waiting");
+  const stuck = count("stuck");
   const go = (agent: string) => actions.onUse?.("go", { agent });
   return (
     <div className="sw sw-status">
       <Head
         title="Who's doing what"
-        sub={`${busy} busy${waiting ? ` · ${waiting} waiting on you` : ""} · ${world.agents.length} in all`}
+        sub={`${busy} busy${waiting ? ` · ${waiting} waiting on you` : ""}${stuck ? ` · ${stuck} stuck` : ""} · ${world.agents.length} in all`}
       />
       <div className="sw-far sw-status-far" aria-hidden="true">
-        {groups.map((g) => (
-          <div key={g.id} className={`sw-far-tile is-${g.id}`}>
-            <span className="sw-far-count">{g.rows.length}</span>
-            <span className="sw-far-label">{g.title}</span>
-          </div>
-        ))}
+        {groups
+          .filter((g) => g.id !== "stuck" || g.rows.length)
+          .map((g) => (
+            <div key={g.id} className={`sw-far-tile is-${g.id}`}>
+              <span className="sw-far-count">{g.rows.length}</span>
+              <span className="sw-far-label">{g.title}</span>
+            </div>
+          ))}
       </div>
       <div className="sw-near sw-status-body">
         <div className="sw-status-active">
@@ -253,7 +258,7 @@ function StatusFace({ world, surface, actions }: FaceProps) {
                     <li key={r.agent}>
                       <button type="button" className="sw-quiet-row" onClick={() => go(r.agent)}>
                         <Agent agent={r.agent} doing={r.doing} />
-                        <span className="sw-quiet-what">{r.what === "idle" ? "" : r.what}</span>
+                        {r.what && r.what !== "idle" && <span className="sw-quiet-what">{r.what}</span>}
                         {r.when && <span className="sw-row-meta">{r.when}</span>}
                       </button>
                     </li>
@@ -356,24 +361,39 @@ function FeedFace({ world, surface, actions }: FaceProps) {
 // Needs you
 // --------------------------------------------------------------------------
 
-/** A tool call's arguments in a line: the first few as key and value, cut short. */
-function argsLine(args: Record<string, unknown> | undefined): string | undefined {
-  if (!args) return undefined;
-  const parts = Object.entries(args)
-    .slice(0, 3)
-    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`);
-  if (!parts.length) return undefined;
-  const line = parts.join(" · ");
-  return line.length > 160 ? `${line.slice(0, 159)}…` : line;
+/** How many of a call's arguments a needs-you board shows, and in how many characters at most. */
+const ARGS_SHOWN = 3;
+const ARGS_CHARS = 160;
+
+/**
+ * A tool call's arguments in a line: the first few as key and value, cut
+ * short, saying how many more there are; and whether that is the whole call,
+ * which is when the wall may approve it.
+ */
+function argsLine(args: Record<string, unknown> | undefined): { text: string; whole: boolean } | undefined {
+  const entries = Object.entries(args ?? {});
+  if (!entries.length) return undefined;
+  const line = entries
+    .slice(0, ARGS_SHOWN)
+    .map(([k, v]) => `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join(" · ");
+  const cut = line.length > ARGS_CHARS;
+  const more = entries.length - ARGS_SHOWN;
+  return {
+    text: `${cut ? `${line.slice(0, ARGS_CHARS - 1)}…` : line}${more > 0 ? ` · +${more} more` : ""}`,
+    whole: !cut && more <= 0,
+  };
 }
 
 /**
  * What agents are waiting on you for: each approval with the call it is for,
  * and Approve or Deny right there when the page has its details from the
- * server and it has no stricter flow of its own (never a purchase, never a
- * trusted action: those say where to approve them, and only Deny is here);
- * each question with Answer, which opens it where it can be answered.
- * Approve never takes the second click of a double click.
+ * server, the board shows the whole call, and it has no stricter flow of its
+ * own (never a purchase, never a trusted action: those say where to approve
+ * them, and only Deny is here; a call too long to show in full is approved
+ * on its card, from Details); each question with Answer, which opens it
+ * where it can be answered. Neither Approve nor Deny takes the second click
+ * of a double click.
  */
 function NeedsFace({ world, surface, actions }: FaceProps) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -385,7 +405,8 @@ function NeedsFace({ world, surface, actions }: FaceProps) {
       await actions.onApprove(need, approved);
       setSaid((s) => ({ ...s, [need.key]: approved ? "Approved" : "Denied" }));
     } catch (err) {
-      setSaid((s) => ({ ...s, [need.key]: `Couldn't: ${err instanceof Error ? err.message : String(err)}` }));
+      const why = err instanceof Error ? err.message : String(err);
+      setSaid((s) => ({ ...s, [need.key]: why === ANSWERED_ELSEWHERE ? why : `Couldn't: ${why}` }));
     } finally {
       setBusy((b) => ({ ...b, [need.key]: false }));
     }
@@ -415,7 +436,10 @@ function NeedsFace({ world, surface, actions }: FaceProps) {
           </p>
         )}
         {needs.map((need) => {
-          const can = answerable(need);
+          const args = need.kind === "approval" ? argsLine(need.approval?.toolArgs) : undefined;
+          // Nothing is approved here that the board doesn't show: a call cut short is approved on its card.
+          const partly = !!args && !args.whole;
+          const can = answerable(need) && !partly;
           const strict = need.kind === "approval" && (ownFlow(need.tool) || ownFlow(need.approval?.toolName));
           const outcome = said[need.key];
           return (
@@ -432,13 +456,20 @@ function NeedsFace({ world, surface, actions }: FaceProps) {
               {need.kind === "approval" && need.approval?.description && (
                 <p className="sw-need-detail">{need.approval.description}</p>
               )}
-              {need.kind === "approval" && argsLine(need.approval?.toolArgs) && (
-                <p className="sw-need-args">{argsLine(need.approval?.toolArgs)}</p>
-              )}
+              {args && <p className="sw-need-args">{args.text}</p>}
               {need.kind === "question" && (need.question ?? need.detail) && (
                 <p className="sw-need-detail">{need.question ?? need.detail}</p>
               )}
-              {strict && <p className="sw-need-note">This one is approved in its own flow, never from a wall.</p>}
+              {strict ? (
+                <p className="sw-need-note">Approved in the chat that asked for it, never from a wall.</p>
+              ) : (
+                partly &&
+                answerable(need) && (
+                  <p className="sw-need-note">
+                    Too long to show here in full: approve it from Details, which shows it all.
+                  </p>
+                )
+              )}
               <div className="sw-need-actions">
                 {outcome ? (
                   <output className="sw-need-said">{outcome}</output>
@@ -463,7 +494,11 @@ function NeedsFace({ world, surface, actions }: FaceProps) {
                         type="button"
                         className="sw-btn"
                         disabled={busy[need.key]}
-                        onClick={() => void decide(need, false)}
+                        onClick={(e) => {
+                          // Nor a denial, which can't be taken back: the click that brought the board up may land here.
+                          if (e.detail > 1) return;
+                          void decide(need, false);
+                        }}
                       >
                         Deny
                       </button>
@@ -566,6 +601,17 @@ function PhotoFace({ world, surface }: FaceProps) {
   const auto = slideAt(now, photos.length);
   const at = held !== null && held < photos.length ? held : auto;
   const big = photos[at];
+  // Only the photo up, the one it took over from (fading out) and the next (loaded ahead, to fade in) are in the
+  // frame: a wall of forty full-size photos stacked out of sight would load and hold every one.
+  const last = useRef(at);
+  const before = useRef(at);
+  if (last.current !== at) {
+    before.current = last.current;
+    last.current = at;
+  }
+  const inFrame = [...new Set([before.current, at, at + 1].map((i) => i % Math.max(1, photos.length)))]
+    .sort((a, b) => a - b)
+    .flatMap((i) => (photos[i] ? [{ photo: photos[i], i }] : []));
   const pick = (i: number) => setHeld(((i % photos.length) + photos.length) % photos.length);
   // The page turns by itself every few seconds while not held: this ticks it over in time.
   const [, tick] = useState(0);
@@ -587,13 +633,12 @@ function PhotoFace({ world, surface }: FaceProps) {
         <>
           <figure className="sw-photo-big">
             <div className="sw-photo-frame">
-              {photos.map((p, i) => (
+              {inFrame.map(({ photo, i }) => (
                 <img
-                  key={p.media}
-                  src={photoUrl(p.media)}
-                  alt={photoCaption(p, world.now)}
+                  key={photo.media}
+                  src={photoUrl(photo.media)}
+                  alt={photoCaption(photo, world.now)}
                   className={i === at ? "is-up" : ""}
-                  loading="lazy"
                 />
               ))}
             </div>
@@ -664,7 +709,7 @@ function TickerFace({ choice, world, surface }: FaceProps) {
   const up = lines.length ? Math.floor(Date.now() / LINE_MS) % Math.min(lines.length, 5) : 0;
   const line = lines[up];
   return (
-    <div className="sw-ticker">
+    <div className={`sw-ticker${ticker.here ? " is-here" : ""}`}>
       <div className="sw-ticker-label">
         <span className="sw-ticker-dot" aria-hidden="true" />
         <span className="sw-ticker-room">{ticker.title}</span>
@@ -697,6 +742,7 @@ function TickerRow({ line, now }: { line: TickerLine; now: number }) {
   return (
     <li className="sw-ticker-row">
       {line.agent ? <Agent agent={line.agent} /> : <span className="sw-agent is-person">{line.who}</span>}
+      {line.room && <span className="sw-ticker-in">#{line.room}</span>}
       <span className="sw-ticker-text">{line.text}</span>
       <time className="sw-ticker-when" dateTime={line.at}>
         {ago(line.at, now)}

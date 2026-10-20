@@ -285,6 +285,7 @@ export function showsChoices(
         { value: "calendar", label: "Calendar" },
         { value: "photos", label: "Photos" },
         { value: "ticker", label: "Room ticker" },
+        { value: "chart", label: "Chart: all four, in turn" },
         ...measures.map((m) => ({ value: `chart: ${m.value}`, label: `Chart: ${m.label.toLowerCase()}` })),
         { value: "dashboard", label: "The Board's widgets" },
       ];

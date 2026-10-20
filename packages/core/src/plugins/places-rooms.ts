@@ -590,15 +590,18 @@ function build(spec: Spec): Place {
     ),
   );
   place = furnish(place, spec.after ?? []);
-  // While the doorways are still held, so a seat or a window made up for doesn't land in one.
-  for (const need of spec.needs ?? []) place = ensure(place, need);
+  // While the doorways are still held, so a seat or a window made up for doesn't land in one. What has to leave
+  // room for something goes in after the lamps, so the room it leaves is still there once they are in.
+  const needs = spec.needs ?? [];
+  const held = new Set(holds.map((h) => h.id));
+  for (const need of needs) if (!NEEDS[need].leaves) place = ensure(place, need, held);
   for (const at of spec.lampsAt ?? []) {
     if (lights(place) >= LAMPS) break;
     // Not right beside a lamp that is already there.
     if (place.props.some((p) => p.kind === "lamp" && Math.hypot(p.at[0] - at[0], p.at[1] - at[1]) < 1.8)) continue;
     place = furnish(place, [{ kind: "lamp", at, facing: 0 }]);
   }
-  const held = new Set(holds.map((h) => h.id));
+  for (const need of needs) if (NEEDS[need].leaves) place = ensure(place, need, held);
   return clearWays(withSpots({ ...place, props: place.props.filter((p) => !held.has(p.id)) }));
 }
 
@@ -649,7 +652,24 @@ interface Needed {
   near?: (p: Place) => string | undefined;
   /** Smaller sizes to try, in turn, on a wall too full for a normal one. */
   smaller?: number[];
+  /**
+   * Something the room must still have room for once it is in, when it had
+   * room for it before: never the last of the wall for an agent's own things.
+   * A room it would take that from goes without.
+   */
+  leaves?: Placing;
 }
+
+/** The desk a home is worked at: what its calendar and its to-do list go by. */
+const deskOf = (p: Place) => p.spots.find((s) => s.activity === "type")?.item;
+
+/**
+ * A wall thing as big as the ready-made to-do board (`READY` in
+ * `places-models.ts`): the room a home keeps on its walls for one, so the
+ * to-do list hung for its owner never takes the last stretch an agent has
+ * for a board of its own.
+ */
+const OWN_BOARD: Placing = { kind: "wall_model", size: [1.1, 0.81, 0.12] };
 
 const NEEDS: Record<Need, Needed> = {
   seat: { kind: "armchair", has: (p) => p.spots.some((s) => s.activity === "sit") },
@@ -660,23 +680,33 @@ const NEEDS: Record<Need, Needed> = {
   calendar: {
     kind: "calendar",
     has: (p) => p.props.some((i) => i.kind === "calendar"),
-    near: (p) => p.spots.find((s) => s.activity === "type")?.item,
+    near: deskOf,
     smaller: [0.8, 0.6],
   },
-  // And the open tasks beside it, short enough to read from the middle of the room.
+  // And the open tasks beside it, short enough to read from the middle of the room, where the walls keep room for a
+  // to-do board the agent makes itself as well.
   todo: {
     kind: "todo",
     has: (p) => p.props.some((i) => i.kind === "todo"),
-    near: (p) => p.spots.find((s) => s.activity === "type")?.item,
+    near: deskOf,
     smaller: [0.85],
+    leaves: OWN_BOARD,
   },
 };
 
-/** A room with what it needs: put wherever it fits (near what it goes by), the way the `place` tool would, when the room has none. */
-function ensure(place: Place, need: Need): Place {
-  const { kind, has, near, smaller = [] } = NEEDS[need];
+/**
+ * A room with what it needs: put wherever it fits (near what it goes by), the
+ * way the `place` tool would, when the room has none. `held` are the blocks
+ * holding its doorways while it is furnished: what it leaves room for is
+ * looked for in the room as the `place` tool will see it, without them.
+ */
+function ensure(place: Place, need: Need, held: Set<string>): Place {
+  const { kind, has, near, smaller = [], leaves } = NEEDS[need];
   if (has(place)) return place;
   const by = near?.(place);
+  const roomFor = (p: Place, placing: Placing) =>
+    typeof findPlacement(withDoorwayHeld({ ...p, props: p.props.filter((i) => !held.has(i.id)) }), placing, {}) !==
+    "string";
   for (const scale of [1, ...smaller]) {
     const got = findPlacement(place, { kind, ...(scale !== 1 ? { scale } : {}) }, by ? { near: by } : {});
     if (typeof got === "string") continue;
@@ -687,7 +717,9 @@ function ensure(place: Place, need: Need): Place {
       ...got,
       ...(scale !== 1 ? { scale } : {}),
     };
-    return withSpots({ ...place, props: [...place.props, item] });
+    const next = withSpots({ ...place, props: [...place.props, item] });
+    if (leaves && roomFor(place, leaves) && !roomFor(next, leaves)) continue;
+    return next;
   }
   return place;
 }

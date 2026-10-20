@@ -9578,7 +9578,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sf-filter-n { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: rgba(30, 40, 60, 0.08); color: var(--sf-paper-dim); text-align: center; font: 720 15px/1.3 var(--sf-font); }
 .sf-filter-project { flex: none; display: flex; align-items: center; gap: 8px; font: 650 17px var(--sf-font); color: var(--sf-paper-dim); }
 .sf-filter-project select { padding: 5px 8px; border: 2px solid rgba(30, 40, 60, 0.14); border-radius: 8px; background: #fff; color: var(--sf-paper-ink); font: 600 17px var(--sf-font); }
-.sf-col-count.is-wip { padding: 2px 7px; background: rgba(37, 99, 235, 0.12); color: #1d4ed8; font-size: 15px; }
+.sf-board-wip { color: #1d4ed8; }
 
 /* The calendar read close up: its day, its week, or its month. */
 .sf-cal-read { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 22px 6px; }
@@ -9671,11 +9671,12 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sw-far-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 740 32px/1.15 var(--sf-font); color: var(--sf-dim); }
 
 /* Who's doing what. */
-.sw-status-far { flex: 1; min-height: 0; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; }
+.sw-status-far { flex: 1; min-height: 0; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 14px; }
 .world-surface[data-detail="far"] .sw-status-far { display: grid; }
 .sw-far-tile { display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; min-width: 0; padding: 16px 16px 18px; border-radius: 16px; border-top: 12px solid var(--tile); background: var(--sf-tile); }
 .sw-far-tile.is-waiting { --tile: var(--doing-waiting, #ff9a1f); }
 .sw-far-tile.is-working { --tile: var(--doing-working, #3ddc78); }
+.sw-far-tile.is-stuck { --tile: var(--doing-stuck, #ff4d4d); }
 .sw-far-tile.is-talking { --tile: var(--doing-talking, #5aa2ff); }
 .sw-far-tile.is-idle { --tile: var(--doing-idle, #6b7286); }
 .sw-far-tile.is-asleep { --tile: var(--doing-asleep, #9d8cff); }
@@ -9686,6 +9687,7 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sw-group { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 12px 12px 10px; border-radius: 14px; background: var(--sf-tile); border-top: 6px solid var(--tile); }
 .sw-group.is-waiting { --tile: var(--doing-waiting, #ff9a1f); background: rgba(255, 154, 31, 0.08); }
 .sw-group.is-working { --tile: var(--doing-working, #3ddc78); }
+.sw-group.is-stuck { --tile: var(--doing-stuck, #ff4d4d); background: rgba(255, 77, 77, 0.08); }
 .sw-group.is-talking { --tile: var(--doing-talking, #5aa2ff); }
 .sw-group-head { display: flex; align-items: center; margin: 0 0 2px; font: 760 20px/1.2 var(--sf-font); letter-spacing: 0.04em; text-transform: uppercase; color: var(--sf-dim); }
 .sw-rows { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
@@ -9705,7 +9707,10 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sw-quiet-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 2px 14px; margin: 0; padding: 0; list-style: none; }
 .sw-quiet-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 5px 8px; border: 0; border-radius: 8px; background: none; color: var(--sf-ink); text-align: left; cursor: pointer; }
 .sw-quiet-row:hover { background: rgba(255, 255, 255, 0.06); }
-.sw-quiet-row .sw-agent { flex: none; max-width: 48%; overflow: hidden; text-overflow: ellipsis; font-size: 18px; color: #c3cbdb; }
+/* A name takes the row, cut short only to leave room for what the agent is at, when it is at something. */
+.sw-quiet-row .sw-agent { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; font-size: 18px; color: #c3cbdb; }
+.sw-quiet-row:has(.sw-quiet-what) .sw-agent { flex: none; max-width: 48%; }
+.sw-quiet-row .sw-row-meta { margin-left: auto; }
 .sw-quiet-row .sw-agent::before { width: 10px; height: 10px; box-shadow: none; }
 .sw-quiet-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 17px var(--sf-font); color: var(--sf-faint); }
 .sw-quiet-row .sw-row-meta { font-size: 15px; }
@@ -9838,6 +9843,13 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sw-ticker-all .sw-agent { font-size: 22px; }
 .world-surface[data-detail="far"] .sw-ticker-row .sw-ticker-when { display: none; }
 .world-surface[data-detail="far"] .sw-ticker-text { font-size: 44px; -webkit-line-clamp: 1; }
+/* On a ticker of every room, which room each line was said in. */
+.sw-ticker-in { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 700 24px var(--sf-font); color: #e2a23b; }
+.sw-ticker-all .sw-ticker-in { font-size: 19px; }
+/* In the meeting room it shows, its label is the dot alone, and a line has two rows to be read in from across it. */
+.world-surface[data-detail="far"] .sw-ticker.is-here .sw-ticker-room { display: none; }
+.world-surface[data-detail="far"] .sw-ticker.is-here .sw-ticker-label { padding: 0 22px; }
+.world-surface[data-detail="far"] .sw-ticker.is-here .sw-ticker-text { font-size: 40px; -webkit-line-clamp: 2; }
 
 /* A chart. The series take the screen's own colours. */
 .sw-chart { --chart-1: var(--sf-accent); --chart-2: #9d8cff; --chart-3: var(--sf-ok); gap: 10px; }

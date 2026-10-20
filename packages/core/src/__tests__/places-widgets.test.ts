@@ -4,25 +4,29 @@
  * add with the `place` tool and people from the catalogue, `shows` choosing
  * what some of them show, the photos every place keeps gathered for a photo
  * wall, and where the building hangs them: the lobby, over a meeting room's
- * task board, by a new home's desk.
+ * task board, by a home's desk.
  */
 import { describe, expect, it } from "vitest";
 import { applyAction, WALL_PHOTOS, wallPhotos } from "../plugins/places.js";
 import { applyEdit, editFrom } from "../plugins/places-edit.js";
 import {
   describe as describeRoom,
+  findPlacement,
   firstHome,
   heightOf,
   KINDS,
   PLACE_SCHEMA,
   type Place,
   type PlaceItem,
+  type Placing,
   placeProblems,
   SHOWS_KINDS,
   SHOWS_LENGTH,
+  withDoorwayHeld,
 } from "../plugins/places-layout.js";
+import { MOUNT_KIND, modelFrom, READY } from "../plugins/places-models.js";
 import { homePlace, LOBBY, lobby, meetingRoom, officeFloor } from "../plugins/places-rooms.js";
-import { layTown, townPlace } from "../plugins/places-town.js";
+import { HALL_PILLARS, layTown, townPlace } from "../plugins/places-town.js";
 
 const WIDGETS = [
   "status_board",
@@ -183,7 +187,7 @@ describe("where the building hangs widgets", () => {
     expect(LOBBY).toBe("lobby");
   });
 
-  it("on the town square: on the town hall's front either side of the door and over it, and on stands at its top corners", () => {
+  it("on the town square: on the town hall's front between its pilasters, either side of the door and over it, and on stands at its top corners", () => {
     const town = layTown(
       { homes: [], street: [], huts: [], office: true, plots: [] },
       { hall: LOBBY, office: "office" },
@@ -203,6 +207,17 @@ describe("where the building hangs widgets", () => {
     };
     const low = [status, needs, screen, board].map(span).sort((a, b) => a[0] - b[0]);
     for (let i = 1; i < low.length; i++) expect(low[i]?.[0] ?? 0).toBeGreaterThan(low[i - 1]?.[1] ?? 0);
+    // Nothing on the front crosses a pilaster, as the page draws them from the town, with a hand's width to spare.
+    const hall = town.buildings.find((b) => b.kind === "hall");
+    expect(hall?.pillars).toEqual(HALL_PILLARS);
+    const onFront = square.props.filter((p) => p.at[1] === screen.at[1]);
+    expect(onFront.length).toBeGreaterThanOrEqual(6);
+    for (const p of onFront)
+      for (const x of HALL_PILLARS.x) {
+        const [a, b] = span(p);
+        const clear = b <= x - HALL_PILLARS.width / 2 - 0.08 || a >= x + HALL_PILLARS.width / 2 + 0.08;
+        expect(clear, `${p.id} across the pilaster at ${x}`).toBe(true);
+      }
     // The ticker over the door, above everything else on the front.
     expect(ticker.at[0]).toBe(0);
     expect(ticker.elevation ?? 0).toBeGreaterThan((board.elevation ?? 0) + heightOf(board));
@@ -236,7 +251,7 @@ describe("where the building hangs widgets", () => {
     }
   });
 
-  it("by a new home's desk, a to-do list of its owner's tasks, whatever the preset", () => {
+  it("by a home's desk, a to-do list of its owner's tasks, whatever the preset", () => {
     let missing = 0;
     for (let i = 0; i < 24; i++) {
       const home = homePlace(`agent-${i}`, `home ${i}`);
@@ -245,5 +260,23 @@ describe("where the building hangs widgets", () => {
     }
     // A wall too full for one even at a smaller size can go without, but hardly any home is that full.
     expect(missing).toBeLessThanOrEqual(2);
+  });
+
+  it("never on the last stretch of a home's wall that a to-do board of the agent's own would take", () => {
+    const ready = READY.find((r) => r.name === "todo_board");
+    const made =
+      ready && modelFrom({ owner: "planner", name: ready.name, mount: ready.mount, parts: ready.parts("planner") });
+    if (!made || typeof made === "string") throw new Error(`no to-do board: ${made}`);
+    const board: Placing = { kind: MOUNT_KIND[made.mount], size: made.size };
+    const roomFor = (p: Place) => typeof findPlacement(withDoorwayHeld(p), board, {}) !== "string";
+    let hung = 0;
+    for (let i = 0; i < 60; i++) {
+      const home = homePlace(`home:agent-${i}`, `agent-${i}'s room`);
+      const without = { ...home, props: home.props.filter((p) => p.kind !== "todo") };
+      if (roomFor(without)) expect(roomFor(home), `home ${i}`).toBe(true);
+      if (home.props.some((p) => p.kind === "todo")) hung++;
+    }
+    // Most homes still have one: the walls of only a few are that full.
+    expect(hung).toBeGreaterThanOrEqual(54);
   });
 });

@@ -46,6 +46,14 @@ export const MAIN = "main";
 /** The town's place id: the outdoors. */
 export const TOWN = "town";
 
+/**
+ * Whether a place is everyone's: the town square and the lobby inside its town hall. Their boards, calendars and
+ * widgets show every agent's, since nobody lives there and agents only pass through.
+ */
+export function isCommon(place: string | undefined): boolean {
+  return place === "lobby" || place === TOWN;
+}
+
 /** A name as a heading: "the summer house" becomes "Summer house". */
 export function areaTitle(name: string): string {
   const bare = name.replace(/^(the|a|an)\s+/i, "").trim() || name;

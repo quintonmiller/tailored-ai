@@ -56,6 +56,8 @@ export interface Wake {
   every?: string;
   /** The room a booked wake wakes it in, by ref; none when it wakes in its own conversation. */
   room?: string;
+  /** A later time a repeat comes round, worked out from how often it repeats (`withRepeats`), not its next time. */
+  again?: boolean;
 }
 
 /** Something an agent got done today. */
@@ -160,6 +162,72 @@ export function dayStart(at: number): number {
 
 /** The day after `start`, at its midnight: a day is not always 24 hours long where clocks change. */
 const nextDay = (start: number) => dayStart(start + 36 * 3_600_000);
+
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
+
+/**
+ * The days of the week (0 is Sunday) a repeat comes round on, once each at
+ * one time of day: from a cron line that fires at one minute of one hour on
+ * every day of the month ("0 7 * * 1-5"), or the words a wake was booked
+ * with ("every day at 7am", "weekdays at 9am", "every monday at 8:30").
+ * None when that can't be told, or it comes round more than once a day or
+ * every few days.
+ */
+export function repeatDays(every: string): number[] | undefined {
+  const words = every.trim().toLowerCase();
+  const cron = words.split(/\s+/);
+  if (
+    cron.length === 5 &&
+    /^\d+$/.test(cron[0] ?? "") &&
+    /^\d+$/.test(cron[1] ?? "") &&
+    cron[2] === "*" &&
+    cron[3] === "*"
+  )
+    return cronDays(cron[4] ?? "");
+  if (/^(every day|daily|each day)\b/.test(words)) return EVERY_DAY;
+  if (/^(every )?weekdays?\b/.test(words)) return [1, 2, 3, 4, 5];
+  if (/^(every )?weekends?\b/.test(words)) return [0, 6];
+  const day = /^every (sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/.exec(words)?.[1];
+  return day ? [WEEKDAYS.indexOf(day)] : undefined;
+}
+
+/** A cron line's days of the week: `*`, numbers, ranges and lists of them (7 is Sunday too). */
+function cronDays(field: string): number[] | undefined {
+  if (field === "*") return EVERY_DAY;
+  const out = new Set<number>();
+  for (const part of field.split(",")) {
+    const range = /^([0-7])(?:-([0-7]))?$/.exec(part);
+    if (!range) return undefined;
+    const from = Number(range[1]);
+    const to = range[2] === undefined ? from : Number(range[2]);
+    for (let d = from; d <= to; d++) out.add(d % 7);
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+/**
+ * The wakes, with each repeat that comes round once a day at one time
+ * (`repeatDays`) put again on every later day it comes round on, up to
+ * `to`, at the time of day of its next time, marked `again`: a week or a
+ * month of a calendar shows a daily wake every day, not only on the next.
+ * A repeat that can't be told this way stays once, at its next time.
+ */
+export function withRepeats(wakes: Wake[], to: number): Wake[] {
+  const out = [...wakes];
+  for (const w of wakes) {
+    const days = w.every ? repeatDays(w.every) : undefined;
+    if (!days) continue;
+    const at = new Date(w.at);
+    for (let d = nextDay(dayStart(w.at)); d < to; d = nextDay(d)) {
+      const day = new Date(d);
+      if (!days.includes(day.getDay())) continue;
+      day.setHours(at.getHours(), at.getMinutes(), 0, 0);
+      out.push({ ...w, key: `${w.key}@${d}`, at: day.getTime(), again: true });
+    }
+  }
+  return out.sort((a, b) => a.at - b.at || a.agent.localeCompare(b.agent));
+}
 
 /** A task, as far as what got done today needs one. */
 export interface DoneTask {

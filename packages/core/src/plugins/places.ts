@@ -726,6 +726,8 @@ export const roomPlaceId = (ref: string) => `room:${ref}`;
 
 /** How many of a room's latest messages a visitor reads in the chat panel. */
 export const TRANSCRIPT_LINES = 30;
+/** How long every room's latest lines are kept before they are read again. */
+const LINES_MS = 55_000;
 
 /** One thing said in a room of conversation, as a visitor reads it. */
 export interface SaidLine {
@@ -791,6 +793,47 @@ export async function transcript(
   } catch (err) {
     return { error: `Couldn't read #${room.name}: ${(err as Error).message}` };
   }
+}
+
+/** How many lines a ticker of every room reads from each room, and how many it keeps across them all. */
+export const EVERY_ROOM_EACH = 4;
+export const EVERY_ROOM_LINES = 24;
+
+/** A line in a ticker of every room: one of a room's latest, and which room, as its place id and its name. */
+export type RoomLine = SaidLine & { room: string; roomName: string };
+
+/**
+ * The latest lines across every room, oldest first as a transcript's are,
+ * each saying which room it was said in: for a ticker of every room, read
+ * from each room as its meeting room's ticker reads it, a few lines a room,
+ * people's lines too. A room whose transport can't be read now is left out
+ * and named in `missed`.
+ */
+export async function latestLines(
+  rooms: TalkRoomRecord[],
+  backendOf: (backend: string) => RoomBackend | undefined,
+  identities: IdentityResolver,
+  each = EVERY_ROOM_EACH,
+  limit = EVERY_ROOM_LINES,
+): Promise<{ lines: RoomLine[]; missed: string[] }> {
+  const read = await Promise.all(
+    rooms.map(async (room) => ({
+      room,
+      said: await transcript(room, backendOf(room.ref.backend), identities, [], each),
+    })),
+  );
+  const lines: RoomLine[] = [];
+  const missed: string[] = [];
+  for (const { room, said } of read) {
+    if ("error" in said) {
+      missed.push(room.name);
+      continue;
+    }
+    const id = roomPlaceId(formatRoomRef(room.ref));
+    for (const line of said.lines) if (line.text.trim()) lines.push({ ...line, room: id, roomName: room.name });
+  }
+  lines.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return { lines: lines.slice(-limit), missed };
 }
 
 /**
@@ -2590,7 +2633,7 @@ const plugin: Plugin = (ctx) => {
     );
 
   // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
-  // `map`, `scene/:id`, `photos` and `transcript/:id` go first, so they aren't read as an agent's name.
+  // `map`, `scene/:id`, `photos`, `lines` and `transcript/:id` go first, so they aren't read as an agent's name.
   const agentNames = () => ["default", ...Object.keys(runtime.getConfig().agents ?? {}).filter((a) => a !== "default")];
   // Who is who in a room, rebuilt per read so a config reload takes effect at once: the same as the watcher's.
   const identities = () => {
@@ -2764,6 +2807,22 @@ const plugin: Plugin = (ctx) => {
         .query(PLUGIN_CALLER, { type: PLACE_TYPE, scope: "global", limit: 500 })
         .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
       return { json: { photos: wallPhotos(records) } };
+    },
+  });
+
+  // Every room's latest lines, for a ticker of every room: read at most once a minute, however many pages ask, since a
+  // room on Discord is read over the network.
+  let lately: { at: number; body: Promise<{ lines: RoomLine[]; missed: string[] }> } | undefined;
+  ctx.http.register({
+    method: "GET",
+    path: "lines",
+    handler: async (): Promise<TaiHttpResponse> => {
+      const now = Date.now();
+      if (!lately || now - lately.at > LINES_MS) {
+        const rooms = runtime.getRoomStore().listRooms();
+        lately = { at: now, body: latestLines(rooms, getRoomBackend, identities()) };
+      }
+      return { json: await lately.body };
     },
   });
 
