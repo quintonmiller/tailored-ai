@@ -234,6 +234,8 @@ const posts: { url: string; body: unknown }[] = [];
 const deleted: string[] = [];
 /** Records a DELETE finds nothing to remove at: answered 404. */
 let missing: string[] = [];
+/** Each agent's `talk` record as the server keeps it, for a GET of it. */
+let talkRows: Record<string, { version: number; data: Record<string, unknown> }> = {};
 const audios: { src: string; onended: (() => void) | null }[] = [];
 const spoken: [string | undefined, string][] = [];
 
@@ -284,6 +286,7 @@ beforeEach(() => {
   posts.length = 0;
   deleted.length = 0;
   missing = [];
+  talkRows = {};
   audios.length = 0;
   spoken.length = 0;
   extras.length = 0;
@@ -500,6 +503,13 @@ beforeEach(() => {
       if (url.startsWith("/api/state/talk/") && init?.method === "PUT") {
         posts.push({ url, body: JSON.parse(String(init.body)) });
         return new Response("{}");
+      }
+      const talkRow = url.match(/^\/api\/state\/talk\/([^/?]+)$/);
+      if (talkRow && !init?.method) {
+        const row = talkRows[decodeURIComponent(talkRow[1])];
+        return row
+          ? new Response(JSON.stringify({ type: "talk", id: talkRow[1], ...row }))
+          : new Response(JSON.stringify({ error: "No talk record" }), { status: 404 });
       }
       if (url.startsWith("/api/state/wear/") && init?.method === "PUT") {
         posts.push({ url, body: JSON.parse(String(init.body)) });
@@ -1009,11 +1019,11 @@ describe("the chat page's scene", () => {
   });
 
   it("plays the far side of a call down a telephone line, out of the phone of the one you stand by", async () => {
-    const made: { kind: string; type?: string; value?: number }[] = [];
-    const node = (extra: Record<string, unknown> = {}) => ({
+    const made: { kind: string; type?: string; value?: number; of?: string }[] = [];
+    const node = (extra: Record<string, unknown> = {}, name = "node") => ({
       ...extra,
       connect: (next: unknown) => next,
-      disconnect: () => made.push({ kind: "let go" }),
+      disconnect: () => made.push({ kind: "let go", of: name }),
     });
     const param = (kind: string) => {
       const p = { _v: 0 } as { _v: number; value: number };
@@ -1033,7 +1043,7 @@ describe("the chat page's scene", () => {
         destination = node();
         createMediaElementSource() {
           made.push({ kind: "source" });
-          return node();
+          return node({}, "source");
         }
         createBiquadFilter() {
           const f = node({ frequency: param("frequency"), Q: param("q"), gain: param("boost") });
@@ -1077,12 +1087,53 @@ describe("the chat page's scene", () => {
     expect(made.filter((m) => m.kind === "filter").map((m) => m.type)).toEqual(["highpass", "lowpass", "peaking"]);
     expect(made.some((m) => m.kind === "compressor")).toBe(true);
     expect(made.find((m) => m.kind === "volume")?.value).toBeLessThan(1);
-    // Played through the line, not at the element's own volume; and the line let go once it is said.
+    // Played through the line, not at the element's own volume; and the line let go once it is said, the element's
+    // own way into it too.
     const played = audios.at(-1) as unknown as { volume?: number; onended: (() => void) | null };
     expect(played.volume).toBeUndefined();
     await act(async () => played.onended?.());
     await settle();
-    expect(made.some((m) => m.kind === "let go")).toBe(true);
+    expect(made.filter((m) => m.kind === "let go").length).toBe(6);
+    expect(made.some((m) => m.kind === "let go" && m.of === "source")).toBe(true);
+  });
+
+  it("plays the far side plainly, quieter, when the browser never lets the phone line's sound out", async () => {
+    let wired = 0;
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        state = "suspended";
+        createMediaElementSource() {
+          wired++;
+          return {};
+        }
+        // Held back for good: a promise that never settles.
+        resume() {
+          return new Promise(() => {});
+        }
+      },
+    );
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Map").click());
+    await settle();
+    await act(async () => (container.querySelector(".world-map-place") as HTMLButtonElement).click());
+    await settle(60);
+    await act(async () => tool("Voices off").click());
+    await act(async () => stage.onLine?.("writer", "On it.", 1, true));
+    await settle(700);
+    expect(wired).toBe(0);
+    const played = audios.at(-1) as unknown as { volume?: number; onended: (() => void) | null };
+    expect(played.volume).toBeCloseTo(0.7);
+    // And the next line is still heard: nothing is left waiting on the browser.
+    await act(async () => played.onended?.());
+    await act(async () => stage.onLine?.("planner", "Thanks.", 0.8));
+    await settle();
+    expect(posts.filter((p) => p.url === "/api/live/say").map((p) => (p.body as { text: string }).text)).toEqual([
+      "On it.",
+      "Thanks.",
+    ]);
   });
 
   it("puts the agent you talk to from somewhere else on the phone, and you too, with your words over your head", async () => {
@@ -1118,7 +1169,70 @@ describe("the chat page's scene", () => {
     await render({ sending: false, exchange: { said: "Where are we on the itinerary?", reply: "By noon." } });
     await settle();
     expect(stage.speech.at(-1)?.talker?.text).toBe("By noon.");
+    // Typed, it was never heard out loud: voices nearby may say it.
+    expect((stage.speech.at(-1)?.talker as { voiced?: boolean }).voiced).toBeUndefined();
     expect(posts.filter((p) => p.url === "/api/state/talk/talker").length).toBeGreaterThan(1);
+  });
+
+  it("shows a spoken turn on a visit in bubbles, its reply marked as heard already so it isn't voiced twice", async () => {
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    await act(async () => tool("Map").click());
+    await settle();
+    const hall = [...container.querySelectorAll(".world-map-fold")][0] as HTMLButtonElement;
+    await act(async () => hall.click());
+    await act(async () =>
+      (
+        [...container.querySelectorAll(".world-map-place")].find((b) =>
+          b.textContent?.includes("Residences"),
+        ) as HTMLButtonElement
+      ).click(),
+    );
+    await settle(60);
+    await act(async () => tool("Voices off").click());
+    await talk();
+    expect(stage.speech.at(-1)?.you?.text).toBe("come sit down");
+    // The turn played the reply itself, sentence by sentence.
+    expect(stage.speech.at(-1)?.talker).toMatchObject({ text: "Coming over.", to: ["you"], voiced: true });
+  });
+
+  it("ends your talk with an agent as you leave the visit, on every page, but not a talk it has with another", async () => {
+    await render();
+    const tool = (label: string) =>
+      [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
+    const visitHall = async () => {
+      await act(async () => tool("Map").click());
+      await settle();
+      const hall = [...container.querySelectorAll(".world-map-fold")][0] as HTMLButtonElement;
+      await act(async () => hall.click());
+      await act(async () =>
+        (
+          [...container.querySelectorAll(".world-map-place")].find((b) =>
+            b.textContent?.includes("Residences"),
+          ) as HTMLButtonElement
+        ).click(),
+      );
+      await settle(60);
+    };
+    await visitHall();
+    await render({ sending: true, exchange: { said: "Where are we?" } });
+    await render({ sending: false, exchange: { said: "Where are we?", reply: "By noon." } });
+    talkRows.talker = { version: 3, data: { with: "you", phone: true } };
+    await act(async () => tool("Back to talker").click());
+    await settle(60);
+    expect(deleted).toEqual(["/api/state/talk/talker?expectedVersion=3"]);
+    // And what was said on the visit goes with it: the agent's own view shows nothing of it.
+    expect(stage.speech.at(-1)?.talker).toBeUndefined();
+    expect(stage.speech.at(-1)?.you).toBeUndefined();
+    // Once more, but by the time you leave the places plugin has it talking with someone else: that talk stays.
+    deleted.length = 0;
+    await visitHall();
+    await render({ sending: true, exchange: { said: "And now?" } });
+    talkRows.talker = { version: 5, data: { with: "writer", phone: true } };
+    await act(async () => tool("Back to talker").click());
+    await settle(60);
+    expect(deleted).toEqual([]);
   });
 
   it("talks face to face with an agent you visit, and shows others' talks as they change", async () => {

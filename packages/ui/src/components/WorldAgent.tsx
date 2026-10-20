@@ -21,6 +21,8 @@ export interface Said {
   to?: string[];
   /** The room it was said in, as `<backend>:<id>`; absent for a direct message. */
   room?: string;
+  /** Heard out loud already, as the reply to a spoken turn: never voiced again by voices nearby. */
+  voiced?: boolean;
 }
 
 /** An interval in a few words: "45 min", "90 min", "3 h", "2.5 h". */

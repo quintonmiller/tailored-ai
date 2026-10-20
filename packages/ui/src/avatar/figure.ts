@@ -4,13 +4,13 @@
  * and one for each other agent in the same room, so they all move the same
  * way: round the furniture, onto seats, with the same gestures.
  */
-import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
+import { type VRM, type VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
 import type { Hold, Sign } from "./doing";
 import { buildPiece, wearColors } from "./dress";
-import { armClearance, bodyPoints, measureWear, wearBone } from "./fit";
+import { type ArmTurn, armClearance, bodyPoints, earAt, measureWear, reach, wearBone } from "./fit";
 import { Director, findPath, type Obstacle, type Pick, route, slide, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { BUBBLE_PX, GAP_PX, type Over, SETTLE_SECONDS, SIGN_PX, type Stacked, TAG_PX, TAIL_WIDTH_PX } from "./overhead";
@@ -19,7 +19,8 @@ import { type Activity, type Room, type Spot, spotById } from "./scene";
 import { bubbleTail, disposeSprite, fitSprite, liftSprite, SignPost, speechBubble, tag } from "./signs";
 import { tintModel } from "./tint";
 import { ease, gait } from "./travel";
-import { wearPieces, wearTop } from "./wear";
+import { Turns } from "./turns";
+import { type BodyFit, type V3, wearPieces, wearTop } from "./wear";
 
 const rad = (degrees: number) => (degrees * Math.PI) / 180;
 /** Seconds its pace takes to catch up with how fast it is really going: long enough to smooth a frame's hitch. */
@@ -50,13 +51,42 @@ export async function loadModel(url: string): Promise<VRM> {
 const GRIPS: Record<Hold, { at: [number, number, number]; turn: [number, number, number] }> = {
   // Up to the eyes, lens ahead, the hand on its right end.
   up: { at: [0.05, 0.01, 0.04], turn: [0, 0, 0] },
-  // On its edge at the ear, screen to the head, tipped toward the mouth.
-  ear: { at: [0.02, 0.03, 0], turn: [0.7, 0, -Math.PI / 2] },
+  // At the ear, screen to the head and tipped toward the mouth, held by its lower half; its back turned out to the
+  // front, so it is seen from across the room as well as up close.
+  ear: { at: [0.02, 0.07, 0.04], turn: [-1.755, -0.227, -0.692] },
   // In front of the chest, tilted up toward the eyes.
   chest: { at: [0.07, 0.03, 0.03], turn: [-0.4, 0, 0] },
   // Out ahead, the far end tipped down to look through.
   out: { at: [0, 0.01, 0.02], turn: [0.5, 0, 0] },
 };
+/** How far out from the side of the head a hand holding a phone there is, for a grown-up: the phone between them. */
+const EAR_GAP = 0.035;
+/** How much of the head's height a phone held to the ear spans, at least. */
+const EAR_SPAN = 0.5;
+/** Which way from the shoulder the elbow of an arm holding a phone to the ear points: out, down, a little forward. */
+const EAR_ELBOW: V3 = [-1, -1, 0.35];
+
+/**
+ * The arm holding a phone to this body's ear, measured in `frame` (the
+ * figure's own) while the body stands as made: the hand brought as near the
+ * side of its head as it reaches (`reach`). None for a model without the bones.
+ */
+function earTurn(vrm: VRM, frame: THREE.Object3D, fit: BodyFit, gap: number): ArmTurn | undefined {
+  frame.updateMatrixWorld(true);
+  const at = (bone: VRMHumanBoneName): V3 | undefined => {
+    const node = vrm.humanoid.getNormalizedBoneNode(bone);
+    return node ? (frame.worldToLocal(node.getWorldPosition(new THREE.Vector3())).toArray() as V3) : undefined;
+  };
+  const shoulder = at("rightUpperArm");
+  const elbow = at("rightLowerArm");
+  const hand = at("rightHand");
+  if (!shoulder || !elbow || !hand) return undefined;
+  // The elbow down and out to the side, a little forward; the palm to the head, which is to its left (+x), with the
+  // phone between them.
+  const { upper, lower } = reach({ shoulder, elbow, hand }, earAt(fit, gap), { elbow: EAR_ELBOW, palm: [1, 0, 0] });
+  return { upper, lower };
+}
+
 /** A microphone held up points at the mouth, not ahead. */
 const MIC_UP: [number, number, number] = [-1.2, 0, 0];
 
@@ -109,10 +139,10 @@ export class Figure {
   private pace = 0;
   /** Its walking speed was set for it, and is kept when a walk clip loads. */
   private readonly paceSet: boolean;
-  /** Something it said, shown in a bubble with its tail from `from` to `until` on the stage's clock. */
-  private line: { bubble: THREE.Sprite; tail: THREE.Sprite; from: number; until: number } | undefined;
-  /** Something said after that, waiting for its turn in the bubble. */
-  private next: { text: string; from: number; who?: string; how: { phone?: boolean; far?: boolean } } | undefined;
+  /** What it says, in turn: the line in its bubble, from when to when on the stage's clock, and those said after. */
+  private readonly turns = new Turns<{ text: string; who?: string; how: { phone?: boolean; far?: boolean } }>();
+  /** The line in its bubble, drawn: the bubble and its tail. */
+  private line: { bubble: THREE.Sprite; tail: THREE.Sprite; from: number } | undefined;
   private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
   /** The sign over its head. */
   readonly signs = new SignPost();
@@ -194,6 +224,11 @@ export class Figure {
     this.current = start?.id;
     this.currentAt = start?.at;
     this.motion = new Motion(opts);
+    // A little larger than life, so what it holds reads from across the room.
+    this.size = 1.3 * Math.min(1.25, Math.max(0.6, (this.bounds.max.y - this.bounds.min.y) / 1.6));
+    // A phone to its own ear: the hand to the side of its own head, however big the head and short the arms. Measured
+    // standing as made, before anything poses it.
+    if (this.measured) this.motion.ear = earTurn(vrm, this.body, this.measured.fit, EAR_GAP * this.size);
     // Swing the arms out just far enough that the hands clear this body.
     const points = bodyPoints(vrm);
     const probe = new Motion({ reducedMotion: true });
@@ -205,8 +240,6 @@ export class Figure {
     });
     this.hipsNode = vrm.humanoid.getNormalizedBoneNode("hips");
     this.hand = vrm.humanoid.getNormalizedBoneNode("rightHand");
-    // A little larger than life, so what it holds reads from across the room.
-    this.size = 1.3 * Math.min(1.25, Math.max(0.6, (this.bounds.max.y - this.bounds.min.y) / 1.6));
     this.crownPoint.position.y = this.bounds.max.y;
     this.crownPoint.add(this.signs.group);
     this.body.add(this.crownPoint);
@@ -365,38 +398,35 @@ export class Figure {
 
   /**
    * Say something: a bubble over its head from `from` (the stage's clock)
-   * for long enough to read, replacing whatever it was saying before. `who`
-   * names the speaker in the bubble, for a body that wears a tag: the tag is
-   * put away while it speaks. Said down the phone, the bubble shows a phone;
-   * the far side of a call, heard out of this body's phone, is edged apart.
+   * for long enough to read, in turn with whatever else it says: what it was
+   * saying stays up until this is due, and this waits for anything said
+   * before it (`turns.ts`). `who` names the speaker in the bubble, for a body
+   * that wears a tag: the tag is put away while it speaks. Said down the
+   * phone, the bubble shows a phone; the far side of a call, heard out of
+   * this body's phone, is edged apart.
    */
   say(text: string, from: number, who?: string, how: { phone?: boolean; far?: boolean } = {}) {
-    // Said after what is in its bubble now (the other end of a call answering), it waits its turn: what is there
-    // stays up until then.
-    if (this.line && from > this.line.from) {
-      this.line.until = Math.min(this.line.until, from);
-      this.next = { text, from, who, how };
-      return;
-    }
-    this.next = undefined;
-    this.utter(text, from, who, how);
+    if (this.turns.add({ text, who, how }, from, Math.min(12, 3 + 0.06 * text.length))) this.utter();
   }
 
-  private utter(text: string, from: number, who: string | undefined, how: { phone?: boolean; far?: boolean }) {
+  /** Draw the line whose turn it is in the bubble, in place of the one there. */
+  private utter() {
     this.hush();
-    const bubble = speechBubble(text, who, how);
+    const now = this.turns.now;
+    if (!now) return;
+    const bubble = speechBubble(now.what.text, now.what.who, now.what.how);
     const tail = bubbleTail();
     bubble.visible = false;
     tail.visible = false;
     this.crownPoint.add(bubble, tail);
-    this.line = { bubble, tail, from, until: from + Math.min(12, 3 + 0.06 * text.length) };
+    this.line = { bubble, tail, from: now.from };
     // A new bubble appears where it goes, rather than gliding there from where the last one was.
     if (this.lifted) this.lifted = { ...this.lifted, bubble: Number.NaN, across: Number.NaN };
   }
 
   /** Whether it is saying something right now: its mouth moves while it is. */
   speaking(clock: number): boolean {
-    return !!this.line && clock >= this.line.from && clock < this.line.until;
+    return !!this.line && this.turns.speaking(clock);
   }
 
   private hush() {
@@ -462,6 +492,13 @@ export class Figure {
     if (!kind || !how) return;
     const thing = buildHeld(kind);
     thing.scale.setScalar(this.size);
+    // At the ear, at least half as long as the head is tall: a big head hides a phone sized for the body.
+    const head = this.measured?.fit.head;
+    if (how === "ear" && head) {
+      const made = new THREE.Box3().setFromObject(thing).getSize(new THREE.Vector3());
+      const long = Math.max(made.x, made.y, made.z) / this.size;
+      if (long > 0) thing.scale.setScalar(Math.max(this.size, (EAR_SPAN * (head.max[1] - head.min[1])) / long));
+    }
     const turn = kind === "microphone" && how === "up" ? MIC_UP : GRIPS[how].turn;
     thing.rotation.set(...turn);
     thing.visible = false;
@@ -629,14 +666,13 @@ export class Figure {
       this.line.tail.visible = on && (this.line.tail.userData.long ?? Number.POSITIVE_INFINITY) > 4;
       this.signs.group.visible = !on;
       if (this.shownTag.sprite) this.shownTag.sprite.visible = !on;
-      if (t >= this.line.until) {
-        this.hush();
-        this.signs.group.visible = true;
-        if (this.shownTag.sprite) this.shownTag.sprite.visible = true;
-        // Its turn now: what was said after it.
-        const next = this.next;
-        this.next = undefined;
-        if (next) this.utter(next.text, next.from, next.who, next.how);
+      // Its time up, the next thing said has its turn, if there is one.
+      if (this.turns.tick(t)) {
+        this.utter();
+        if (!this.line) {
+          this.signs.group.visible = true;
+          if (this.shownTag.sprite) this.shownTag.sprite.visible = true;
+        }
       }
     }
     const size = Math.max(0.05, this.bounds.max.y - this.hipsY) * 0.5;

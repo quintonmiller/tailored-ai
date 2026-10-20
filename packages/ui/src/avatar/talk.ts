@@ -59,13 +59,29 @@ export function talkWords(t: { with: string; phone?: boolean }): string {
 /** The doings a talk can go with: busy with nothing else, talking already, or thinking or working through it. */
 const TALKS_THROUGH = new Set<AgentActivity["doing"]>(["idle", "talking", "thinking", "working"]);
 
+/** A name with only its letters and digits, in lower case: how a label in rooms ("Writer", "code-reviewer") is matched. */
+const plain = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * Whether one talking to `called` (as the activity names it: the name or the
+ * label the call used) is talking to `agent`: the same name in any case or
+ * spelling a room label gives it, or a name that is no agent's at all, an
+ * alias only the rooms know, which the talk has already worked out.
+ */
+function sameAgent(called: string, agent: string, agents: Iterable<string>): boolean {
+  if (plain(called) === plain(agent)) return true;
+  for (const a of agents) if (plain(a) === plain(called)) return false;
+  return true;
+}
+
 /**
  * Every agent's activity as the world shows it, with the talks going on at
  * `now`. One idle, or talking with the one its talk names, is talking in the
  * talk's words; one thinking or working keeps its own words, with the talk
  * alongside, so a body that thinks on the phone holds the phone as it thinks.
  * One talking to somebody else (handing off work), waiting on you, stuck or
- * asleep is left as it is. An agent with a talk and no activity yet is
+ * asleep is left as it is; one calling the other by its label in rooms is
+ * talking to the same one. An agent with a talk and no activity yet is
  * talking too.
  */
 export function withTalks(
@@ -79,7 +95,8 @@ export function withTalks(
     if (!t) continue;
     const own = activities[agent];
     const doing = own?.doing ?? "idle";
-    if (!TALKS_THROUGH.has(doing) || (doing === "talking" && own?.with && own.with !== t.with)) continue;
+    if (!TALKS_THROUGH.has(doing)) continue;
+    if (doing === "talking" && own?.with && !sameAgent(own.with, t.with, Object.keys(activities))) continue;
     const talk = { with: t.with, ...(t.phone ? { phone: true } : {}), ...(t.started ? { started: true } : {}) };
     if (out === activities) out = { ...activities };
     out[agent] =
@@ -121,17 +138,21 @@ export function byPhone(line: { to?: string[]; room?: string }, talk: AgentActiv
 
 /**
  * Whose phone a line said by `speaker`, who isn't here, comes out of: a body
- * here on the phone with it, if there is one. That is where the far side of a
- * call is heard, and where its words show.
+ * here on the phone with it that the line was said to, if there is one. That
+ * is where the far side of a call is heard, and where its words show. What
+ * the speaker says in a room, or to somebody else, isn't said down this call,
+ * though the call is still on.
  */
 export function heardThrough(
   speaker: string,
+  line: { to?: string[]; room?: string },
   activities: Record<string, AgentActivity>,
   here: Iterable<string>,
 ): string | undefined {
   for (const agent of here) {
     const t = activities[agent]?.talk;
-    if (agent !== speaker && t?.phone && t.with === speaker) return agent;
+    if (agent !== speaker && t?.phone && t.with === speaker && byPhone(line, { with: agent, phone: true }))
+      return agent;
   }
   return undefined;
 }

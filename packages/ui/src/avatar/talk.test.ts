@@ -134,6 +134,23 @@ describe("activities with the talks going on", () => {
     expect(withTalks(activities, talks, NOW)).toBe(activities);
   });
 
+  it("takes a call naming the other by its label in rooms as the talk with it, but not one to an agent besides", () => {
+    const calling = (label: string): AgentActivity => ({
+      agent: "host",
+      doing: "talking",
+      what: `talking to ${label}`,
+      with: label,
+    });
+    const activities = { guest: idle("guest"), other: idle("other") };
+    const talks = { host: { with: "guest", phone: true, started: true, until: later(5000) } };
+    for (const label of ["Guest", "GUEST", "guest-", "an-alias-only-rooms-know"])
+      expect(withTalks({ ...activities, host: calling(label) }, talks, NOW).host).toMatchObject({
+        what: "on the phone with guest",
+        talk: { with: "guest", phone: true },
+      });
+    expect(withTalks({ ...activities, host: calling("Other") }, talks, NOW).host.what).toBe("talking to Other");
+  });
+
   it("has an agent with a talk and no activity yet talking", () => {
     expect(withTalks({}, { guest: { with: "host", until: later(5000) } }, NOW).guest).toMatchObject({
       doing: "talking",
@@ -202,9 +219,25 @@ describe("the phone", () => {
       host: { agent: "host", doing: "talking", what: "", talk: { with: "guest", phone: true } },
       other: { agent: "other", doing: "talking", what: "", talk: { with: "guest" } },
     };
-    expect(heardThrough("guest", activities, ["other", "host"])).toBe("host");
+    const down = { to: ["host"] };
+    expect(heardThrough("guest", down, activities, ["other", "host"])).toBe("host");
     // Face to face is no phone to hear it from, and nobody hears themselves down the line.
-    expect(heardThrough("guest", activities, ["other"])).toBeUndefined();
-    expect(heardThrough("host", activities, ["host"])).toBeUndefined();
+    expect(heardThrough("guest", down, activities, ["other"])).toBeUndefined();
+    expect(heardThrough("host", { to: ["guest"] }, activities, ["host"])).toBeUndefined();
+  });
+
+  it("hears only what is said down the call: not what the far side says in a room, or to somebody else", () => {
+    const activities: Record<string, AgentActivity> = {
+      host: { agent: "host", doing: "talking", what: "", talk: { with: "guest", phone: true } },
+    };
+    expect(heardThrough("guest", { to: ["host"], room: "local:trip" }, activities, ["host"])).toBeUndefined();
+    expect(heardThrough("guest", { room: "local:trip" }, activities, ["host"])).toBeUndefined();
+    expect(heardThrough("guest", { to: ["editor"] }, activities, ["host"])).toBeUndefined();
+    // Your own phone, the agent's answer to you.
+    const yours: Record<string, AgentActivity> = {
+      [YOU]: { agent: YOU, doing: "talking", what: "", talk: { with: "guest", phone: true } },
+    };
+    expect(heardThrough("guest", { to: [YOU] }, yours, [YOU])).toBe(YOU);
+    expect(heardThrough("guest", { to: ["host"], room: "local:trip" }, yours, [YOU])).toBeUndefined();
   });
 });

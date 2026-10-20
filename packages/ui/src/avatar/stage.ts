@@ -97,6 +97,7 @@ import {
   widestReach,
   ZOOM_SECONDS,
 } from "./travel";
+import { inOrder } from "./turns";
 
 export type { Travel } from "./travel";
 
@@ -107,6 +108,8 @@ export interface Line {
   to?: string[];
   /** The room it was said in; none for a direct message, which may be said down the phone. */
   room?: string;
+  /** Already heard out loud where it was said (the reply to a spoken turn): only a bubble here, never voiced again. */
+  voiced?: boolean;
 }
 
 /** Where on something made to be used a click landed: a note or a column on a board, or the page a screen is on. */
@@ -1696,14 +1699,16 @@ export async function createStage(
   /**
    * Show what an agent said, once, over its head: now, or when a reply is
    * timed to follow. Said down the phone, its bubble shows a phone. Said by
-   * someone who isn't here, to someone here on the phone with it, it comes
-   * out of that one's phone: over its head, edged apart, in the speaker's name.
+   * someone who isn't here, down the phone to someone here on a call with
+   * it, it comes out of that one's phone: over its head, edged apart, in the
+   * speaker's name. What it says anywhere else isn't heard here at all.
    */
   const hear = (agent: string, line: Line | undefined) => {
+    if (!line) return;
     const own = figureOf(agent);
-    const through = own ? undefined : heardThrough(agent, activities, [self, ...companions.keys()]);
+    const through = own ? undefined : heardThrough(agent, line, activities, [self, ...companions.keys()]);
     const f = own ?? (through ? figureOf(through) : undefined);
-    if (!f || !line || heard.get(agent) === line.at) return;
+    if (!f || heard.get(agent) === line.at) return;
     heard.set(agent, line.at);
     const delay = Date.parse(line.at) - Date.now();
     if (!Number.isFinite(delay) || delay < -STALE_LINE_MS) return;
@@ -1714,7 +1719,7 @@ export async function createStage(
       f.say(line.text, at, f === me ? undefined : companions.get(agent)?.name, {
         phone: byPhone(line, activities[agent]?.talk),
       });
-    if (opts.visitor && opts.onLine && (f !== me || !own))
+    if (opts.visitor && opts.onLine && (f !== me || !own) && !line.voiced)
       voices.push({ agent, text: line.text, at, ...(through ? { via: through } : {}) });
     // Said to someone here: the two turn to each other.
     for (const name of line.to ?? []) {
@@ -2526,7 +2531,7 @@ export async function createStage(
       for (const [agent, c] of companions) show(agent, c);
       lightDoors();
       // A call heard of after what was said on it: the far side's words, waiting for a phone here to come out of.
-      for (const [agent, line] of Object.entries(speech)) hear(agent, line);
+      for (const [agent, line] of inOrder(speech)) hear(agent, line);
     },
     setTasks(next) {
       tasks = next;
@@ -2570,7 +2575,9 @@ export async function createStage(
     },
     setSpeech(next) {
       speech = next;
-      for (const [agent, line] of Object.entries(next)) hear(agent, line);
+      // In the order said, which isn't the order the lines came in: an answer timed to follow its question can
+      // come first, and a body shows each in its turn.
+      for (const [agent, line] of inOrder(next)) hear(agent, line);
     },
     setEditing(next) {
       const was = editing;

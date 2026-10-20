@@ -255,17 +255,38 @@ export function useRecords<T>(type: string, enabled: boolean): Record<string, T>
   return records;
 }
 
-/** The page's one way to sound, made the first time a line goes down the phone; none where the browser has none. */
-let audioContext: AudioContext | null | undefined;
-function soundOut(): AudioContext | null {
-  if (audioContext === undefined) {
+/** A way to sound, for lines down the phone: made the first time one is said; none where the browser has none. */
+function soundOut(held: { current: AudioContext | null | undefined }): AudioContext | null {
+  if (held.current === undefined) {
     try {
-      audioContext = typeof AudioContext === "undefined" ? null : new AudioContext();
+      held.current = typeof AudioContext === "undefined" ? null : new AudioContext();
     } catch {
-      audioContext = null;
+      held.current = null;
     }
   }
-  return audioContext;
+  return held.current;
+}
+
+/** How long a line down the phone waits for the browser to let the page's sound out, before it plays plainly instead. */
+const SOUND_WAIT_MS = 500;
+
+/**
+ * Whether `ctx` is letting sound out, having asked once more if it was held
+ * back: waiting no longer than `ms`, as a browser may hold it back for good
+ * (some want a fresh tap, not just one made earlier on the page).
+ */
+async function soundsOut(ctx: AudioContext, ms: number): Promise<boolean> {
+  if (ctx.state === "suspended") {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      ctx.resume().catch(() => {}),
+      new Promise<void>((done) => {
+        timer = setTimeout(done, ms);
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+  return ctx.state === "running";
 }
 
 /**
@@ -278,6 +299,15 @@ function soundOut(): AudioContext | null {
 export function useVoicesNearby(on: boolean) {
   const queue = useRef<{ agent: string; text: string; nearness: number; phone: boolean }[]>([]);
   const playing = useRef(false);
+  // The phone line's sound, made when first needed and closed with the page.
+  const sound = useRef<AudioContext | null | undefined>(undefined);
+  useEffect(
+    () => () => {
+      void sound.current?.close?.().catch(() => {});
+      sound.current = undefined;
+    },
+    [],
+  );
   const next = useCallback(async () => {
     if (playing.current) return;
     const line = queue.current.shift();
@@ -293,11 +323,12 @@ export function useVoicesNearby(on: boolean) {
       if (!res.ok) throw new Error(String(res.status));
       const url = URL.createObjectURL(await res.blob());
       const audio = new Audio(url);
-      const ctx = line.phone ? soundOut() : null;
-      if (ctx) {
-        // Down the line: through the phone's filters, at the phone's volume, rather than the element's own.
-        if (ctx.state === "suspended") await ctx.resume().catch(() => {});
-        chain = phoneLine(ctx, ctx.createMediaElementSource(audio), ctx.destination, lineVolume(line.nearness, true));
+      const ctx = line.phone ? soundOut(sound) : null;
+      if (ctx && (await soundsOut(ctx, SOUND_WAIT_MS))) {
+        // Down the line: through the phone's filters, at the phone's volume, rather than the element's own. The
+        // element's own way in is let go with the rest once the line is said.
+        const source = ctx.createMediaElementSource(audio);
+        chain = [source, ...phoneLine(ctx, source, ctx.destination, lineVolume(line.nearness, true))];
       } else audio.volume = lineVolume(line.nearness, line.phone);
       await new Promise<void>((done) => {
         audio.onended = () => done();
@@ -690,7 +721,8 @@ export function lastExchange(messages: { role: string; content: unknown }[]): { 
  * The agent's `talk` record while you talk to it on a visit: with `you`,
  * face to face when its body is in the place you are in, on the phone when
  * not. The page is the only one that knows where you are, so it writes it,
- * for every page to show. Nothing takes it away: it runs out by itself.
+ * for every page to show. The page takes it away as you leave (`hangUp`); one
+ * closed in the middle of a talk leaves it to run out by itself.
  */
 async function talkWithYou(agent: string, near: boolean): Promise<void> {
   await fetch(`/api/state/talk/${encodeURIComponent(agent)}`, {
@@ -701,6 +733,24 @@ async function talkWithYou(agent: string, near: boolean): Promise<void> {
       data: { with: YOU, ...(near ? {} : { phone: true }), until: new Date(Date.now() + TALK_AFTER_MS).toISOString() },
     }),
   }).catch(() => {});
+}
+
+/**
+ * Your talk with an agent over, for every page: its `talk` record taken away,
+ * while it is still the one with you. A talk the places plugin wrote since,
+ * with another agent, is left alone, and so is one changed in between.
+ */
+async function hangUp(agent: string): Promise<void> {
+  const url = `/api/state/talk/${encodeURIComponent(agent)}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const record = (await res.json()) as { version?: unknown; data?: { with?: unknown } };
+    if (record.data?.with !== YOU || typeof record.version !== "number") return;
+    await fetch(`${url}?expectedVersion=${record.version}`, { method: "DELETE" });
+  } catch {
+    // Left where it is, it runs out by itself.
+  }
 }
 
 /**
@@ -726,8 +776,8 @@ function useTalkWithYou(opts: {
 }): {
   talk: Talk | undefined;
   lines: Record<string, Said>;
-  /** Something said out loud: by you (`heard`), or the agent's answer. */
-  spoke: (who: "you" | "agent", text: string) => void;
+  /** Something said out loud: by you (`heard`), or the agent's answer; `voiced`, already played as it was said. */
+  spoke: (who: "you" | "agent", text: string, voiced?: boolean) => void;
 } {
   const { on, agent, near, sending, busy, exchange, now } = opts;
   const [lines, setLines] = useState<Record<string, Said>>({});
@@ -736,17 +786,21 @@ function useTalkWithYou(opts: {
   onRef.current = on;
   const agentRef = useRef(agent);
   agentRef.current = agent;
-  const spoke = useCallback((who: "you" | "agent", text: string) => {
+  const spoke = useCallback((who: "you" | "agent", text: string, voiced = false) => {
     if (!onRef.current || !text.trim()) return;
     const at = new Date().toISOString();
     const speaker = who === "you" ? YOU : agentRef.current;
     const to = who === "you" ? agentRef.current : YOU;
-    setLines((was) => ({ ...was, [speaker]: { text: text.trim(), at, to: [to] } }));
+    setLines((was) => ({ ...was, [speaker]: { text: text.trim(), at, to: [to], ...(voiced ? { voiced } : {}) } }));
     setLastAt(Date.now());
   }, []);
   // Talking to someone else now: nothing has been said to it yet.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new agent is what starts the count again.
   useEffect(() => setLastAt(0), [agent]);
+  // Back from the visit, what was said on it goes with it: the agent's own view shows nothing of your talk.
+  useEffect(() => {
+    if (!on) setLines({});
+  }, [on]);
   // A typed message going out is what you said; the answer arriving after it, what the agent said back.
   const waiting = useRef(false);
   const said = exchange.said;
@@ -764,6 +818,12 @@ function useTalkWithYou(opts: {
   // The agent's record: written as you start, again while a reply takes its time, and once more as it comes, so the
   // talk goes on a little after.
   const talking = on && (busy || now - lastAt < TALK_AFTER_MS);
+  // The last write of the record, and whose: what hanging up waits for, so a write still on its way can't land after.
+  const wrote = useRef<{ agent: string; done: Promise<void> } | undefined>(undefined);
+  const write = useCallback((who: string, isNear: boolean) => {
+    const prior = wrote.current?.agent === who ? wrote.current.done : Promise.resolve();
+    wrote.current = { agent: who, done: prior.then(() => talkWithYou(who, isNear)) };
+  }, []);
   const wasBusy = useRef(false);
   useEffect(() => {
     if (!on) {
@@ -772,14 +832,25 @@ function useTalkWithYou(opts: {
     }
     if (busy) {
       wasBusy.current = true;
-      void talkWithYou(agent, near);
-      const timer = setInterval(() => void talkWithYou(agent, near), TALK_AGAIN_MS);
+      write(agent, near);
+      const timer = setInterval(() => write(agent, near), TALK_AGAIN_MS);
       return () => clearInterval(timer);
     }
     if (!wasBusy.current) return;
     wasBusy.current = false;
-    void talkWithYou(agent, near);
-  }, [on, agent, near, busy]);
+    write(agent, near);
+  }, [on, agent, near, busy, write]);
+  // Leaving the visit, or talking to someone else now: the talk is over, on every page at once, rather than the agent
+  // staying on the line with nobody for a while.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new agent is what ends the talk with the last one.
+  useEffect(() => {
+    if (!on) return;
+    return () => {
+      const last = wrote.current;
+      wrote.current = undefined;
+      if (last) void last.done.then(() => hangUp(last.agent));
+    };
+  }, [on, agent]);
   const talk = useMemo(
     (): Talk | undefined =>
       talking
@@ -1260,7 +1331,7 @@ export function useChatStage({
   };
 
   // What you and the agent say out loud, for the bubbles on a visit: filled in below, once your talk with it is known.
-  const spokeRef = useRef<(who: "you" | "agent", text: string) => void>(() => {});
+  const spokeRef = useRef<(who: "you" | "agent", text: string, voiced?: boolean) => void>(() => {});
   const voice = useVoice({
     agent: agent || undefined,
     sessionKey: keyFor,
@@ -1279,7 +1350,8 @@ export function useChatStage({
       const key = inUse.current;
       setHeard(null);
       setReplying("");
-      spokeRef.current("agent", turn.reply);
+      // Played already, sentence by sentence: a bubble, but not to be voiced again by voices nearby.
+      spokeRef.current("agent", turn.reply, true);
       if (turn.transcript && key) onSpoken(turn.conversation, key);
     },
   });

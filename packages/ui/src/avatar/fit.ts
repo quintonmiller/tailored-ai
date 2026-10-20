@@ -2,7 +2,8 @@
  * Fitting poses to the model's own body. A pose written for one figure puts
  * another's hands through its hips when the second is stockier: arms at rest
  * on a slim mannequin are inside a chunky robot. This measures the body and
- * says how far out the arms must swing to clear it.
+ * says how far out the arms must swing to clear it, and how to turn an arm to
+ * bring the hand to a place on it: the side of its own head, for a phone.
  */
 import type { VRM, VRMHumanBoneName } from "@pixiv/three-vrm";
 import * as THREE from "three";
@@ -91,6 +92,120 @@ export function armClearance(vrm: VRM, points: THREE.Vector3[], pose: (extra: nu
     if (clear) return extra;
   }
   return 0.9;
+}
+
+/** The right arm as the model was made: where the shoulder, the elbow and the wrist stand, in the body's own frame. */
+export interface Arm {
+  shoulder: V3;
+  elbow: V3;
+  hand: V3;
+}
+
+/**
+ * How the right arm is turned, in full: the upper arm and the lower, each as
+ * Euler angles (x, y, z) from the arm as made, in the body's own frame, as a
+ * pose gives them.
+ */
+export interface ArmTurn {
+  upper: V3;
+  lower: V3;
+}
+
+/**
+ * Where the elbow and the hand end up with the arm turned so: the upper arm
+ * turns the whole arm about the shoulder, and the lower arm turns the forearm
+ * about the elbow, after it.
+ */
+export function handAt(arm: Arm, turn: ArmTurn): { elbow: THREE.Vector3; hand: THREE.Vector3 } {
+  const upper = new THREE.Quaternion().setFromEuler(new THREE.Euler(...turn.upper));
+  const lower = new THREE.Quaternion().setFromEuler(new THREE.Euler(...turn.lower)).premultiply(upper);
+  const shoulder = new THREE.Vector3(...arm.shoulder);
+  const elbow = new THREE.Vector3(...arm.elbow).sub(shoulder).applyQuaternion(upper).add(shoulder);
+  const forearm = new THREE.Vector3(...arm.hand).sub(new THREE.Vector3(...arm.elbow)).applyQuaternion(lower);
+  return { elbow, hand: elbow.clone().add(forearm) };
+}
+
+/**
+ * How to turn the right arm to bring its hand to `target`, or as near as it
+ * reaches: two bones solved exactly, the elbow bent just enough for the
+ * shoulder-to-hand distance and pointing as near `elbow` (a direction from
+ * the shoulder) as that allows, each bone turned the shortest way from as
+ * made. Then the forearm turned about its own length, which leaves the hand
+ * where it is, until the palm faces `palm` as near as it can: a palm faces
+ * down when the arm is out as made. `miss` is how far short the hand stays,
+ * in metres.
+ */
+export function reach(arm: Arm, target: V3, opts: { elbow: V3; palm?: V3 }): ArmTurn & { miss: number } {
+  const shoulder = new THREE.Vector3(...arm.shoulder);
+  const madeUpper = new THREE.Vector3(...arm.elbow).sub(shoulder);
+  const madeFore = new THREE.Vector3(...arm.hand).sub(new THREE.Vector3(...arm.elbow));
+  const [a, b] = [madeUpper.length(), madeFore.length()];
+  const goal = new THREE.Vector3(...target).sub(shoulder);
+  const way = goal.lengthSq() > 1e-12 ? goal.clone().normalize() : new THREE.Vector3(0, -1, 0);
+  // Never quite straight, nor folded flat: a solution either side of its limits.
+  const d = Math.min(a + b - 1e-4, Math.max(Math.abs(a - b) + 1e-4, goal.length()));
+  // The elbow is on a circle round the line to the hand: `along` it from the shoulder, `out` from the line.
+  const along = (a * a - b * b + d * d) / (2 * d);
+  const out = Math.sqrt(Math.max(0, a * a - along * along));
+  const pole = new THREE.Vector3(...opts.elbow);
+  pole.sub(way.clone().multiplyScalar(pole.dot(way)));
+  if (pole.lengthSq() < 1e-8) pole.set(0, -1, 0).sub(way.clone().multiplyScalar(-way.y));
+  pole.normalize();
+  const elbow = way.clone().multiplyScalar(along).add(pole.multiplyScalar(out));
+  const hand = way.clone().multiplyScalar(d);
+  const upper = new THREE.Quaternion().setFromUnitVectors(madeUpper.clone().normalize(), elbow.clone().normalize());
+  // The forearm's way in the upper arm's own frame, turned the shortest way from as made.
+  const fore = hand.clone().sub(elbow).normalize().applyQuaternion(upper.clone().invert());
+  let lower = new THREE.Quaternion().setFromUnitVectors(madeFore.clone().normalize(), fore);
+  if (opts.palm) lower = twisted(madeFore.normalize(), upper, lower, new THREE.Vector3(...opts.palm).normalize());
+  const euler = (q: THREE.Quaternion): V3 => {
+    const e = new THREE.Euler().setFromQuaternion(q);
+    return [e.x, e.y, e.z];
+  };
+  const turn: ArmTurn = { upper: euler(upper), lower: euler(lower) };
+  return { ...turn, miss: handAt(arm, turn).hand.distanceTo(new THREE.Vector3(...target)) };
+}
+
+/** Turns of the forearm about its own length tried, to face the palm: every way round. */
+const TWISTS = 48;
+
+/**
+ * The lower arm turned further about the forearm's own length (`along`, as
+ * made), for the palm to face `toward` as near as it can. Facing down as made,
+ * square to the forearm.
+ */
+function twisted(
+  along: THREE.Vector3,
+  upper: THREE.Quaternion,
+  lower: THREE.Quaternion,
+  toward: THREE.Vector3,
+): THREE.Quaternion {
+  const down = new THREE.Vector3(0, -1, 0);
+  const face = down.sub(along.clone().multiplyScalar(down.dot(along))).normalize();
+  const turnedBy = (angle: number) => lower.clone().multiply(new THREE.Quaternion().setFromAxisAngle(along, angle));
+  let best = { angle: 0, dot: Number.NEGATIVE_INFINITY };
+  for (let i = 0; i < TWISTS; i++) {
+    const angle = -Math.PI + (i * 2 * Math.PI) / TWISTS;
+    const dot = face
+      .clone()
+      .applyQuaternion(upper.clone().multiply(turnedBy(angle)))
+      .dot(toward);
+    if (dot > best.dot) best = { angle, dot };
+  }
+  return turnedBy(best.angle);
+}
+
+/**
+ * Where the hand goes to hold a phone to the ear, in the body's own frame:
+ * at the right side of the head (−x), `gap` out from it for the phone between
+ * them, below the eyes, where the hand holds a phone whose top is at the ear,
+ * and a little in front of the middle of the head, as ears are. From the head as measured, so it is a big head's side
+ * on a robot and a small one's on a person.
+ */
+export function earAt(fit: Pick<BodyFit, "head" | "face">, gap: number): V3 {
+  const { min, max } = fit.head;
+  const tall = max[1] - min[1];
+  return [min[0] - gap, Math.max(min[1], fit.face.y - 0.22 * tall), min[2] + (max[2] - min[2]) * 0.55];
 }
 
 /**

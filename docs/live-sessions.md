@@ -542,8 +542,9 @@ both heard as they speak. Stand by an agent on the phone and you hear its side
 plainly, and the other side faintly out of its phone, as a voice sounds down a
 telephone line: only the band a phone carries, squeezed flat, quieter than
 someone in the room. You hear the far side only near the one holding the
-phone. It is off by default because each line
-is a text-to-speech render, which may run on your GPU. **Back to** returns to
+phone. An agent's answer to something you said out loud with **Talk** is not
+played a second time: the talk itself already played it. It is off by default
+because each line is a text-to-speech render, which may run on your GPU. **Back to** returns to
 the agent's own view. While you visit, your body is
 yours: the agent's turns still run, but its cues have nothing to move.
 
@@ -742,12 +743,15 @@ walks anywhere. How they talk depends on where their bodies are:
   other; one sitting about gets up when it comes over, unless it is at a
   meeting table, where everyone keeps their seat and turns in it.
 - **Far**: anywhere else. Each holds a phone to its ear while it speaks and
-  listens, with a phone over its head where the talk sign would be. Its tag
-  says "on the phone with writer" with a small phone before it, and each
-  bubble it says down the line has a small phone by the name. Whoever is
-  with one end hears the other end too: the far side's words come out of the
-  phone, in a bubble over the one holding it, edged in dashes and named for
-  who said them.
+  listens, with a phone over its head where the talk sign would be. The arm
+  is fitted to the body, so a robot with a big head and short arms still
+  brings the phone up against the side of its own head. Its tag says "on the
+  phone with writer" with a small phone before it, and each bubble it says
+  down the line has a small phone by the name. Whoever is with one end hears
+  the other end too: the far side's words come out of the phone, in a bubble
+  over the one holding it, edged in dashes and named for who said them. Only
+  what is said down the call comes out of it: what the far side says in a
+  room, or to someone else, while the call is on, doesn't.
 
 The two are talking from the moment the message is sent, so a slow answer
 keeps them on the line while it comes, and for 40 seconds after the last
@@ -781,8 +785,10 @@ Each talk is a `talk` record, one per agent, naming who it is `with`, whether
 it is on the `phone`, whether it `started` the conversation, and an `until`.
 The places plugin writes agents' talks, so every page shows the same thing; a
 talk with you is written by the page you talk on, with `with: you`, since only
-that page knows where you are. Like a visit it lives in the `memory` provider,
-ends on restart, and is cleared every 20 seconds once it has run out.
+that page knows where you are, and taken away as you leave the visit or turn
+to talk to someone else; a page closed in the middle of a talk leaves it to
+run out. Like a visit it lives in the `memory` provider, ends on restart, and
+is cleared every 20 seconds once it has run out.
 
 #### Changing a meeting room
 
@@ -1402,7 +1408,7 @@ cues, and its text passes through untouched.
 | `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name. `company` is everyone else there with a body: `{agent, name, avatar, animations, role?, wear}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `wear` change that someone chose what a body wears |
 | `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, role?, wear?, wearChosen?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent, with `role` and `wear` as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `with`, `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for a hall; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for a hall; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
 | `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for, and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
 | `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "remove", item}` or `{op: "color", item, color}`. A `remove` of one of the lobby's kiosks or its task board is a `why`; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
