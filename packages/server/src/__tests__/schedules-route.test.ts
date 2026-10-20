@@ -16,7 +16,7 @@ import {
   ScheduleStore,
   updateExploratoryState,
 } from "@tailored-ai/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createServer } from "../index.js";
 
 function fakeProvider(): AIProvider {
@@ -204,6 +204,11 @@ describe("GET /api/exploratory/agents", () => {
     >((all, a) => Object.assign(all, { [a.name]: a.next_turn_at }), {});
 
   it("says when each agent next takes its turn, the way the worker decides", async () => {
+    // Mid-morning, UTC: the cases below count hours forward from now, and near
+    // midnight they would cross into tomorrow and stop meaning what they say.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-03-10T10:00:00.000Z"));
+    onTestFinished(() => vi.useRealTimers());
     const hour = new Date().getUTCHours();
     const last = new Date(Date.now() - 10 * 60_000).toISOString();
     cfg.agents = {
