@@ -27,6 +27,12 @@ export interface MapPlace {
   via?: string;
   /** Those here to see someone else here, by who they came to see: an agent visiting one it messaged directly. */
   with?: Record<string, string>;
+  /** A home's owner, in a word ("coder", "writer"), when what it is for can be read. */
+  role?: string;
+  /** What a home's owner wears, by name. */
+  wear?: string[];
+  /** Someone chose that, rather than it being what suits its role. */
+  wearChosen?: boolean;
 }
 
 /** An area: places joined by doors. Between areas, the map is the way. */
@@ -154,7 +160,8 @@ export function mapIndex(
         ...(activities[agent] ? { activity: activities[agent] } : {}),
       };
     })
-    .filter((a) => has(a.agent, nameOf(a.agent)))
+    // By name, or by what it is: "coder" finds every coder.
+    .filter((a) => has(a.agent, nameOf(a.agent), a.home.role))
     .sort((a, b) => nameOf(a.agent).localeCompare(nameOf(b.agent), "en", { sensitivity: "base" }));
   const ranked = (list: MapPlace[]) =>
     list

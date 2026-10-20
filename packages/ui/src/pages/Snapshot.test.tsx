@@ -29,7 +29,16 @@ vi.mock("../avatar/stage", () => ({
   ) => {
     stage.opts.push(opts);
     setTimeout(() => opts.onReady?.(), 0);
-    return { dispose() {}, setView() {}, setInsets() {}, setRoom() {}, setCompany() {}, setLights() {}, cue() {} };
+    return {
+      dispose() {},
+      setView() {},
+      setInsets() {},
+      setRoom() {},
+      setCompany() {},
+      setWear() {},
+      setLights() {},
+      cue() {},
+    };
   },
 }));
 
@@ -51,7 +60,11 @@ beforeEach(() => {
       if (url.startsWith("/api/live")) return new Response(JSON.stringify(live));
       if (url === "/api/ext/builtin:places/guide")
         return new Response(
-          JSON.stringify({ id: "home:guide", place: { name: "guide's room", props: [], spots: [], start: "middle" } }),
+          JSON.stringify({
+            id: "home:guide",
+            place: { name: "guide's room", props: [], spots: [], start: "middle" },
+            wear: ["beret", "scarf"],
+          }),
         );
       if (url === "/api/ext/builtin:places/planner")
         return new Response(
@@ -90,6 +103,9 @@ describe("the snapshot page", () => {
       still: { spot: "couch", gesture: "wave" },
       room: { name: "guide's room" },
       lights: "home",
+      // In its own colours, wearing what it wears in the world.
+      agent: "guide",
+      wear: ["beret", "scarf"],
     });
     expect(frame().dataset.snapshot).toBe("ready");
     // Nothing to click in a photo.

@@ -22,7 +22,18 @@ import {
   unreachable,
   withSpots,
 } from "../plugins/places-layout.js";
-import { homePlace, lobby, meetingRoom, PRESETS, seeded, sharedPlace, THEMES } from "../plugins/places-rooms.js";
+import { homeFor, ROLES } from "../plugins/places-roles.js";
+import {
+  dress,
+  homePlace,
+  lobby,
+  meetingRoom,
+  PRESETS,
+  ROLE_DRESSINGS,
+  seeded,
+  sharedPlace,
+  THEMES,
+} from "../plugins/places-rooms.js";
 import { validateAgainstSchema } from "../state/validate.js";
 
 const seeds = Array.from({ length: 120 }, (_, i) => `home:agent-${i}`);
@@ -31,7 +42,14 @@ const meetings = [
   ...[2, 3, 4, 5, 6, 7, 9, 12, 16].map((n) => meetingRoom("standup", n)),
   ...THEMES.flatMap((t) => [3, 8].map((n) => meetingRoom(`${t.id} room`, n, `${t.words.source.split("|")[1]}`))),
 ];
-const every = [...homes, ...meetings, lobby()];
+// Each role's homes, for a dozen agents of it: the kind of home that suits it, and what its work needs in it.
+const suited = ROLES.flatMap((role) =>
+  seeds.slice(0, 12).map((seed) => {
+    const home = homeFor(role, seed);
+    return { role, home, place: homePlace(seed, `${role.id} ${seed}`, home.kind, home.dressing) };
+  }),
+);
+const every = [...homes, ...suited.map((s) => s.place), ...meetings, lobby()];
 
 describe("homes drawn from a seed", () => {
   it("are the same room every time for the same seed", () => {
@@ -148,6 +166,67 @@ describe("homes drawn from a seed", () => {
 
   it("are furnished, not bare: a couple of dozen things or more", () => {
     for (const h of homes) expect(h.props.length).toBeGreaterThanOrEqual(18);
+  });
+});
+
+describe("homes that suit their agents' work", () => {
+  /** What says a home has its work in it. */
+  const TELLS: Record<string, string[]> = {
+    rack: ["server_rack"],
+    booth: ["mic_stand"],
+    travel: ["globe", "map"],
+    accounts: ["ledger"],
+    game: ["chessboard"],
+  };
+
+  it("are the kind of home the role suits, with what the work needs in it", () => {
+    const missing: string[] = [];
+    for (const { role, home, place } of suited) {
+      expect(role.homes).toContain(home.kind);
+      for (const kind of home.dressing ? TELLS[home.dressing] : [])
+        if (!place.props.some((p) => p.kind === kind)) missing.push(`${place.name}: ${kind}`);
+    }
+    expect(missing).toEqual([]);
+    // A producer's studio has a booth instead of an easel.
+    for (const { place } of suited.filter((s) => s.role.id === "producer"))
+      expect(place.props.some((p) => p.kind === "easel")).toBe(false);
+  });
+
+  it("still have somewhere to sit, to work, a window and a calendar", () => {
+    for (const { place } of suited) {
+      expect(
+        place.spots.some((s) => s.activity === "sit" && s.seat),
+        place.name,
+      ).toBe(true);
+      expect(
+        place.spots.some((s) => s.activity === "type"),
+        place.name,
+      ).toBe(true);
+      expect(
+        place.props.some((p) => p.kind === "window"),
+        place.name,
+      ).toBe(true);
+      expect(
+        place.props.some((p) => p.kind === "calendar"),
+        place.name,
+      ).toBe(true);
+    }
+  });
+
+  it("still differ from each other for agents of the same role: the seed does the rest", () => {
+    const coders = suited.filter((s) => s.role.id === "coder").map((s) => s.place);
+    expect(new Set(coders.map((h) => `${h.width}x${h.depth}`)).size).toBeGreaterThanOrEqual(5);
+    expect(new Set(coders.map((h) => h.walls)).size).toBeGreaterThanOrEqual(4);
+  });
+
+  it("put the work where the room would have had something it can do without, or first on the left wall", () => {
+    const rack = ROLE_DRESSINGS.rack;
+    expect(dress(["desk", "sideboard"], ["window"], rack)).toEqual([["desk", "rack"], ["window"]]);
+    expect(dress(["desk"], ["window", "books"], rack)).toEqual([["desk"], ["window", "rack"]]);
+    expect(dress(["desk"], ["window"], rack)).toEqual([["desk"], ["rack", "window"]]);
+    expect(dress(["easel", "desk"], ["couch"], ROLE_DRESSINGS.booth)).toEqual([["sideboard", "booth"], ["couch"]]);
+    expect(dress(["desk"], ["window"], ROLE_DRESSINGS.game)).toEqual([["desk"], ["window"]]);
+    expect(dress(["desk"], ["window"], undefined)).toEqual([["desk"], ["window"]]);
   });
 });
 

@@ -127,6 +127,8 @@ export interface Companion {
   animations: string[];
   /** The agent here it came to see, having messaged it directly: it stands with that one, facing it. */
   with?: string;
+  /** What it wears, by name (see `wear.ts`). */
+  wear?: string[];
 }
 
 export interface Stage {
@@ -154,6 +156,8 @@ export interface Stage {
   setRoom(room: Room, moved?: boolean): void;
   /** Who else is in the room: new arrivals appear at a free spot, and those who left go. */
   setCompany(company: Companion[]): void;
+  /** What the body this stage shows wears, by name. */
+  setWear(wear: string[]): void;
   /** What each agent is doing, by agent: every body in the room shows its own. */
   setActivities(activities: Record<string, AgentActivity>): void;
   /** The last thing each agent said, by agent: a new line shows in a bubble over its head. */
@@ -271,6 +275,7 @@ const WALL_KINDS = new Set([
   "sign",
   "screen",
   "calendar",
+  "map",
 ]);
 /** What a click on a thing does when the room doesn't say: a screen and a calendar open what they show. */
 const USES: Partial<Record<string, string>> = { screen: "screen", calendar: "calendar" };
@@ -343,6 +348,8 @@ export async function createStage(
     company?: Companion[];
     /** The agent this stage shows, for its activity and its colour. */
     agent?: string;
+    /** What that body wears, by name (see `wear.ts`). */
+    wear?: string[];
     /** Someone clicked an agent's body (or its tag): which agent, and where on the page. */
     onPick?: (agent: string, at: { x: number; y: number }) => void;
     /** The body here is the visitor's own, moved by keys and clicks, not an agent's. */
@@ -685,6 +692,7 @@ export async function createStage(
     ...(pickMine ? { pick: pickMine } : {}),
     ...(selfie && start && start.activity !== "sit" ? { facing: 0.5 } : {}),
     hue: hueFor(opts.agent ?? "default"),
+    wear: opts.wear,
     // Your own body walks briskly and turns on the spot, whatever its size; the agents keep their own calmer pace.
     ...(opts.visitor ? { pace: WALK_SPEED, turn: VISITOR_TURN, runs: true } : {}),
     // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
@@ -1552,6 +1560,8 @@ export async function createStage(
       const fig = companions.get(c.agent);
       if (fig) {
         fig.name = c.name;
+        // Dressed again only when what it wears changed: the same list is nothing to do.
+        fig.dress(c.wear);
         // Here already, and now come to see someone here: over to them.
         if (fig.with !== c.with) {
           fig.with = c.with;
@@ -1586,6 +1596,7 @@ export async function createStage(
             reducedMotion: opts.reducedMotion,
             animations: still.animations,
             hue: hueFor(c.agent),
+            wear: still.wear,
             ...(opts.still ? {} : { pick: pickFor(c.agent, () => companions.get(c.agent)) }),
           }) as Figure & { name?: string; with?: string };
           figure.name = still.name;
@@ -2167,6 +2178,9 @@ export async function createStage(
       requestAnimationFrame(fadeIn);
     },
     setCompany: meet,
+    setWear(wear) {
+      me.dress(wear);
+    },
     standBefore,
     setActivities(next) {
       activities = next;

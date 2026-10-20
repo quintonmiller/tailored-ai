@@ -116,7 +116,9 @@ Each agent's room is its own, and it starts out furnished. It is drawn from
 the agent's name, so the same agent always gets the same room and no two
 agents get the same one: 8 to 10 m wide and 6 to 8 m deep, in its own
 colours, and one of several kinds (a study, a studio, a lounge, a workshop, a
-reading nook, a garden room, a bedsit, a den). Furniture comes in groups that
+reading nook, a garden room, a bedsit, a den). Which kind suits what the agent
+is for, when that can be read (see
+[What an agent is for](#what-an-agent-is-for-its-home-and-what-it-wears)). Furniture comes in groups that
 belong together, set against the walls: a desk with its chair, lamp and a
 shelf above it, a couch facing a TV, two armchairs by a fire, a bed between
 bedside tables. A couple of islands stand out in the floor, like a round
@@ -257,6 +259,98 @@ Paths work as they do under `live.avatar`. An agent that names a model but
 no animations plays the shared libraries, since any library fits any model.
 Its voice is set by `voice.voice`, as before.
 
+Agents sharing one model are told apart first by colour: each body is the
+model turned round the colour wheel by an amount drawn from the agent's
+name, and the dot by its name on its card, in the chat and on the map is the
+same colour. The default agent keeps the model's own colours.
+
+### What an agent is for: its home, and what it wears
+
+Forty bodies in one colour scheme still look alike from across a hall, so
+the world reads what each agent is for and shows it. The reading is words
+alone, no model call, and it starts from the agent's name and its
+`description`: an agent has a role only when one of those says it. `coder`
+or `debugger` reads as a coder, and so does "Fixes bugs in the repo";
+`podcast-producer`, or "Turns each session into a podcast episode", as a
+producer. The name counts over everything else. The start of its
+`instructions` and the tools in its `tools:` list only choose between roles
+the name or description already says, so "Handles the mail and the podcast"
+is a clerk if its tools are the mail's. They never give a role on their
+own: instructions mention all sorts in passing, and most agents are given
+the same exec, edit and web search. Words that often mean something else
+are left out: a DM is usually a direct message, not a dungeon master, and
+"health" is as often an agent's as a person's. When two roles score the
+same, the more particular one wins: a trip planner is a travel agent before
+it is a planner, a code reviewer a reviewer before a coder. An agent whose
+name and description say nothing has no role.
+
+| role | home | something in it for the work | wears |
+|---|---|---|---|
+| coder | workshop or study | two server racks, their lights on day and night | headset, glasses |
+| operator (deploys, backups, outages) | workshop | server racks | headset, tool belt |
+| reviewer (reviews, audits, judges) | study or workshop | | glasses, lanyard |
+| producer (podcast, audio, voice-overs) | studio | a mixing desk with a microphone on a stand, acoustic panels, no easel | headset, scarf |
+| travel agent | lounge | a globe, a map of the world, a suitcase | adventurer hat, satchel |
+| bookkeeper (budget, bills, accounts) | study | a bureau with ledgers on it, and a safe | bow tie, glasses |
+| game master | den | a game table with a chessboard and the rule books | wizard hat |
+| player | den | the game table | adventurer hat, tool belt |
+| writer | reading nook or study | | beret, scarf |
+| artist (graphic design, drawing, photography) | studio | | beret, satchel |
+| researcher | study or reading nook | | glasses, satchel |
+| reporter (news, digests) | study or studio | | cap, satchel |
+| tutor | reading nook | | glasses, scarf |
+| coach (fitness, workouts, sleep) | garden room | | cap, lanyard |
+| clerk (mail, inbox) | study | | bow tie, lanyard |
+| housekeeper (chores, groceries, the garden) | garden room or lounge | | tool belt, scarf |
+| concierge | lounge | | bow tie |
+| builder | workshop | | cap, tool belt |
+| planner (calendar, to-dos, assistant) | study or lounge | | lanyard |
+
+Where a role suits two kinds of home, the agent's name picks one, and the
+name still draws everything else: the size, the colours, which way each
+group of furniture runs. Two coders live in two different workshops. The
+thing for the work takes the place of something the room can do without (a
+sideboard, a shelf of plants), and a crowded wall drops anything else before
+it. A home nobody has changed is redrawn this way the next time it is asked
+for, under the same rule as any redraw (see
+[A room the agent can change](#a-room-the-agent-can-change)); a home anyone
+has changed keeps what it has. An agent with no role gets the room its name
+draws, as before.
+
+**What a body wears** is a few simple shapes fixed to its bones: a headset
+with a microphone, glasses, a beret, a cap, a wizard hat, an adventurer hat,
+a scarf, a bow tie, a lanyard with a badge, a satchel, a tool belt. Each is
+sized from the body itself, measured once as the model loads: the head from
+the skin its head bone moves, the face at the eyes, the neck, the chest and
+the hips. So a robot with a big head gets a big hat, and glasses sit on the
+face wherever its eyes are. Things on the head go with the head, a scarf or
+a bow tie with the chest, a belt and the satchel's bag with the hips, so
+they follow the body walking, sitting, asleep or holding something up. They
+come in the agent's own colour, deeper than the body so they stand out
+against it, with pale stripes and trims. One thing goes on each part of the
+body (one hat, one thing at the neck), at most four at once. Photos and
+selfies show them too, in the body's own colours. The shapes and colours are
+made once and shared by every body, so a room full of dressed agents costs
+little more than one.
+
+An agent wears what suits its role until it, or you, chooses otherwise. The
+agent chooses with the `place` tool's `room` action and `wear`:
+`"glasses, scarf"`, `"none"`, or `"default"` for what suits its role again.
+`look` says what it wears. **On its card** (see
+[What it is doing](#what-it-is-doing)), a row of chips under **Wears** puts
+each thing on or takes it off, in place of whatever was in its place, and
+**back to what suits** goes back to the role's. Either way the choice is a
+`wear` world-state record whose id is the agent's name
+(`/api/state/wear/<agent>`), in the agent's own scope, kept
+apart from the home so that choosing a hat never counts as changing the
+room. No record means what suits its role. The page redraws the body the
+moment the record changes, whoever changed it.
+
+**The map and the card say the role in a word**, beside the agent's name and
+its colour: "trip-planner · travel agent". Where the name says it already
+(`coder`, `podcast-producer`), the word is left out and the colour stays.
+Typing a role in the map's search finds every agent of it.
+
 ### A room the agent can change
 
 Each agent with a body has a room of its own, and it can furnish it. Ask for
@@ -287,7 +381,7 @@ The agent changes it with the `place` tool:
 | `move` | a thing to somewhere new, or turned where it stands with only `facing` |
 | `change` | a thing's `name`, `color`, `scale` or `size` |
 | `remove` | a thing, and whatever stands on it |
-| `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), `name`, `theme` and `purpose` (see [A theme and a purpose](#a-theme-and-a-purpose)), and `area` (see [Areas, halls and doors](#areas-halls-and-doors)) |
+| `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), `name`, `theme` and `purpose` (see [A theme and a purpose](#a-theme-and-a-purpose)), and `area` (see [Areas, halls and doors](#areas-halls-and-doors)); and `wear`, what the agent's body wears, wherever it is (see [What an agent is for](#what-an-agent-is-for-its-home-and-what-it-wears)) |
 | `undo` | the last change, whoever made it, unless it was the system redrawing the room. In a meeting room, undoing the first change brings back the room as it was drawn |
 
 Where things go is said in words: `near` a thing or spot, on one `side` of it
@@ -309,11 +403,12 @@ tables (desk, table, round table, coffee table, side table, sideboard), a
 bookshelf, TV, fireplace, easel, rugs (square or round), lamps, plants (a
 plant, a tall plant, a cactus, a palm), things for the walls (window,
 picture, painting, poster, clock, shelf, pegboard, task board, screen,
-calendar, and a sign that shows its name), a bench, small things for a surface (laptop, books,
-vase of flowers, small plant, mug, candle, table lamp, aquarium), and blocks,
-balls and cylinders of any size and colour.
-Seats, desks, the bookshelf, the TV, the fireplace, the easel and windows each
-bring a spot: add an armchair, and the agent can sit in it, and so can a
+calendar, a map, and a sign that shows its name), a bench, a globe, a
+microphone stand, a server rack, small things for a surface (laptop, books,
+vase of flowers, small plant, mug, candle, table lamp, aquarium, ledger,
+chessboard), and blocks, balls and cylinders of any size and colour.
+Seats, desks, the bookshelf, the TV, the fireplace, the easel, windows, a
+globe and a server rack each bring a spot: add an armchair, and the agent can sit in it, and so can a
 click.
 
 #### Shared places
@@ -377,14 +472,16 @@ them the meeting rooms are still near the top. Each has a dot in the colour of
 what it is doing: green working, blue thinking or talking, orange waiting on
 you, red stuck, violet asleep, grey idle. They are the colours a door's light
 and the sign over a head use, and every dot on the map means the same. A busy
-agent has the word for it beside its name too ("working", "waiting on you").
+agent has the word for it beside its name too ("working", "waiting on you"),
+and every agent what it is for, by a small dot in its body's colour
+("trip-planner · travel agent").
 Click an agent to go into its home; when its body is somewhere else, "in
 #trip" beside its name goes there instead. Rooms and places show who is in
 each, with a mark for anyone waiting on you (`!`), stuck (`?`) or asleep (`z`).
 The map asks the server again each time it opens, so an agent or a room made
 since you last looked is on it.
 
-Typing filters it all as you go: agents by name, rooms by name or what they
+Typing filters it all as you go: agents by name or role, rooms by name or what they
 are for, places and areas by name (an area by what is in it too), and halls,
 which open up while you search and fold back as they were when you clear it. `Enter` goes to the first thing left, which
 is marked `↵`; `Esc` closes the map. So `M`, a few letters of a name, `Enter`
@@ -1108,7 +1205,7 @@ place, or open **About** it; an online agent can be paused for four hours or
 woken, with the same switch as the Agents page.
 
 **About** opens the agent's card, in the world. It shows the agent's name in
-its body's colour, what it is doing now and for how long, the last thing it
+its body's colour, what it is for in a word, what it is doing now and for how long, the last thing it
 said and where (from its `speech` record), where its body is, and how many
 open tasks it has (click for them in the task list). For an agent that runs
 on its own, it shows when its next turn is due, worked out the way the
@@ -1117,7 +1214,10 @@ exploratory worker does from its last turn and the interval it is on now
 time, or that every agent is paused, and what its last run said. Idle or
 asleep, it says what the agent did last and how long ago, and for an agent
 that doesn't run on its own, the next wake it booked with the `schedule`
-tool (from its activity record's `next`). Its buttons chat with it, go to
+tool (from its activity record's `next`). Under **Wears**, it says what the
+body wears and whether that is what suits its role, with a chip for each
+thing a body can wear (see
+[What an agent is for](#what-an-agent-is-for-its-home-and-what-it-wears)). Its buttons chat with it, go to
 where its body is (a meeting room, while it is talking in one), send it home
 from somewhere else, and pause it for four hours or wake it. **Open its
 page** at the bottom goes to the Agents page.
@@ -1206,10 +1306,10 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations, with?}`, `with` naming the agent there it came to see, for one that messaged it directly. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` or `visit` change means someone came or went |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, with?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `with` maps each agent there that came to see another there, having messaged it directly, to that agent. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name. `company` is everyone else there with a body: `{agent, name, avatar, animations, with?, role?, wear}`, `with` naming the agent there it came to see, for one that messaged it directly. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `wear` change that someone chose what a body wears |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, with?, role?, wear?, wearChosen?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent, with `role` and `wear` as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `with` maps each agent there that came to see another there, having messaged it directly, to that agent. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company` (each `with` the agent there it came to see, as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company` (each with `with`, `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |

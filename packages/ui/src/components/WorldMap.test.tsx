@@ -8,7 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StateChangeInfo } from "../api";
 import type { AgentActivity } from "../avatar/doing";
-import { busyAgents, busyMark, doingHere, type MapPlace, markWords, useWorldMap, WorldMap } from "./WorldMap";
+import { busyAgents, busyMark, doingHere, type MapPlace, markWords, roleWord, useWorldMap, WorldMap } from "./WorldMap";
 
 // Changes to the world, as the page hears of them.
 const heard = vi.hoisted(() => ({ listeners: new Set<(change: unknown) => void>() }));
@@ -330,6 +330,32 @@ describe("WorldMap", () => {
     expect(container.textContent).toMatch(/couldn't be loaded/);
     act(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe("what each agent is for", () => {
+  it("says it in a word by each agent's name, with the body's own colour", () => {
+    render({
+      places: [
+        { id: "home:trip-planner", name: "", kind: "home", owner: "trip-planner", role: "travel agent", agents: [] },
+        { id: "home:coder", name: "", kind: "home", owner: "coder", role: "coder", agents: [] },
+      ],
+    });
+    const roles = [...container.querySelectorAll(".world-map-who-role")];
+    expect(roles.map((r) => r.textContent)).toEqual(["", "travel agent"]);
+    const dot = roles[1].querySelector(".world-map-hue") as HTMLElement;
+    // The coder's own line has the dot too, though its name says what it is.
+    expect(roles[0].querySelector(".world-map-hue")).not.toBeNull();
+    expect(dot.getAttribute("style")).toContain("background");
+  });
+
+  it("leaves the word out where the name says it already", () => {
+    expect(roleWord("coder", "coder")).toBeUndefined();
+    expect(roleWord("podcast-producer", "producer")).toBeUndefined();
+    expect(roleWord("game-master", "game master")).toBeUndefined();
+    expect(roleWord("trip-planner", "travel agent")).toBe("travel agent");
+    expect(roleWord("decoder", "coder")).toBe("coder");
+    expect(roleWord("anyone", undefined)).toBeUndefined();
   });
 });
 

@@ -64,7 +64,13 @@ export type PropKind =
   | "bench"
   | "sign"
   | "screen"
-  | "calendar";
+  | "calendar"
+  | "globe"
+  | "map"
+  | "mic_stand"
+  | "server_rack"
+  | "ledger"
+  | "chessboard";
 
 export interface Prop {
   id: string;

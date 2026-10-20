@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import { TypedEventBus } from "../events.js";
 import {
+  aboutAgent,
   anyAvatar,
   applyAction,
   bodyAt,
@@ -16,6 +17,7 @@ import {
   followMessages,
   goingToSee,
   homeId,
+  looksOf,
   mayChange,
   messageTo,
   onlyMembers,
@@ -33,11 +35,14 @@ import {
   VISIT_TYPE,
   visitOf,
   visitWith,
+  WEAR_TYPE,
   WHEREABOUTS_TYPE,
   whereIs,
   whoIsIn,
   withChange,
+  withLooks,
   worldMap,
+  wornBy,
 } from "../plugins/places.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
@@ -58,6 +63,7 @@ import {
   resize,
   spotOf,
 } from "../plugins/places-layout.js";
+import { homeFor, readRole } from "../plugins/places-roles.js";
 import {
   homePlace,
   LOBBY,
@@ -1874,5 +1880,143 @@ describe("whether there is anything to do", () => {
     expect(anyAvatar({ live: { avatar: { model: "robot.vrm" } }, agents: { a: { avatar: false } } } as never)).toBe(
       true,
     );
+  });
+});
+
+describe("what a body wears, and the home that suits what an agent is for", () => {
+  const types = [
+    { name: PLACE_TYPE, scope: "agent" as const },
+    { name: WEAR_TYPE, scope: "agent" as const },
+  ];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const system: StateCaller = { actor: { kind: "plugin", name: "places" } };
+  const as = (agentName: string) => ({ agentName }) as ToolContext;
+  const roles = (agent: string) => readRole({ name: agent });
+  const homes = (agent: string) => homeFor(roles(agent), homeId(agent));
+  let state: StateService;
+  let tool: PlaceTool;
+  beforeEach(() => {
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    tool = new PlaceTool(
+      () => state,
+      () => true,
+      undefined,
+      () => [],
+      () => new Date(),
+      roles,
+    );
+  });
+  const chosen = async (agent: string) => (await state.get(owner, { type: WEAR_TYPE, id: agent }))?.data.wear;
+
+  it("says what it wears when it looks: what suits its role until it chooses", async () => {
+    const look = await tool.execute({ action: "look" }, as("coder"));
+    expect(String(look.output)).toMatch(/You wear a headset and glasses, as suits a coder\./);
+    const none = await tool.execute({ action: "look" }, as("zork"));
+    expect(String(none.output)).toMatch(/You wear nothing\./);
+  });
+
+  it("puts on what it asks for with room, in its own scope, without touching the room", async () => {
+    await tool.execute({ action: "look" }, as("coder"));
+    const room = await state.get(owner, { type: PLACE_TYPE, id: homeId("coder") });
+    const worn = await tool.execute({ action: "room", wear: "a wizard hat and a scarf" }, as("coder"));
+    expect(worn.success, worn.error).toBe(true);
+    expect(worn.output).toBe("You wear a wizard hat and a scarf now.");
+    expect(await chosen("coder")).toEqual(["wizard hat", "scarf"]);
+    expect((await state.get(owner, { type: WEAR_TYPE, id: "coder" }))?.scope).toBe("agent:coder");
+    // The room is as it was: choosing a hat isn't changing the room.
+    expect((await state.get(owner, { type: PLACE_TYPE, id: homeId("coder") }))?.version).toBe(room?.version);
+    const look = await tool.execute({ action: "look" }, as("coder"));
+    expect(String(look.output)).toMatch(/You wear a wizard hat and a scarf\./);
+  });
+
+  it("wears nothing, or goes back to what suits its role", async () => {
+    await tool.execute({ action: "room", wear: "none" }, as("coder"));
+    expect(await chosen("coder")).toEqual([]);
+    expect(String((await tool.execute({ action: "look" }, as("coder"))).output)).toMatch(/You wear nothing\./);
+    const back = await tool.execute({ action: "room", wear: "default" }, as("coder"));
+    expect(back.output).toBe("You wear a headset and glasses now, what suits your role.");
+    expect(await chosen("coder")).toBeUndefined();
+  });
+
+  it("changes the room and what it wears in one go, and neither when what it asks to wear is wrong", async () => {
+    const both = await tool.execute({ action: "room", walls: "sage", wear: "cap" }, as("coder"));
+    expect(both.success, both.error).toBe(true);
+    expect(both.output).toMatch(/^Changed the room: the walls are sage\. You wear a cap now\.$/);
+    const bad = await tool.execute({ action: "room", walls: "navy", wear: "cap, beret" }, as("coder"));
+    expect(bad.success).toBe(false);
+    expect(bad.error).toMatch(/a cap and a beret both go on the head/);
+    expect(await chosen("coder")).toEqual(["cap"]);
+    const home = (await readHome(state, owner, "coder", homes)).place;
+    expect(home.walls).toBe(parseColor("sage"));
+  });
+
+  it("wears what was chosen while it makes sense, and otherwise what suits its role", () => {
+    const coder = roles("coder");
+    expect(wornBy(undefined, coder)).toEqual(["headset", "glasses"]);
+    expect(wornBy([], coder)).toEqual([]);
+    expect(wornBy(["beret"], coder)).toEqual(["beret"]);
+    // Someone wrote two hats on the State page: its role's, rather than a body with a hat inside a hat.
+    expect(wornBy(["cap", "beret"], coder)).toEqual(["headset", "glasses"]);
+    expect(wornBy(undefined, undefined)).toEqual([]);
+  });
+
+  it("reads an agent's role from its definition, and gives each home on the map its owner's role and wear", () => {
+    const def = { description: "Plans our family trips.", instructions: "Book the flights.", tools: ["speak"] };
+    expect(aboutAgent("ivy", def)).toEqual({ name: "ivy", ...def });
+    expect(readRole(aboutAgent("ivy", def))?.word).toBe("travel agent");
+    // The default agent's name is no word for anything, and no tool list says nothing.
+    expect(aboutAgent("default", { description: "" })).toEqual({ name: "" });
+    expect(aboutAgent("ivy", undefined)).toEqual({ name: "ivy" });
+    const chosen = new Map<string, unknown>([["coder", ["cap"]]]);
+    expect(looksOf("coder", roles("coder"), chosen)).toEqual({ role: "coder", wear: ["cap"], wearChosen: true });
+    expect(looksOf("zork", undefined, chosen)).toEqual({ wear: [] });
+    // Each home by its owner, whatever the place is called; nothing else on the map says who anyone is.
+    expect(
+      withLooks(
+        [
+          { id: "lobby", kind: "lobby" },
+          { id: homeId("coder"), kind: "home", owner: "coder" },
+          { id: homeId("bookkeeper"), kind: "home", owner: "bookkeeper" },
+          { id: "shared:den", kind: "shared" },
+        ],
+        roles,
+        chosen,
+      ),
+    ).toEqual([
+      { id: "lobby", kind: "lobby" },
+      { id: homeId("coder"), kind: "home", owner: "coder", role: "coder", wear: ["cap"], wearChosen: true },
+      { id: homeId("bookkeeper"), kind: "home", owner: "bookkeeper", role: "bookkeeper", wear: ["bow tie", "glasses"] },
+      { id: "shared:den", kind: "shared" },
+    ]);
+  });
+
+  it("starts a home as the kind that suits what its agent is for, with what the work needs", async () => {
+    const { place } = await readHome(state, owner, "podcast-producer", homes);
+    const home = homes("podcast-producer");
+    expect(home).toEqual({ kind: "studio", dressing: "booth" });
+    expect(place).toEqual(homePlace(homeId("podcast-producer"), "podcast-producer's room", home.kind, home.dressing));
+    expect(place.props.some((p) => p.kind === "mic_stand")).toBe(true);
+  });
+
+  it("brings a home nobody changed up to the kind that suits its agent, and leaves a changed one be", async () => {
+    // Made before homes suited their agents: the seed's room alone.
+    const ref = { type: PLACE_TYPE, id: homeId("bookkeeper") };
+    const plain = homePlace(ref.id, "bookkeeper's room");
+    await state.put(system, { ...ref, scope: "agent:bookkeeper", data: plain as never });
+    const suited = (await readHome(state, owner, "bookkeeper", homes)).place;
+    expect(suited.props.some((p) => p.kind === "ledger")).toBe(true);
+    // Someone else's: the agent changed it, so it stays as it is whatever it would draw now.
+    const other = { type: PLACE_TYPE, id: homeId("travel-agent") };
+    const theirs = { ...homePlace(other.id, "travel-agent's room"), walls: "#123456" };
+    await state.put(system, { ...other, scope: "agent:travel-agent", data: homePlace(other.id, "x") as never });
+    await state.put(
+      { actor: { kind: "agent", name: "travel-agent" } },
+      { ...other, data: theirs as never },
+      (await state.get(owner, other))?.version,
+    );
+    expect((await readHome(state, owner, "travel-agent", homes)).place).toEqual(theirs);
   });
 });

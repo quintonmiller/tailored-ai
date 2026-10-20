@@ -208,6 +208,13 @@ describe("mapIndex", () => {
     expect(none.first).toBeUndefined();
   });
 
+  it("finds agents by what they are for, too", () => {
+    const withRoles = places.map((p) =>
+      p.id === "home:writer" ? { ...p, role: "writer" } : p.id === "home:analyst" ? { ...p, role: "researcher" } : p,
+    );
+    expect(mapIndex(withRoles, areas, {}, "research").agents.map((a) => a.agent)).toEqual(["analyst"]);
+  });
+
   it("puts rooms where something is happening first, and keeps the rest in the order they came", () => {
     const index = mapIndex(places, areas, {}, "", (p) => (p.id === "room:local:trip" ? 0 : 10));
     expect(index.rooms.map((p) => p.id)).toEqual(["room:local:trip", "room:local:budget"]);
