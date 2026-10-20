@@ -29,6 +29,12 @@ export interface AgentActivity {
   until?: string;
   /** Idle or asleep: when it next wakes on its own. */
   next?: string;
+  /**
+   * Who it is talking with right now, on the phone or face to face, and
+   * whether it spoke first: the places plugin's `talk` record, which the page
+   * puts here (`withTalks` in `talk.ts`).
+   */
+  talk?: { with: string; phone?: boolean; started?: boolean };
 }
 
 /**
@@ -61,8 +67,8 @@ export const DOING_VARS: Record<string, string> = Object.fromEntries(
 /** How a thing is held: up to the eyes, at the ear, in front of the chest, or out ahead. */
 export type Hold = "up" | "ear" | "chest" | "out";
 
-/** A sign over the head: thinking dots, a speech bubble, an exclamation, a question, sleep. */
-export type Sign = "think" | "talk" | "wait" | "stuck" | "sleep";
+/** A sign over the head: thinking dots, a speech bubble, a phone, an exclamation, a question, sleep. */
+export type Sign = "think" | "talk" | "phone" | "wait" | "stuck" | "sleep";
 
 /** Where it goes to do something, by what the spot is for: a seat, its desk, or the task board. */
 export type Station = "seat" | "desk" | "board";
@@ -80,6 +86,8 @@ export interface Behavior {
   station?: Station;
   /** Another agent it turns to, when they are in the room. */
   face?: string;
+  /** On the phone, as the places plugin says: the phone stays at its ear, whoever is in sight. */
+  phone?: boolean;
   /** Stays where it is instead of wandering. */
   stays: boolean;
   /** A status line, and what it is about; nothing while idle. */
@@ -127,21 +135,28 @@ const IDLE: Behavior = { stays: false };
 export function behaviorFor(a: AgentActivity | undefined): Behavior {
   if (!a) return IDLE;
   const label = { label: a.what, ...(a.detail ? { detail: a.detail } : {}) };
+  const talk = a.talk;
   switch (a.doing) {
     case "thinking":
       // Work is done at the desk: a turn starting sends it there, when it is free to go.
-      return { ...label, sign: "think", thinking: true, stays: true, station: "desk" };
+      return through({ ...label, sign: "think", thinking: true, stays: true, station: "desk" }, talk);
     case "working": {
       const look = a.look && HELD[a.look] ? a.look : undefined;
-      return {
-        ...label,
-        stays: true,
-        ...(look ? { prop: look, hold: HELD[look] } : {}),
-        ...(look ? (STATIONS[look] ? { station: STATIONS[look] } : {}) : { station: "desk" as const }),
-      };
+      return through(
+        {
+          ...label,
+          stays: true,
+          ...(look ? { prop: look, hold: HELD[look] } : {}),
+          ...(look ? (STATIONS[look] ? { station: STATIONS[look] } : {}) : { station: "desk" as const }),
+        },
+        talk,
+      );
     }
     case "talking":
-      // Face to face when the other one is here; on the phone when they are not.
+      // Face to face with one in the same place, and on the phone to one anywhere else, as the places plugin says.
+      if (talk && !talk.phone) return { ...label, sign: "talk", stays: true, face: talk.with };
+      if (talk) return { ...label, sign: "phone", stays: true, prop: "phone", hold: "ear", phone: true };
+      // Handing off work, which nobody says either way: on the phone, unless the other turns out to be here.
       return { ...label, sign: "talk", stays: true, prop: "phone", hold: "ear", ...(a.with ? { face: a.with } : {}) };
     case "waiting":
       return { ...label, sign: "wait", stays: true, gesture: "wave" };
@@ -155,8 +170,20 @@ export function behaviorFor(a: AgentActivity | undefined): Behavior {
 }
 
 /**
+ * Thinking or working through a talk: on the phone, it keeps the phone at its
+ * ear unless its work puts something else in its hand; face to face, it turns
+ * to the other and stays with it rather than going off to its desk.
+ */
+function through(b: Behavior, talk: AgentActivity["talk"]): Behavior {
+  if (!talk) return b;
+  if (!talk.phone) return { ...b, face: talk.with, station: undefined };
+  return b.prop ? b : { ...b, prop: "phone", hold: "ear", phone: true };
+}
+
+/**
  * What is actually in its hand, where it is: no laptop at a desk — it types
- * there — and no phone to someone standing in the same room.
+ * there — and no phone to someone standing in the same room, unless the
+ * places plugin says it is on the phone all the same.
  */
 export function heldFor(
   b: Behavior | undefined,
@@ -164,7 +191,7 @@ export function heldFor(
 ): { prop?: string; hold?: Hold } {
   if (!b?.prop || !b.hold) return {};
   if (b.prop === "laptop" && at.spotActivity === "type") return {};
-  if (b.hold === "ear" && at.partnerHere) return {};
+  if (b.hold === "ear" && at.partnerHere && !b.phone) return {};
   return { prop: b.prop, hold: b.hold };
 }
 
@@ -201,6 +228,7 @@ export function sameBehavior(a: Behavior, b: Behavior): boolean {
     "asleep",
     "station",
     "face",
+    "phone",
     "stays",
     "label",
     "detail",

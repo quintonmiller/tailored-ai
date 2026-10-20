@@ -25,8 +25,6 @@ export interface MapPlace {
    * open on each other, the other one. None for the lobby, another area's first hall, or a place alone in its area.
    */
   via?: string;
-  /** Those here to see someone else here, by who they came to see: an agent visiting one it messaged directly. */
-  with?: Record<string, string>;
   /** A home's owner, in a word ("coder", "writer"), when what it is for can be read. */
   role?: string;
   /** What a home's owner wears, by name. */

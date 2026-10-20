@@ -111,6 +111,8 @@ export class Figure {
   private readonly paceSet: boolean;
   /** Something it said, shown in a bubble with its tail from `from` to `until` on the stage's clock. */
   private line: { bubble: THREE.Sprite; tail: THREE.Sprite; from: number; until: number } | undefined;
+  /** Something said after that, waiting for its turn in the bubble. */
+  private next: { text: string; from: number; who?: string; how: { phone?: boolean; far?: boolean } } | undefined;
   private shownTag: { sprite: THREE.Sprite | undefined; key: string } = { sprite: undefined, key: "" };
   /** The sign over its head. */
   readonly signs = new SignPost();
@@ -365,11 +367,24 @@ export class Figure {
    * Say something: a bubble over its head from `from` (the stage's clock)
    * for long enough to read, replacing whatever it was saying before. `who`
    * names the speaker in the bubble, for a body that wears a tag: the tag is
-   * put away while it speaks.
+   * put away while it speaks. Said down the phone, the bubble shows a phone;
+   * the far side of a call, heard out of this body's phone, is edged apart.
    */
-  say(text: string, from: number, who?: string) {
+  say(text: string, from: number, who?: string, how: { phone?: boolean; far?: boolean } = {}) {
+    // Said after what is in its bubble now (the other end of a call answering), it waits its turn: what is there
+    // stays up until then.
+    if (this.line && from > this.line.from) {
+      this.line.until = Math.min(this.line.until, from);
+      this.next = { text, from, who, how };
+      return;
+    }
+    this.next = undefined;
+    this.utter(text, from, who, how);
+  }
+
+  private utter(text: string, from: number, who: string | undefined, how: { phone?: boolean; far?: boolean }) {
     this.hush();
-    const bubble = speechBubble(text, who);
+    const bubble = speechBubble(text, who, how);
     const tail = bubbleTail();
     bubble.visible = false;
     tail.visible = false;
@@ -456,13 +471,14 @@ export class Figure {
 
   /**
    * The tag over its head: its name, what it is doing, both, or neither, and
-   * a line or two more when you come close. Redrawn only when the words change.
+   * a line or two more when you come close, with a phone before what it is
+   * doing while it is on one. Redrawn only when the words change.
    */
-  label(name: string | undefined, status: string | undefined, more: string[] = []) {
-    const key = `${name ?? ""}\n${status ?? ""}\n${more.join("\n")}`;
+  label(name: string | undefined, status: string | undefined, more: string[] = [], phone = false) {
+    const key = `${name ?? ""}\n${status ?? ""}\n${more.join("\n")}\n${phone}`;
     if (key === this.shownTag.key) return;
     if (this.shownTag.sprite) disposeSprite(this.shownTag.sprite);
-    const sprite = tag({ ...(name ? { name } : {}), ...(status ? { status } : {}), more });
+    const sprite = tag({ ...(name ? { name } : {}), ...(status ? { status } : {}), more, phone });
     if (sprite) {
       this.crownPoint.add(sprite);
       // Where the last tag stood, until the stage lays this one out.
@@ -617,6 +633,10 @@ export class Figure {
         this.hush();
         this.signs.group.visible = true;
         if (this.shownTag.sprite) this.shownTag.sprite.visible = true;
+        // Its turn now: what was said after it.
+        const next = this.next;
+        this.next = undefined;
+        if (next) this.utter(next.text, next.from, next.who, next.how);
       }
     }
     const size = Math.max(0.05, this.bounds.max.y - this.hipsY) * 0.5;

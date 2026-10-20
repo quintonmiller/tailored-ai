@@ -143,8 +143,8 @@ export function Avatar({
    * on a board the note or column clicked, on a screen the page that was up.
    */
   onUse?: (action: string, on?: UseSpot) => void;
-  /** A visitor is near an agent as it starts saying something, nearness 0–1. */
-  onLine?: (agent: string, text: string, nearness: number) => void;
+  /** A visitor is near an agent as it starts saying something, nearness 0–1; `phone`, heard down the line. */
+  onLine?: (agent: string, text: string, nearness: number, phone?: boolean) => void;
   /**
    * Which place `room` is, by id. A new one on the same stage is a place come
    * into through a door: you stand just inside the door back to the last one.
@@ -320,7 +320,8 @@ export function Avatar({
             ? {
                 visitor: true,
                 onNear: (who: string | undefined) => nearRef.current?.(who),
-                onLine: (who: string, text: string, nearness: number) => lineRef.current?.(who, text, nearness),
+                onLine: (who: string, text: string, nearness: number, phone?: boolean) =>
+                  lineRef.current?.(who, text, nearness, phone),
               }
             : {}),
           onUse: (action: string, on?: UseSpot) => onUseRef.current?.(action, on),
