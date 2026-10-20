@@ -23,6 +23,8 @@ import {
   type Placing,
   placeProblems,
   removeItem,
+  SHOWS_KINDS,
+  SHOWS_LENGTH,
   topOf,
   type Where,
   wallPoint,
@@ -46,7 +48,9 @@ export type Edit =
    */
   | { op: "add"; kind: string; like?: string; model?: string; size?: [number, number, number]; name?: string }
   | { op: "remove"; item: string }
-  | { op: "color"; item: string; color: string };
+  | { op: "color"; item: string; color: string }
+  /** What a widget shows (`PlaceItem.shows`); null, back to what its kind shows by itself. */
+  | { op: "shows"; item: string; shows: string | null };
 
 /** The room after a person's change: what it is now, the thing it added or changed, and what went with a removal. */
 export interface Edited {
@@ -112,8 +116,15 @@ export function editFrom(body: unknown): Edit | string {
       if (!item || !color || !/^#[0-9a-f]{6}$/.test(color)) return "A colour needs `item` and `color` as #rrggbb.";
       return { op: "color", item, color };
     }
+    case "shows": {
+      if (!item) return "Choosing what it shows needs `item`.";
+      if (e.shows === null || e.shows === "") return { op: "shows", item, shows: null };
+      const shows = text(e.shows);
+      if (!shows || shows.length > SHOWS_LENGTH) return `\`shows\` is up to ${SHOWS_LENGTH} characters, or null.`;
+      return { op: "shows", item, shows };
+    }
     default:
-      return "`op` is one of: move, add, remove, color.";
+      return "`op` is one of: move, add, remove, color, shows.";
   }
 }
 
@@ -183,6 +194,7 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
           ...(like.label ? { label: like.label } : {}),
           ...(like.action ? { action: like.action } : {}),
           ...(like.model ? { model: like.model } : {}),
+          ...(like.shows ? { shows: like.shows } : {}),
         }
       : edit.model && edit.size
         ? { model: edit.model, size: edit.size }
@@ -226,6 +238,13 @@ export function applyEdit(id: string, place: Place, edit: Edit): Edited | string
       return `${named(item)} is how you ${DOES[item.action]} from the lobby, so it stays. Move it instead.`;
     const { place: next, removed } = removeItem(place, item.id);
     return { place: next, item: item.id, ...(removed.length ? { removed } : {}) };
+  }
+
+  if (edit.op === "shows") {
+    if (!SHOWS_KINDS.includes(item.kind)) return `${named(item)} shows what it is: there's nothing to choose.`;
+    const { shows: _, ...rest } = item;
+    const changed: PlaceItem = edit.shows ? { ...rest, shows: edit.shows } : rest;
+    return { place: { ...place, props: place.props.map((p) => (p.id === item.id ? changed : p)) }, item: item.id };
   }
 
   if (edit.op === "color") {

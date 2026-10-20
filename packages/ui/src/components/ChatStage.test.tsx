@@ -171,6 +171,7 @@ vi.mock("../avatar/stage", () => ({
       setCalendar: (view: { title: string; names: boolean; wakes: { key: string }[]; done: { key: string }[] }) =>
         stage.calendars.push(view),
       setLights: (l: string) => stage.lights.push(l),
+      setGlances: () => {},
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
       onSurfaces: (listener: (views: unknown[]) => void) => {
         stage.surfaces = listener;

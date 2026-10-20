@@ -13,6 +13,7 @@ import {
   palette,
   redoing,
   type Steps,
+  showsChoices,
   stepped,
   TURNS,
   turned,
@@ -201,7 +202,11 @@ export interface RoomEditor {
 }
 
 /** Rearranging the place on screen: `place` is it as the page last heard, undefined when it can't be rearranged. */
-export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
+export function useRoomEditor(
+  place: EditablePlace | undefined,
+  /** What a widget can be set to show beyond its own choices, as of now: the rooms there are, the Board's widgets. */
+  have: () => { rooms?: string[]; widgets?: { id: string; title?: string }[] } = () => ({}),
+): RoomEditor {
   const [editing, setEditing] = useState(false);
   const [kinds, setKinds] = useState<Offer | null>(null);
   const [local, setLocal] = useState<Saved | null>(null);
@@ -488,6 +493,10 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   };
   const add = (kind: string) => void change({ op: "add", kind }, (made) => made.item);
   const addModel = (model: string) => void change({ op: "add", kind: "model", model }, (made) => made.item);
+  const show = (shows: string) => {
+    const prop = thing(now.current.selected);
+    if (prop && (prop.shows ?? "") !== shows) void change({ op: "shows", item: prop.id, shows: shows || null });
+  };
 
   // Undo and redo write over the version your last write left, not the newest the page has heard: if anyone changed
   // the room since, the server says so, and theirs stands.
@@ -603,6 +612,8 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
   // A model keeps its parts' own colours: there is nothing to repaint.
   const fixedColours = !!picked?.model;
   const hangs = !!picked && kinds?.kinds[picked.kind]?.mount === "wall";
+  // A widget that can show more than one thing: what it can be set to.
+  const choices = picked ? showsChoices(picked.kind, have()) : undefined;
   // A thing being put somewhere it can't go says why; otherwise the last thing the server or a save said.
   const said = pending?.fits === false ? pending.why : notice;
 
@@ -685,6 +696,21 @@ export function useRoomEditor(place: EditablePlace | undefined): RoomEditor {
         ))}
         {busy && <span className="room-edit-saving">Saving…</span>}
       </fieldset>
+      {picked && choices && (
+        <label className="room-edit-shows">
+          <span>Shows</span>
+          <select value={picked.shows ?? ""} disabled={busy} onChange={(e) => show(e.target.value)}>
+            {choices.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+            {picked.shows && !choices.some((c) => c.value === picked.shows) && (
+              <option value={picked.shows}>{picked.shows}</option>
+            )}
+          </select>
+        </label>
+      )}
       {said ? (
         <output className="room-edit-said">{said}</output>
       ) : (

@@ -3,7 +3,8 @@
  *
  * In the middle is the square: paving round a fountain, benches and lamps,
  * the town hall along its north side with the kiosks in front of it and the
- * task board, the big screen and the calendar on its front. Through the
+ * task board, the big screen, the calendar and the square's widgets on its
+ * front, and stands with more of them at the square's top corners. Through the
  * square runs the avenue, east to west. East of the square, on the avenue,
  * is the office, where the rooms agents talk in are; behind it, a park with a
  * pond. Off the avenue run lanes of homes, each agent's a house of its own
@@ -768,6 +769,32 @@ export function townPlace(town: Town): TownPlaceRecord {
     scale: 1.4,
     elevation: 1.35,
   });
+  // The widgets the square has, for a glance from anywhere on it: who is doing what, left of the big screen, and what
+  // waits on you, right of the door; over the door, the latest lines from every room, like a marquee; and on stands
+  // at the square's top corners, turned to its middle, what got done lately and the numbers behind it.
+  // Bigger than indoors, as everything on the hall's front is, to read from across the square.
+  add({
+    id: "status",
+    name: "the status board",
+    kind: "status_board",
+    at: [-7.95, front],
+    facing: 0,
+    scale: 1.25,
+    elevation: 1.3,
+  });
+  add({
+    id: "needs",
+    name: "the needs-you board",
+    kind: "needs_board",
+    at: [1.95, front],
+    facing: 0,
+    scale: 1.4,
+    elevation: 1.3,
+  });
+  add({ id: "ticker", name: "the ticker", kind: "ticker", at: [0, front], facing: 0, scale: 1.6, elevation: 3.1 });
+  const stand = { kind: "display", scale: 1.8 } as const;
+  add({ ...stand, id: "feed", name: "the activity stand", shows: "feed", at: [-9.4, -10.4], facing: 42 });
+  add({ ...stand, id: "chart", name: "the chart stand", shows: "chart", at: [9.4, -10.4], facing: -42 });
   // In front of it, on the square: a kiosk each to make a new agent, a new task and a new room.
   const kiosk = (id: string, x: number, label: string, action: PlaceItem["action"]) =>
     add({

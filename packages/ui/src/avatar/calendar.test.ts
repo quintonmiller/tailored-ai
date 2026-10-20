@@ -10,10 +10,13 @@ import {
   byDay,
   type CalendarView,
   type CronJob,
+  calendarDays,
   calendarLines,
   dayStart,
+  doneBetween,
   doneToday,
   type OwnAgent,
+  onDay,
   upcoming,
   type Wake,
 } from "./calendar";
@@ -281,5 +284,71 @@ describe("calendarLines", () => {
   it("gives a small page to the wakes alone", () => {
     const done = [{ key: "d1", agent: "planner", at: at(0, 9), what: "finished “a”" }];
     expect(kinds(calendarLines(view({ wakes: wakes(1), done }), 4))).toEqual(["#Today", "w0-0"]);
+  });
+});
+
+describe("a calendar read close up", () => {
+  const now = new Date(2026, 9, 20, 15, 30).getTime();
+
+  it("puts what got done on the days gone by: done, assigned, and last changed in the time asked about", () => {
+    const at = (d: number) => new Date(2026, 9, d, 10).toISOString();
+    const done = doneBetween(
+      [
+        { id: "a", title: "Plan", status: "done", assignee: "planner", updated_at: at(3) },
+        { id: "b", title: "Draft", status: "done", assignee: "writer", updated_at: at(18) },
+        { id: "c", title: "Open", status: "in_progress", assignee: "writer", updated_at: at(18) },
+        { id: "d", title: "Nobody's", status: "done", assignee: null, updated_at: at(18) },
+        {
+          id: "e",
+          title: "Last month",
+          status: "done",
+          assignee: "writer",
+          updated_at: new Date(2026, 8, 20).toISOString(),
+        },
+      ],
+      new Date(2026, 9, 1).getTime(),
+      now,
+    );
+    expect(done.map((d) => d.task)).toEqual(["b", "a"]);
+    expect(done[0]).toMatchObject({ agent: "writer", what: "finished “Draft”" });
+  });
+
+  it("lays out today alone, the week from today, or the month's whole weeks", () => {
+    const day = calendarDays("day", now);
+    expect(day).toEqual([{ start: dayStart(now), today: true, inMonth: true }]);
+    const week = calendarDays("week", now);
+    expect(week).toHaveLength(7);
+    expect(week[0]?.today).toBe(true);
+    expect(new Date(week[6]?.start ?? 0).getDate()).toBe(26);
+    // October 2026 starts on a Thursday: Monday-first weeks begin on 28 September, and end with 1 November.
+    const month = calendarDays("month", now, 1);
+    expect(month.length % 7).toBe(0);
+    expect(new Date(month[0]?.start ?? 0).getDate()).toBe(28);
+    expect(month[0]?.inMonth).toBe(false);
+    expect(month.filter((d) => d.inMonth)).toHaveLength(31);
+    expect(new Date(month.at(-1)?.start ?? 0).getDate()).toBe(1);
+    expect(month.filter((d) => d.today)).toHaveLength(1);
+    // Sunday-first, it begins the Sunday before.
+    expect(new Date(calendarDays("month", now, 0)[0]?.start ?? 0).getDate()).toBe(27);
+  });
+
+  it("finds what falls on a day: its wakes soonest first, what got done newest first", () => {
+    const start = dayStart(now);
+    const wake = (key: string, at: number): Wake => ({ key, agent: "planner", at, kind: "booked", what: key });
+    const on = onDay(
+      start,
+      [
+        wake("late", start + 20 * 3_600_000),
+        wake("early", start + 8 * 3_600_000),
+        wake("tomorrow", start + 30 * 3_600_000),
+      ],
+      [
+        { key: "d1", agent: "writer", at: start + 9 * 3_600_000, what: "x" },
+        { key: "d2", agent: "writer", at: start + 11 * 3_600_000, what: "y" },
+        { key: "d0", agent: "writer", at: start - 3_600_000, what: "z" },
+      ],
+    );
+    expect(on.wakes.map((w) => w.key)).toEqual(["early", "late"]);
+    expect(on.done.map((d) => d.key)).toEqual(["d2", "d1"]);
   });
 });

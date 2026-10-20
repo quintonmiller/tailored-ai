@@ -77,7 +77,18 @@ export type PropKind =
   // Models agents make from parts, by where they go (`models.ts`).
   | "model"
   | "wall_model"
-  | "small_model";
+  | "small_model"
+  // Widgets: live pages drawn from what the server keeps (`widgets.ts`).
+  | "status_board"
+  | "feed"
+  | "needs_board"
+  | "todo"
+  | "photo_wall"
+  | "ticker"
+  | "chart"
+  | "agenda"
+  | "display"
+  | "monitor";
 
 export interface Prop {
   id: string;
@@ -108,6 +119,8 @@ export interface Prop {
   action?: string;
   /** For a model an agent made, its record's id: `room.models` has what it is made of. */
   model?: string;
+  /** What a widget shows, for kinds that can show more than one thing: a chart's measure, a ticker's room. */
+  shows?: string;
 }
 
 /** What the avatar does once it gets to a spot. */

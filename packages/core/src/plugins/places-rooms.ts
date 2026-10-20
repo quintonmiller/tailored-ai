@@ -111,6 +111,8 @@ interface Piece {
   size?: [number, number, number];
   label?: string;
   action?: PlaceAction;
+  /** What a widget shows (`PlaceItem.shows`). */
+  shows?: string;
 }
 
 /** Furniture that belongs together, and how much wall it takes. */
@@ -472,6 +474,7 @@ function furnish(start: Place, pieces: Placed[]): Place {
     if (piece.size) item.size = piece.size;
     if (piece.label) item.label = piece.label;
     if (piece.action) item.action = piece.action;
+    if (piece.shows) item.shows = piece.shows;
     if (piece.key) ids.set(piece.key, item.id);
     place = withSpots({ ...place, props: [...place.props, item] });
   }
@@ -634,9 +637,10 @@ function clearWays(start: Place): Place {
 
 /**
  * Something every home has: somewhere to sit, somewhere to work, a window, a
- * frame for the photos taken there, and a calendar of its owner's day.
+ * frame for the photos taken there, a calendar of its owner's day, and a
+ * to-do list of its owner's tasks.
  */
-type Need = "seat" | "desk" | "window" | "picture" | "calendar";
+type Need = "seat" | "desk" | "window" | "picture" | "calendar" | "todo";
 
 interface Needed {
   kind: string;
@@ -659,6 +663,13 @@ const NEEDS: Record<Need, Needed> = {
     near: (p) => p.spots.find((s) => s.activity === "type")?.item,
     smaller: [0.8, 0.6],
   },
+  // And the open tasks beside it, short enough to read from the middle of the room.
+  todo: {
+    kind: "todo",
+    has: (p) => p.props.some((i) => i.kind === "todo"),
+    near: (p) => p.spots.find((s) => s.activity === "type")?.item,
+    smaller: [0.85],
+  },
 };
 
 /** A room with what it needs: put wherever it fits (near what it goes by), the way the `place` tool would, when the room has none. */
@@ -677,6 +688,44 @@ function ensure(place: Place, need: Need): Place {
       ...(scale !== 1 ? { scale } : {}),
     };
     return withSpots({ ...place, props: [...place.props, item] });
+  }
+  return place;
+}
+
+/**
+ * A room with a wall thing hung centred over another, as high as leaves a
+ * hand's width between them, when it fits there; as it was when it doesn't.
+ */
+export function above(place: Place, under: PlaceItem, thing: { kind: string; name?: string }): Place {
+  return hangAt(place, under, round((under.elevation ?? 0) + heightOf(under) + 0.11), thing);
+}
+
+/**
+ * A room with a wall thing hung where another hangs (`at`, on its wall, along
+ * it as far), this high, when it fits there, a size smaller if not; as it was
+ * when it fits neither way.
+ */
+export function hangAt(
+  place: Place,
+  at: Pick<PlaceItem, "at">,
+  elevation: number,
+  thing: { kind: string; name?: string },
+): Place {
+  const wall = Math.abs(at.at[1] + place.depth / 2) < Math.abs(at.at[0] + place.width / 2) ? "back" : "left";
+  const along = wall === "back" ? at.at[0] : at.at[1];
+  for (const scale of [1, 0.8]) {
+    const placing: Placing = { kind: thing.kind, ...(scale !== 1 ? { scale } : {}) };
+    if (!fitsOnWall(place, placing, wall, along, elevation)) continue;
+    const item: PlaceItem = {
+      id: newId(place, thing.kind),
+      name: newName(place, thing.kind, undefined, thing.name),
+      kind: thing.kind,
+      at: wallPoint(place, wall, along),
+      facing: wall === "back" ? 0 : 90,
+      elevation,
+      ...(scale !== 1 ? { scale } : {}),
+    };
+    return { ...place, props: [...place.props, item] };
   }
   return place;
 }
@@ -1067,7 +1116,7 @@ export function homePlace(seed: string, name: string, kind?: string, dressing?: 
     flips: () => rand() < 0.5,
     after,
     lampsAt,
-    needs: ["seat", "desk", "window", "picture", "calendar"],
+    needs: ["seat", "desk", "window", "picture", "calendar", "todo"],
   });
 }
 
@@ -1384,7 +1433,7 @@ export function meetingRoom(name: string, seats: number, purpose = "", chosen?: 
       facing: 0,
       color: "#e85d4a",
     });
-  const room = build({
+  const built = build({
     name,
     width,
     depth,
@@ -1400,6 +1449,9 @@ export function meetingRoom(name: string, seats: number, purpose = "", chosen?: 
     flips: () => rand() < 0.5,
     after,
   });
+  // Over the task board, the room's latest lines: what was said lately, by whom, read without walking up to it.
+  const board = built.props.find((p) => p.kind === "board");
+  const room = board ? above(built, board, { kind: "ticker", name: "the ticker" }) : built;
   // The look it is dressed in, so whoever changes it later knows; a plain room nobody chose says nothing.
   return theme ? { ...room, theme: theme.id } : chosen === NO_THEME ? { ...room, theme: NO_THEME } : room;
 }
@@ -1492,8 +1544,40 @@ export function lobby(): Place {
     ...island("reading", [5.2, -1.4], look, "reading"),
     { kind: "lamp", name: "the corner lamp", at: [round(-width / 2 + 0.4), round(depth / 2 - 0.4)], facing: 0 },
     { kind: "plant", at: [round(width / 2 - 0.5), round(depth / 2 - 0.5)], facing: 0 },
+    // The lobby's widgets, where the walls have room for them: who is doing what and what waits on you along the
+    // left wall, the photos agents took over the lounge, the latest talk from every room over the task board, and on
+    // stands what got done lately and the numbers behind it.
+    {
+      id: "status",
+      name: "the status board",
+      kind: "status_board",
+      at: [0, 0],
+      facing: 0,
+      wall: { side: "left", along: -3.15 },
+    },
+    {
+      id: "needs",
+      name: "the needs-you board",
+      kind: "needs_board",
+      at: [0, 0],
+      facing: 0,
+      wall: { side: "left", along: -1.75 },
+    },
+    {
+      id: "ticker",
+      name: "the ticker",
+      kind: "ticker",
+      at: [4, back],
+      facing: 0,
+      wall: { side: "back", along: 4 },
+      elevation: 2.12,
+      scale: 1.3,
+    },
+    // Either side of the way out, clear of it, turned to the middle of the room.
+    { id: "feed", name: "the activity stand", kind: "display", shows: "feed", at: [-4.4, 3.9], facing: 25 },
+    { id: "chart", name: "the chart stand", kind: "display", shows: "chart", at: [5.6, 3.9], facing: -25 },
   ];
-  return build({
+  const built = build({
     name: "the lobby",
     width,
     depth,
@@ -1505,11 +1589,18 @@ export function lobby(): Place {
     centre,
     start: { id: "middle", name: "in the middle", place: "the middle of the lobby", at: [0, 0.6], facing: 180 },
     back: [],
-    left: ["windows", "lounge"],
-    corner: { back: 1, left: 1 },
+    // The back of the left wall is for the widgets, the lounge in front of them.
+    left: ["lounge"],
+    corner: { back: 1, left: 3.4 },
     flips: () => false,
     after,
   });
+  // Over the lounge's couch, the photos agents took, where its painting was.
+  const painting = built.props.find((p) => p.kind === "painting");
+  if (!painting) return built;
+  const bare = removeItem(built, painting.id).place;
+  const photos = hangAt(bare, painting, 1.1, { kind: "photo_wall", name: "the photo wall" });
+  return photos === bare ? built : photos;
 }
 
 /**
@@ -1518,7 +1609,8 @@ export function lobby(): Place {
  * and standing along its open right side past what the walls hold, with the
  * way in at the front on the left and the stairs on at the front on the right.
  * In the middle, kept as far from every side as a door's approach: a directory
- * by the way in, a lounge, a table to work at, and plants.
+ * by the way in with a stand of every room's latest lines beside it, a
+ * lounge, a table to work at, and plants.
  */
 export function officeFloor(name: string, width: number, depth: number, doors: DoorSlot[]): Place {
   const look: Look = {
@@ -1549,6 +1641,16 @@ export function officeFloor(name: string, width: number, depth: number, doors: D
   const after: Placed[] = [
     { kind: "tall_plant", at: [round(-width / 2 + 0.45), round(-depth / 2 + 0.45)], facing: 0 },
     { kind: "plant", at: [round(width / 2 - 0.5), round(-depth / 2 + 0.5)], facing: 0 },
+    // In the corner beside the way in, the latest lines from every room, for whoever comes in: a stand, turned to the
+    // middle of the floor.
+    {
+      id: "ticker",
+      name: "the room ticker",
+      kind: "display",
+      shows: "ticker",
+      at: [round(-width / 2 + 0.95), round(front + 1.3)],
+      facing: 45,
+    },
   ];
   return build({
     name,

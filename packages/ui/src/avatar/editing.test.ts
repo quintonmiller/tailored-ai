@@ -17,6 +17,7 @@ import {
   ridersOf,
   SAME_CHANGE_MS,
   STEPS_KEPT,
+  showsChoices,
   snap,
   stepped,
   turned,
@@ -333,5 +334,43 @@ describe("undo and redo", () => {
     for (let i = 1; i <= STEPS_KEPT + 5; i++) steps = stepped(steps, step(i));
     expect(steps.done).toHaveLength(STEPS_KEPT);
     expect(steps.done[0].what).toBe("change 6");
+  });
+});
+
+describe("what a person can set a widget to show", () => {
+  it("offers a chart's four measures, and going through them all first", () => {
+    const choices = showsChoices("chart");
+    expect(choices?.map((c) => c.value)).toEqual(["", "tokens", "turns", "tasks", "time"]);
+  });
+
+  it("offers a ticker the rooms there are, and a screen the Board's widgets", () => {
+    expect(showsChoices("ticker", { rooms: ["trip"] })).toEqual([
+      { value: "", label: "Its own room, or every room" },
+      { value: "trip", label: "#trip" },
+    ]);
+    expect(
+      showsChoices("screen", { widgets: [{ id: "needs", title: "Needs you" }, { id: "plain" }] })?.slice(1),
+    ).toEqual([
+      { value: "needs", label: "Needs you" },
+      { value: "plain", label: "plain" },
+    ]);
+  });
+
+  it("offers a display stand any widget, its own first", () => {
+    const choices = showsChoices("display") ?? [];
+    expect(choices[0]).toEqual({ value: "", label: "Who's doing what" });
+    expect(choices.map((c) => c.value)).toContain("chart: tokens");
+    expect(showsChoices("monitor")?.[0]?.label).toBe("The clock and agenda");
+  });
+
+  it("offers nothing for a kind that shows what it is", () => {
+    expect(showsChoices("status_board")).toBeUndefined();
+    expect(showsChoices("couch")).toBeUndefined();
+  });
+
+  it("reads in the room's recent changes", () => {
+    const room = { props: [{ id: "c", name: "the chart" } as Prop] };
+    expect(changeWords({ op: "shows", item: "c", shows: "tokens" }, room, room)).toBe("set the chart to show tokens");
+    expect(changeWords({ op: "shows", item: "c", shows: null }, room, room)).toBe("set the chart back to its own");
   });
 });

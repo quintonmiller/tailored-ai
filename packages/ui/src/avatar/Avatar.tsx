@@ -1,5 +1,6 @@
 import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardWidgetSpec } from "../api";
+import type { Need } from "../lib/needs";
 import { type Anchor, SHEET_BELOW } from "./anchors";
 import type { BoardTask } from "./boards";
 import type { BodyLooks, EmoteRecord } from "./body";
@@ -12,6 +13,7 @@ import type { BodyState } from "./motion";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
 import type { ScreenCard } from "./screens";
 import type { Companion, Line, PanelOptions, Stage, StageEdit, StageView, SurfaceView, Travel, UseSpot } from "./stage";
+import { faceOf, glanceFor, type WorldData } from "./widgets";
 
 const VIEW_KEY = "tai.talk.avatarView";
 /** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
@@ -100,6 +102,8 @@ export function Avatar({
   screen,
   widgets,
   calendar,
+  world,
+  onApprove,
   onUse,
   onTaskMove,
   onLine,
@@ -173,6 +177,10 @@ export function Avatar({
   widgets?: DashboardWidgetSpec[];
   /** What the calendars on the walls show. */
   calendar?: CalendarView;
+  /** What the widgets show (`widgets.ts`): what agents are doing, the feed, the charts' numbers, the photos. */
+  world?: WorldData;
+  /** Approve or deny what an agent waits on, from a needs-you board on a wall. */
+  onApprove?: (need: Need, approved: boolean) => Promise<unknown>;
   /**
    * A kiosk, a board, a screen or a calendar was clicked: what it does, and
    * on a board the note or column clicked, on a screen the page that was up.
@@ -328,12 +336,30 @@ export function Avatar({
   useEffect(() => {
     if (calendar) stage.current?.setCalendar(calendar);
   }, [calendar]);
+  // What each widget shows from across a room, worked out again as what it shows or the room changes.
+  const glances = useMemo(() => {
+    const out: Record<string, ScreenCard> = {};
+    if (!world || !room) return out;
+    for (const p of room.props) {
+      const choice = faceOf(p);
+      const glance = choice && glanceFor(choice, world);
+      if (glance) out[p.id] = glance;
+    }
+    return out;
+  }, [world, room]);
+  const glancesRef = useRef(glances);
+  glancesRef.current = glances;
+  useEffect(() => {
+    if (world) stage.current?.setGlances(glances);
+  }, [glances, world]);
   const placeRef = useRef(place);
   placeRef.current = place;
   const onUseRef = useRef(onUse);
   onUseRef.current = onUse;
   const moveRef = useRef(onTaskMove);
   moveRef.current = onTaskMove;
+  const approveRef = useRef(onApprove);
+  approveRef.current = onApprove;
   // The surfaces live now, which the faces are drawn into, and the one being read close up.
   const [surfaces, setSurfaces] = useState<SurfaceView[]>([]);
   const [reading, setReading] = useState<string | undefined>(undefined);
@@ -351,12 +377,18 @@ export function Avatar({
       ...(screen ? { cards: screen } : {}),
       ...(widgets ? { widgets } : {}),
       ...(calendar ? { calendar } : {}),
+      ...(world ? { world } : {}),
       onUse: (action, on, thing) => onUseRef.current?.(action, on, thing),
       ...(onTaskMove
         ? { onTaskMove: (id: string, change: TaskMove) => moveRef.current?.(id, change) ?? Promise.resolve() }
         : {}),
+      ...(onApprove
+        ? {
+            onApprove: (need: Need, approved: boolean) => approveRef.current?.(need, approved) ?? Promise.resolve(),
+          }
+        : {}),
     }),
-    [tasks, screen, widgets, calendar, onTaskMove],
+    [tasks, screen, widgets, calendar, world, onTaskMove, onApprove],
   );
   const lineRef = useRef(onLine);
   lineRef.current = onLine;
@@ -523,6 +555,7 @@ export function Avatar({
         if (tasksRef.current) s.setTasks(tasksRef.current);
         if (screenRef.current) s.setScreen(screenRef.current);
         if (calendarRef.current) s.setCalendar(calendarRef.current);
+        if (Object.keys(glancesRef.current).length) s.setGlances(glancesRef.current);
         if (editRef.current) s.setEditing(editRef.current);
         greetIn(s, placeRef.current);
       })

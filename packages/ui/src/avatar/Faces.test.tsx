@@ -7,11 +7,13 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import type { Need } from "../lib/needs";
 import type { BoardTask } from "./boards";
 import type { CalendarView } from "./calendar";
-import { type FaceData, SurfacePortals, type SurfaceStage } from "./Faces";
+import { type FaceData, pinnedWidget, SurfacePortals, type SurfaceStage } from "./Faces";
 import type { Prop } from "./scene";
 import type { SurfaceView } from "./stage";
+import type { FeedItem, WorldData } from "./widgets";
 
 /** How many times a widget has been drawn from nothing: each time is a "Loading…" and another fetch. */
 const mounted = vi.hoisted(() => ({ count: 0 }));
@@ -434,5 +436,188 @@ describe("the screen", () => {
     });
     expect(screen.el.querySelectorAll(".sf-dot")).toHaveLength(2);
     expect(screen.el.querySelector(".sf-screen-title")?.textContent).toMatch(/planner/);
+  });
+});
+
+describe("the widgets", () => {
+  const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  const world = (over: Partial<WorldData> = {}): WorldData => ({
+    activities: {
+      planner: { agent: "planner", doing: "working", what: "searching the web", since: at(3) },
+      reviewer: { agent: "reviewer", doing: "waiting", what: "has a question for you", since: at(9) },
+    },
+    agents: ["planner", "reviewer", "writer"],
+    needs: [],
+    feed: {},
+    stats: {},
+    photos: {},
+    ticker: () => ({ title: "#trip", lines: [] }),
+    wakes: [],
+    done: [],
+    tasks: [],
+    projects: {},
+    now: Date.now(),
+    ...over,
+  });
+  /** A widget on its own kind of thing, at the size it was made for. */
+  const widget = (kind: string, more: Partial<SurfaceView> = {}, look: Partial<Prop> = {}) =>
+    view(kind, { px: [900, 589], ...more }, look);
+
+  it("groups every agent on the status board, and a click goes to the agent", () => {
+    const onUse = vi.fn();
+    const board = widget("status_board", { focused: true });
+    draw([board], { tasks: [], world: world(), onUse });
+    const heads = [...board.el.querySelectorAll(".sw-group-head")].map((h) => h.textContent);
+    expect(heads).toEqual(["Waiting on you1", "Working1"]);
+    const idle = [...board.el.querySelectorAll(".sw-quiet.is-idle .sw-agent")].map((a) => a.textContent);
+    expect(idle).toEqual(["writer"]);
+    press(board.el.querySelector(".sw-row") as Element, "click");
+    expect(onUse).toHaveBeenCalledWith("go", { agent: "reviewer" });
+  });
+
+  it("narrows the feed to one kind when read close up, and a finished task opens its card", () => {
+    const onUse = vi.fn();
+    const feed: FeedItem[] = [
+      { id: "1", kind: "tool", agent: "planner", text: "searching the web", at: at(1) },
+      { id: "2", kind: "done", agent: "writer", text: "Draft the plan", at: at(2), task: "t-4" },
+    ];
+    const stand = widget("feed", { focused: true, px: [557, 781] });
+    draw([stand], { tasks: [], world: world({ feed: { data: feed } }), onUse });
+    const rows = () => [...stand.el.querySelectorAll(".sw-feed-row")];
+    expect(rows()).toHaveLength(2);
+    const done = [...stand.el.querySelectorAll(".sw-chip")].find((c) => c.textContent === "Done") as Element;
+    press(done, "click");
+    expect(rows()).toHaveLength(1);
+    press(rows()[0] as Element, "click");
+    expect(onUse).toHaveBeenCalledWith("tasks", { task: "t-4" });
+  });
+
+  it("keeps showing what the feed had when asking again fails, and says so", () => {
+    const stand = widget("feed", { px: [557, 781] });
+    const feed: FeedItem[] = [{ id: "1", kind: "turn", agent: "planner", text: "Booked.", at: at(1) }];
+    draw([stand], { tasks: [], world: world({ feed: { data: feed, error: "503 Service Unavailable" } }) });
+    expect(stand.el.querySelectorAll(".sw-feed-row")).toHaveLength(1);
+    expect(stand.el.querySelector(".sw-foot.is-error")?.textContent).toContain("503");
+  });
+
+  it("offers Approve on the needs-you board only for a request the page has from the server, never a purchase", async () => {
+    const onApprove = vi.fn(() => Promise.resolve());
+    const ok: Need = {
+      key: "approval:r1",
+      agent: "planner",
+      kind: "approval",
+      what: "waiting for your OK",
+      tool: "write",
+      request: "r1",
+      approval: { requestId: "r1", toolName: "write", toolArgs: { path: "notes.md" } },
+    };
+    const buy: Need = {
+      key: "approval:r2",
+      agent: "shopper",
+      kind: "approval",
+      what: "waiting for your OK",
+      tool: "purchase_item",
+      request: "r2",
+      approval: { requestId: "r2", toolName: "purchase_item" },
+    };
+    const unknown: Need = { key: "approval:r3", agent: "coder", kind: "approval", what: "x", request: "r3" };
+    const board = widget("needs_board", { focused: true, px: [717, 493] });
+    draw([board], { tasks: [], world: world({ needs: [ok, buy, unknown] }), onApprove });
+    const needs = [...board.el.querySelectorAll(".sw-need")];
+    const buttons = (n: Element) => [...n.querySelectorAll("button")].map((b) => b.textContent);
+    expect(buttons(needs[0] as Element)).toEqual(["Approve", "Deny", "Details"]);
+    expect(buttons(needs[1] as Element)).toEqual(["Deny", "Details"]);
+    expect(needs[1]?.textContent).toContain("never from a wall");
+    expect(buttons(needs[2] as Element)).toEqual(["Details"]);
+    expect(needs[0]?.textContent).toContain("path: notes.md");
+    // The second click of a double click is never an approval.
+    press(needs[0]?.querySelector("button") as Element, "click", { detail: 2 });
+    expect(onApprove).not.toHaveBeenCalled();
+    await act(async () => {
+      (needs[0]?.querySelector("button") as HTMLElement).click();
+    });
+    expect(onApprove).toHaveBeenCalledWith(ok, true);
+    expect(board.el.querySelector(".sw-need-said")?.textContent).toBe("Approved");
+  });
+
+  it("lists a home's open tasks on its to-do list, what is in hand first", () => {
+    const list = widget("todo", { px: [358, 499] });
+    draw([list], {
+      tasks: [],
+      world: world({
+        owner: "planner",
+        whose: ["planner"],
+        tasks: [
+          { id: "a", title: "Later", status: "backlog", assignee: "planner" },
+          { id: "b", title: "Now", status: "in_progress", assignee: "planner" },
+          { id: "c", title: "Theirs", status: "in_progress", assignee: "writer" },
+        ],
+      }),
+    });
+    expect(list.el.querySelector(".sw-todo-title")?.textContent).toBe("planner's to-do");
+    expect([...list.el.querySelectorAll(".sw-todo-text")].map((t) => t.textContent)).toEqual(["Now", "Later"]);
+  });
+
+  it("charts real numbers with a scale and the days, and says from when time was counted", () => {
+    const today = new Date();
+    today.setHours(10, 0, 0, 0);
+    const stats = {
+      days: 14,
+      tokens: [{ hour: today.toISOString(), agent: "planner", prompt: 1200, completion: 300, calls: 3 }],
+      turns: [],
+      done: [],
+      time: [{ hour: today.toISOString(), agent: "planner", what: "searching the web", ms: 30 * 60_000 }],
+      since: new Date(today.getTime() - 3_600_000).toISOString(),
+    };
+    const chart = widget("chart", { focused: true, px: [717, 461] }, { shows: "tokens" });
+    draw([chart], { tasks: [], world: world({ stats: { data: stats } }) });
+    expect(chart.el.querySelector(".sw-title")?.textContent).toBe("Tokens per day");
+    expect(chart.el.querySelector(".sw-chart-big")?.textContent).toBe("1.5k");
+    // Read close up, the tabs change the measure.
+    const time = [...chart.el.querySelectorAll(".sw-chip")].find((c) => c.textContent === "Time") as Element;
+    press(time, "click");
+    expect(chart.el.querySelector(".sw-time-what")?.textContent).toBe("searching the web");
+    expect(chart.el.querySelector(".sw-chart-small")?.textContent).toContain("counted since");
+  });
+
+  it("shows a ticker's newest line, and every line when read close up", () => {
+    const lines = [
+      { id: "2", who: "planner", agent: "planner", text: "Booked the ferry.", at: at(1) },
+      { id: "1", who: "sam", text: "Thanks", at: at(5) },
+    ];
+    const strip = widget("ticker", { px: [1114, 230] });
+    draw([strip], { tasks: [], world: world({ ticker: () => ({ title: "#trip", lines }) }) });
+    expect(strip.el.querySelector(".sw-ticker-room")?.textContent).toBe("#trip");
+    expect(strip.el.querySelectorAll(".sw-ticker-row")).toHaveLength(1);
+    draw([{ ...strip, focused: true }], { tasks: [], world: world({ ticker: () => ({ title: "#trip", lines }) }) });
+    expect(strip.el.querySelectorAll(".sw-ticker-row")).toHaveLength(2);
+  });
+
+  it("zooms a widget to fit something it wasn't made for, and leaves one on its own kind as it is", () => {
+    const stand = view("display", { px: [627, 384] }, { shows: "feed" });
+    const own = widget("status_board", { px: [909, 589] });
+    draw([stand, own], { tasks: [], world: world({ feed: { data: [] } }) });
+    const fit = stand.el.querySelector(".sf-fit") as HTMLElement;
+    expect(fit).not.toBeNull();
+    expect(Number(fit.style.zoom)).toBeCloseTo(384 / (1.22 * 640), 2);
+    expect(stand.el.querySelector(".sw-feed")).not.toBeNull();
+    expect(own.el.querySelector(".sf-fit")).toBeNull();
+  });
+
+  it("keeps a screen to one of the Board's widgets, by its id or title, or says there is none", () => {
+    const widgets = [
+      { id: "needs", type: "tasks", title: "Needs you" },
+      { id: "health", type: "status", title: "System status" },
+    ];
+    expect(pinnedWidget(widgets, "HEALTH")?.id).toBe("health");
+    expect(pinnedWidget(widgets, "needs you")?.id).toBe("needs");
+    expect(pinnedWidget(widgets, "nope")).toBeUndefined();
+    const screen = view("screen", { px: [973, 538] }, { shows: "health" });
+    draw([screen], { tasks: [], widgets });
+    expect(screen.el.querySelector(".sf-screen-title")?.textContent).toBe("System status");
+    expect(screen.el.querySelectorAll(".sf-dot")).toHaveLength(0);
+    const missing = view("screen", { px: [973, 538] }, { shows: "nope" });
+    draw([missing], { tasks: [], widgets });
+    expect(missing.el.textContent).toContain("no widget by that name");
   });
 });

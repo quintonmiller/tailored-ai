@@ -9,6 +9,7 @@ import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeom
 import { fitPlate } from "./doors";
 import { forgetModels } from "./models";
 import type { PropKind, Room, RoomDoor } from "./scene";
+import { FACE_SIZE } from "./widgets";
 
 const materials = new Map<string, THREE.MeshStandardMaterial>();
 
@@ -234,6 +235,41 @@ function canvasFace(
     roughness: 0.9,
   });
   return { canvas, texture, material };
+}
+
+/**
+ * A widget's screen: dark glass of `face` metres in a slim rounded bezel,
+ * centred `y` up, standing a hand's width off what it hangs on, with a small
+ * light lit at its foot when given one. The page draws on the glass.
+ */
+function widgetScreen(
+  g: THREE.Group,
+  look: PropLook,
+  face: [number, number],
+  opts: { bezel: number; y: number; depth?: number; lit?: number },
+): BuiltProp {
+  const [w, h] = face;
+  const depth = opts.depth ?? 0.05;
+  const rim = Math.min(0.04, Math.max(0.025, h * 0.05));
+  rounded(g, [w + rim * 2, h + rim * 2, depth], 0.016, satin(opts.bezel), [0, opts.y, depth / 2]);
+  if (opts.lit !== undefined) {
+    const lit = solid(
+      new THREE.CircleGeometry(0.006, 10),
+      glowing(opts.lit),
+      w / 2 - 0.04,
+      opts.y - h / 2 - rim / 2,
+      depth + 0.0005,
+    );
+    (lit.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
+    lit.castShadow = false;
+    g.add(lit);
+  }
+  const drawn = canvasFace(w, h, FACE_PX * Math.min(SHARPEST, Math.max(1, look.scale ?? 1)));
+  drawn.material.emissiveIntensity = 0.85;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), drawn.material);
+  mesh.position.set(0, opts.y, depth + 0.001);
+  g.add(mesh);
+  return { group: g, screen: { canvas: drawn.canvas, texture: drawn.texture, face: mesh, size: [w, h] } };
 }
 
 /** A kiosk's screen: its label, large, on a dark glass. */
@@ -961,6 +997,66 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
         g.add(solid(new THREE.IcosahedronGeometry(0.013, 0), paint(color), x, 0.03 + tall, z));
       }
       return { group: g };
+    }
+    // Widgets: screens and boards the page draws what the server keeps on (`WidgetFaces.tsx`), each its own shape.
+    case "status_board":
+      // A wide screen, a dot of green lit at its foot: who is doing what.
+      return widgetScreen(g, look, FACE_SIZE.status, { bezel: main(0x16181d), y: 0.5, lit: 0x7cf2a8 });
+    case "feed":
+      // A tall screen, like a phone's feed hung on the wall.
+      return widgetScreen(g, look, FACE_SIZE.feed, { bezel: main(0x16181d), y: 0.65, lit: 0x8ab4ff });
+    case "needs_board":
+      // A screen with an amber light at its foot, the colour of waiting on you.
+      return widgetScreen(g, look, FACE_SIZE.needs, { bezel: main(0x1d1a16), y: 0.425, lit: 0xffb35c });
+    case "chart":
+      return widgetScreen(g, look, FACE_SIZE.chart, { bezel: main(0x16181d), y: 0.4, lit: 0x8ab4ff });
+    case "agenda":
+      return widgetScreen(g, look, FACE_SIZE.agenda, { bezel: main(0x16181d), y: 0.4 });
+    case "ticker": {
+      // A strip of dark glass in a deep housing, like a station's departure board.
+      return widgetScreen(g, look, FACE_SIZE.ticker, { bezel: main(0x0f1115), y: 0.21, depth: 0.07 });
+    }
+    case "todo": {
+      // A paper pad on a stiff backing, held at the top by a bulldog clip.
+      const [w, h] = FACE_SIZE["my-tasks"];
+      box(g, w + 0.06, h + 0.08, 0.018, main(0x8a6a4a), 0, (h + 0.08) / 2, 0.009).castShadow = false;
+      const face = canvasFace(w, h, FACE_PX * Math.min(SHARPEST, Math.max(1, look.scale ?? 1)));
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), face.material);
+      mesh.position.set(0, h / 2 + 0.02, 0.0185);
+      g.add(mesh);
+      rounded(g, [0.2, 0.05, 0.03], 0.008, satin(0x9aa3ae), [0, h + 0.035, 0.028]);
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh, size: [w, h] } };
+    }
+    case "photo_wall": {
+      // A corkboard in a wooden frame: the page pins the photos to it.
+      const [w, h] = FACE_SIZE.photos;
+      box(g, w + 0.08, h + 0.08, 0.03, main(0x7a5638), 0, (h + 0.08) / 2, 0.015).castShadow = false;
+      const face = canvasFace(w, h, FACE_PX * Math.min(SHARPEST, Math.max(1, look.scale ?? 1)));
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), face.material);
+      mesh.position.set(0, (h + 0.08) / 2, 0.031);
+      g.add(mesh);
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh, size: [w, h] } };
+    }
+    case "display": {
+      // A screen on a stand, for the middle of a room: a weighted foot, a post, the screen tipped back a little.
+      box(g, 0.7, 0.04, 0.45, 0x2b2f38, 0, 0.02, 0);
+      cylinder(g, 0.035, 0.045, 1.08, satin(0x3a3f4b), 0, 0.6, -0.04, 12);
+      const screen = new THREE.Group();
+      screen.position.set(0, 1.36, 0);
+      screen.rotation.x = -0.08;
+      const built = widgetScreen(screen, look, [0.98, 0.6], { bezel: main(0x16181d), y: 0, depth: 0.05 });
+      g.add(screen);
+      return { group: g, ...(built.screen ? { screen: built.screen } : {}) };
+    }
+    case "monitor": {
+      // A monitor on a desk: a round foot, a short neck, a slim screen.
+      cylinder(g, 0.09, 0.1, 0.015, satin(0x2b2f38), 0, 0.0075, 0, 16);
+      box(g, 0.04, 0.12, 0.025, 0x2b2f38, 0, 0.07, -0.02);
+      const screen = new THREE.Group();
+      screen.position.set(0, 0.27, 0);
+      const built = widgetScreen(screen, look, [0.5, 0.29], { bezel: main(0x16181d), y: 0, depth: 0.025 });
+      g.add(screen);
+      return { group: g, ...(built.screen ? { screen: built.screen } : {}) };
     }
     case "sign": {
       // A dark plate with its words lit, so it reads from across a hall.

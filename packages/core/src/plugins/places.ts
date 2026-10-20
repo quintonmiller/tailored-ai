@@ -113,6 +113,8 @@ import {
   placeProblems,
   removeItem,
   resize,
+  SHOWS_KINDS,
+  SHOWS_LENGTH,
   type Side,
   type Wall,
   type Where,
@@ -593,6 +595,42 @@ async function sharedPlaces(
       const data = r.data as unknown as Place;
       return { id: r.id, name: String(data.name ?? r.id), ...(data.area ? { area: data.area } : {}) };
     });
+}
+
+/** A photo on a wall somewhere, as the photo wall shows it: where it was taken, and by whom when that is known. */
+export interface WallPhoto extends PlacePhoto {
+  place: string;
+  placeName: string;
+  by?: string;
+}
+
+/** Photos the photo wall shows at most: the newest, from every place. */
+export const WALL_PHOTOS = 40;
+
+/**
+ * Every photo kept on a place, newest first, with where it was taken and who
+ * took it: the change the photo made to the place says who, and failing that
+ * a home's photos are its owner's.
+ */
+export function wallPhotos(records: { id: string; data: unknown }[], limit = WALL_PHOTOS): WallPhoto[] {
+  const out: WallPhoto[] = [];
+  for (const r of records) {
+    const place = r.data as Partial<Place>;
+    for (const photo of place.photos ?? []) {
+      if (!photo?.media || !photo.at) continue;
+      const change = place.changes?.find((c) => c.at === photo.at && /^took a (selfie|photo)/.test(c.what));
+      const by = change?.who ?? (r.id.startsWith("home:") ? r.id.slice("home:".length) : undefined);
+      out.push({
+        media: photo.media,
+        what: photo.what,
+        at: photo.at,
+        place: r.id,
+        placeName: String(place.name ?? r.id),
+        ...(by ? { by } : {}),
+      });
+    }
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
 }
 
 /** What each place someone gave a purpose is for, by id: one query for the map, however many places there are. */
@@ -1432,6 +1470,25 @@ function number(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** Words that clear what a widget shows, back to its kind's own. */
+const SHOWS_CLEARED = new Set(["none", "default", "nothing", "clear"]);
+
+/**
+ * What a widget of `kind` is to show, from what the model wrote: the words,
+ * null to clear it, undefined when none was given, or why it can't be.
+ */
+function showsFrom(kind: string, v: unknown): string | null | undefined | { why: string } {
+  const t = text(v);
+  if (t === undefined) return undefined;
+  if (!SHOWS_KINDS.includes(kind))
+    return {
+      why: `A ${KINDS[kind]?.noun ?? kind} shows what it is. \`shows\` is for: ${SHOWS_KINDS.join(", ")}.`,
+    };
+  if (SHOWS_CLEARED.has(t.toLowerCase())) return null;
+  if (t.length > SHOWS_LENGTH) return { why: `\`shows\` is ${SHOWS_LENGTH} characters at most.` };
+  return t;
+}
+
 /** A kind from what the model wrote: "coffee table", "Coffee_Table", "TV". */
 function kindFrom(v: unknown): string | undefined {
   const t = text(v)
@@ -1725,6 +1782,9 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       if (typeof size === "string") return no(size);
       item.size = size ?? [0.5, 0.5, 0.5];
     }
+    const shows = showsFrom(kind, args.shows);
+    if (shows && typeof shows === "object") return no(shows.why);
+    if (shows) item.shows = shows;
     const placing: Placing = {
       kind,
       ...(item.scale ? { scale: item.scale } : {}),
@@ -1844,7 +1904,18 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     changes.push(`it is ${size.join(" × ")} m`);
     if (scale === undefined) did.push(`resized ${changed.name}`);
   }
-  if (!changes.length) return no("Say what to change: name, color, scale, or size for a shape.");
+  const shows = showsFrom(item.kind, args.shows);
+  if (shows && typeof shows === "object") return no(shows.why);
+  if (shows === null) {
+    delete changed.shows;
+    changes.push("it shows what it shows by itself");
+    did.push(`set ${changed.name} back to its own`);
+  } else if (shows) {
+    changed.shows = shows;
+    changes.push(`it shows ${shows}`);
+    did.push(`set ${changed.name} to show ${shows}`);
+  }
+  if (!changes.length) return no("Say what to change: name, color, scale, shows, or size for a shape.");
   let next = withSpots({ ...place, props: place.props.map((p) => (p.id === item.id ? changed : p)) });
   const [ow, od] = footprintOf(item);
   const [nw, nd] = footprintOf(changed);
@@ -1987,6 +2058,11 @@ export class PlaceTool implements Tool {
       },
       scale: { type: "number", description: "Size relative to normal, 0.5 to 2." },
       size: { type: "string", description: 'Shapes only: width height depth in metres, e.g. "0.4 1.2 0.4".' },
+      shows: {
+        type: "string",
+        description:
+          'add, change: what a widget shows: a chart\'s "tokens" or "tasks", a ticker\'s room, a screen\'s dashboard widget, a display stand\'s "feed". "default" clears it.',
+      },
       width: { type: "number", description: "room: width in metres." },
       depth: { type: "number", description: "room: depth in metres." },
       height: { type: "number", description: "room: ceiling height in metres." },
@@ -2514,7 +2590,7 @@ const plugin: Plugin = (ctx) => {
     );
 
   // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
-  // `map`, `scene/:id` and `transcript/:id` go first, so they aren't read as an agent's name.
+  // `map`, `scene/:id`, `photos` and `transcript/:id` go first, so they aren't read as an agent's name.
   const agentNames = () => ["default", ...Object.keys(runtime.getConfig().agents ?? {}).filter((a) => a !== "default")];
   // Who is who in a room, rebuilt per read so a config reload takes effect at once: the same as the watcher's.
   const identities = () => {
@@ -2675,6 +2751,19 @@ const plugin: Plugin = (ctx) => {
           ? await modelsIn(runtime.getStateService(), PLUGIN_CALLER, components(), [{ model: edit.model }])
           : undefined;
       return { json: added ? { ...done, models: added } : done };
+    },
+  });
+
+  // The photos agents took, from every place, for a photo wall: one query, newest first.
+  ctx.http.register({
+    method: "GET",
+    path: "photos",
+    handler: async (): Promise<TaiHttpResponse> => {
+      const records = await runtime
+        .getStateService()
+        .query(PLUGIN_CALLER, { type: PLACE_TYPE, scope: "global", limit: 500 })
+        .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+      return { json: { photos: wallPhotos(records) } };
     },
   });
 

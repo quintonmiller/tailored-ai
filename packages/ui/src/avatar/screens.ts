@@ -431,3 +431,54 @@ export function drawScreen(canvas: HTMLCanvasElement, card: ScreenCard | undefin
     ctx.fillText(clip(ctx, card.empty, w - pad * 2), pad, y);
   }
 }
+
+/**
+ * A card on a strip much wider than it is tall (a room ticker): its title on
+ * an amber block at the left, and its first row big beside it, who said it
+ * after. What a ticker shows from across a room.
+ */
+export function drawStrip(canvas: HTMLCanvasElement, card: ScreenCard) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const { width: w, height: h } = canvas;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "#14171d");
+  g.addColorStop(1, "#0b0d11");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  const font = (weight: number, size: number) => `${weight} ${Math.round(size)}px system-ui, sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  // The room's name as big as fits in up to two fifths of the strip, never smaller than reads.
+  let size = h * 0.26;
+  ctx.font = font(800, size);
+  const fits = w * 0.4 - h * 0.5;
+  const wide = ctx.measureText(card.title).width;
+  if (wide > fits) {
+    size = Math.max(h * 0.17, (size * fits) / wide);
+    ctx.font = font(800, size);
+  }
+  const block = Math.min(w * 0.4, ctx.measureText(card.title).width + h * 0.5);
+  ctx.fillStyle = "#e2a23b";
+  ctx.fillRect(0, 0, block, h);
+  ctx.fillStyle = "#1a1408";
+  ctx.fillText(clip(ctx, card.title, block - h * 0.4), h * 0.25, h / 2);
+  const row = card.rows?.[0];
+  const x = block + h * 0.3;
+  const room = w - x - h * 0.3;
+  if (!row) {
+    ctx.fillStyle = "#8a93a6";
+    ctx.font = font(600, h * 0.3);
+    ctx.fillText(clip(ctx, card.empty ?? "", room), x, h / 2);
+    return;
+  }
+  // Who said it, small, over what they said, big: the line is what reads from across a room.
+  if (row.meta) {
+    ctx.fillStyle = "#9fb4ff";
+    ctx.font = font(700, h * 0.2);
+    ctx.fillText(clip(ctx, row.meta, room), x, h * 0.27);
+  }
+  ctx.fillStyle = "#f4f1e8";
+  ctx.font = font(600, h * 0.34);
+  ctx.fillText(clip(ctx, row.text, room), x, row.meta ? h * 0.64 : h / 2);
+}

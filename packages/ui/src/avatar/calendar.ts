@@ -224,6 +224,74 @@ export function byDay(
   return days;
 }
 
+/**
+ * Tasks finished between `from` and `to`, newest first: done, assigned, and
+ * last changed in that time. What a calendar read close up puts on the days
+ * gone by of its week and its month.
+ */
+export function doneBetween(tasks: DoneTask[], from: number, to: number): Done[] {
+  const out: Done[] = [];
+  for (const t of tasks) {
+    const at = whenMs(t.updated_at);
+    if (t.status !== "done" || !t.assignee || !(at >= from && at < to)) continue;
+    out.push({ key: `task:${t.id}`, agent: t.assignee, at, what: `finished “${t.title}”`, task: t.id });
+  }
+  return out.sort((a, b) => b.at - a.at);
+}
+
+/** How a calendar read close up lays out its days: today alone, the week from today, or the month. */
+export type CalendarMode = "day" | "week" | "month";
+
+/** A day on a calendar's week or month: its midnight, and whether it is today and in the month shown. */
+export interface CalendarDay {
+  start: number;
+  today: boolean;
+  /** In the month the calendar shows, rather than the end of the month before or the start of the next. */
+  inMonth: boolean;
+}
+
+/**
+ * The days a calendar shows in a mode: today; today and the six days after;
+ * or the month's weeks from the week its first day is in, each starting on
+ * `firstDay` (0 Sunday, 1 Monday), whole weeks only.
+ */
+export function calendarDays(mode: CalendarMode, now = Date.now(), firstDay = 1): CalendarDay[] {
+  const today = dayStart(now);
+  const month = new Date(today).getMonth();
+  const at = (start: number): CalendarDay => ({
+    start,
+    today: start === today,
+    inMonth: new Date(start).getMonth() === month,
+  });
+  if (mode === "day") return [at(today)];
+  const out: CalendarDay[] = [];
+  if (mode === "week") {
+    for (let d = today, i = 0; i < 7; i++, d = nextDay(d)) out.push(at(d));
+    return out;
+  }
+  const first = new Date(today);
+  first.setDate(1);
+  const back = (first.getDay() - firstDay + 7) % 7;
+  first.setDate(1 - back);
+  let d = dayStart(first.getTime());
+  // Weeks until one starts after the month has ended.
+  while (out.length < 42) {
+    if (out.length % 7 === 0 && out.length && new Date(d).getMonth() !== month && d > today) break;
+    out.push(at(d));
+    d = nextDay(d);
+  }
+  return out;
+}
+
+/** What falls on the day starting at `start`: its wakes, soonest first, and what got done, newest first. */
+export function onDay(start: number, wakes: Wake[], done: Done[]): { wakes: Wake[]; done: Done[] } {
+  const end = nextDay(start);
+  return {
+    wakes: wakes.filter((w) => w.at >= start && w.at < end).sort((a, b) => a.at - b.at),
+    done: done.filter((d) => d.at >= start && d.at < end).sort((a, b) => b.at - a.at),
+  };
+}
+
 /** What a calendar shows. */
 export interface CalendarView {
   /** Whose it is, under the date: "planner's day", "Everyone's next wakes". */
@@ -236,6 +304,8 @@ export interface CalendarView {
   names: boolean;
   /** A line under the title when nothing will wake on time for a reason: agents are paused. */
   note?: string;
+  /** What got done this month and last, for the days gone by when it is read close up: newest first. */
+  history?: Done[];
 }
 
 /** A line on a calendar's page. */

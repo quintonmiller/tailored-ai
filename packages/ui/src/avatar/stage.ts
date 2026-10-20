@@ -108,10 +108,10 @@ import {
   spotFor,
   spreadLights,
 } from "./scene";
-import { drawScreen, pageAt, type ScreenCard } from "./screens";
+import { drawScreen, drawStrip, pageAt, type ScreenCard } from "./screens";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
-import { blocksView, facingSurface, focusDistance, focusFraming, overWalls } from "./surfaces";
+import { behindView, blocksView, facingSurface, focusDistance, focusFraming, overWalls, solidInWay } from "./surfaces";
 import { byPhone, GET_UP_AT, heardThrough, standBy, TALK_APART, talkingHere } from "./talk";
 import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
@@ -249,6 +249,12 @@ export interface Stage {
   setScreen(cards: ScreenCard[]): void;
   /** What every calendar in the room shows. */
   setCalendar(view: CalendarView): void;
+  /**
+   * What each widget (a status board, a feed, a chart…) shows from across a
+   * room, by the id of the thing it is on: drawn on it while its live page
+   * isn't up, and in a photo.
+   */
+  setGlances(glances: Record<string, ScreenCard>): void;
   /** Light the place as a home, cosy after dark, or as a public place (the lobby, a hall), bright at any hour. */
   setLights(lights: Lights): void;
   /**
@@ -662,8 +668,12 @@ export async function createStage(
   let tasks: BoardTask[] = [];
   // Screens, each on the page the clock says, and calendars; what they show, and what was last drawn, so the same
   // again isn't drawn twice.
-  let screens: Face[] = [];
+  let screens: (Face & { pin?: string })[] = [];
   let calendars: Face[] = [];
+  // The widgets (`widgets.ts`): each one's face, and what it shows from across a room, by the id of what it is on.
+  let widgetFaces: { prop: string; title: string; screen: Face }[] = [];
+  let glances: Record<string, ScreenCard> = {};
+  let glancesKey = "{}";
   let cards: ScreenCard[] = [];
   let cardsKey = "[]";
   let shownPage = -1;
@@ -684,8 +694,21 @@ export async function createStage(
     shownPage = pageAt(now, cards.length);
     shownMinute = cards[shownPage]?.clock ? Math.floor(now / 60_000) : -1;
     for (const s of screens) {
-      drawScreen(s.canvas, cards[shownPage], shownPage, cards.length);
+      // A screen kept to one widget shows that one's page alone.
+      const pinned = s.pin ? cards.find((c) => c.id === s.pin || c.title.toLowerCase() === s.pin) : undefined;
+      if (s.pin) drawScreen(s.canvas, pinned ?? { id: s.pin, title: s.pin }, 0, 1);
+      else drawScreen(s.canvas, cards[shownPage], shownPage, cards.length);
       s.texture.needsUpdate = true;
+    }
+  };
+  /** Draw each widget as it reads from across a room: its title alone until the page says more. */
+  const drawGlances = () => {
+    for (const w of widgetFaces) {
+      const card = glances[w.prop] ?? { id: w.prop, title: w.title };
+      // A strip (a ticker) reads in one line; anything else as a screen's page does.
+      if (w.screen.canvas.width > w.screen.canvas.height * 3) drawStrip(w.screen.canvas, card);
+      else drawScreen(w.screen.canvas, card, 0, 1);
+      w.screen.texture.needsUpdate = true;
     }
   };
   // Until the page says what is on them (and in a photo, where it never does), calendars show today's date alone.
@@ -778,6 +801,7 @@ export async function createStage(
     boards = [];
     screens = [];
     calendars = [];
+    widgetFaces = [];
     // Outdoors, the town in place of a floor and walls: its buildings fade when they hide you, and a click on one
     // walks you up to its door.
     clearTown();
@@ -828,9 +852,12 @@ export async function createStage(
             label: prop.name ?? face.spec.kind,
           });
       if (built.screen) {
-        if (prop.kind === "screen") screens.push(built.screen);
+        if (prop.kind === "screen")
+          screens.push({ ...built.screen, ...(prop.shows ? { pin: prop.shows.trim().toLowerCase() } : {}) });
         else if (prop.kind === "calendar") calendars.push(built.screen);
         else if (prop.kind === "board") boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
+        else if (prop.kind !== "kiosk")
+          widgetFaces.push({ prop: prop.id, title: prop.name ?? prop.kind, screen: built.screen });
         layer.add({
           id: `${surfacePlace}:${prop.id}`,
           anchor: built.screen.face,
@@ -942,6 +969,7 @@ export async function createStage(
     drawBoards();
     drawScreens();
     drawCalendars();
+    drawGlances();
     warm.length = 0;
     // A big room's lamps reach further, so the light still meets in the middle; outdoors, a street lamp's pool.
     lampReach = town ? 9 : Math.max(5, Math.hypot(room.width, room.depth) / 2.2);
@@ -1804,8 +1832,9 @@ export async function createStage(
     const door = !who && !leaving && opts.onDoor ? it?.door : undefined;
     const box = canvas.getBoundingClientRect();
     hoverDoor(door, { x: e.clientX - box.left, y: e.clientY - box.top });
-    // A surface brought up to read when clicked says so while the pointer is on it.
-    const surface = !who && it ? layer.surfaceAt(it.object) : undefined;
+    // A surface brought up to read when clicked says so while the pointer is on it: one on something made to be used,
+    // or a widget, which is there only to be read.
+    const surface = who ? undefined : ((it && layer.surfaceAt(it.object)) ?? surfaceUnder(e));
     const reads = surface && !reading && layer.howUsed(surface) === "focus" ? surface : undefined;
     layer.hover(reads);
     if (reads || hoveredSurface)
@@ -1824,7 +1853,7 @@ export async function createStage(
     if (plaqued) opts.onPlaqueHover?.({ x: e.clientX - box.left, y: e.clientY - box.top });
     const approach = !!it?.approach && opts.visitor && travel === "walk";
     canvas.style.cursor =
-      (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || door || approach ? "pointer" : "";
+      (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || door || approach || reads ? "pointer" : "";
   };
   /** The pointer is over a body now, or none: its tag says more, and the last one's goes back. */
   const hover = (who: string | undefined) => {
@@ -2395,7 +2424,11 @@ export async function createStage(
     opts.onFocus?.(undefined);
   }
 
-  /** While a surface is read, anyone standing between it and the camera is put out of sight. */
+  /**
+   * While a surface is read, anyone standing between it and the camera is put
+   * out of sight, and so is anyone just behind it, whose name and words over
+   * their head would otherwise show through it, and anything tall in the way.
+   */
   function clearView() {
     const at = reading ? layer.placeOf(reading) : undefined;
     if (!at) return;
@@ -2404,11 +2437,22 @@ export async function createStage(
     const distance = at.center.distanceTo(camera.position);
     for (const f of [me, ...companions.values(), ...departing.map((d) => d.fig)]) {
       const p = f.walker.place;
-      const inWay = blocksView([p.x, 0, p.z], center, normal, at.size[0] / 2, distance);
+      const inWay =
+        blocksView([p.x, 0, p.z], center, normal, at.size[0] / 2, distance) ||
+        behindView([p.x, 0, p.z], center, normal, at.size[0] / 2);
       if (inWay && f.body.visible) {
         f.body.visible = false;
         hidden.add(f.body);
       } else if (!inWay && hidden.delete(f.body)) f.body.visible = true;
+    }
+    // And anything tall standing in the way: a display stand in front of a screen on the wall, say.
+    for (const f of fadeable) {
+      if (!f.solid) continue;
+      const inWay = solidInWay(f.solid, center, normal, at.size[0] / 2, distance);
+      if (inWay && f.group.visible) {
+        f.group.visible = false;
+        hidden.add(f.group);
+      } else if (!inWay && hidden.delete(f.group)) f.group.visible = true;
     }
   }
 
@@ -3941,6 +3985,13 @@ export async function createStage(
       calendar = next;
       calendarKey = key;
       drawCalendars();
+    },
+    setGlances(next) {
+      const key = JSON.stringify(next);
+      if (key === glancesKey) return;
+      glances = next;
+      glancesKey = key;
+      drawGlances();
     },
     setLights(next) {
       if (next === lights) return;
