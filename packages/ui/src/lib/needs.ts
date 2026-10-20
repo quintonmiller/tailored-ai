@@ -193,6 +193,9 @@ export function ownFlow(tool: string | undefined): boolean {
   return OWN_FLOW.has(name) || name.split(/[^a-z0-9]+/).some((word) => MONEY.has(word));
 }
 
+/** What an approval says when someone answered it first, from another tab, the chat, or Discord: the server has it no more. */
+export const ANSWERED_ELSEWHERE = "Already answered somewhere else.";
+
 /**
  * Whether the world may offer Approve for a need: an approval whose details
  * this page has from the server (so the card shows exactly what is being

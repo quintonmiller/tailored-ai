@@ -104,6 +104,12 @@ interface Surface {
 const LOOK_EVERY_MS = 150;
 
 const ORIGIN = new THREE.Vector3();
+
+/** Whether something is drawn: it and everything it is in are visible. */
+function shown(o: THREE.Object3D): boolean {
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) if (!p.visible) return false;
+  return true;
+}
 const scratch = new THREE.Vector3();
 /**
  * The browser's 3D is laid out in pixels, the room in metres. Laid out in
@@ -433,7 +439,9 @@ export class SurfaceLayer {
         id: s.spec.id,
         px,
         facing,
-        inView: this.frustum.intersectsSphere(new THREE.Sphere(s.center, Math.hypot(sx, sy) / 2)),
+        // Put out of sight with what it is on (a stand in the way of another surface being read) is out of view.
+        inView:
+          shown(s.spec.anchor) && this.frustum.intersectsSphere(new THREE.Sphere(s.center, Math.hypot(sx, sy) / 2)),
         faded: faded(s.spec.anchor),
         ...(s.spec.live ? { live: s.spec.live } : {}),
         focused: this.focusedId === s.spec.id,

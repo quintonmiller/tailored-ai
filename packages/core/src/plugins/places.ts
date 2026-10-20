@@ -113,6 +113,8 @@ import {
   placeProblems,
   removeItem,
   resize,
+  SHOWS_KINDS,
+  SHOWS_LENGTH,
   type Side,
   type Wall,
   type Where,
@@ -595,6 +597,42 @@ async function sharedPlaces(
     });
 }
 
+/** A photo on a wall somewhere, as the photo wall shows it: where it was taken, and by whom when that is known. */
+export interface WallPhoto extends PlacePhoto {
+  place: string;
+  placeName: string;
+  by?: string;
+}
+
+/** Photos the photo wall shows at most: the newest, from every place. */
+export const WALL_PHOTOS = 40;
+
+/**
+ * Every photo kept on a place, newest first, with where it was taken and who
+ * took it: the change the photo made to the place says who, and failing that
+ * a home's photos are its owner's.
+ */
+export function wallPhotos(records: { id: string; data: unknown }[], limit = WALL_PHOTOS): WallPhoto[] {
+  const out: WallPhoto[] = [];
+  for (const r of records) {
+    const place = r.data as Partial<Place>;
+    for (const photo of place.photos ?? []) {
+      if (!photo?.media || !photo.at) continue;
+      const change = place.changes?.find((c) => c.at === photo.at && /^took a (selfie|photo)/.test(c.what));
+      const by = change?.who ?? (r.id.startsWith("home:") ? r.id.slice("home:".length) : undefined);
+      out.push({
+        media: photo.media,
+        what: photo.what,
+        at: photo.at,
+        place: r.id,
+        placeName: String(place.name ?? r.id),
+        ...(by ? { by } : {}),
+      });
+    }
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
+}
+
 /** What each place someone gave a purpose is for, by id: one query for the map, however many places there are. */
 async function purposes(service: StateService, caller: StateCaller): Promise<Map<string, string>> {
   const records = await service
@@ -688,6 +726,8 @@ export const roomPlaceId = (ref: string) => `room:${ref}`;
 
 /** How many of a room's latest messages a visitor reads in the chat panel. */
 export const TRANSCRIPT_LINES = 30;
+/** How long every room's latest lines are kept before they are read again. */
+const LINES_MS = 55_000;
 
 /** One thing said in a room of conversation, as a visitor reads it. */
 export interface SaidLine {
@@ -753,6 +793,47 @@ export async function transcript(
   } catch (err) {
     return { error: `Couldn't read #${room.name}: ${(err as Error).message}` };
   }
+}
+
+/** How many lines a ticker of every room reads from each room, and how many it keeps across them all. */
+export const EVERY_ROOM_EACH = 4;
+export const EVERY_ROOM_LINES = 24;
+
+/** A line in a ticker of every room: one of a room's latest, and which room, as its place id and its name. */
+export type RoomLine = SaidLine & { room: string; roomName: string };
+
+/**
+ * The latest lines across every room, oldest first as a transcript's are,
+ * each saying which room it was said in: for a ticker of every room, read
+ * from each room as its meeting room's ticker reads it, a few lines a room,
+ * people's lines too. A room whose transport can't be read now is left out
+ * and named in `missed`.
+ */
+export async function latestLines(
+  rooms: TalkRoomRecord[],
+  backendOf: (backend: string) => RoomBackend | undefined,
+  identities: IdentityResolver,
+  each = EVERY_ROOM_EACH,
+  limit = EVERY_ROOM_LINES,
+): Promise<{ lines: RoomLine[]; missed: string[] }> {
+  const read = await Promise.all(
+    rooms.map(async (room) => ({
+      room,
+      said: await transcript(room, backendOf(room.ref.backend), identities, [], each),
+    })),
+  );
+  const lines: RoomLine[] = [];
+  const missed: string[] = [];
+  for (const { room, said } of read) {
+    if ("error" in said) {
+      missed.push(room.name);
+      continue;
+    }
+    const id = roomPlaceId(formatRoomRef(room.ref));
+    for (const line of said.lines) if (line.text.trim()) lines.push({ ...line, room: id, roomName: room.name });
+  }
+  lines.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return { lines: lines.slice(-limit), missed };
 }
 
 /**
@@ -1432,6 +1513,25 @@ function number(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** Words that clear what a widget shows, back to its kind's own. */
+const SHOWS_CLEARED = new Set(["none", "default", "nothing", "clear"]);
+
+/**
+ * What a widget of `kind` is to show, from what the model wrote: the words,
+ * null to clear it, undefined when none was given, or why it can't be.
+ */
+function showsFrom(kind: string, v: unknown): string | null | undefined | { why: string } {
+  const t = text(v);
+  if (t === undefined) return undefined;
+  if (!SHOWS_KINDS.includes(kind))
+    return {
+      why: `A ${KINDS[kind]?.noun ?? kind} shows what it is. \`shows\` is for: ${SHOWS_KINDS.join(", ")}.`,
+    };
+  if (SHOWS_CLEARED.has(t.toLowerCase())) return null;
+  if (t.length > SHOWS_LENGTH) return { why: `\`shows\` is ${SHOWS_LENGTH} characters at most.` };
+  return t;
+}
+
 /** A kind from what the model wrote: "coffee table", "Coffee_Table", "TV". */
 function kindFrom(v: unknown): string | undefined {
   const t = text(v)
@@ -1725,6 +1825,9 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       if (typeof size === "string") return no(size);
       item.size = size ?? [0.5, 0.5, 0.5];
     }
+    const shows = showsFrom(kind, args.shows);
+    if (shows && typeof shows === "object") return no(shows.why);
+    if (shows) item.shows = shows;
     const placing: Placing = {
       kind,
       ...(item.scale ? { scale: item.scale } : {}),
@@ -1844,7 +1947,18 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     changes.push(`it is ${size.join(" × ")} m`);
     if (scale === undefined) did.push(`resized ${changed.name}`);
   }
-  if (!changes.length) return no("Say what to change: name, color, scale, or size for a shape.");
+  const shows = showsFrom(item.kind, args.shows);
+  if (shows && typeof shows === "object") return no(shows.why);
+  if (shows === null) {
+    delete changed.shows;
+    changes.push("it shows what it shows by itself");
+    did.push(`set ${changed.name} back to its own`);
+  } else if (shows) {
+    changed.shows = shows;
+    changes.push(`it shows ${shows}`);
+    did.push(`set ${changed.name} to show ${shows}`);
+  }
+  if (!changes.length) return no("Say what to change: name, color, scale, shows, or size for a shape.");
   let next = withSpots({ ...place, props: place.props.map((p) => (p.id === item.id ? changed : p)) });
   const [ow, od] = footprintOf(item);
   const [nw, nd] = footprintOf(changed);
@@ -1987,6 +2101,11 @@ export class PlaceTool implements Tool {
       },
       scale: { type: "number", description: "Size relative to normal, 0.5 to 2." },
       size: { type: "string", description: 'Shapes only: width height depth in metres, e.g. "0.4 1.2 0.4".' },
+      shows: {
+        type: "string",
+        description:
+          'add, change: what a widget shows: a chart\'s "tokens" or "tasks", a ticker\'s room, a screen\'s dashboard widget, a display stand\'s "feed". "default" clears it.',
+      },
       width: { type: "number", description: "room: width in metres." },
       depth: { type: "number", description: "room: depth in metres." },
       height: { type: "number", description: "room: ceiling height in metres." },
@@ -2514,7 +2633,7 @@ const plugin: Plugin = (ctx) => {
     );
 
   // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
-  // `map`, `scene/:id` and `transcript/:id` go first, so they aren't read as an agent's name.
+  // `map`, `scene/:id`, `photos`, `lines` and `transcript/:id` go first, so they aren't read as an agent's name.
   const agentNames = () => ["default", ...Object.keys(runtime.getConfig().agents ?? {}).filter((a) => a !== "default")];
   // Who is who in a room, rebuilt per read so a config reload takes effect at once: the same as the watcher's.
   const identities = () => {
@@ -2675,6 +2794,35 @@ const plugin: Plugin = (ctx) => {
           ? await modelsIn(runtime.getStateService(), PLUGIN_CALLER, components(), [{ model: edit.model }])
           : undefined;
       return { json: added ? { ...done, models: added } : done };
+    },
+  });
+
+  // The photos agents took, from every place, for a photo wall: one query, newest first.
+  ctx.http.register({
+    method: "GET",
+    path: "photos",
+    handler: async (): Promise<TaiHttpResponse> => {
+      const records = await runtime
+        .getStateService()
+        .query(PLUGIN_CALLER, { type: PLACE_TYPE, scope: "global", limit: 500 })
+        .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+      return { json: { photos: wallPhotos(records) } };
+    },
+  });
+
+  // Every room's latest lines, for a ticker of every room: read at most once a minute, however many pages ask, since a
+  // room on Discord is read over the network.
+  let lately: { at: number; body: Promise<{ lines: RoomLine[]; missed: string[] }> } | undefined;
+  ctx.http.register({
+    method: "GET",
+    path: "lines",
+    handler: async (): Promise<TaiHttpResponse> => {
+      const now = Date.now();
+      if (!lately || now - lately.at > LINES_MS) {
+        const rooms = runtime.getRoomStore().listRooms();
+        lately = { at: now, body: latestLines(rooms, getRoomBackend, identities()) };
+      }
+      return { json: await lately.body };
     },
   });
 

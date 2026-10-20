@@ -337,8 +337,9 @@ function townHall(body: Parts, glass: Parts, b: TownBuilding) {
   body.box(w + 0.4, 0.35, d + 0.4, 0xb8b0a0, [0, 0.175, 0]);
   body.box(w, h, d, stone, [0, h / 2, 0]);
   body.box(w + 0.5, 0.4, d + 0.5, 0xc4bcaa, [0, h + 0.2, 0]);
-  for (const x of [-w / 2 + 0.3, -1.4, 1.4, w / 2 - 0.3])
-    body.box(0.55, h - 0.2, 0.3, 0xe8e2d4, [x, h / 2, d / 2 + 0.12]);
+  // Where the town says, so what hangs on the front is hung between them.
+  const pillars = b.pillars ?? { x: [], width: 0 };
+  for (const x of pillars.x) body.box(pillars.width, h - 0.2, 0.3, 0xe8e2d4, [x, h / 2, d / 2 + 0.12]);
   // The pediment over the middle, and the roof behind it.
   body.add(gables(1, 4.4, 1.6), 0xe8e2d4, [0, h + 0.4, d / 2 + 0.1], Math.PI / 2, 0, [0.6, 1, 1]);
   body.add(slopes(d - 0.4, w * 0.92, 1.4), 0x6a6e78, [0, h + 0.4, -0.3], Math.PI / 2);

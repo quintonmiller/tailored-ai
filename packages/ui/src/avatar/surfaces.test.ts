@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  behindView,
   blocksView,
   DEAD_PX,
   detailFor,
@@ -22,8 +23,10 @@ import {
   type Placed,
   type Seen,
   SURFACE_PX,
+  solidInWay,
   surfacePixels,
   surfacePoint,
+  type Vec3,
 } from "./surfaces";
 
 const seen = (id: string, px: number, more: Partial<Seen> = {}): Seen => ({
@@ -227,5 +230,45 @@ describe("surfacePoint", () => {
     expect(surfacePoint([0, 1], [800, 400])).toEqual([0, 0]);
     expect(surfacePoint([0.5, 0.5], [800, 400])).toEqual([400, 200]);
     expect(surfacePoint([1, 0], [800, 400])).toEqual([800, 400]);
+  });
+});
+
+describe("bodies behind a surface being read", () => {
+  // A board on the back wall at x 0, facing the room (+z), 1.4 m across.
+  const center: Vec3 = [0, 1.5, -3];
+  const normal: Vec3 = [0, 0, 1];
+
+  it("are those just behind it and within its width, whose names would show through it", () => {
+    expect(behindView([0, 0, -4], center, normal, 0.7)).toBe(true);
+    expect(behindView([0.9, 0, -3.5], center, normal, 0.7)).toBe(true);
+    // In front of it, off to the side, or far behind, they don't come into it.
+    expect(behindView([0, 0, -1], center, normal, 0.7)).toBe(false);
+    expect(behindView([2, 0, -4], center, normal, 0.7)).toBe(false);
+    expect(behindView([0, 0, -8], center, normal, 0.7)).toBe(false);
+  });
+
+  it("follow which way the surface faces", () => {
+    // A display stand in the middle of the room, facing +x: behind it is -x.
+    expect(behindView([-1.5, 0, 0], [0, 1.3, 0], [1, 0, 0], 0.5)).toBe(true);
+    expect(behindView([1.5, 0, 0], [0, 1.3, 0], [1, 0, 0], 0.5)).toBe(false);
+  });
+});
+
+describe("furniture in the way of a surface being read", () => {
+  // A screen on the back wall, its middle 1.6 m up, read from 2.5 m out.
+  const center: Vec3 = [0, 1.6, -3];
+  const normal: Vec3 = [0, 0, 1];
+
+  it("is something solid between it and the camera, within its width", () => {
+    const stand = { min: [-0.5, 0, -2.2], max: [0.5, 1.9, -1.7] } as { min: Vec3; max: Vec3 };
+    expect(solidInWay(stand, center, normal, 0.8, 2.5)).toBe(true);
+    const aside = { min: [2.5, 0, -2.2], max: [3.5, 1.9, -1.7] } as { min: Vec3; max: Vec3 };
+    expect(solidInWay(aside, center, normal, 0.8, 2.5)).toBe(false);
+  });
+
+  it("is never the thing the surface is on", () => {
+    // A display stand with a long foot out in front, its own screen read from in front of it.
+    const own = { min: [-0.5, 0, -0.3], max: [0.5, 1.9, 0.9] } as { min: Vec3; max: Vec3 };
+    expect(solidInWay(own, [0, 1.36, 0], [0, 0, 1], 0.5, 1.5)).toBe(false);
   });
 });

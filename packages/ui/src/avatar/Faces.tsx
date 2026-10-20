@@ -27,12 +27,37 @@ import { useAgentColor } from "../lib/body-colors";
 import type { ComponentSpec } from "../lib/content.js";
 import { nameOf } from "../lib/conversations";
 import { clockTime } from "../lib/did";
+import type { Need } from "../lib/needs";
 import { GROUPS, type Group } from "../lib/tasks";
 import { type BoardTask, type ColumnSpan, columnAt, columnsFor, moveTo } from "./boards";
-import { byDay, type CalendarView, type Wake } from "./calendar";
+import {
+  byDay,
+  type CalendarMode,
+  type CalendarView,
+  calendarDays,
+  type Done,
+  onDay,
+  repeatDays,
+  type Wake,
+  withRepeats,
+} from "./calendar";
 import type { Prop } from "./scene";
 import { PAGE_MS, pageAt, type ScreenCard, screenWidgets, type Tone } from "./screens";
 import type { Stage, SurfaceView, UseSpot } from "./stage";
+import { SURFACE_PX } from "./surfaces";
+import { WidgetFace } from "./WidgetFaces";
+import {
+  assigneesOf,
+  type BoardFilter,
+  boardFiltered,
+  FACE_SIZE,
+  type FaceChoice,
+  type FilterTask,
+  faceOf,
+  projectsOf,
+  WIP_EACH,
+  type WorldData,
+} from "./widgets";
 
 /** What moving a task on a board changes: its status, and coming out of Blocked, the reason. */
 export type TaskMove = { status: string; blocked_reason?: null };
@@ -51,6 +76,10 @@ export interface FaceData {
   onUse?: (action: string, on?: UseSpot, thing?: string) => void;
   /** A note was moved to another column on a board: save it. Rejects with why it couldn't be. */
   onTaskMove?: (id: string, change: TaskMove) => Promise<unknown>;
+  /** What the widgets show (`WidgetFaces.tsx`): what agents are doing, the feed, the numbers, the photos. */
+  world?: WorldData;
+  /** Approve or deny what an agent waits on, from a needs-you board. Rejects with why it couldn't be. */
+  onApprove?: (need: Need, approved: boolean) => Promise<unknown>;
 }
 
 const Faces = createContext<FaceData>({ tasks: [] });
@@ -110,23 +139,33 @@ function SurfaceFrame({ view, stage, reading }: { view: SurfaceView; stage: Surf
     [stage, id, focused, view.el],
   );
   const active = focused || (view.use === "direct" && !reading);
+  // A model's face is the agent interface it carries, whatever kind of thing it is on; any other prop shows the
+  // widget its kind and `shows` name.
+  const choice = view.prop && !view.component ? faceOf(view.prop) : undefined;
+  const face = view.render ? (
+    view.render()
+  ) : view.component ? (
+    <ModelFace spec={view.component} />
+  ) : view.prop && choice ? (
+    <PropFace prop={view.prop} choice={choice} />
+  ) : null;
   return (
     <Faces.Provider value={own}>
       <SurfaceContext.Provider value={api}>
         <section
           ref={root}
-          className={`sf sf-${view.component ? "face" : (view.prop?.kind ?? "own")}`}
+          className={`sf sf-${view.component ? "face" : (view.prop?.kind ?? "own")}${choice ? ` sf-face-${choice.face}` : ""}`}
           inert={!active}
           tabIndex={-1}
           aria-label={view.label}
         >
-          {view.render ? (
-            view.render()
-          ) : view.component ? (
-            <ModelFace spec={view.component} />
-          ) : view.prop ? (
-            <PropFace prop={view.prop} />
-          ) : null}
+          {choice ? (
+            <Fit px={view.px} face={choice.face}>
+              {face}
+            </Fit>
+          ) : (
+            face
+          )}
         </section>
       </SurfaceContext.Provider>
     </Faces.Provider>
@@ -146,19 +185,48 @@ function ModelFace({ spec }: { spec: ComponentSpec }) {
   );
 }
 
-/** The face a prop has, by its kind. */
-function PropFace({ prop }: { prop: Prop }) {
-  switch (prop.kind) {
-    case "board":
+/**
+ * A face on something it wasn't made for (a status board on a display stand,
+ * a clock on a desk monitor): laid out at the height it was made at, as wide
+ * as the surface's shape makes that, and zoomed to fit. On its own kind of
+ * thing it fits as it is.
+ */
+function Fit({ px, face, children }: { px: [number, number]; face: FaceChoice["face"]; children: ReactNode }) {
+  const tall = FACE_SIZE[face][1] * SURFACE_PX;
+  const k = px[1] / tall;
+  if (Math.abs(k - 1) < 0.02) return children;
+  return (
+    <div className="sf-fit" style={{ width: px[0] / k, height: tall, zoom: k }}>
+      {children}
+    </div>
+  );
+}
+
+/** The face a prop has, by the widget it shows (`faceOf`). */
+function PropFace({ prop, choice }: { prop: Prop; choice: FaceChoice }) {
+  const data = useContext(Faces);
+  const surface = useContext(SurfaceContext);
+  switch (choice.face) {
+    case "tasks":
       return <BoardFace heading={prop.label ?? "Tasks"} />;
-    case "screen":
-      return <ScreenFace />;
+    case "dashboard":
+      return <ScreenFace {...(choice.arg ? { pin: choice.arg } : {})} />;
     case "calendar":
       return <CalendarFace />;
     case "kiosk":
       return <KioskFace label={prop.label ?? ""} action={prop.action} />;
     default:
-      return null;
+      return data.world ? (
+        <WidgetFace
+          choice={choice}
+          world={data.world}
+          surface={surface}
+          actions={{
+            ...(data.onUse ? { onUse: data.onUse } : {}),
+            ...(data.onApprove ? { onApprove: data.onApprove } : {}),
+          }}
+        />
+      ) : null;
   }
 }
 
@@ -217,8 +285,13 @@ interface Drag {
  * changes its status, there at once and saved as a card would save it.
  */
 function BoardFace({ heading }: { heading: string }) {
-  const { tasks, onUse, onTaskMove } = useContext(Faces);
+  const { tasks, onUse, onTaskMove, world } = useContext(Faces);
   const surface = useContext(SurfaceContext);
+  // Read close up, narrowed to one agent's tasks or one project's; put down, everything again.
+  const [filter, setFilter] = useState<BoardFilter>({});
+  useEffect(() => {
+    if (!surface.focused) setFilter({});
+  }, [surface.focused]);
   const root = useRef<HTMLDivElement>(null);
   // Notes moved here and not yet saved: shown where they were put meanwhile.
   const [moved, setMoved] = useState<Record<string, string>>({});
@@ -232,9 +305,15 @@ function BoardFace({ heading }: { heading: string }) {
       return left.length === Object.keys(was).length ? was : Object.fromEntries(left);
     });
   }, [tasks]);
-  const shown = useMemo(() => tasks.map((t) => (moved[t.id] ? { ...t, status: moved[t.id] } : t)), [tasks, moved]);
+  const all = useMemo(() => tasks.map((t) => (moved[t.id] ? { ...t, status: moved[t.id] } : t)), [tasks, moved]);
+  const shown = surface.focused ? boardFiltered(all as FilterTask[], filter) : all;
   const columns = columnsFor(shown, surface.focused ? Number.POSITIVE_INFINITY : NOTES_SHOWN);
   const open = shown.filter((t) => !GROUPS[3].statuses.includes(t.status)).length;
+  // Work in progress: what is under Doing, said in the board's heading, where it never squeezes a column's name.
+  const doing = columns.find((c) => c.id === "doing");
+  const wip = doing ? doing.notes.length + doing.more : 0;
+  const people = surface.focused ? assigneesOf(all) : [];
+  const projects = surface.focused ? projectsOf(all as FilterTask[]) : [];
 
   const move = async (task: BoardTask, column: Group["id"]) => {
     const change = moveTo(task, column);
@@ -301,9 +380,58 @@ function BoardFace({ heading }: { heading: string }) {
       <header className="sf-board-head">
         <span className="sf-board-title">{heading}</span>
         <span className="sf-board-sum">
-          {open} open · {shown.length - open} done
+          {open} open ·{" "}
+          <span className="sf-board-wip" title="Work in progress">
+            {wip} in progress
+          </span>{" "}
+          · {shown.length - open} done
         </span>
       </header>
+      {surface.focused && (people.length > 1 || projects.length > 1) && (
+        <div className="sf-board-filter">
+          {people.length > 1 && (
+            <fieldset className="sf-filter-row" aria-label="Whose tasks">
+              <button
+                type="button"
+                aria-pressed={!filter.who}
+                className="sf-filter-chip"
+                onClick={() => setFilter({ ...filter, who: undefined })}
+              >
+                Everyone
+              </button>
+              {people.slice(0, 10).map((p) => (
+                <button
+                  key={p.agent}
+                  type="button"
+                  aria-pressed={filter.who === p.agent}
+                  className={`sf-filter-chip${p.over ? " is-over" : ""}`}
+                  title={p.over ? `${p.doing} in progress: more than ${WIP_EACH} at once` : `${p.open} open`}
+                  onClick={() => setFilter({ ...filter, who: filter.who === p.agent ? undefined : p.agent })}
+                >
+                  <Who agent={p.agent} />
+                  <span className="sf-filter-n">{p.open}</span>
+                </button>
+              ))}
+            </fieldset>
+          )}
+          {projects.length > 1 && (
+            <label className="sf-filter-project">
+              <span>Project</span>
+              <select
+                value={filter.project ?? ""}
+                onChange={(e) => setFilter({ ...filter, project: e.target.value || undefined })}
+              >
+                <option value="">All</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {world?.projects[p.id] ?? p.id} ({p.n})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+      )}
       {/* From across a room: how many in each column, big, and a bar for each note (the CSS shows one or the other). */}
       <div className="sf-board-far" aria-hidden="true">
         {columns.map((col) => (
@@ -456,15 +584,17 @@ const SWIPE_PX = 36;
  * is live, the pages not up hidden, so a page turning shows what its widget
  * had already, rather than starting again from nothing.
  */
-function ScreenFace() {
+function ScreenFace({ pin }: { pin?: string }) {
   const { cards = [], widgets, onUse } = useContext(Faces);
   const surface = useContext(SurfaceContext);
-  const pages = widgets ? screenWidgets(widgets) : [];
-  const count = pages.length || cards.length;
+  // Kept to one widget (its `shows`), that one alone, wherever it hangs; otherwise the first few in turn.
+  const pinned = pin ? pinnedWidget(widgets ?? [], pin) : undefined;
+  const pages = pinned ? [pinned] : widgets && !pin ? screenWidgets(widgets) : [];
+  const count = pinned ? 1 : pin ? 0 : pages.length || cards.length;
   const { page, pick, left } = usePage(count, surface.focused);
   const now = useMinuteNow();
   const widget = pages[page];
-  const card = pages.length ? undefined : cards[page];
+  const card = pages.length || pin ? undefined : cards[page];
   const title = widget ? (widget.title ?? widget.id) : card?.title;
   const id = widget?.id ?? card?.id;
   // Links to tasks stay in the world, as on the dashboard panel: a task's card, or the list.
@@ -499,6 +629,15 @@ function ScreenFace() {
     window.addEventListener("keydown", turn);
     return () => window.removeEventListener("keydown", turn);
   }, [surface.focused, surface.el, count, page, pick]);
+  if (pin && !pinned)
+    return (
+      <div className="sf-screen">
+        <header className="sf-screen-head">
+          <span className="sf-screen-title">{pin}</span>
+        </header>
+        <p className="sf-empty">{widgets ? "There's no widget by that name on the Board." : "Loading…"}</p>
+      </div>
+    );
   return (
     <div className="sf-screen">
       <header className="sf-screen-head">
@@ -573,6 +712,15 @@ function ScreenFace() {
         </footer>
       )}
     </div>
+  );
+}
+
+/** The Board's widget a screen is kept to: by its id, or failing that its title, whatever the case. */
+export function pinnedWidget(widgets: DashboardWidgetSpec[], pin: string): DashboardWidgetSpec | undefined {
+  const want = pin.trim().toLowerCase();
+  return (
+    widgets.find((w) => w.id.toLowerCase() === want) ??
+    widgets.find((w) => (w.title ?? "").trim().toLowerCase() === want)
   );
 }
 
@@ -687,6 +835,23 @@ function CalendarFace() {
       </span>
     </button>
   );
+  const finished = (d: Done) => (
+    <button
+      type="button"
+      key={d.key}
+      className="sf-cal-wake"
+      disabled={!d.task}
+      onClick={() => d.task && onUse?.("tasks", { task: d.task })}
+    >
+      <span className="sf-cal-check" aria-hidden="true">
+        ✓
+      </span>
+      <span className="sf-cal-text">
+        {view?.names && <Who agent={d.agent} />}
+        <span className="sf-cal-what">{d.what}</span>
+      </span>
+    </button>
+  );
   return (
     <div className={view?.names ? "sf-calendar has-names" : "sf-calendar"}>
       <button type="button" className="sf-cal-band" title="Every wake" onClick={() => onUse?.("calendar")}>
@@ -715,7 +880,8 @@ function CalendarFace() {
           {view.note && <span className="sf-cal-far-note">{view.note}</span>}
         </div>
       )}
-      {view && (
+      {view && surface.focused && <CalendarRead view={view} wake={wake} finished={finished} />}
+      {view && !surface.focused && (
         <div className="sf-cal-body">
           <p className="sf-cal-title">{view.title}</p>
           {view.note && <p className="sf-cal-note">{view.note}</p>}
@@ -731,28 +897,180 @@ function CalendarFace() {
           {done.length > 0 && (
             <section className="sf-cal-dayblock sf-cal-done">
               <h4 className="sf-cal-head">Done today</h4>
-              {done.map((d) => (
-                <button
-                  type="button"
-                  key={d.key}
-                  className="sf-cal-wake"
-                  disabled={!d.task}
-                  onClick={() => d.task && onUse?.("tasks", { task: d.task })}
-                >
-                  <span className="sf-cal-check" aria-hidden="true">
-                    ✓
-                  </span>
-                  <span className="sf-cal-text">
-                    {view.names && <Who agent={d.agent} />}
-                    <span className="sf-cal-what">{d.what}</span>
-                  </span>
-                </button>
-              ))}
+              {done.map(finished)}
             </section>
           )}
         </div>
       )}
       {surface.focused && <footer className="sf-foot">Click a wake for that agent's list · Esc to step back</footer>}
+    </div>
+  );
+}
+
+const MODES: { id: CalendarMode; label: string }[] = [
+  { id: "day", label: "Day" },
+  { id: "week", label: "Week" },
+  { id: "month", label: "Month" },
+];
+
+/** The day the week starts on where the page is read: Monday unless the browser says otherwise. */
+function firstDayOfWeek(): number {
+  try {
+    const locale = new Intl.Locale(navigator.language) as Intl.Locale & {
+      weekInfo?: { firstDay: number };
+      getWeekInfo?: () => { firstDay: number };
+    };
+    const first = (locale.getWeekInfo?.() ?? locale.weekInfo)?.firstDay;
+    return typeof first === "number" ? first % 7 : 1;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * A calendar read close up: its day, its week from today, or its month, picked
+ * by the tabs under its band. A day lists its wakes by the hour and what got
+ * done; the week, a column a day; the month, a square a day with how many
+ * wakes and how much got done, a square opening its day. A wake that comes
+ * round once a day at one time shows on each day it comes round on; one
+ * that repeats some other way shows at its next time, saying how often, and
+ * the days without anything say nothing else is booked rather than nothing.
+ */
+function CalendarRead({
+  view,
+  wake,
+  finished,
+}: {
+  view: CalendarView;
+  wake: (w: Wake) => ReactNode;
+  finished: (d: Done) => ReactNode;
+}) {
+  const { onUse } = useContext(Faces);
+  const [mode, setMode] = useState<CalendarMode>("day");
+  const [day, setDay] = useState<number | null>(null);
+  const done = useMemo(() => {
+    const seen = new Set(view.done.map((d) => d.key));
+    return [...view.done, ...(view.history ?? []).filter((d) => !seen.has(d.key))];
+  }, [view.done, view.history]);
+  const days = calendarDays(mode, day ?? view.now, firstDayOfWeek());
+  const until = days.at(-1)?.start;
+  const wakes = useMemo(
+    () => (until === undefined ? view.wakes : withRepeats(view.wakes, until + 36 * 3_600_000)),
+    [view.wakes, until],
+  );
+  // A repeat that couldn't be put on each day it comes round on may come round on any of them.
+  const unsure = wakes.some((w) => w.every && !repeatDays(w.every));
+  const none = unsure ? "Nothing else booked" : "Nothing booked";
+  const dayLabel = (start: number, long = false) =>
+    new Date(start).toLocaleDateString(
+      [],
+      long ? { weekday: "long", day: "numeric", month: "long" } : { weekday: "short", day: "numeric" },
+    );
+  return (
+    <div className={`sf-cal-read is-${mode}`}>
+      <div className="sf-cal-modes" role="tablist" aria-label="How much of the calendar">
+        {MODES.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            role="tab"
+            aria-selected={mode === m.id}
+            className="sf-cal-mode"
+            onClick={() => {
+              setMode(m.id);
+              if (m.id !== "day") setDay(null);
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
+        <span className="sf-cal-read-title">{view.title}</span>
+      </div>
+      {view.note && <p className="sf-cal-note">{view.note}</p>}
+      {mode === "day" &&
+        (() => {
+          const start = days[0]?.start ?? view.now;
+          const on = onDay(start, wakes, done);
+          return (
+            <div className="sf-cal-day-view">
+              <h4 className="sf-cal-head">{dayLabel(start, true)}</h4>
+              {on.wakes.map(wake)}
+              {!on.wakes.length && (
+                <p className="sf-cal-empty">{unsure ? "No other wakes booked" : "No wakes booked"}</p>
+              )}
+              {on.done.length > 0 && <h4 className="sf-cal-head">Done</h4>}
+              {on.done.map(finished)}
+            </div>
+          );
+        })()}
+      {mode === "week" && (
+        <div className="sf-cal-week">
+          {days.map((d) => {
+            const on = onDay(d.start, wakes, done);
+            return (
+              <section key={d.start} className={`sf-cal-col${d.today ? " is-today" : ""}`}>
+                <button
+                  type="button"
+                  className="sf-cal-col-head"
+                  onClick={() => {
+                    setDay(d.start);
+                    setMode("day");
+                  }}
+                >
+                  {d.today ? "Today" : dayLabel(d.start)}
+                </button>
+                <div className="sf-cal-col-items">
+                  {on.wakes.map((w) => (
+                    <button
+                      type="button"
+                      key={w.key}
+                      className={`sf-cal-chip is-${w.kind}`}
+                      title={`${clock(w.at)} ${w.what}${w.every ? ` · ${w.every}` : ""}`}
+                      onClick={() => onUse?.("calendar", { agent: w.agent })}
+                    >
+                      <span className="sf-cal-chip-time">{clock(w.at)}</span>
+                      <span className="sf-cal-chip-what">
+                        {view.names ? `${nameOf(w.agent)} · ${w.what}` : w.what}
+                        {w.every ? " ↻" : ""}
+                      </span>
+                    </button>
+                  ))}
+                  {on.done.length > 0 && <span className="sf-cal-chip is-done">✓ {on.done.length} done</span>}
+                  {!on.wakes.length && !on.done.length && <span className="sf-cal-col-none">{none}</span>}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+      {mode === "month" && (
+        <div className="sf-cal-month-grid">
+          {days.slice(0, 7).map((d) => (
+            <span key={`h${d.start}`} className="sf-cal-wday">
+              {new Date(d.start).toLocaleDateString([], { weekday: "narrow" })}
+            </span>
+          ))}
+          {days.map((d) => {
+            const on = onDay(d.start, wakes, done);
+            return (
+              <button
+                type="button"
+                key={d.start}
+                className={`sf-cal-cell${d.today ? " is-today" : ""}${d.inMonth ? "" : " is-out"}`}
+                onClick={() => {
+                  setDay(d.start);
+                  setMode("day");
+                }}
+                aria-label={`${dayLabel(d.start, true)}: ${on.wakes.length} wakes, ${on.done.length} done`}
+              >
+                <span className="sf-cal-cell-day">{new Date(d.start).getDate()}</span>
+                {on.wakes.length > 0 && <span className="sf-cal-cell-n is-wake">{on.wakes.length}</span>}
+                {on.done.length > 0 && <span className="sf-cal-cell-n is-done">✓{on.done.length}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

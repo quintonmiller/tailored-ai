@@ -51,6 +51,15 @@ import type { Plugin, PluginMeta } from "../plugin-context.js";
 import { fromDbTime, ScheduleStore } from "../schedules/store.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { runtimeTimeProvider } from "../time/provider.js";
+import {
+  hourlyStats,
+  type Ongoing,
+  recentFeed,
+  STATS_DAYS,
+  type Stats,
+  TimeTally,
+  timeKey,
+} from "./activity-history.js";
 import { anyAvatar } from "./places.js";
 
 export const ACTIVITY_TYPE = "activity";
@@ -63,6 +72,7 @@ export const meta: PluginMeta = {
   registers: [
     { kind: "stateType", id: ACTIVITY_TYPE },
     { kind: "stateType", id: SPEECH_TYPE },
+    { kind: "httpRoutes", id: "activity" },
   ],
 };
 
@@ -264,6 +274,8 @@ export interface ActivityOptions {
   settleMs?: number;
   /** Keep what agents say, in rooms and to each other. Default on. */
   speech?: boolean;
+  /** Where time spent at each activity is counted as records change; none counts nothing. */
+  tally?: TimeTally;
   now?: () => Date;
 }
 
@@ -424,10 +436,29 @@ export class ActivityTracker {
   }
 
   stop(): void {
+    // What agents are in the middle of counts up to now: a tracker started after this one starts afresh.
+    const now = this.now().getTime();
+    for (const o of this.ongoing()) this.opts.tally?.add(o.agent, o.what, o.since, now);
+    // Counted once: a stopped tracker has nothing ongoing, so a route still holding it can't count it again.
+    this.written.clear();
     this.stopped = true;
     for (const sub of this.subs) sub.dispose();
     for (const timer of this.pending.values()) clearTimeout(timer);
     this.pending.clear();
+  }
+
+  /** What each agent is in the middle of that counts toward time by activity, and since when. */
+  ongoing(): Ongoing[] {
+    return [...this.written.values()].flatMap((a) => {
+      const what = timeKey(a);
+      const since = Date.parse(a.since);
+      return what && Number.isFinite(since) ? [{ agent: a.agent, what, since }] : [];
+    });
+  }
+
+  /** How a tool call looks from outside, in the words a status line uses: for a feed of what agents did. */
+  looks(tool: string, args: Record<string, unknown>): Look {
+    return this.lookOf(tool, args);
   }
 
   /** What an agent is doing, from what has been heard. */
@@ -646,6 +677,9 @@ export class ActivityTracker {
     if (was && same(was, next)) return;
     // Only a change in what it is doing is a new start: a new `next` or `last` keeps its `since`.
     const since = was && sameDoing(was, next) ? was.since : this.now().toISOString();
+    // A stretch at something has ended: counted toward time by activity.
+    const ended = was && since !== was.since ? timeKey(was) : undefined;
+    if (was && ended) this.opts.tally?.add(agent, ended, Date.parse(was.since), Date.parse(since));
     const record: Activity = { ...next, since };
     this.written.set(agent, record);
     this.queue(
@@ -777,6 +811,24 @@ export const SPEECH_SCHEMA = {
 /** How often idle agents are looked at again, for the per-agent pause, which announces nothing. */
 const SLEEP_CHECK_MS = 5_000;
 
+/**
+ * Time by activity, counted since the process started. Kept outside the
+ * plugin, so a config reload, which runs every plugin again, doesn't start
+ * the count over.
+ */
+const TALLY = new TimeTally();
+
+/**
+ * The tracker of the plugin's latest run. The server mounts a route's
+ * handler once, at startup, and a reload runs the plugin again with a new
+ * tracker, so the routes read the one running now from here rather than the
+ * one they were registered with.
+ */
+let live: ActivityTracker | undefined;
+
+/** How long the charts' numbers are kept before they are read again: they change by the hour, not the second. */
+const STATS_MS = 30_000;
+
 const plugin: Plugin = (ctx) => {
   const runtime = ctx.runtime;
   if (!runtime || !anyAvatar(runtime.getConfig())) return;
@@ -839,14 +891,45 @@ const plugin: Plugin = (ctx) => {
     ...(cfg.tools ? { tools: cfg.tools } : {}),
     ...(typeof cfg.settleMs === "number" ? { settleMs: cfg.settleMs } : {}),
     speech: cfg.speech !== false,
+    tally: TALLY,
   });
   void tracker.start();
+  live = tracker;
+
+  // What agents did lately and the numbers behind the charts, for the widgets in the 3D world. Under
+  // /api/ext/builtin:activity/. Read from what the server keeps, so only people read them, as the page does.
+  ctx.http.register({
+    method: "GET",
+    path: "feed",
+    handler: () => ({
+      json: { items: recentFeed(runtime.db, (tool, args) => (live ?? tracker).looks(tool, args)) },
+    }),
+  });
+  let kept: { at: number; days: number; stats: Omit<Stats, "time" | "since"> } | undefined;
+  ctx.http.register({
+    method: "GET",
+    path: "stats",
+    handler: (req) => {
+      const days = Math.max(1, Math.min(STATS_DAYS, Math.floor(Number(req.query.days) || STATS_DAYS)));
+      const now = Date.now();
+      if (!kept || kept.days !== days || now - kept.at > STATS_MS)
+        kept = { at: now, days, stats: hourlyStats(runtime.db, days) };
+      return {
+        json: {
+          ...kept.stats,
+          time: TALLY.rows(live?.ongoing() ?? [], now),
+          since: new Date(TALLY.since).toISOString(),
+        },
+      };
+    },
+  });
   const timer = setInterval(() => tracker.refresh(), SLEEP_CHECK_MS);
   timer.unref?.();
 
   return () => {
     clearInterval(timer);
     tracker.stop();
+    if (live === tracker) live = undefined;
   };
 };
 

@@ -173,6 +173,54 @@ export function blocksView(
   return aside <= half + girth;
 }
 
+/**
+ * Whether something solid (its box, from `min` to `max`) stands in the way of
+ * reading a surface from `distance` in front of it, as a body would
+ * (`blocksView`), by its middle and half its width. Never the thing the
+ * surface is on: a box holding the surface's middle is its own.
+ */
+export function solidInWay(
+  solid: { min: Vec3; max: Vec3 },
+  center: Vec3,
+  normal: Vec3,
+  half: number,
+  distance: number,
+): boolean {
+  const { min, max } = solid;
+  const holds = [0, 1, 2].every(
+    (i) => (center[i] ?? 0) >= (min[i] ?? 0) - 0.05 && (center[i] ?? 0) <= (max[i] ?? 0) + 0.05,
+  );
+  if (holds) return false;
+  const mid: Vec3 = [(min[0] + max[0]) / 2, 0, (min[2] + max[2]) / 2];
+  return blocksView(mid, center, normal, half, distance, Math.max(max[0] - min[0], max[2] - min[2]) / 2);
+}
+
+/** How far behind a surface being read a body's name and words would still show over it, in metres. */
+export const BEHIND_REACH = 4;
+
+/**
+ * Whether a body standing at `at` is just behind a surface being read, no
+ * further to one side than its half width (`half`) and the body's girth:
+ * the signs over a head (its name, what it says) are drawn over everything,
+ * so they would show through the surface while it is read.
+ */
+export function behindView(
+  at: Vec3,
+  center: Vec3,
+  normal: Vec3,
+  half: number,
+  reach = BEHIND_REACH,
+  girth = 0.35,
+): boolean {
+  const len = Math.hypot(normal[0], normal[2]) || 1;
+  const n = [normal[0] / len, normal[2] / len];
+  const d = [at[0] - center[0], at[2] - center[2]];
+  const ahead = d[0] * n[0] + d[1] * n[1];
+  if (ahead > 0.05 || ahead < -reach) return false;
+  const aside = Math.abs(d[0] * -n[1] + d[1] * n[0]);
+  return aside <= half + girth;
+}
+
 /** How far you can be from a surface and still bring it up with a key, in metres. */
 export const FACE_REACH = 3.2;
 /** How far off where you face a surface can be, sideways, and still be the one you face: radians. */

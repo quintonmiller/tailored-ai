@@ -18,6 +18,7 @@ import {
   plainLines,
   rowsFit,
   screenWidgets,
+  twoLines,
 } from "./screens";
 
 const widget = (id: string, type: string, options?: Record<string, unknown>): DashboardWidgetSpec => ({
@@ -269,5 +270,23 @@ describe("homeCards", () => {
     const [, list, next] = homeCards("writer", { tasks: [], coming: [], now });
     expect(list).toMatchObject({ rows: [], empty: "Nothing on its list." });
     expect(next).toMatchObject({ rows: [], empty: "Nothing booked." });
+  });
+});
+
+describe("twoLines", () => {
+  // A character's width in a test: one unit each.
+  const width = (t: string) => t.length;
+
+  it("breaks between words, and cuts the second line short when it all doesn't fit", () => {
+    expect(twoLines("Ferries every twenty minutes", 30, width)).toEqual(["Ferries every twenty minutes"]);
+    expect(twoLines("Ferries every twenty minutes", 16, width)).toEqual(["Ferries every", "twenty minutes"]);
+    expect(twoLines("Ferries leave every twenty minutes from the quay", 16, width)).toEqual([
+      "Ferries leave",
+      "every twenty mi…",
+    ]);
+  });
+
+  it("puts a word longer than a line on the first line by itself", () => {
+    expect(twoLines("Supercalifragilistic word", 10, width)[0]).toBe("Supercalifragilistic");
   });
 });

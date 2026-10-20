@@ -44,7 +44,17 @@ export interface PlaceItem {
   action?: PlaceAction;
   /** A model an agent made (`places-models.ts`), by its record's id: what a thing of a model kind is drawn as. */
   model?: string;
+  /**
+   * What a widget shows, for kinds that can show more than one thing: a
+   * chart's measure, a ticker's room, the dashboard widget a screen keeps to,
+   * or which widget a display stand or a desk monitor is. The page reads it;
+   * one it doesn't know shows the kind's own.
+   */
+  shows?: string;
 }
+
+/** The most `shows` says, in characters: a measure, a room's name, a widget's id. */
+export const SHOWS_LENGTH = 60;
 
 /** What a thing in a place does when someone clicks it on the page. */
 export type PlaceAction = "new-agent" | "new-task" | "new-room" | "tasks" | "map";
@@ -322,7 +332,42 @@ export const KINDS: Record<string, Kind> = {
     model: true,
   },
   small_model: { noun: "model", mount: "on", footprint: [0.2, 0.2], height: 0.2, shaped: true, model: true },
+  // Widgets: live pages the web UI draws from what the server keeps, each its own kind of thing to hang. What some
+  // show is chosen with `shows`; a display stand or a desk monitor can be any of them.
+  /** Every agent and what it is doing, grouped: working, waiting on you, talking, idle, asleep. */
+  status_board: { noun: "status board", mount: "wall", footprint: [1.5, 0.05], height: 1.0, elevation: 1.1 },
+  /** What agents did lately, newest first: turns, tools, posts, finished tasks. */
+  feed: { noun: "activity feed", mount: "wall", footprint: [0.95, 0.05], height: 1.3, elevation: 0.9 },
+  /** Approvals and questions waiting on a person, with their answers. */
+  needs_board: { noun: "needs-you board", mount: "wall", footprint: [1.2, 0.05], height: 0.85, elevation: 1.15 },
+  /** A short list of one agent's open tasks: in a home, its owner's. */
+  todo: { noun: "to-do list", mount: "wall", footprint: [0.62, 0.03], height: 0.86, elevation: 1.15 },
+  /** The photos and selfies agents took, a slow slideshow. */
+  photo_wall: { noun: "photo wall", mount: "wall", footprint: [1.7, 0.04], height: 1.05, elevation: 1.1 },
+  /** A room's latest lines, scrolling: a meeting room's own, or every room's. */
+  ticker: { noun: "room ticker", mount: "wall", footprint: [1.8, 0.05], height: 0.42, elevation: 1.72 },
+  /** A small chart of real numbers: tokens, turns, tasks done or time by activity, per day. */
+  chart: { noun: "chart", mount: "wall", footprint: [1.2, 0.05], height: 0.8, elevation: 1.2 },
+  /** The time and date, and the day's agenda under them. */
+  agenda: { noun: "clock and agenda", mount: "wall", footprint: [0.8, 0.05], height: 0.8, elevation: 1.3 },
+  /** A screen on a stand, for the middle of a room: it shows any widget, chosen with `shows`. */
+  display: {
+    noun: "display stand",
+    mount: "floor",
+    footprint: [1.05, 0.5],
+    height: 1.9,
+    use: { activity: "look", offset: 1.1 },
+  },
+  /** A monitor on a desk: any widget, chosen with `shows`; the day's agenda unless told. */
+  monitor: { noun: "desk monitor", mount: "on", footprint: [0.56, 0.2], height: 0.44 },
 };
+
+/**
+ * Kinds with a `shows` to choose: a screen's dashboard widget, a chart's
+ * measure, a ticker's room, and which widget a display stand or a desk
+ * monitor is. The rest show what they are.
+ */
+export const SHOWS_KINDS: readonly string[] = ["screen", "chart", "ticker", "display", "monitor"];
 
 export const LIMITS = {
   // Room enough for a lobby, the biggest room there is, and a meeting room for sixteen.
@@ -1675,7 +1720,7 @@ export function describe(place: Place): string {
     "Things (id: name, where):",
     ...place.props.map(
       (p) =>
-        `- ${p.id}: ${p.name} (${KINDS[p.kind]?.noun ?? p.kind}${p.color ? `, ${p.color}` : ""}${sizeWords(p)}), ${whereWords(place, p)}, at (${p.at[0]}, ${p.at[1]})`,
+        `- ${p.id}: ${p.name} (${KINDS[p.kind]?.noun ?? p.kind}${p.color ? `, ${p.color}` : ""}${sizeWords(p)}${p.shows ? `, showing ${p.shows}` : ""}), ${whereWords(place, p)}, at (${p.at[0]}, ${p.at[1]})`,
     ),
     "",
     `Spots you can go to: ${place.spots.map((s) => s.place).join(", ")}.`,
@@ -1685,6 +1730,7 @@ export function describe(place: Place): string {
     `- wall: ${kindsBy((k) => k.mount === "wall")}`,
     `- on a surface: ${kindsBy((k) => k.mount === "on")}`,
     `- shapes, any size and colour: ${kindsBy((k) => !!k.shaped)}`,
+    `Some show what you choose with \`shows\`: ${SHOWS_KINDS.join(", ")}.`,
   ];
   return lines.join("\n");
 }
@@ -1766,6 +1812,7 @@ export const PLACE_SCHEMA = {
           label: { type: "string", maxLength: 40 },
           action: { type: "string", enum: PLACE_ACTIONS },
           model: { type: "string", maxLength: 128 },
+          shows: { type: "string", maxLength: SHOWS_LENGTH },
         },
       },
     },

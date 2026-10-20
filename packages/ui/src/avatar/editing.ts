@@ -217,7 +217,82 @@ export const GROUPS: { id: string; label: string; kinds: string[] }[] = [
     kinds: ["window", "picture", "painting", "poster", "pegboard", "clock", "sign"],
   },
   { id: "screens", label: "Boards and screens", kinds: ["board", "screen", "calendar", "tv", "laptop"] },
+  {
+    id: "widgets",
+    label: "Widgets",
+    kinds: [
+      "status_board",
+      "needs_board",
+      "feed",
+      "chart",
+      "agenda",
+      "todo",
+      "photo_wall",
+      "ticker",
+      "display",
+      "monitor",
+    ],
+  },
 ];
+
+/** One choice of what a widget shows, as the editor's bar offers it: what is saved, and what it says. */
+export interface ShowsChoice {
+  value: string;
+  label: string;
+}
+
+/**
+ * What a person can choose for a widget to show, by its kind: a chart's
+ * measure, which widget a display stand or a desk monitor is, a ticker's room
+ * from the rooms there are, or which of the Board's widgets a screen keeps
+ * to. The first choice, saved as nothing, is what the kind shows by itself.
+ * None for a kind that shows what it is.
+ */
+export function showsChoices(
+  kind: string,
+  have: { rooms?: string[]; widgets?: { id: string; title?: string }[] } = {},
+): ShowsChoice[] | undefined {
+  const measures = [
+    { value: "tokens", label: "Tokens per day" },
+    { value: "turns", label: "Turns per day" },
+    { value: "tasks", label: "Tasks done per day" },
+    { value: "time", label: "Time by activity" },
+  ];
+  switch (kind) {
+    case "chart":
+      return [{ value: "", label: "All four, in turn" }, ...measures];
+    case "ticker":
+      return [
+        { value: "", label: "Its own room, or every room" },
+        ...(have.rooms ?? []).map((r) => ({ value: r, label: `#${r}` })),
+      ];
+    case "screen":
+      return [
+        { value: "", label: "The Board's widgets, in turn" },
+        ...(have.widgets ?? []).map((w) => ({ value: w.id, label: w.title ?? w.id })),
+      ];
+    case "display":
+    case "monitor":
+      return [
+        { value: "", label: kind === "display" ? "Who's doing what" : "The clock and agenda" },
+        ...(kind === "display"
+          ? [{ value: "agenda", label: "The clock and agenda" }]
+          : [{ value: "status", label: "Who's doing what" }]),
+        { value: "feed", label: "Activity feed" },
+        { value: "needs", label: "Needs you" },
+        { value: "tasks", label: "Task board" },
+        { value: "my tasks", label: "To-do list" },
+        { value: "calendar", label: "Calendar" },
+        { value: "photos", label: "Photos" },
+        { value: "ticker", label: "Room ticker" },
+        { value: "chart", label: "Chart: all four, in turn" },
+        ...measures.map((m) => ({ value: `chart: ${m.value}`, label: `Chart: ${m.label.toLowerCase()}` })),
+        { value: "dashboard", label: "The Board's widgets" },
+      ];
+    default:
+      return undefined;
+  }
+}
 
 /**
  * Kinds the catalogue leaves out: a kiosk does something only as one of the
@@ -365,7 +440,9 @@ export type Edit =
   | ({ op: "move" } & Move)
   | { op: "add"; kind: string; like?: string; model?: string }
   | { op: "remove"; item: string }
-  | { op: "color"; item: string; color: string };
+  | { op: "color"; item: string; color: string }
+  /** What a widget shows (`Prop.shows`); null, what its kind shows by itself. */
+  | { op: "shows"; item: string; shows: string | null };
 
 /**
  * How a change reads after your name in the room's recent changes, the way
@@ -394,6 +471,7 @@ export function changeWords(edit: Edit, before: Pick<Room, "props">, after: Pick
     if (swatch?.from && swatch.from !== name) return `made ${name} the colour of ${swatch.from}`;
     return `repainted ${name}`;
   }
+  if (edit.op === "shows") return edit.shows ? `set ${name} to show ${edit.shows}` : `set ${name} back to its own`;
   const moved = thing && (Math.abs(thing.at[0] - edit.at[0]) > 0.005 || Math.abs(thing.at[1] - edit.at[1]) > 0.005);
   if (thing && !moved) return `turned ${name}`;
   if (edit.on && edit.on !== thing?.on) {

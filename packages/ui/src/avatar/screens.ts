@@ -431,3 +431,104 @@ export function drawScreen(canvas: HTMLCanvasElement, card: ScreenCard | undefin
     ctx.fillText(clip(ctx, card.empty, w - pad * 2), pad, y);
   }
 }
+
+/**
+ * Text in two lines at most, broken between words, the second cut short with
+ * an ellipsis when it all doesn't fit; `width` measures a piece of text.
+ */
+export function twoLines(text: string, room: number, width: (s: string) => number): string[] {
+  const words = text.split(/\s+/).filter(Boolean);
+  let first = "";
+  let i = 0;
+  for (; i < words.length; i++) {
+    const next = first ? `${first} ${words[i]}` : (words[i] ?? "");
+    if (width(next) > room && first) break;
+    first = next;
+  }
+  const rest = words.slice(i).join(" ");
+  if (!rest) return [first];
+  if (width(rest) <= room) return [first, rest];
+  let lo = 0;
+  let hi = rest.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (width(`${rest.slice(0, mid).trimEnd()}…`) <= room) lo = mid;
+    else hi = mid - 1;
+  }
+  return [first, `${rest.slice(0, lo).trimEnd()}…`];
+}
+
+/**
+ * A card on a strip much wider than it is tall (a room ticker): its title on
+ * an amber block at the left, and its first row big beside it, who said it
+ * after. What a ticker shows from across a room. A card with no title (the
+ * ticker of the meeting room it hangs in, whose name says nothing the room
+ * doesn't) has the amber block alone, and its line two rows to be read in.
+ */
+export function drawStrip(canvas: HTMLCanvasElement, card: ScreenCard) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const { width: w, height: h } = canvas;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "#14171d");
+  g.addColorStop(1, "#0b0d11");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  const font = (weight: number, size: number) => `${weight} ${Math.round(size)}px system-ui, sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  // The room's name as big as fits in up to two fifths of the strip, never smaller than reads.
+  let size = h * 0.26;
+  ctx.font = font(800, size);
+  const fits = w * 0.4 - h * 0.5;
+  const wide = ctx.measureText(card.title).width;
+  if (wide > fits) {
+    size = Math.max(h * 0.17, (size * fits) / wide);
+    ctx.font = font(800, size);
+  }
+  const block = Math.min(w * 0.4, ctx.measureText(card.title).width + h * 0.5);
+  ctx.fillStyle = "#e2a23b";
+  ctx.fillRect(0, 0, block, h);
+  ctx.fillStyle = "#1a1408";
+  ctx.fillText(clip(ctx, card.title, block - h * 0.4), h * 0.25, h / 2);
+  if (!card.title) {
+    // The live dot alone, as the strip read close up has beside its name.
+    ctx.fillStyle = "#c0392b";
+    ctx.beginPath();
+    ctx.arc(block / 2, h / 2, h * 0.08, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const row = card.rows?.[0];
+  const x = block + h * 0.3;
+  const room = w - x - h * 0.3;
+  if (!row) {
+    ctx.fillStyle = "#8a93a6";
+    ctx.font = font(600, h * 0.3);
+    ctx.fillText(clip(ctx, card.empty ?? "", room), x, h / 2);
+    return;
+  }
+  // Who said it, small, over what they said, big: the line is what reads from across a room.
+  if (!card.title) {
+    if (row.meta) {
+      ctx.fillStyle = "#9fb4ff";
+      ctx.font = font(700, h * 0.17);
+      ctx.fillText(clip(ctx, row.meta, room), x, h * 0.18);
+    }
+    ctx.fillStyle = "#f4f1e8";
+    ctx.font = font(600, h * 0.27);
+    const lines = twoLines(row.text, room, (t) => ctx.measureText(t).width);
+    const top = row.meta ? h * 0.47 : lines.length > 1 ? h * 0.33 : h / 2;
+    lines.forEach((line, i) => {
+      ctx.fillText(line, x, top + i * h * 0.31);
+    });
+    return;
+  }
+  if (row.meta) {
+    ctx.fillStyle = "#9fb4ff";
+    ctx.font = font(700, h * 0.2);
+    ctx.fillText(clip(ctx, row.meta, room), x, h * 0.27);
+  }
+  ctx.fillStyle = "#f4f1e8";
+  ctx.font = font(600, h * 0.34);
+  ctx.fillText(clip(ctx, row.text, room), x, row.meta ? h * 0.64 : h / 2);
+}

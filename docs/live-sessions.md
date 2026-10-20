@@ -1541,7 +1541,13 @@ open that task's card, right there in the world. **Drag a note** to another
 column to move the task there, or pick it with Tab and press **Shift** with
 the left or right arrow: the board shows it moved at once, and the change is
 saved as the card saves it, coming out of Blocked with no reason left on it.
-If it can't be saved, the note goes back and the board says why. The card
+If it can't be saved, the note goes back and the board says why. Read close
+up, a row of names over the columns narrows the board to one agent's tasks
+(each with how many it has open, ringed when it has more than three in
+progress at once), and a menu to one project's when the tasks belong to more
+than one; the heading over the columns says how many are open, how many are
+in progress (the work in progress: everything under Doing) and how many are
+done. Put down, the board shows everything again. The card
 shows the title, the details, the status, who has it, its project and tags,
 who made it and when, when it last changed, and its latest few comments. From
 the card you can:
@@ -1624,6 +1630,11 @@ title opens the whole dashboard in a panel, scrolled to that widget.
 **Open the Board page** at the bottom of the panel is there for changing the
 layout.
 
+A screen can be kept to one of the Board's widgets instead of going through
+them: give it the widget's id or title with `shows` (an agent: "change the
+screen to show in-review"; you: pick it under **Shows** while rearranging the
+room). It shows that widget alone, wherever it hangs, a home too.
+
 An agent can hang a screen in its own room ("add a screen on the back wall").
 There it shows what the agent is up to: what it is doing now (with what it
 did last and when it next wakes, while it rests), the open tasks on its list,
@@ -1649,8 +1660,19 @@ next wakes in time order, each with whose it is. Anywhere else, a calendar
 shows the wakes of whoever is there. While agents are paused, it says
 nothing wakes until you resume them.
 
-Bring a calendar up to read all of it: every wake this week and everything
-done today. Click a wake for that agent's list, something it finished for
+Bring a calendar up to read all of it, a day, a week or a month at a time,
+by the tabs under its band. **Day** lists the day's wakes and what got done;
+**Week** is the seven days from today, a row each, every wake with its time
+and whose it is; **Month** is the month's whole weeks, each day with how many
+wakes it has and how many tasks were finished on it, and a click on a day
+opens that day. A wake that repeats is marked ↻, with how often in its line.
+One that comes round once a day at one time (a cron job such as `0 7 * * 1-5`,
+or a wake booked "every day at 7am", "weekdays at 9am" or "every monday at
+8:30") shows on each day it comes round on, at that time. One that repeats any
+other way ("every 30 minutes", "every 3 days") shows once, at its next time,
+and while one does, a day with nothing on it says "Nothing else booked"
+rather than "Nothing booked". The days gone by show the
+tasks finished on them (done, and last changed that day). Click a wake for that agent's list, something it finished for
 the task's card, and the date band for the whole list. Each wake in the list says when, what kind it
 is, whose it is, what it will do (a booked wake's note in full, a cron job's
 prompt), how often it comes round, and where a booked wake wakes the agent:
@@ -1677,6 +1699,79 @@ a screen reads `GET /api/dashboard` and each widget's own endpoint.
 `next_turn_at`: when the worker will take its next turn, within its hours
 and once the day's limit lifts, as an ISO instant; null while it is switched
 off or paused, or when its hours never come.
+
+#### Widgets: more to read on the walls
+
+Besides boards, screens and calendars there are widgets: live pages of what
+the server keeps, each its own kind of thing to hang, and each a
+[surface](#surfaces-using-what-hangs-on-the-walls) you bring up to read and
+use. They share the screen's look (dark glass, a heading with a line under
+it, each agent's name in its own colour) and each reads three ways: from
+across the room only what reads from there, big; near, everything that fits;
+brought up close, everything, with its buttons and its lists to scroll.
+
+| Kind | What it shows | Brought up close |
+|---|---|---|
+| `status_board` | Every agent by what it is doing: waiting on you, stuck (a turn that failed or stalled), working, talking (each with what and for how long), then idle and asleep with what each did last. From afar, a big count for each, the stuck only while some are. | Click an agent to go to it, its card open beside you. |
+| `feed` (activity feed) | What agents did lately, newest first: replies, tools used (the same one used again and again folded into one line, "searching the web ×3"), posts in rooms, tasks finished. | Chips narrow it to replies, tools, posts or done, and to the agents here. A finished task opens its card; anything else the agent's. |
+| `needs_board` | Every approval and question waiting on you, with the call an approval is for: its first three arguments, cut at 160 characters, saying how many more there are. | **Approve** and **Deny** right there, for an approval the page has the details of, whose whole call the board shows, and which has no stricter flow of its own. A purchase or a trusted action says it is approved in the chat that asked for it, and offers Deny; a call too long to show in full says to approve it from **Details**, whose card shows all of it. Neither button takes the second click of a double click. **Answer** and **Details** open the card. |
+| `todo` (to-do list) | One agent's open tasks on a pad: what is in hand first, then blocked, then waiting to start. In a home, its owner's. | A line opens its task. |
+| `photo_wall` | The photos and selfies agents took, from every place, one big and turning over slowly, the rest pinned beside it, each with who took it, where and when. | The arrows go through them; a print clicked is the big one. |
+| `ticker` (room ticker) | A room's latest lines on a strip, one at a time, people's and agents': a meeting room's own (from across the room, just the line, on two rows), or every room's elsewhere, each line saying which room. | Every line it has, to scroll. Reading it wakes nobody. |
+| `chart` | A small chart of real numbers by the day: tokens (read and written), turns, tasks done, or time by activity. It goes through the four, a minute each, unless told one. | Tabs pick the measure and the last week or two. |
+| `agenda` (clock and agenda) | The time, big, the date, and the day: what wakes still to come, then what got done. | Seconds, and a line about an agent opens its list of wakes. |
+| `display` (display stand) | Any of them on a stand for the middle of a room: who's doing what unless told. | As the widget it shows. |
+| `monitor` (desk monitor) | Any of them on a desk: the clock and agenda unless told. | As the widget it shows. |
+
+Widgets show whose place they are in: a home's owner's, a meeting room's
+members', whoever is in a shared place, everyone's in the town hall and on
+the square. Some show what you choose with **`shows`**: a chart's measure
+(`tokens`, `turns`, `tasks`, `time`), a ticker's room by name, a screen's
+dashboard widget, and for a display stand or a desk monitor, which widget it
+is (`feed`, `needs`, `my tasks`, `photos`, `agenda`…), with a chart's measure
+or a ticker's room after a colon (`chart: tasks`, `ticker: lisbon-trip`). An
+agent sets it with the `place` tool ("add a chart showing time", "change the
+display stand to show feed"; `shows: "default"` clears it), and you pick it
+under **Shows** while rearranging the room. Widgets are in the catalogue under
+**Widgets**.
+
+Where they hang: on the square, a status board left of the town hall's big
+screen, a needs-you board right of its door, a ticker of every room over the
+door, each between the hall's pilasters, and stands with the activity feed
+and a chart at the square's top corners. In the town hall's lobby, the status and needs-you boards along the
+left wall, the photo wall over the lounge, a ticker over the task board, and
+stands with the feed and a chart either side of the way out. In the office, a
+stand of every room's latest lines by the way in. Every meeting room drawn
+afresh has a ticker of its own lines over its task board, and every home
+nobody has changed a to-do list by its desk, where its walls have room for one
+and still keep a stretch wide enough for a to-do board its agent makes itself
+(`todo_board`). Places someone has changed keep what they have: widgets are
+hung there only on request.
+
+Numbers are only what the server keeps. Tokens and model calls come from
+what the loop records with every call (`token_usage`); turns are the messages
+that started one (a person's, a room's, a wake's) in the sessions that spent
+tokens; tasks done are tasks marked done, by the day they last changed. Time
+by activity is counted by the activity plugin as each agent's record changes
+(the tool's words while working, thinking, talking, waiting on you, stuck;
+never idle or asleep), in memory, since the server started: a chart says since
+when, if that falls within its days. A day with nothing is a zero.
+
+Each kind of data is fetched once for every widget in view, and again once a
+minute, only while some widget in the place shows it: a widget keeps what it
+showed while a fetch fails, and says at its foot why nothing newer came. A
+ticker of the room you are in reads that room again as soon as someone says
+something there; one that moves to another room starts empty rather than
+showing the last room's lines. The routes are under
+`/api/ext/builtin:activity/`: `feed` (the last two days, 80 lines at most) and
+`stats?days=14` (by agent and UTC hour, which the page sums into days on its
+own clock); and under `/api/ext/builtin:places/`: `photos` (the newest 40
+photos from every place) and `lines` (every room's latest lines for a ticker
+of every room, four from each and 24 in all, read from each room as its
+meeting room's ticker reads it, at most once a minute however many pages ask;
+a room that can't be read now is named in `missed`).
+They read what people read: every route is behind the server's auth, as the
+rest of the API is.
 
 #### What needs you
 

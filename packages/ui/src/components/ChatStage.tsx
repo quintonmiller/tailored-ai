@@ -8,6 +8,7 @@ import {
   fetchWidgetData,
   type PendingApprovalRequest,
   type ProjectTask,
+  resolveApproval,
   updateProjectTask,
 } from "../api";
 import { type AgentAction, Avatar, type AvatarControls, type WorldPanelSpec } from "../avatar/Avatar";
@@ -18,6 +19,8 @@ import {
   type Booked,
   type CalendarView,
   type CronJob,
+  dayStart,
+  doneBetween,
   doneToday,
   type OwnAgent,
   upcoming,
@@ -34,16 +37,17 @@ import type { Companion, UseSpot } from "../avatar/stage";
 import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
 import { isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
+import type { WorldData } from "../avatar/widgets";
 import { changeBody, makeGesture } from "../lib/body";
 import { useAgentColor } from "../lib/body-colors";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
-import { type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
+import { ANSWERED_ELSEWHERE, answerable, type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
 import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
-import { trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
+import { isCommon, trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
@@ -55,6 +59,7 @@ import { comeOrGone, type MapPlace, useWorldMap, WorldMap } from "./WorldMap";
 import { NeedCard, NeedsList } from "./WorldNeeds";
 import { ROOM_ASK, WorldPlace, withChangeLines } from "./WorldPlace";
 import { type ListView, TaskCard, TaskList } from "./WorldTasks";
+import { facesIn, useWidgetFeeds, whoseIn } from "./WorldWidgets";
 
 /**
  * The chat page's scene and voice: the agent's 3D body behind the
@@ -644,14 +649,6 @@ export function whereWords(agent: string, places: MapPlace[], here: string | und
   if (spot.id === here) return "here";
   if (spot.kind === "room") return `in #${spot.name}`;
   return spot.kind === "home" && spot.owner === agent ? "at home" : `in ${spot.name}`;
-}
-
-/**
- * Whether a place is everyone's: the town square and the lobby inside its town hall. Their boards and calendars show
- * every agent's, since nobody lives there and agents only pass through.
- */
-export function isCommon(place: string | undefined): boolean {
-  return place === "lobby" || place === "town";
 }
 
 /** Which tasks a place's boards show: everyone's on the square and in the lobby, otherwise those of whoever is there. */
@@ -1272,7 +1269,9 @@ export function useChatStage({
         : undefined,
     [sceneNow.id, sceneNow.editable, sceneNow.version, sceneNow.scope, sceneNow.lent, sceneNow.room, loading],
   );
-  const editor = useRoomEditor(editable);
+  // What the editor offers a widget to show: the rooms on the map and the Board's widgets, known further down.
+  const editorHas = useRef<{ rooms?: string[]; widgets?: { id: string; title?: string }[] }>({});
+  const editor = useRoomEditor(editable, () => editorHas.current);
   const room = editor.room ?? sceneNow.room;
   // How tall the bar over the stage's foot is while rearranging, for framing the room above it.
   const dock = useRef<HTMLDivElement>(null);
@@ -1668,11 +1667,18 @@ export function useChatStage({
   const boardTasks = useMemo(() => tasksFor(placeId, here, allTasks), [placeId, here, allTasks]);
   // The screens and calendars here: nothing is asked for that no wall shows, or no panel open needs.
   const owner = placeId?.startsWith("home:") ? placeId.slice("home:".length) : undefined;
-  const hasScreen = room.props.some((p) => p.kind === "screen");
-  const hasCalendar = room.props.some((p) => p.kind === "calendar");
-  const dashboard = useDashboard(showStage && ((hasScreen && !owner) || panel?.kind === "dashboard"));
-  const wakes = useWakes(showStage && (hasCalendar || hasScreen || panel?.kind === "calendar"));
-  const minute = useMinute(showStage && (hasCalendar || hasScreen || panel?.kind === "calendar"));
+  // What the things here show (`faceOf`): a screen, a calendar, a clock, or any of them on a display stand.
+  const faces = useMemo(() => facesIn(room.props), [room.props]);
+  const hasScreen = faces.some((f) => f.face === "dashboard" && !f.arg);
+  // A screen kept to one of the Board's widgets needs the Board's widgets wherever it is, a home too.
+  const pinsWidget = faces.some((f) => f.face === "dashboard" && !!f.arg);
+  const hasCalendar = faces.some((f) => f.face === "calendar");
+  const hasAgenda = faces.some((f) => f.face === "agenda");
+  const dashboard = useDashboard(showStage && ((hasScreen && !owner) || pinsWidget || panel?.kind === "dashboard"));
+  const wakes = useWakes(showStage && (hasCalendar || hasScreen || hasAgenda || panel?.kind === "calendar"));
+  const minute = useMinute(
+    showStage && (hasCalendar || hasScreen || hasAgenda || faces.length > 0 || panel?.kind === "calendar"),
+  );
   // Pausing is for every agent at once, so one asleep because agents are paused means they all are: nothing on a
   // calendar wakes until they are resumed.
   const paused = useMemo(() => Object.values(activities).some((a) => a.detail === "agents are paused"), [activities]);
@@ -1707,8 +1713,70 @@ export function useChatStage({
       done: lobby ? [] : done.filter((d) => whose.includes(d.agent)),
       names: !owner,
       ...(paused ? { note: PAUSED_NOTE } : {}),
+      // Read close up, its month shows what got done on the days gone by: since the start of last month.
+      history: doneBetween(allTasks, dayStart(minute - 40 * 86_400_000), minute + 86_400_000).filter(
+        (d) => lobby || whose.includes(d.agent),
+      ),
     };
-  }, [hasCalendar, placeId, owner, here, minute, wakes, done, paused]);
+  }, [hasCalendar, placeId, owner, here, minute, wakes, done, paused, allTasks]);
+  editorHas.current = {
+    rooms: map.places.filter((p) => p.kind === "room").map((p) => p.name),
+    widgets: dashboard.widgets,
+  };
+  // The widgets here (a status board, a feed, a chart, a ticker…): what they show, fetched once for all of them.
+  const widgetFeeds = useWidgetFeeds({ enabled: showStage, props: room.props, placeId, places: map.places, speech });
+  const world = useMemo(
+    (): WorldData | undefined =>
+      faces.length
+        ? {
+            activities: shownActivities,
+            agents: ["default", ...agentNames.filter((a) => a !== "default")],
+            needs,
+            feed: widgetFeeds.feed,
+            stats: widgetFeeds.stats,
+            photos: widgetFeeds.photos,
+            ticker: widgetFeeds.ticker,
+            wakes: wakes ?? [],
+            done,
+            ...(whoseIn(placeId, here, map.places) ? { whose: whoseIn(placeId, here, map.places) } : {}),
+            ...(owner ? { owner } : {}),
+            tasks: allTasks,
+            projects: widgetFeeds.projects,
+            now: minute,
+          }
+        : undefined,
+    [
+      faces.length,
+      shownActivities,
+      agentNames,
+      needs,
+      widgetFeeds,
+      wakes,
+      done,
+      placeId,
+      here,
+      map.places,
+      owner,
+      allTasks,
+      minute,
+    ],
+  );
+  // Approved or denied from a needs-you board: as the card answers it, the agent's turn going on at once. Whatever face
+  // asks, nothing with a stricter flow of its own, or whose details the page doesn't have, is approved from here: the
+  // card's rule, kept where every face's answer goes through.
+  const approve = useCallback(async (need: Need, approved: boolean) => {
+    if (!need.request) throw new Error("There's no request to answer.");
+    if (approved && !answerable(need)) throw new Error("This one is approved in the chat that asked for it.");
+    try {
+      await resolveApproval(need.request, approved);
+    } catch (err) {
+      // Gone from the server: answered already, in another tab, the chat or Discord.
+      if (err instanceof Error && /^404\b/.test(err.message)) throw new Error(ANSWERED_ELSEWHERE);
+      throw err;
+    }
+  }, []);
+  // Going to an agent's body, for the status board: the function is made further down, each time the page draws.
+  const goSeeRef = useRef<(who: string) => boolean>(() => false);
   // What the kiosks (the lobby's, and the office's directory, which opens the map), the boards, the screens and the
   // calendars do when clicked. A note on a board opens its task; anywhere else on a board opens the list, at that
   // column when it was one, and at the owner's tasks in a home. A screen opens what its page is about; a calendar, its
@@ -1725,6 +1793,20 @@ export function useChatStage({
           setPanel({ kind: "tasks", ...at });
         } else if (card === "next") setPanel({ kind: "calendar", who: owner, ...at });
         else setPanel({ kind: "agent", agent: owner });
+        return;
+      }
+      if (action === "agent" && on && "agent" in on) {
+        setPanel({ kind: "agent", agent: on.agent });
+        return;
+      }
+      if (action === "go" && on && "agent" in on) {
+        // From the status board: to the agent, standing in front of it, its card open beside it.
+        setPanel({ kind: "agent", agent: on.agent });
+        goSeeRef.current(on.agent);
+        return;
+      }
+      if (action === "need" && on && "agent" in on) {
+        setPanel({ kind: "need", agent: on.agent });
         return;
       }
       if (action === "calendar") {
@@ -1805,6 +1887,7 @@ export function useChatStage({
     setGreet({ agent: who, place: spot.id, n: ++greets.current });
     return true;
   };
+  goSeeRef.current = goSee;
   const tools = (
     <>
       {needs.length > 0 && (
@@ -2216,10 +2299,12 @@ export function useChatStage({
         tools={editor.editing ? editor.tools : tools}
         tasks={boardTasks}
         {...(screenCards ? { screen: screenCards } : {})}
-        // Outside a home, a screen drawn live goes through the dashboard's widgets, by the Board page's renderers.
-        {...(hasScreen && !owner && dashboard.widgets.length ? { widgets: dashboard.widgets } : {})}
+        // Outside a home, a screen drawn live goes through the dashboard's widgets, by the Board page's renderers; one
+        // kept to a single widget shows it anywhere.
+        {...(((hasScreen && !owner) || pinsWidget) && dashboard.widgets.length ? { widgets: dashboard.widgets } : {})}
         onTaskMove={moveTask}
         {...(calendarView ? { calendar: calendarView } : {})}
+        {...(world ? { world, onApprove: approve } : {})}
         onUse={onUse}
         onLine={hearLine}
         overlay={

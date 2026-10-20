@@ -16,6 +16,7 @@ import {
   buildWorld,
   followTalk,
   homeId,
+  latestLines,
   mayChange,
   messageTo,
   onlyMembers,
@@ -1338,6 +1339,38 @@ describe("a room's conversation, for a visitor to read", () => {
     expect(said.lines).toHaveLength(TRANSCRIPT_LINES);
     expect(said.lines.at(-1)?.text).toBe(`line ${TRANSCRIPT_LINES + 4}`);
     expect(store.getSubscription("planner", "local:trip")?.cursor ?? null).toBeNull();
+  });
+
+  it("gathers every room's latest lines for a ticker of every room, each saying which room, a few from each", async () => {
+    store.upsertRoom({ ref: { backend: "local", id: "budget" }, name: "budget" });
+    store.upsertRoom({ ref: { backend: "chat", id: "c1" }, name: "standup" });
+    const say = (room: string, who: string, text: string, minutesAgo: number) =>
+      db
+        .prepare(
+          "INSERT INTO room_messages (room_ref, author_id, author_label, content, created_at) VALUES (?, ?, ?, ?, datetime('now', ?))",
+        )
+        .run(`local:${room}`, who, who, text, `-${minutesAgo} minutes`);
+    say("trip", "Sam", "Window seats, please.", 9);
+    for (let i = 0; i < 6; i++) say("budget", "writer", `budget line ${i}`, 8 - i);
+    say("trip", "planner", "Booked.", 1);
+    const rooms = store.listRooms();
+    const got = await latestLines(rooms, (b) => (b === "local" ? backend : undefined), ids, 4);
+    // Oldest first, as a transcript reads; people's lines too; only each room's latest few.
+    expect(got.lines.map((l) => [l.roomName, l.who, l.text])).toEqual([
+      ["trip", "Sam", "Window seats, please."],
+      ["budget", "writer", "budget line 2"],
+      ["budget", "writer", "budget line 3"],
+      ["budget", "writer", "budget line 4"],
+      ["budget", "writer", "budget line 5"],
+      ["trip", "planner", "Booked."],
+    ]);
+    expect(got.lines[0]?.room).toBe("room:local:trip");
+    // A room whose transport isn't connected is left out, and named.
+    expect(got.missed).toEqual(["standup"]);
+    expect((await latestLines(rooms, () => backend, ids, 4, 2)).lines.map((l) => l.text)).toEqual([
+      "budget line 5",
+      "Booked.",
+    ]);
   });
 
   it("says why when the room's transport isn't there to read", async () => {
