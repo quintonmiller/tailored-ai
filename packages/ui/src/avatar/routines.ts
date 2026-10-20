@@ -13,7 +13,6 @@ import { ago } from "../lib/tasks";
 import { BASE_HUE, hexToHsl } from "./body";
 import { type AgentActivity, hueFor } from "./doing";
 import { buildingOf, type TownPlan } from "./town";
-import { wrap } from "./wrap";
 
 /** An outing, as the places plugin writes it on a body's `visit` record. A visit to talk has no `errand`. */
 export interface Outing {
@@ -50,12 +49,14 @@ function names(agents: string[]): string {
 /**
  * Every agent's activity as the world shows it, with the routines going on
  * at `now`. One idle and out is doing what its outing says, in its words;
- * one put to bed for the night is asleep, though nothing paused it. One that
- * is busy, waiting or paused is left as it is: work wins, and the server ends
- * its outing as it starts. Someone with company is chatting with them, and a
- * host at home with nothing on has whoever dropped in round. The seat and the
- * company are given only for bodies in `here`, the place on the stage: the
- * map and an agent's card read the words alone.
+ * one put to bed for the night is asleep, though nothing paused it, until it
+ * gets up. One that is busy, waiting or paused is left as it is: work wins,
+ * and the server ends its outing as it starts. Someone with company is
+ * chatting with them, and a host at home with nothing on has whoever dropped
+ * in round. The seat and the company are given only for bodies in `here`,
+ * the place on the stage: the map and an agent's card read the words alone.
+ * How long it has been idle is no longer how long it has been doing this, so
+ * that goes.
  */
 export function withRoutines(
   activities: Record<string, AgentActivity>,
@@ -85,12 +86,16 @@ export function withRoutines(
       ...(there && o.spot ? { spot: o.spot } : {}),
       ...(there && company.length ? { with: company } : {}),
     };
+    const { since: _, ...was } = own ?? { agent };
+    // Put to bed: "asleep · overnight until 7:10" up close, short enough for a tag in any clock.
     if (o.errand === "sleep") {
-      set(agent, { ...own, agent, doing: "asleep", what: o.what ?? "asleep for the night", routine });
+      set(agent, { ...was, agent, doing: "asleep", what: "asleep", detail: "overnight", until: o.until, routine });
       continue;
     }
-    const along = company.length ? ` with ${names(company)}` : "";
-    set(agent, { ...own, agent, doing: "idle", what: `${o.what ?? "out"}${along}`, routine });
+    // Dropping in on a friend, it is with its host already, by the words: only other guests are named.
+    const others = o.errand === "friend" ? company.filter((w) => o.place !== `home:${w}`) : company;
+    const along = others.length ? ` with ${names(others)}` : "";
+    set(agent, { ...was, agent, doing: "idle", what: `${o.what ?? "out"}${along}`, routine });
     if (o.errand === "friend" && o.place.startsWith("home:")) {
       const host = o.place.slice("home:".length);
       hosting.set(host, [...(hosting.get(host) ?? []), agent]);
@@ -99,8 +104,9 @@ export function withRoutines(
   for (const [host, guests] of hosting) {
     const own = activities[host];
     if ((own && own.doing !== "idle") || visits[host]?.errand) continue;
+    const { since: _, ...was } = own ?? { agent: host };
     set(host, {
-      ...own,
+      ...was,
       agent: host,
       doing: "idle",
       what: `having ${names(guests)} round`,
@@ -125,6 +131,29 @@ export function chatMove(agent: string, n: number): string {
   let h = 0;
   for (const c of agent) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return CHAT_MOVES[(h + n) % CHAT_MOVES.length];
+}
+
+/**
+ * A chatting body's gesture at `t`, when one is due (`c`, its count and when
+ * the next is, moved on): none while a gesture of its own is still playing
+ * (`own`, until when: one it chose, or one a person made from its card),
+ * which puts the chat off until a little after.
+ */
+export function chatDue(
+  c: { n: number; at: number },
+  agent: string,
+  t: number,
+  own = Number.NEGATIVE_INFINITY,
+): string | undefined {
+  if (t < c.at) return undefined;
+  if (t < own) {
+    c.at = own + chatPause(agent, c.n);
+    return undefined;
+  }
+  const move = chatMove(agent, c.n);
+  c.n++;
+  c.at = t + chatPause(agent, c.n);
+  return move;
 }
 
 /**
@@ -157,14 +186,19 @@ export interface Notes {
   lines: { who: string; agent?: string; words: string; ink: string }[];
 }
 
-/** A meeting room's whiteboard, from its room's chatter; `chosen`, the colours agents chose for their bodies. */
+/**
+ * A meeting room's whiteboard, from its room's chatter; `chosen`, the colours
+ * agents chose for their bodies; `last`, when the room last talked as its
+ * door says (`talkedAt`), so the board and the door never disagree.
+ */
 export function notesFrom(
   chatter: Chatter | undefined,
   room: string,
   now: number,
   chosen: Readonly<Record<string, string>> = {},
+  last: string | undefined = chatter?.last,
 ): Notes {
-  const talked = talkedWords(chatter?.last, now);
+  const talked = talkedWords(last, now);
   return {
     room: chatter?.room ?? room,
     ...(talked ? { talked } : {}),
@@ -219,7 +253,8 @@ export function inkFor(agent: string | undefined, chosen?: string): string {
  * A meeting room's whiteboard, as the picture on the wall shows it from
  * across the room: the room's name, how long since it talked, and its last
  * few lines, each with who said it, in their colour. Live HTML takes over up
- * close (`Faces.tsx`).
+ * close (`Faces.tsx`). With no notes (in a photo, or a whiteboard an agent
+ * put up somewhere else), it is a clean board.
  */
 export function drawNotes(canvas: HTMLCanvasElement, notes: Notes | undefined) {
   const ctx = canvas.getContext("2d");
@@ -227,12 +262,13 @@ export function drawNotes(canvas: HTMLCanvasElement, notes: Notes | undefined) {
   const { width: w, height: h } = canvas;
   ctx.fillStyle = "#fbfcfd";
   ctx.fillRect(0, 0, w, h);
+  if (!notes) return;
   const pad = w * 0.045;
   ctx.textBaseline = "top";
   ctx.fillStyle = "#24427a";
   ctx.font = `700 ${Math.round(h * 0.085)}px system-ui, sans-serif`;
-  ctx.fillText(notes ? `#${notes.room}` : "", pad, pad * 0.8, w * 0.6);
-  if (notes?.talked) {
+  ctx.fillText(`#${notes.room}`, pad, pad * 0.8, w * 0.6);
+  if (notes.talked) {
     ctx.fillStyle = "#7a8294";
     ctx.font = `500 ${Math.round(h * 0.05)}px system-ui, sans-serif`;
     ctx.textAlign = "right";
@@ -241,22 +277,67 @@ export function drawNotes(canvas: HTMLCanvasElement, notes: Notes | undefined) {
   }
   const size = Math.round(h * 0.062);
   let y = pad * 0.8 + h * 0.15;
-  if (!notes?.lines.length) {
+  if (!notes.lines.length) {
     ctx.fillStyle = "#a3aab8";
     ctx.font = `italic 400 ${size}px system-ui, sans-serif`;
     ctx.fillText("Nothing said here yet.", pad, y);
     return;
   }
+  // Each line as the page lays it out up close: its words flow on from who said them, two rows at most.
+  const width = w - 2 * pad;
   for (const line of notes.lines) {
     ctx.font = `700 ${size}px system-ui, sans-serif`;
     ctx.fillStyle = line.ink;
     const who = `${line.agent ? nameOf(line.agent) : line.who}:`;
-    ctx.fillText(who, pad, y, w * 0.3);
-    const indent = Math.min(w * 0.3, ctx.measureText(who).width) + size * 0.4;
+    ctx.fillText(who, pad, y, width);
+    const indent = Math.min(width, ctx.measureText(who).width) + size * 0.3;
     ctx.font = `400 ${size}px system-ui, sans-serif`;
     ctx.fillStyle = "#1f2430";
-    const words = wrap(line.words, 34, 2);
-    for (const [k, part] of words.entries()) ctx.fillText(part, pad + indent, y + k * size * 1.2, w - 2 * pad - indent);
-    y += Math.max(1, words.length) * size * 1.2 + size * 0.55;
+    const rows = flowRows(line.words, indent, width, (s) => ctx.measureText(s).width);
+    for (const [k, row] of rows.entries()) {
+      const at = k ? 0 : indent;
+      if (row) ctx.fillText(row, pad + at, y + k * size * 1.25, width - at);
+    }
+    y += Math.max(1, rows.length) * size * 1.25 + size * 0.45;
   }
+}
+
+/**
+ * Words laid out in rows `width` wide, as a line of a whiteboard is: the
+ * first row starts `indent` in, after who said it (or on the next row when a
+ * long name leaves too little of it), and the last of at most `rows` ends in
+ * an ellipsis when there is more. `measure` says how wide a piece of text is.
+ */
+export function flowRows(
+  words: string,
+  indent: number,
+  width: number,
+  measure: (text: string) => number,
+  rows = 2,
+): string[] {
+  const out: string[] = [];
+  // A name taking most of the first row: the words start on the next.
+  if (width - indent < width * 0.3) out.push("");
+  const room = () => (out.length ? width : width - indent);
+  let row = "";
+  const list = words.split(/\s+/).filter(Boolean);
+  for (const word of list) {
+    const next = row ? `${row} ${word}` : word;
+    if (!row || measure(next) <= room()) {
+      row = next;
+      continue;
+    }
+    out.push(row);
+    row = word;
+    if (out.length === rows) {
+      // Out of rows: the last is cut short to fit an ellipsis.
+      let last = out[rows - 1];
+      const fits = rows - 1 ? width : width - indent;
+      while (last.includes(" ") && measure(`${last}…`) > fits) last = last.replace(/\s+\S+$/, "");
+      out[rows - 1] = `${last.replace(/[\s,;:.!?-]+$/, "")}…`;
+      return out;
+    }
+  }
+  if (row && out.length < rows) out.push(row);
+  return out;
 }

@@ -1222,8 +1222,10 @@ export class RoomWatcher {
       roomRef,
       messageId: enriched.id,
       speaker: enriched.speaker,
+      authorLabel: enriched.authorLabel,
       to: enriched.to,
       body: enriched.body,
+      ...(enriched.media?.length ? { files: enriched.media.length } : {}),
       fromSelf: enriched.fromSelf,
     });
 

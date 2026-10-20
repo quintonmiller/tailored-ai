@@ -451,6 +451,8 @@ const BUSY = new Set(["thinking", "working", "talking", "waiting", "stuck"]);
 export const HOME_BEFORE_WAKE = 15;
 /** Not out again until this many minutes after it last did something: it is finishing up. */
 export const AFTER_WORK = 10;
+/** Not out at all for less than this many minutes: an outing shorter is mostly the walk there and back. */
+export const SHORTEST_OUTING = 20;
 
 /** What {@link decide} looks at. */
 export interface Everyone {
@@ -463,6 +465,12 @@ export interface Everyone {
   activities: Map<string, Doing>;
   /** Each agent's live visit, if it has one. */
   visits: Map<string, Visit>;
+  /**
+   * The version of each agent's `visit` record as it was read, live or run
+   * out; none for one without. An outing is written only over the record the
+   * look saw: one a turn, a talk or a person changed since is left for the next.
+   */
+  seen?: Map<string, number>;
   /** Every seat out there: the town's, shared places', lively meeting rooms', and homes'. */
   seats: Seat[];
   ties: (agent: string) => string[];
@@ -481,19 +489,22 @@ export interface Everyone {
 /**
  * Where every body should be, as the `visit` record it should have: an
  * outing, a night's sleep at home, or none (null) to be home and awake. An
- * agent left out is left as it is: busy, or gone somewhere to talk. Asleep by
- * its own day, it sleeps in its bed until it gets up. Busy, paused, due to
- * wake within {@link HOME_BEFORE_WAKE} minutes, sent home by a person
- * (`sentHome`), or just done with something and not already out, it is home;
- * where it chose to be itself (`chose`), it stays. Otherwise its day says, and those its day
- * has out are seated by {@link seatEveryone}; one that finds no seat stays home.
+ * agent left out is left as it is: busy, or gone somewhere to talk. Busy,
+ * paused, sent home by a person (`sentHome`), or just done with something
+ * and not already out, it is home and awake, even at bedtime; where it chose
+ * to be itself (`chose`), it stays. Otherwise its day says: asleep, it
+ * sleeps in its bed until it gets up; awake, it is home within
+ * {@link HOME_BEFORE_WAKE} minutes of its next wake, and an outing ends by
+ * then too, so one that would be shorter than {@link SHORTEST_OUTING}
+ * minutes doesn't start. Those its day has out are seated by
+ * {@link seatEveryone}; one that finds no seat stays home.
  */
 export function decide(all: Everyone): Map<string, Visit | null> {
   const out = new Map<string, Visit | null>();
   const { at } = all.now;
   // From the start of this minute, so the same stretch ends at the same time at every look.
   const iso = (minutes: number) => new Date(at - (at % 60_000) + minutes * 60_000).toISOString();
-  const wants: { agent: string; errand: Errand; left: number }[] = [];
+  const wants: { agent: string; errand: Errand; until: number }[] = [];
   const hosts = new Set<string>();
   for (const agent of all.agents) {
     const visit = all.visits.get(agent);
@@ -504,11 +515,6 @@ export function decide(all: Everyone): Map<string, Visit | null> {
       out.set(agent, null);
       continue;
     }
-    const next = act?.next ? Date.parse(act.next) : Number.NaN;
-    if (Number.isFinite(next) && next > at && next - at <= HOME_BEFORE_WAKE * 60_000) {
-      out.set(agent, null);
-      continue;
-    }
     // Sent home by a person: it stays in until that outing would have ended, and isn't put to bed against it either.
     if ((all.sentHome?.get(agent) ?? 0) > at) {
       out.set(agent, null);
@@ -516,6 +522,15 @@ export function decide(all: Everyone): Map<string, Visit | null> {
       continue;
     }
     const now = dayNow(all.dayOf(agent), all.now.day, all.now.minute);
+    // Just done with something, and not out on an errand: it stays in, awake, finishing up, bedtime or not. You may
+    // be talking with it.
+    const last = act?.last?.at ? Date.parse(act.last.at) : Number.NaN;
+    const fresh = Number.isFinite(last) && at - last < AFTER_WORK * 60_000;
+    if (fresh && (!visit || visit.errand === "sleep")) {
+      out.set(agent, null);
+      if (!now.asleep && !now.errand) hosts.add(agent);
+      continue;
+    }
     if (now.asleep) {
       const home = all.homes.get(agent);
       out.set(
@@ -532,15 +547,21 @@ export function decide(all: Everyone): Map<string, Visit | null> {
       );
       continue;
     }
-    const last = act?.last?.at ? Date.parse(act.last.at) : Number.NaN;
-    const fresh = Number.isFinite(last) && at - last < AFTER_WORK * 60_000;
-    if (!now.errand || (fresh && !visit)) {
+    // Awake: home in good time for its next wake, and back from any outing by then.
+    const next = act?.next ? Date.parse(act.next) : Number.NaN;
+    const due = Number.isFinite(next) && next > at ? next - HOME_BEFORE_WAKE * 60_000 : Number.POSITIVE_INFINITY;
+    if (due <= at) {
       out.set(agent, null);
-      // Home with nothing on: someone it knows may drop in.
-      if (!now.errand) hosts.add(agent);
       continue;
     }
-    wants.push({ agent, errand: now.errand, left: now.left });
+    const until = Math.min(Date.parse(iso(now.left)), due);
+    // Home with nothing on, or with too little time to go anywhere: someone it knows may drop in.
+    if (!now.errand || (!visit && until - at < SHORTEST_OUTING * 60_000)) {
+      out.set(agent, null);
+      hosts.add(agent);
+      continue;
+    }
+    wants.push({ agent, errand: now.errand, until });
   }
   const held = new Map<string, { place: string; spot: string }>();
   for (const [agent, v] of all.visits) if (isOuting(v) && v.spot) held.set(agent, { place: v.place, spot: v.spot });
@@ -559,7 +580,7 @@ export function decide(all: Everyone): Map<string, Visit | null> {
       s
         ? {
             place: s.seat.place,
-            until: iso(w.left),
+            until: new Date(w.until).toISOString(),
             spot: s.seat.spot,
             errand: s.errand,
             ...(s.with.length ? { with: s.with } : {}),
@@ -636,29 +657,37 @@ export const ROUTINE_MS = 60_000;
 /**
  * Everyone's routine, kept: once a minute, read what {@link decide} needs,
  * and write the outings that changed, through `keep`, which leaves a visit
- * to talk alone. One look at a time: a slow one is never overtaken.
+ * to talk alone and writes only over the record the look saw (`seen`). One
+ * look at a time: a slow one is never overtaken, and one still going when
+ * the routines stop writes nothing more.
  */
 export class Routines {
   private timer: ReturnType<typeof setInterval> | undefined;
   private running: Promise<void> | undefined;
+  private stopped = false;
 
   constructor(
     private readonly opts: {
       /** Everything a look needs, read fresh. */
       look: () => Promise<Everyone>;
-      /** Write an agent's outing, or end it (null). */
-      keep: (agent: string, visit: Visit | null) => Promise<void>;
+      /**
+       * Write an agent's outing, or end it (null), over the version of its
+       * record the look saw: null for none, undefined when it didn't say.
+       */
+      keep: (agent: string, visit: Visit | null, seen?: number | null) => Promise<void>;
       everyMs?: number;
     },
   ) {}
 
   start(): void {
+    this.stopped = false;
     void this.tick();
     this.timer = setInterval(() => void this.tick(), this.opts.everyMs ?? ROUTINE_MS);
     this.timer.unref?.();
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
@@ -681,11 +710,13 @@ export class Routines {
       return;
     }
     for (const [agent, visit] of decide(all)) {
+      if (this.stopped) return;
       const was = all.visits.get(agent);
       const outing = was && isOuting(was) ? was : undefined;
       if (sameOuting(outing, visit)) continue;
       if (!visit && !outing) continue;
-      await this.opts.keep(agent, visit).catch((err: unknown) => {
+      const seen = all.seen ? (all.seen.get(agent) ?? null) : undefined;
+      await this.opts.keep(agent, visit, seen).catch((err: unknown) => {
         console.warn(`[places] could not keep ${agent}'s routine: ${(err as Error).message}`);
       });
     }

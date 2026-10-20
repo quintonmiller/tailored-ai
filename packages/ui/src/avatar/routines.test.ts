@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type AgentActivity, behaviorFor } from "./doing";
+import { asleepWords } from "../lib/did";
+import { type AgentActivity, behaviorFor, chatsAt, seatToTake } from "./doing";
 import {
+  chatDue,
   chatMove,
   chatPause,
+  drawNotes,
+  flowRows,
   inkFor,
   notesFrom,
   occupied,
@@ -53,10 +57,33 @@ describe("an agent's day, as the world shows it", () => {
   it("says what each is doing out, and who with, in the words the server gave", () => {
     const shown = withRoutines(activities, visits, NOW);
     expect(shown.writer).toMatchObject({ doing: "idle", what: "having a coffee at the café with planner" });
-    expect(shown.coach).toMatchObject({ doing: "asleep", what: "asleep for the night" });
     expect(shown.host).toMatchObject({ doing: "idle", what: "having guest round" });
+    // Dropping in on its host, it is with its host by the words already: only other guests are named.
+    expect(shown.guest.what).toBe("dropping in on host");
+    const two = withRoutines(
+      { ...activities, other: idle("other") },
+      { ...visits, other: { ...visits.guest, spot: "armchair", with: ["guest", "host"] } },
+      NOW,
+    );
+    expect(two.other.what).toBe("dropping in on host with guest");
     // A visit to talk is no outing: the talk says what it is doing.
     expect(shown.talker).toBe(activities.talker);
+  });
+
+  it("puts one to bed for the night until it gets up, said once, and how long it has been idle goes", () => {
+    const since = { ...activities, coach: { ...idle("coach"), since: "2026-10-20T02:00:00Z" } };
+    const coach = withRoutines(since, visits, NOW).coach;
+    expect(coach).toMatchObject({ doing: "asleep", what: "asleep", detail: "overnight", until: later });
+    expect(coach.since).toBeUndefined();
+    expect(asleepWords(coach, () => "13:00")).toBe("overnight until 13:00");
+    // Up close, its tag says it in one line a tag has room for, in a twelve-hour clock too.
+    expect(`asleep · ${asleepWords(coach, () => "10:22 AM")}`.length).toBeLessThanOrEqual(34);
+    const out = withRoutines(
+      { ...activities, writer: { ...idle("writer"), since: "2026-10-20T02:00:00Z" } },
+      visits,
+      NOW,
+    );
+    expect(out.writer.since).toBeUndefined();
   });
 
   it("gives the seat and the company only to bodies in the place on the stage", () => {
@@ -127,6 +154,44 @@ describe("an agent's day, as the world shows it", () => {
 });
 
 describe("chatting", () => {
+  it("waits for a gesture of the body's own to play out, and goes on a little after", () => {
+    const c = { n: 0, at: 10 };
+    expect(chatDue(c, "writer", 9)).toBeUndefined();
+    // An emote it chose is still going at 10: the chat is put off until after it ends at 14.
+    expect(chatDue(c, "writer", 10, 14)).toBeUndefined();
+    expect(c.at).toBeGreaterThan(14);
+    expect(chatDue(c, "writer", 13, 14)).toBeUndefined();
+    expect(chatDue(c, "writer", c.at, 14)).toBe(chatMove("writer", 0));
+    expect(c.n).toBe(1);
+  });
+
+  it("chats wherever it has settled, and a host about its home whenever it has guests", () => {
+    expect(chatsAt({ chat: true, spot: "cafe-1-a" }, "cafe-1-a")).toBe(true);
+    // Sat at another seat, its own taken: still chatting.
+    expect(chatsAt({ chat: true, spot: "cafe-1-a" }, "cafe-1-b")).toBe(true);
+    expect(chatsAt({ chat: true, spot: "cafe-1-a" }, undefined)).toBe(false);
+    // A host has no seat of its own: on its couch, or between spots.
+    expect(chatsAt({ chat: true }, "couch")).toBe(true);
+    expect(chatsAt({ chat: true }, undefined)).toBe(true);
+    expect(chatsAt({ spot: "cafe-1-a" }, "cafe-1-a")).toBe(false);
+  });
+
+  it("sits at its own seat while it is free, and at the nearest free one while someone else has it", () => {
+    const spots = [
+      { id: "couch", at: [0, 0] as [number, number], activity: "sit" },
+      { id: "armchair", at: [2, 0] as [number, number], activity: "sit" },
+      { id: "stool", at: [6, 0] as [number, number], activity: "sit" },
+      { id: "middle", at: [1, 1] as [number, number] },
+    ];
+    expect(seatToTake("couch", spots, { x: 1, z: 1, spot: "middle" }, new Set())).toBe("couch");
+    // The host is on the couch: the guest takes the armchair, nearest.
+    expect(seatToTake("couch", spots, { x: 1, z: 1, spot: "middle" }, new Set(["couch"]))).toBe("armchair");
+    // Sat in the armchair already, it stays there until the couch is free.
+    expect(seatToTake("couch", spots, { x: 2, z: 0, spot: "armchair", spotActivity: "sit" }, new Set(["couch"]))).toBe(
+      undefined,
+    );
+  });
+
   it("gestures every few seconds, the same run for the same agent, and two at a table not in step", () => {
     for (let n = 0; n < 20; n++) {
       expect(chatPause("writer", n)).toBeGreaterThanOrEqual(3.5);
@@ -194,6 +259,33 @@ describe("what a meeting room's whiteboard and door say", () => {
     expect(notesFrom(chatter, "standup", NOW, { planner: "#e04040" }).lines[0].ink).toBe("hsl(0 70% 32%)");
     expect(notesFrom(undefined, "standup", NOW)).toEqual({ room: "standup", lines: [] });
     expect(talkedWords(undefined, NOW)).toBeUndefined();
+    // When the door says the room talked later (it woke someone since), the board says the same.
+    expect(notesFrom(chatter, "standup", NOW, {}, "2026-10-20T12:25:00Z").talked).toBe("talked 5 min ago");
+  });
+
+  it("lays a line out as the page does: on from who said it, two rows at most, cut short to fit", () => {
+    // Ten units a character, rows a hundred wide.
+    const measure = (s: string) => s.length * 10;
+    expect(flowRows("Train booked for Friday", 30, 100, measure)).toEqual(["Train", "booked…"]);
+    expect(flowRows("Done.", 30, 100, measure)).toEqual(["Done."]);
+    expect(flowRows("All set", 30, 100, measure)).toEqual(["All set"]);
+    // A name taking most of the first row: the words start on the next.
+    expect(flowRows("All set", 80, 100, measure)).toEqual(["", "All set"]);
+    expect(flowRows("We should book the train now", 80, 100, measure)).toEqual(["", "We should…"]);
+  });
+
+  it("leaves a whiteboard with nothing to say about a room clean, and says so only in a meeting room", () => {
+    const said: string[] = [];
+    const ctx = {
+      fillRect: () => {},
+      fillText: (text: string) => said.push(text),
+      measureText: () => ({ width: 10 }),
+    };
+    const canvas = { width: 640, height: 418, getContext: () => ctx } as unknown as HTMLCanvasElement;
+    drawNotes(canvas, undefined);
+    expect(said).toEqual([]);
+    drawNotes(canvas, { room: "standup", lines: [] });
+    expect(said).toEqual(["#standup", "Nothing said here yet."]);
   });
 
   it("takes the later of what a room said and when the map saw it wake someone", () => {

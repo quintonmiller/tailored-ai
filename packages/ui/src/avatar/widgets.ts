@@ -34,7 +34,8 @@ export type FaceId =
   | "chart"
   | "agenda"
   | "dashboard"
-  | "kiosk";
+  | "kiosk"
+  | "whiteboard";
 
 /** The face each kind of thing has of its own. */
 export const KIND_FACE: Record<string, FaceId> = {
@@ -52,6 +53,7 @@ export const KIND_FACE: Record<string, FaceId> = {
   kiosk: "kiosk",
   display: "status",
   monitor: "agenda",
+  whiteboard: "whiteboard",
 };
 
 /**
@@ -72,6 +74,7 @@ export const FACE_SIZE: Record<FaceId, [number, number]> = {
   agenda: [0.74, 0.74],
   dashboard: [1.52, 0.84],
   kiosk: [0.56, 0.38],
+  whiteboard: [1.44, 0.94],
 };
 
 /** Kinds that show whichever widget `shows` names. */

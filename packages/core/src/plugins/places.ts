@@ -887,6 +887,34 @@ export function talkedAt(chatter: Chatter | undefined, woke: (string | null)[]):
   return times.sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1);
 }
 
+/** The local day (days since 1970 by the local calendar) and the minute of it, at `now` in `timeZone`: what a day is drawn from. */
+export function localDay(now: Date, timeZone: string): { day: number; minute: number } {
+  const local = zonedParts(now, timeZone);
+  return {
+    day: Math.floor(Date.UTC(local.year, local.month - 1, local.day) / 86_400_000),
+    minute: local.hour * 60 + local.minute,
+  };
+}
+
+/**
+ * The agents that chose where their body is themselves, whose day doesn't
+ * move them: a spot it stays at or a place it went to for a while (its
+ * `body` record, until either runs out), or a place it lives in other than
+ * its home (its `whereabouts`).
+ */
+export function choseWhere(
+  bodies: { id: string; data: Record<string, unknown> }[],
+  whereabouts: { id: string; data: Record<string, unknown> }[],
+  now: number,
+): Set<string> {
+  const chose = new Set<string>();
+  const still = (stay: unknown) =>
+    !!stay && typeof stay === "object" && !ranOut((stay as { until?: string }).until, now);
+  for (const r of bodies) if (still(r.data.spot) || still(r.data.away)) chose.add(r.id);
+  for (const r of whereabouts) if (typeof r.data.place === "string" && r.data.place !== homeId(r.id)) chose.add(r.id);
+  return chose;
+}
+
 /**
  * What a room of conversation has said lately, for a visitor standing in its
  * meeting room: the latest lines, oldest first, and who its members are. Read
@@ -1186,6 +1214,10 @@ const VISIT_REFRESH_MS = 60_000;
  */
 export class Presence {
   private readonly chains = new Map<string, Promise<void>>();
+  /** How many turns each agent is in the middle of: while it has any, no outing is written for it. */
+  private readonly working = new Map<string, number>();
+  /** Outings work ended a moment ago, by agent: where its body was, should a talk with you there be heard of next. */
+  private readonly yielded = new Map<string, { place: string; at: number }>();
 
   constructor(
     private readonly opts: {
@@ -1253,13 +1285,18 @@ export class Presence {
   /**
    * An outing for an agent with nothing to do (see `places-routines.ts`), or
    * the end of one (null). A visit to talk stands: an outing never writes
-   * over one, nor ends it.
+   * over one, nor ends it. Nor is one written for an agent in the middle of
+   * a turn, or over a record that changed since the routine read it (`seen`,
+   * its version then, null for none): a turn started, a person sent the body
+   * home, or a talk took it somewhere, and the next look goes from that.
    */
-  keep(agent: string, outing: Visit | null): Promise<void> {
+  keep(agent: string, outing: Visit | null, seen?: number | null): Promise<void> {
     return this.inTurn(agent, async () => {
+      if (outing && this.working.has(agent)) return;
       const service = this.opts.state();
       const ref = { type: VISIT_TYPE, id: agent };
       const found = await service.get(PRESENCE_CALLER, ref);
+      if (seen !== undefined && (found?.version ?? null) !== seen) return;
       if (visitOf(found?.data, this.now()) && !isOuting(found?.data)) return;
       try {
         if (outing)
@@ -1272,15 +1309,112 @@ export class Presence {
     });
   }
 
-  /** Work started: an outing, or a night's sleep, ends at once, and the body is where it lives. A visit to talk goes on. */
+  /** A turn started: the agent is at work until it ends (see {@link ended}), and any outing it is on gives way. */
+  started(agent: string): Promise<void> {
+    this.working.set(agent, (this.working.get(agent) ?? 0) + 1);
+    return this.yieldTo(agent);
+  }
+
+  /** A turn ended: once it has none left, the agent's day may take it out again. */
+  ended(agent: string): void {
+    const left = (this.working.get(agent) ?? 0) - 1;
+    if (left > 0) this.working.set(agent, left);
+    else this.working.delete(agent);
+  }
+
+  /**
+   * Work started: an outing, or a night's sleep, ends at once, and the body
+   * is where it lives. A visit to talk goes on, and so does an outing where
+   * you are talking with the agent face to face: there it becomes a visit to
+   * talk, so the body stays with you rather than walking off mid-sentence.
+   */
   yieldTo(agent: string): Promise<void> {
     if (!this.opts.hasBody(agent)) return Promise.resolve();
     return this.inTurn(agent, async () => {
       const service = this.opts.state();
       const ref = { type: VISIT_TYPE, id: agent };
       const found = await service.get(PRESENCE_CALLER, ref);
-      if (found && isOuting(found.data)) await service.delete(PRESENCE_CALLER, ref, found.version).catch(() => {});
+      if (!found || !isOuting(found.data)) return;
+      const now = this.now();
+      const place = visitOf(found.data, now);
+      if (place && found.data.errand !== "sleep" && (await this.withYou(agent, now))) {
+        await this.stayToTalk(agent, place, found.version);
+        return;
+      }
+      if (place) this.yielded.set(agent, { place, at: now });
+      await service.delete(PRESENCE_CALLER, ref, found.version).catch(() => {});
     });
+  }
+
+  /**
+   * You are talking with an agent face to face (its `talk` record, which the
+   * page writes): its body stays where it is while you do. An outing there
+   * becomes a visit to talk, a visit to talk goes on, and a body work called
+   * home from an outing a moment ago, before the page's record came in, comes
+   * back to where it was. At home it is home already.
+   */
+  faceToFace(agent: string): Promise<void> {
+    if (!this.opts.hasBody(agent)) return Promise.resolve();
+    return this.inTurn(agent, async () => {
+      const service = this.opts.state();
+      const found = await service.get(PRESENCE_CALLER, { type: VISIT_TYPE, id: agent });
+      const now = this.now();
+      const live = visitOf(found?.data, now);
+      const back = this.yielded.get(agent);
+      this.yielded.delete(agent);
+      const place =
+        live && found?.data.errand !== "sleep"
+          ? live
+          : !live && back && now - back.at < YIELDED_MS
+            ? back.place
+            : undefined;
+      if (!place || place === homeId(agent)) return;
+      // A visit to talk with a while to run is left as it is.
+      const until = typeof found?.data.until === "string" ? Date.parse(found.data.until) : Number.NaN;
+      if (!isOuting(found?.data) && found && until - now > this.stayMs() - VISIT_REFRESH_MS) return;
+      await this.stayToTalk(agent, place, found?.version ?? 0);
+    });
+  }
+
+  /** How long a body stays to talk: a quiet spell, and never less than a talk lasts. */
+  private stayMs(): number {
+    return Math.max(this.opts.quietMs, TALK_AFTER_MS);
+  }
+
+  /** The body stays in `place` to talk, its visit written over the version given. */
+  private async stayToTalk(agent: string, place: string, version: number): Promise<void> {
+    try {
+      await this.opts.state().put(
+        PRESENCE_CALLER,
+        {
+          type: VISIT_TYPE,
+          id: agent,
+          scope: "global",
+          data: { place, until: new Date(this.now() + this.stayMs()).toISOString() },
+        },
+        version,
+      );
+    } catch (err) {
+      if (!(err instanceof StateConflictError)) throw err;
+    }
+  }
+
+  /** Whether the agent is talking with you face to face now: its `talk` record, with you and not on the phone. */
+  private async withYou(agent: string, now: number): Promise<boolean> {
+    const talk = await this.opts
+      .state()
+      .get(PRESENCE_CALLER, { type: TALK_TYPE, id: agent })
+      .catch(() => null);
+    return faceToFaceWithYou(talk?.data, now);
+  }
+
+  /** Every outing ended, and every night's sleep: the routines are off, and nobody is left out in the town. */
+  async endOutings(): Promise<void> {
+    const visits = await this.opts
+      .state()
+      .query(PRESENCE_CALLER, { type: VISIT_TYPE, limit: 500 })
+      .catch(() => []);
+    await Promise.all(visits.filter((r) => isOuting(r.data)).map((r) => this.keep(r.id, null)));
   }
 
   /** End the visits that have run out: each body back where it lives. */
@@ -1314,6 +1448,14 @@ export class Presence {
 }
 
 const PRESENCE_CALLER: StateCaller = { actor: { kind: "plugin", name: "places" }, source: { surface: "events" } };
+/** How long after work called a body home from an outing a talk with you there brings it back. */
+const YIELDED_MS = 60_000;
+
+/** Whether a `talk` record is a person talking with the agent face to face from the page, still going at `now`. */
+export function faceToFaceWithYou(talk: Record<string, unknown> | undefined, now: number): boolean {
+  const until = typeof talk?.until === "string" ? Date.parse(talk.until) : Number.NaN;
+  return talk?.with === "you" && !talk.phone && Number.isFinite(until) && until > now;
+}
 
 /**
  * Rooms' chatter (see {@link CHATTER_TYPE}), kept from what the rooms hear.
@@ -1376,7 +1518,7 @@ export class Chatters {
           id: l.id,
           who: l.who,
           ...(l.agent ? { agent: l.agent } : {}),
-          words: firstWords(l.text),
+          words: murmurWords(l.text, l.files),
           at: l.at,
         })),
       );
@@ -1389,6 +1531,70 @@ export class Chatters {
   async settled(): Promise<void> {
     await Promise.all([...this.chains.values()]);
   }
+}
+
+/** A line's words on a whiteboard: how it began, or, for one with no words, what came with it. */
+export function murmurWords(text: string, files?: number): string {
+  const words = firstWords(text);
+  if (words) return words;
+  return files ? (files > 1 ? `sent ${files} files` : "sent a file") : "sent something";
+}
+
+/**
+ * What the places plugin does as things happen, for agents' days and rooms'
+ * whiteboards (see `places-routines.ts`). A turn starting ends an outing at
+ * once, and no outing is written until the agent's turns are over
+ * (`Presence.started`, `ended`). You talking with an agent face to face from
+ * the page keeps its body where it is (`faceToFace`). A person sending a
+ * body home from an outing keeps it home until that outing would have ended
+ * (`sentHome`). And what a room says goes up on its whiteboard, each speaker
+ * named as the room's transcript names them (`Chatters`).
+ */
+export function followDays(
+  events: EventBus,
+  opts: {
+    presence: Presence;
+    said: Chatters;
+    /** Agents a person sent home from an outing, and until when they stay there. */
+    sentHome: Map<string, number>;
+    /** A room's name, by its `<backend>:<id>`; undefined for a room there isn't. */
+    roomName: (ref: string) => string | undefined;
+    /** The agent a speaker's name is, if it is one. */
+    agentFor: (who: string) => string | undefined;
+  },
+): Subscription[] {
+  const { presence, said, sentHome } = opts;
+  return [
+    events.on("agent.turn_started", (e) => void presence.started(e.agent || "default")),
+    events.on("agent.turn_ended", (e) => presence.ended(e.agent || "default")),
+    events.on("state.changed", (e) => {
+      if (e.type === TALK_TYPE && e.op !== "delete" && faceToFaceWithYou(e.after, Date.now())) {
+        void presence.faceToFace(e.id);
+        return;
+      }
+      if (e.type !== VISIT_TYPE || e.op !== "delete" || e.actor.kind !== "user" || !isOuting(e.before)) return;
+      const until = Date.parse(String(e.before?.until ?? ""));
+      if (Number.isFinite(until)) sentHome.set(e.id, until);
+    }),
+    events.on("room.message", (e) => {
+      const room = opts.roomName(e.roomRef);
+      if (room === undefined) return;
+      const who = e.speaker || e.authorLabel || "someone";
+      const agent = opts.agentFor(who);
+      // A speaker the room doesn't know as anyone keeps its tag in the text, as the transcript has it: once is enough.
+      const tag = `[${who}]`;
+      const text = e.body.startsWith(tag) ? e.body.slice(tag.length).trimStart() : e.body;
+      void said.hear(e.roomRef, room, [
+        {
+          id: e.messageId,
+          who,
+          ...(agent ? { agent } : {}),
+          words: murmurWords(text, e.files),
+          at: new Date().toISOString(),
+        },
+      ]);
+    }),
+  ];
 }
 
 // --------------------------------------------------------------------------
@@ -3209,24 +3415,15 @@ const plugin: Plugin = (ctx) => {
       }),
     );
   sweeps.push(() => presence.sweep());
-  // Work wins: a turn starting ends any outing at once, and the body is home, or where the talk is.
-  subs.push(ctx.events.on("agent.turn_started", (e) => void presence.yieldTo(e.agent || "default")));
-
-  // What each room says, for its whiteboard and door: the first few words of its latest lines, people only.
+  // Agents' days give way to work and to you, and rooms' whiteboards follow what they say (`followDays`).
+  const sentHome = new Map<string, number>();
   subs.push(
-    ctx.events.on("room.message", (e) => {
-      const room = runtime.getRoomStore().getRoomByRef(e.roomRef);
-      if (!room) return;
-      const who = e.speaker || "someone";
-      void said.hear(e.roomRef, room.name, [
-        {
-          id: e.messageId,
-          who,
-          ...(agentNames().includes(who) ? { agent: who } : {}),
-          words: firstWords(e.body),
-          at: new Date().toISOString(),
-        },
-      ]);
+    ...followDays(ctx.events, {
+      presence,
+      said,
+      sentHome,
+      roomName: (ref) => runtime.getRoomStore().getRoomByRef(ref)?.name,
+      agentFor: (who) => identities().agentForLabel(who) ?? (agentNames().includes(who) ? who : undefined),
     }),
   );
 
@@ -3240,24 +3437,17 @@ const plugin: Plugin = (ctx) => {
     const agents = agentNames().filter((a) => hasBody(a));
     const clock = runtimeTimeProvider(runtime);
     const now = clock.now();
-    const local = zonedParts(now, clock.timeZone());
     const all = async (type: string) =>
       service.query(PLUGIN_CALLER, { type, limit: 500 }).catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
     const activities = new Map((await all("activity")).map((r) => [r.id, r.data as unknown as Doing]));
+    const visitRecords = await all(VISIT_TYPE);
     const visits = new Map(
-      (await all(VISIT_TYPE)).flatMap((r) =>
+      visitRecords.flatMap((r) =>
         visitOf(r.data, now.getTime()) ? [[r.id, r.data as unknown as Visit] as const] : [],
       ),
     );
-    // Where an agent chose to be itself stands: a spot it stays at, a place it went to for a while, or one it lives in.
-    const chose = new Set<string>();
-    for (const r of await all(BODY_TYPE)) {
-      const body = r.data as { spot?: { until?: string }; away?: { until: string } };
-      const until = (u: string | undefined) => !ranOut(u, now.getTime());
-      if ((body.spot && until(body.spot.until)) || (body.away && until(body.away.until))) chose.add(r.id);
-    }
-    for (const r of await all(WHEREABOUTS_TYPE))
-      if (typeof r.data.place === "string" && r.data.place !== homeId(r.id)) chose.add(r.id);
+    const seen = new Map(visitRecords.map((r) => [r.id, r.version]));
+    const chose = choseWhere(await all(BODY_TYPE), await all(WHEREABOUTS_TYPE), now.getTime());
     // Homes, and their beds and seats.
     const homesNow = new Map<string, { place: string; bed?: string }>();
     const seats: Seat[] = [];
@@ -3311,11 +3501,7 @@ const plugin: Plugin = (ctx) => {
     const known = ties.map;
     return {
       agents,
-      now: {
-        at: now.getTime(),
-        day: Math.floor(Date.UTC(local.year, local.month - 1, local.day) / 86_400_000),
-        minute: local.hour * 60 + local.minute,
-      },
+      now: { at: now.getTime(), ...localDay(now, clock.timeZone()) },
       density,
       dayOf: (agent) => {
         const role = roleOf(agent)?.id;
@@ -3325,6 +3511,7 @@ const plugin: Plugin = (ctx) => {
       },
       activities,
       visits,
+      seen,
       seats,
       ties: (agent) => known.get(agent) ?? [],
       homes: homesNow,
@@ -3332,15 +3519,6 @@ const plugin: Plugin = (ctx) => {
       chose,
     };
   };
-  // Agents a person sent home from an outing (the menu's "Send home"): home until that outing would have ended.
-  const sentHome = new Map<string, number>();
-  subs.push(
-    ctx.events.on("state.changed", (e) => {
-      if (e.type !== VISIT_TYPE || e.op !== "delete" || e.actor.kind !== "user" || !isOuting(e.before)) return;
-      const until = Date.parse(String(e.before?.until ?? ""));
-      if (Number.isFinite(until)) sentHome.set(e.id, until);
-    }),
-  );
   // Who messages whom directly, and how much: the `dm:<from>:<to>` sessions' messages, counted.
   const directMessages = () => {
     try {
@@ -3365,10 +3543,13 @@ const plugin: Plugin = (ctx) => {
   if (density !== null) {
     const routines = new Routines({
       look: routineLook(typeof density === "string" ? density : "normal"),
-      keep: (agent, visit) => presence.keep(agent, visit),
+      keep: (agent, visit, seen) => presence.keep(agent, visit, seen),
     });
     routines.start();
     stops.push(() => routines.stop());
+  } else {
+    // Turned off, with the town as it was left: everyone out comes home, and anyone put to bed for the night gets up.
+    void presence.endOutings();
   }
   // Each morning, in the deployment's time zone, the habit trackers start the day unticked (`turnHabits`). Looked
   // at when TAI starts and whenever the day changes, so a day missed while it was off is still counted.

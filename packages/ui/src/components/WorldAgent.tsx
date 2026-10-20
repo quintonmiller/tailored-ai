@@ -185,7 +185,8 @@ export function WorldAgent({
   // Paused or switched off: what "Wake up" undoes.
   const next = own?.agent ? nextTurn(own.agent).kind : undefined;
   const resting = next === "paused" || next === "off";
-  const doing = activity && activity.doing !== "idle" ? activity : undefined;
+  // Out on its day (`routines.ts`), it says where, though it has nothing to do.
+  const doing = activity && (activity.doing !== "idle" || activity.routine) ? activity : undefined;
   const room = said?.room ? roomName(said.room) : undefined;
   const name = nameOf(agent);
   // The switch that pauses every agent, as its activity says while it has nothing to do: the worker then skips

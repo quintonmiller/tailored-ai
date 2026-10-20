@@ -891,17 +891,19 @@ it has ("talked 20 min ago · 3 members", or "quiet" when nothing is known).
 **A meeting room shows its conversation.** A whiteboard hangs as near its
 task board as there is wall, with the room's last four lines on it: who said
 each, in the colour their body and their dot are drawn in, and how each
-began, its first eight words or so, never the whole message ("planner: Flights
-to Lisbon are booked for the 14th…"), and how long ago the room last talked.
-Up close it is live, like a task board; from across the room it is a picture
-of the same. A card pinned on the meeting room's door, at eye height, says the
-same "talked 20 min ago", and so does the label by the pointer when you point
-at the door. Nothing asks a model and nothing is posted: the plugin keeps a
+began, its first eight words or so, a longer one cut short with an ellipsis
+("planner: Flights to Lisbon are booked for the 14th…"), two rows at most,
+and how long ago the room last talked. A line that was only a picture or a
+file says so ("coder: sent a file"). Up close it is live, like a task board;
+from across the room it is a picture of the same. A card pinned on the
+meeting room's door, at eye height, says the same "talked 20 min ago", and
+so does the label by the pointer when you point at the door. Nothing asks a model and nothing is posted: the plugin keeps a
 `chatter` record per room from what the room hears (below), which only
 people can read, as with the `speech` records. A room nothing has been heard
 from since the server started reads its last four lines once, the first time
 anyone looks at its meeting room. A meeting room its members rearranged keeps
 its own walls: add a `whiteboard` with the `place` tool and it shows the same.
+A whiteboard anywhere else is a clean board.
 
 The agent you are chatting with is the exception on your own page: it stays
 in its own room with you while you talk, even while its body is at a
@@ -2070,19 +2072,31 @@ Out in the town you see them at the café, on the benches and by the pond, and
 a body setting out walks from its own door to its seat, and back to its door
 when it goes home. Its name is over its head; come near, or point at it, and
 its tag says what it is doing ("having a coffee at the café with writer").
-The map shows who is out in the town under the town, and an agent's card
-says it too.
+The map shows who is out in the town under the town, and clicking it, its
+menu and its card say it too. One put to bed for the night says "asleep ·
+overnight until 7:10". A seat someone else is in (a host on its own
+couch, an agent come to talk, you) isn't sat in twice: the body takes the
+nearest free seat instead, and its own once that is free. A gesture an agent
+chose for itself, or one you made from its card, plays out before the
+chatting goes on.
 
 **Work always wins.** An agent's body is never moved while it is thinking,
-working, talking, waiting on you or stuck. The moment a turn starts (a
-message from you, a room waking it, a scheduled wake), its outing ends and
-its body goes home to its desk, walking off the square as you watch; one
-called to a room to talk goes to that room's meeting room as before, and
-one sitting about in the very meeting room that woke it stays at the table.
-It is home in good time for its next wake on its own (a quarter of an hour
-before), it stays in for ten minutes after it last did something, and a
-paused agent stays home asleep. Send it home from its menu and it stays home
-until the outing it was on would have ended. And an agent's own choice
+working, talking, waiting on you or stuck, and no outing starts until its
+turn is over. The moment a turn starts (a message from you, a room waking
+it, a scheduled wake), its outing ends and its body goes home to its desk,
+walking off the square as you watch; one called to a room to talk goes to
+that room's meeting room as before, and one sitting about in the very
+meeting room that woke it stays at the table. Walk up to one out on its day
+and talk to it face to face, though, and it stays where it is, with you,
+for as long as you talk and a quiet spell after, rather than walking off
+mid-sentence. It is home in good time for its next wake on its own (a
+quarter of an hour before): an outing ends by then, and one that would last
+less than twenty minutes doesn't start. It stays in, awake, for ten minutes
+after it last did something, at bedtime too, so one you are chatting with
+late isn't put to bed between your messages; asleep in bed, a wake of its own
+coming round doesn't get it up early. A paused agent stays home asleep. Send
+it home from its menu and it stays home until the outing it was on would
+have ended. And an agent's own choice
 stands: one that chose a spot to stay at or went somewhere for a while with
 its `body` tool, or went to live in a shared place with its `place` tool,
 stays there, and its day doesn't move it. The agent you are chatting with is with you
@@ -2105,7 +2119,9 @@ plugins:
 
 `quiet` has each agent out about a sixth of its waking day and six out at
 once at most; `normal` about a third, twelve at most; `busy` about half,
-twenty-four at most. Off, bodies only leave home to talk, as before. The day
+twenty-four at most. Off, bodies only leave home to talk, as before: turning
+it off and reloading brings everyone out home at once, and anyone put to bed
+for the night gets up. The day
 is worked out in `packages/core/src/plugins/places-routines.ts`; it uses the
 runtime's time zone (`time.timezone`).
 

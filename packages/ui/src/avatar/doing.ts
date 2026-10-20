@@ -260,6 +260,25 @@ export function stationSpot<S extends { id: string; at: [number, number]; activi
   return spots.filter((s) => fits(s) && !taken.has(s.id)).sort((a, b) => distance(a) - distance(b))[0];
 }
 
+/**
+ * Where a body out on its day goes to sit: its own seat (`own`) while nobody
+ * else has it; with someone else there (a host on its couch, an agent come
+ * to talk, a visitor), the nearest free seat, unless it is sat down already.
+ * Undefined when it stays where it is.
+ */
+export function seatToTake<S extends { id: string; at: [number, number]; activity?: string; for?: string }>(
+  own: string,
+  spots: S[],
+  here: { x: number; z: number; spotActivity?: string; spot?: string },
+  taken: Set<string>,
+): string | undefined {
+  return taken.has(own) ? stationSpot("seat", spots, here, taken)?.id : own;
+}
+
+/** Whether a body keeping company chats where it is: settled at a spot, or anywhere about a home it has guests in. */
+export const chatsAt = (b: Pick<Behavior, "chat" | "spot">, here: string | undefined): boolean =>
+  !!b.chat && (!b.spot || here !== undefined);
+
 /** Two behaviours that look the same: nothing to redo. */
 export function sameBehavior(a: Behavior, b: Behavior): boolean {
   const keys: (keyof Behavior)[] = [

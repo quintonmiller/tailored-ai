@@ -238,20 +238,22 @@ function PropFace({ prop, choice }: { prop: Prop; choice: FaceChoice }) {
 /**
  * A meeting room's whiteboard: what its room said last, a line each, who said
  * it in their colour and how it began; and how long ago that was. Only the
- * first few words of each: the conversation itself is the room's.
+ * first few words of each, two rows at most: the conversation itself is the
+ * room's. A whiteboard with no room to speak for (one an agent put up
+ * somewhere else) is clean.
  */
 function NotesFace() {
   const { notes } = useContext(Faces);
+  if (!notes) return <div className="sf-notes" />;
   return (
     <div className="sf-notes">
       <div className="sf-notes-head">
-        <span className="sf-notes-room">{notes ? `#${notes.room}` : ""}</span>
-        {notes?.talked && <span className="sf-notes-when">{notes.talked}</span>}
+        <span className="sf-notes-room">#{notes.room}</span>
+        {notes.talked && <span className="sf-notes-when">{notes.talked}</span>}
       </div>
-      {notes?.lines.length ? (
+      {notes.lines.length ? (
         <ul className="sf-notes-lines">
           {notes.lines.map((l, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: lines are shown in order and never moved; the same words may come twice.
             <li key={i} className="sf-notes-line">
               <span className="sf-notes-who" style={{ color: l.ink }}>
                 {l.agent ? nameOf(l.agent) : l.who}

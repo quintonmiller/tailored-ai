@@ -286,6 +286,8 @@ let ownAgents: Record<string, unknown>[] = [];
 let mapExtra: Record<string, unknown>[] = [];
 /** Where planner's body is on the map: at home, or gone to the trip's meeting room. */
 let plannerAt = "home:planner";
+// When the map says the trip's room last woke someone, if it says.
+let tripTalked: string | undefined;
 /** The town's plan, as small as it can be: the town hall, two houses, and the office. */
 const townPlan = {
   width: 100,
@@ -478,6 +480,7 @@ beforeEach(() => {
   chatterRecords = [];
   mapExtra = [];
   plannerAt = "home:planner";
+  tripTalked = undefined;
   stage.agents.length = 0;
   activityRecords = [];
   taskRows = [
@@ -602,6 +605,7 @@ beforeEach(() => {
                 kind: "room",
                 agents: plannerAt === "room:local:trip" ? ["planner", "writer"] : ["writer"],
                 via: "office",
+                ...(tripTalked ? { talked: tripTalked } : {}),
               },
               ...mapExtra,
             ],
@@ -1599,14 +1603,24 @@ describe("the chat page's scene", () => {
     expect(stage.occupied.at(-1)).toEqual(["home:planner", "home:talker", "office"]);
     // Leaving the town, a body walks to the door of where it went: home, as the map says.
     expect(stage.exitFor?.("planner")).toEqual(doorInTown(townPlan as never, "home:planner"));
+    // Clicked, it says where it is, though it has nothing to do, and you can send it home from its day out.
+    const buttons = await pick("planner");
+    expect(container.querySelector(".agent-menu-head")?.textContent).toMatch(/planner.*having a coffee at the café/);
+    await press(buttons, "Send home");
+    expect(deleted).toContain("/api/state/visit/planner");
     // The card on the trip's door, and its whiteboard inside.
     expect(stage.talked.at(-1)?.["room:local:trip"]).toBe(said);
+    // The room woke someone since it last said anything: the door and the board both say so.
+    tripTalked = new Date(Date.now() - 2 * 60_000).toISOString();
+    await act(async () => FakeEventSource.last?.emit("change", { type: "visit", id: "writer", op: "update" }));
+    await settle(60);
+    expect(stage.talked.at(-1)?.["room:local:trip"]).toBe(tripTalked);
     await act(async () => stage.onDoor?.({ to: "room:local:trip" }));
     await settle(60);
     expect(stage.notes.at(-1)).toEqual({
       room: "trip",
-      // Counted from the start of this minute: four or five minutes, by where in the minute it is.
-      talked: expect.stringMatching(/^talked [45] min ago$/),
+      // Counted from the start of this minute: one or two minutes, by where in the minute it is.
+      talked: expect.stringMatching(/^talked [12] min ago$/),
       lines: [{ who: "planner", agent: "planner", words: "Flights are booked…", ink: expect.any(String) }],
     });
   });

@@ -70,7 +70,16 @@ import {
 } from "./body";
 import { type CalendarView, drawCalendar } from "./calendar";
 import type { Cue } from "./cues";
-import { type AgentActivity, type Behavior, behaviorFor, heldFor, sameBehavior, stationSpot } from "./doing";
+import {
+  type AgentActivity,
+  type Behavior,
+  behaviorFor,
+  chatsAt,
+  heldFor,
+  sameBehavior,
+  seatToTake,
+  stationSpot,
+} from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
 import { footprint, heightOf, type Kinds, type Move, moveKey, onFloor, onTop, onWall, ridersOf } from "./editing";
 import { type Fadeable, paintFaded } from "./fade";
@@ -84,7 +93,7 @@ import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
 import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildPlaque, buildProp, buildShell, disposeTree } from "./props";
-import { chatMove, chatPause, drawNotes, type Notes, talkedWords } from "./routines";
+import { chatDue, chatPause, drawNotes, type Notes, talkedWords } from "./routines";
 import {
   changesShown,
   closeDistance,
@@ -2691,16 +2700,23 @@ export async function createStage(
       f.gesture(behavior.gesture, clock, undefined, { auto: true });
   }
 
-  // When each body keeping someone company next moves its hands or nods, and how many times it has.
-  const chats = new Map<Figure, { n: number; at: number }>();
-  /** Keeping someone company, sat down: now and then it talks with its hands, nods along, or laughs. */
+  // When each body keeping someone company next moves its hands or nods, and how many times it has; and until when
+  // each is making a gesture of its own. Weak, so a body gone from the stage is let go with it.
+  const chats = new WeakMap<Figure, { n: number; at: number }>();
+  const ownGesture = new WeakMap<Figure, number>();
+  /**
+   * Keeping someone company, sat down: now and then it talks with its hands,
+   * nods along, or laughs. A gesture of its own comes first: one it chose
+   * with the body tool, or one a person made from its card, plays out before
+   * the chat goes on.
+   */
   const chat = (f: Figure, agent: string, t: number) => {
     let c = chats.get(f);
     if (!c) chats.set(f, (c = { n: 0, at: t + chatPause(agent, 0) }));
-    if (t < c.at || f.walker.busy) return;
-    f.gesture(chatMove(agent, c.n), t);
-    c.n++;
-    c.at = t + chatPause(agent, c.n);
+    if (f.walker.busy) return;
+    const move = chatDue(c, agent, t, ownGesture.get(f));
+    // Never over a gesture kept going, as a doing's own gesture isn't.
+    if (move) f.gesture(move, t, undefined, { auto: true });
   };
 
   /**
@@ -2751,14 +2767,23 @@ export async function createStage(
     if (held.prop) f.hold(held.prop, held.hold);
     else f.hold(errandHold?.prop, errandHold?.how);
     if (!s || !b) return;
-    // Its seat on an outing, its bed for the night: it goes there, and keeps to it.
+    // Its seat on an outing, its bed for the night: it goes there, and keeps to it. With someone else there (a host on
+    // its couch, an agent come to talk, you), it sits at the nearest free seat instead, or stays sat where it is, and
+    // takes its own once it is free.
     const seat = b.spot && b.spot !== f.current && spotById(room, b.spot) ? b.spot : undefined;
     if (seat && free && t - s.checked > 1.5 && !f.walker.busy) {
       s.checked = t;
-      if (f === me) go(seat);
-      else f.go(room, seat, waysFor(f));
+      const to = seatToTake(
+        seat,
+        room.spots,
+        { x: f.walker.place.x, z: f.walker.place.z, spotActivity: spot?.activity, ...(f.here ? { spot: f.here } : {}) },
+        taken(f),
+      );
+      if (to && f === me) go(to);
+      else if (to) f.go(room, to, waysFor(f));
     }
-    if (b.chat && f.here === b.spot) chat(f, agent, t);
+    // Chatting wherever it has settled: at its seat, the one it sat at instead, or about its home with guests round.
+    if (chatsAt(b, f.here)) chat(f, agent, t);
     // In a meeting room everyone keeps their seat at the table: nobody leaves it for a desk to think at.
     const station = isMeeting(room) && b.station !== "seat" ? undefined : b.station;
     if (station && !seat && b.spot !== f.here && free && t - s.checked > 1.5 && !f.walker.busy && !f.pending) {
@@ -2802,7 +2827,6 @@ export async function createStage(
       shows.delete(fig);
       standing.delete(fig);
       facedAt.delete(fig);
-      chats.delete(fig);
       companions.delete(agent);
       // Gone home, or somewhere else: out through the door, or simply gone from a room without one. Outdoors, it
       // walks to the door of where it is going, however far that is.
@@ -3054,6 +3078,7 @@ export async function createStage(
       if (at) f.face(at, clock);
       f.gesture(now.name, clock, now.seconds);
     }
+    ownGesture.set(f, clock + (now.seconds ?? EMOTE_SECONDS));
     if (back) turnedFor.set(f, back);
   }
   /** Bodies done with a gesture turn back to what their spot faces, if they are still standing at it. */

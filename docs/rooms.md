@@ -1284,7 +1284,7 @@ Plugins observe room traffic through the runtime event bus:
 
 | event | when |
 |---|---|
-| `room.message` | any message lands, before any wake decision — including traffic nobody wakes on |
+| `room.message` | any message lands, before any wake decision — including traffic nobody wakes on. Carries the transport's own name for whoever spoke (`authorLabel`, for a speaker no identity was resolved for) and how many files came with it (`files`) |
 | `room.woke` | a wake actually consumed budget and started a run |
 | `room.membership_changed` | an agent took or gave up a seat — see [Announcing who is here](#announcing-who-is-here) |
 | `room.archived` / `room.unarchived` | a room was retired or brought back. Distinct from a membership change because nobody joined or left: every seat is kept, and simply stops being armed |

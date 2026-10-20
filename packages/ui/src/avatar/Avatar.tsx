@@ -797,7 +797,8 @@ function AgentMenu({
       window.removeEventListener("pointerdown", away);
     };
   }, [onClose]);
-  const status = activity && activity.doing !== "idle" ? activity.what : "idle";
+  // Out on its day, it says where, though it has nothing to do.
+  const status = activity && (activity.doing !== "idle" || activity.routine) ? activity.what : "idle";
   const when = activity?.doing !== "idle" ? since(activity?.since) : undefined;
   return (
     <div

@@ -36,6 +36,7 @@ import {
   notesFrom,
   type Outing,
   occupied as occupiedBy,
+  outingNow,
   talkedAt,
   withRoutines,
 } from "../avatar/routines";
@@ -1405,17 +1406,20 @@ export function useChatStage({
     arrived.current = host;
     if (host) chatWith(host, true);
   }, [host]);
-  // What clicking an agent's body offers: talk to it, send it home from a shared place, pause or wake it. One
-  // waiting on you opens what it waits on instead (`onBody`); one busy with something else that still has a question
-  // on a task for you offers it first.
+  // What clicking an agent's body offers: talk to it, send it home from a shared place or its day out, pause or wake
+  // it. One waiting on you opens what it waits on instead (`onBody`); one busy with something else that still has a
+  // question on a task for you offers it first.
   const menuFor = useCallback(
     (who: string): AgentAction[] => {
       const actions: AgentAction[] = [];
       if (needs.some((n) => n.agent === who))
         actions.push({ label: "What it needs from you", run: () => setPanel({ kind: "need", agent: who }) });
       if (who !== talking && onChatWith) actions.push({ label: `Chat with ${who}`, run: () => chatWith(who) });
-      // Gone to a shared place, or to a meeting room to talk: home is where it goes back to.
-      if (placeId?.startsWith("shared:") || placeId?.startsWith("room:"))
+      // Gone to a shared place, to a meeting room to talk, or out here on its day (`routines.ts`): home is where it
+      // goes back to, and stays until that outing would have ended.
+      const out = outingNow(outings[who], Date.now());
+      const outHere = !!out && out.place === placeId && out.errand !== "sleep";
+      if (placeId?.startsWith("shared:") || placeId?.startsWith("room:") || outHere)
         actions.push({
           label: who === shown ? "Go home" : "Send home",
           run: () => sendHome(who),
@@ -1453,7 +1457,7 @@ export function useChatStage({
       });
       return actions;
     },
-    [shown, talking, onChatWith, chatWith, placeId, online, activities, needs],
+    [shown, talking, onChatWith, chatWith, placeId, online, activities, needs, outings],
   );
   // A click on an agent waiting on you opens what it waits on, rather than the menu.
   const onBody = useCallback(
@@ -1503,8 +1507,9 @@ export function useChatStage({
   const notes = useMemo(() => {
     if (!placeId?.startsWith("room:")) return undefined;
     const name = map.places.find((p) => p.id === placeId)?.name ?? room.name ?? "";
-    return notesFrom(chatter[placeId] as Chatter | undefined, name, today, chosenColors);
-  }, [placeId, chatter, map.places, room.name, today, chosenColors]);
+    // Talked when its door says it did, so the board and the door agree.
+    return notesFrom(chatter[placeId] as Chatter | undefined, name, today, chosenColors, talked[placeId]);
+  }, [placeId, chatter, map.places, room.name, today, chosenColors, talked]);
   // Out in the town, bodies going from one place to another walk the streets: each time the map hears that someone
   // went somewhere, from the door of where they were to the door of where they went.
   const whereWas = useRef<Map<string, string> | null>(null);

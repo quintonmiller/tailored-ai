@@ -20,6 +20,7 @@ import {
   parseRoutines,
   Routines,
   type Seat,
+  SHORTEST_OUTING,
   sameOuting,
   seatEveryone,
   seatsIn,
@@ -404,12 +405,12 @@ describe("deciding where everyone is", () => {
     ]),
     ...over,
   });
-  // The minute both agents' days have them out.
+  // The minute both agents' days have them out, with a good while to go.
   const outAt = (() => {
     for (let m = 420; m < 1380; m++) {
       const both = ["a", "b"].every((agent) => {
         const now = dayNow({ agent, hours: { wake: 420, sleep: 1380 }, density: "normal" }, DAY, m);
-        return !now.asleep && now.errand;
+        return !now.asleep && now.errand && now.left >= 30;
       });
       if (both) return m;
     }
@@ -477,6 +478,55 @@ describe("deciding where everyone is", () => {
     expect(decide(outNow({ sentHome: new Map([["a", now - 1]]) })).get("a")).toMatchObject({ place: "town" });
   });
 
+  it("keeps one that just did something up at night, rather than putting it to bed between your messages", () => {
+    // 23:50, after bedtime: it replied a minute ago.
+    const at = DAY * 86_400_000 + (23 * 60 + 50) * 60_000;
+    const night = (ago: number) =>
+      all({
+        now: { at, day: DAY, minute: 23 * 60 + 50 },
+        activities: new Map([["a", { doing: "idle", last: { at: new Date(at - ago * 60_000).toISOString() } }]]),
+      });
+    expect(decide(night(1)).get("a")).toBeNull();
+    // Put to bed already, a reply gets it up.
+    const asleep: Visit = { place: "home:a", spot: "bed", until: "2099-01-01T00:00:00Z", errand: "sleep" };
+    expect(decide({ ...night(1), visits: new Map([["a", asleep]]) }).get("a")).toBeNull();
+    // Once it has been quiet a while, to bed.
+    expect(decide(night(AFTER_WORK + 1)).get("a")).toMatchObject({ errand: "sleep", spot: "bed" });
+  });
+
+  it("leaves one asleep in bed through the night, however often it wakes on its own", () => {
+    const at = DAY * 86_400_000 + 2 * 3_600_000;
+    const soon = new Date(at + (HOME_BEFORE_WAKE - 5) * 60_000).toISOString();
+    const night = all({
+      now: { at, day: DAY, minute: 120 },
+      activities: new Map([["a", { doing: "idle", next: soon }]]),
+    });
+    expect(decide(night).get("a")).toMatchObject({ errand: "sleep", spot: "bed" });
+  });
+
+  it("ends an outing in good time for the next wake, and starts none too short to be worth the walk", () => {
+    const now = DAY * 86_400_000 + outAt * 60_000;
+    const waking = (minutes: number, visits = new Map<string, Visit>()) =>
+      decide(
+        outNow({
+          activities: new Map([["a", { doing: "idle", next: new Date(now + minutes * 60_000).toISOString() }]]),
+          visits,
+        }),
+      ).get("a");
+    // Too close to its next wake to go anywhere worth going.
+    expect(waking(HOME_BEFORE_WAKE + 1)).toBeNull();
+    expect(waking(HOME_BEFORE_WAKE + SHORTEST_OUTING - 1)).toBeNull();
+    // Time enough: out, and home by a quarter of an hour before it wakes.
+    const out = waking(HOME_BEFORE_WAKE + 25);
+    expect(out).toMatchObject({ place: "town" });
+    expect(Date.parse(out?.until ?? "")).toBe(now + 25 * 60_000);
+    // Out already: it stays out until then, however short that is now.
+    const there = new Map([["a", out as Visit]]);
+    const later = waking(HOME_BEFORE_WAKE + 5, there);
+    expect(later).toMatchObject({ place: "town", spot: out?.spot });
+    expect(Date.parse(later?.until ?? "")).toBe(now + 5 * 60_000);
+  });
+
   it("puts everyone to bed at night, in bed, until it gets up", () => {
     const night = all({ now: { at: DAY * 86_400_000 + 2 * 3_600_000, day: DAY, minute: 120 } });
     const got = decide(night);
@@ -525,9 +575,39 @@ describe("the minute's look", () => {
     const busy = async () => ({ ...(await look()), activities: new Map([["a", { doing: "working" }]]) });
     const again = new Routines({ look: busy, keep });
     await again.tick();
-    expect(keep).toHaveBeenLastCalledWith("a", null);
+    expect(keep).toHaveBeenLastCalledWith("a", null, undefined);
     visits = new Map();
     await again.tick();
     expect(keep).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes over the version of each record it read, and nothing once stopped mid-look", async () => {
+    const DAY = 20_000;
+    const look = async (): Promise<Everyone> => ({
+      agents: ["a", "b"],
+      now: { at: DAY * 86_400_000 + 2 * 3_600_000, day: DAY, minute: 120 },
+      density: "normal",
+      dayOf: (agent) => ({ agent, hours: { wake: 420, sleep: 1380 }, density: "normal" }),
+      activities: new Map(),
+      visits: new Map(),
+      seen: new Map([["a", 4]]),
+      seats: [],
+      ties: () => [],
+      homes: new Map([
+        ["a", { place: "home:a" }],
+        ["b", { place: "home:b" }],
+      ]),
+    });
+    const keep = vi.fn(async () => {});
+    await new Routines({ look, keep }).tick();
+    expect(keep.mock.calls.map((c) => [(c as unknown[])[0], (c as unknown[])[2]])).toEqual([
+      ["a", 4],
+      ["b", null],
+    ]);
+    // Stopped while the first write is on its way: the second is never made.
+    const stopping = vi.fn(async () => routines.stop());
+    const routines = new Routines({ look, keep: stopping });
+    await routines.tick();
+    expect(stopping).toHaveBeenCalledTimes(1);
   });
 });

@@ -117,10 +117,18 @@ export interface RuntimeEventMap {
     messageId: string;
     /** TAI identity that spoke, when one was resolved. */
     speaker?: string;
+    /**
+     * The transport's own name for whoever spoke (a Discord display name),
+     * for naming a speaker no TAI identity was resolved for, as the room's
+     * transcript does.
+     */
+    authorLabel?: string;
     /** TAI identities addressed. Empty means the room at large. */
     to: string[];
     /** Envelope-stripped text. */
     body: string;
+    /** How many files came with it (pictures among them), when any did. */
+    files?: number;
     fromSelf: boolean;
   };
 
