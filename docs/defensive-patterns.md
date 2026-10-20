@@ -303,7 +303,8 @@ the agent's own view three times, for as long as the tab was open.
 
 **Rule:** a long-lived object that short-lived owners draw with must be
 disposed as each owner goes, not just dropped. In the UI's 3D world that is
-`share()` in `packages/ui/src/avatar/shared.ts`. More generally, before keeping
+`share()` in `packages/ui/src/avatar/shared.ts`, with `takeDown` beside it
+keeping the order a stage goes in. More generally, before keeping
 anything at module scope, ask what it holds a reference *back* to.
 
 ## A probe can hold what it measures

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { disposeTree } from "./props";
 
 /**
  * What is made once for the whole page and drawn by every stage on it: the
@@ -15,6 +16,8 @@ import * as THREE from "three";
 const kept = new Set<{ dispose(): void }>();
 /** Three.js's table for lit materials, once a stage going has found it: the same one for the whole page. */
 let lut: THREE.Texture | undefined;
+/** Whether the console has been told the table couldn't be found: once a page is enough. */
+let warned = false;
 
 /** Keep something for the whole page, drawn by every stage: let go of with each one as it goes. */
 export function share<T extends { dispose(): void }>(thing: T): T {
@@ -34,14 +37,42 @@ interface Drawn {
  * is found through what this renderer drew.
  */
 export function releaseShared(renderer: Pick<THREE.WebGLRenderer, "properties">, scene: THREE.Object3D): void {
-  if (!lut)
+  if (!lut) {
+    let lit = false;
     scene.traverse((o) => {
       const m = (o as THREE.Mesh).material;
       for (const one of Array.isArray(m) ? m : m ? [m] : []) {
-        const value = (renderer.properties.get(one) as Drawn).uniforms?.dfgLUT?.value;
+        const drawn = renderer.properties.get(one) as Drawn;
+        // Only what this renderer drew has uniforms kept for it.
+        if (drawn.uniforms && (one as THREE.MeshStandardMaterial).isMeshStandardMaterial) lit = true;
+        const value = drawn.uniforms?.dfgLUT?.value;
         if (value instanceof THREE.Texture) lut ??= value;
       }
     });
+    // A lit material was drawn with no table where three.js used to keep it: a newer three.js keeps it elsewhere, so
+    // every stage taken down stays in memory again. Said where someone working on the world will see it.
+    if (lit && !lut && !warned) {
+      warned = true;
+      console.warn("The 3D world couldn't find three.js's table for lit materials: old stages will stay in memory.");
+    }
+  }
   if (lut) kept.add(lut);
   for (const thing of kept) thing.dispose();
+}
+
+/**
+ * Take a stage's renderer down with everything it drew, in the one order that lets the page forget it. What is kept
+ * for the page goes first, while the renderer still knows what it drew: disposing the scene has it forget each
+ * material, and disposing it forgets the rest, and then the table can't be found. Its drawing context goes straight
+ * after, not whenever the page's garbage is next collected, since a browser keeps only a few.
+ */
+export function takeDown(
+  renderer: Pick<THREE.WebGLRenderer, "properties" | "dispose" | "forceContextLoss" | "domElement">,
+  scene: THREE.Object3D,
+): void {
+  releaseShared(renderer, scene);
+  disposeTree(scene);
+  renderer.dispose();
+  renderer.forceContextLoss();
+  renderer.domElement.remove();
 }

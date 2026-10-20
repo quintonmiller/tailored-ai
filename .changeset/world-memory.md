@@ -18,7 +18,7 @@ on each thing it draws, and that listener holds the renderer, its canvas and so
 the stage. These are now kept through `share()` (`avatar/shared.ts`), and a
 stage going disposes them, so every renderer that drew them lets go; a stage
 still drawing them uploads them again on its next frame. The stage's drawing
-context is also released as it goes rather than whenever the garbage collector
-gets to it. After the change the same thirty trips hold no old stage, nine
+context is also released as it goes, and when a body's model fails to load,
+rather than whenever the garbage collector gets to it. After the change the same thirty trips hold no old stage, nine
 canvases (the live stage's), and the heap stays at about 16.5 MB from the tenth
 trip on.

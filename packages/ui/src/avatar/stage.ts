@@ -141,7 +141,7 @@ import {
   spreadLights,
 } from "./scene";
 import { drawScreen, drawStrip, pageAt, type ScreenCard } from "./screens";
-import { releaseShared } from "./shared";
+import { takeDown } from "./shared";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { behindView, blocksView, facingSurface, focusDistance, focusFraming, overWalls, solidInWay } from "./surfaces";
@@ -671,6 +671,8 @@ export async function createStage(
     vrm = await loadModel(myLooks.avatar ?? url);
   } catch (err) {
     renderer.dispose();
+    // Its drawing context goes now too, as when a stage is taken down: a body that won't load is tried at each rebuild.
+    renderer.forceContextLoss();
     throw err;
   }
 
@@ -4594,13 +4596,8 @@ export async function createStage(
       for (const d of departing.splice(0)) d.fig.dispose();
       shows.clear();
       unfade();
-      // What every stage draws, made once for the page, holds on to each renderer that drew it until it is disposed.
-      releaseShared(renderer, scene);
-      disposeTree(scene);
-      renderer.dispose();
-      // Its drawing context goes now, not whenever the page's garbage is next collected: a browser keeps only a few.
-      renderer.forceContextLoss();
-      renderer.domElement.remove();
+      // The renderer and all it drew, in the order that lets the page forget them (`shared.ts`).
+      takeDown(renderer, scene);
     },
   };
 }

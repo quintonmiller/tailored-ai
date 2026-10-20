@@ -4,7 +4,7 @@
  * stays in memory for as long as the page is open.
  */
 import * as THREE from "three";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildPiece, wearColors } from "./dress";
 import { releaseShared, share } from "./shared";
 import { bubbleTail } from "./signs";
@@ -16,11 +16,13 @@ HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElemen
 /**
  * A renderer as far as these things know one: what it keeps for each, and the
  * listener it hangs on each it draws, which lets go of itself once told the
- * thing is disposed, as three.js's own does.
+ * thing is disposed, as three.js's own does. Like three.js's, it forgets what
+ * it kept for something disposed, and everything once it is disposed itself.
  */
 function renderer(drawn: Map<object, unknown> = new Map()) {
-  const kept = new WeakMap<object, object>();
+  let kept = new WeakMap<object, object>();
   const listeners = new Map<THREE.EventDispatcher<{ dispose: object }>, () => void>();
+  const done: string[] = [];
   return {
     properties: {
       get: (thing: object) => {
@@ -29,8 +31,14 @@ function renderer(drawn: Map<object, unknown> = new Map()) {
         return p;
       },
     } as unknown as THREE.WebGLRenderer["properties"],
-    draw(thing: THREE.EventDispatcher<{ dispose: object }>) {
-      const off = () => thing.removeEventListener("dispose", off);
+    /** Draw something; a material is drawn with the values of its uniforms. */
+    draw(thing: THREE.EventDispatcher<{ dispose: object }>, uniforms?: object) {
+      if (uniforms) kept.set(thing, { uniforms });
+      const off = () => {
+        thing.removeEventListener("dispose", off);
+        kept.delete(thing);
+        drawn.delete(thing);
+      };
       thing.addEventListener("dispose", off);
       listeners.set(thing, off);
     },
@@ -38,7 +46,24 @@ function renderer(drawn: Map<object, unknown> = new Map()) {
       const off = listeners.get(thing);
       return !!off && thing.hasEventListener("dispose", off);
     },
+    /** What was done to the renderer itself, in order. */
+    done,
+    dispose() {
+      done.push("dispose");
+      kept = new WeakMap();
+      drawn.clear();
+    },
+    forceContextLoss: () => done.push("forceContextLoss"),
+    domElement: document.body.appendChild(document.createElement("canvas")),
   };
+}
+
+/** A scene with one lit wall in it. */
+function litRoom() {
+  const wall = new THREE.MeshStandardMaterial();
+  const scene = new THREE.Scene();
+  scene.add(new THREE.Mesh(new THREE.PlaneGeometry(), wall));
+  return { scene, wall };
 }
 
 describe("releaseShared", () => {
@@ -60,9 +85,7 @@ describe("releaseShared", () => {
 
   it("finds three.js's table for lit materials through what was drawn, and lets it go with later stages too", () => {
     const lut = new THREE.DataTexture(new Uint8Array(4), 1, 1);
-    const wall = new THREE.MeshStandardMaterial();
-    const scene = new THREE.Scene();
-    scene.add(new THREE.Mesh(new THREE.PlaneGeometry(), wall));
+    const { scene, wall } = litRoom();
     const first = renderer(new Map([[wall, { uniforms: { dfgLUT: { value: lut } } }]]));
     first.draw(lut);
     releaseShared(first, scene);
@@ -72,6 +95,52 @@ describe("releaseShared", () => {
     next.draw(lut);
     releaseShared(next, new THREE.Scene());
     expect(next.holds(lut)).toBe(false);
+  });
+
+  it("looks for the table where three.js really keeps it: a uniform of every lit material", () => {
+    // The renderer above only copies three.js; this is three.js itself, so an upgrade that moves the table fails here.
+    expect(THREE.ShaderLib.standard.uniforms).toHaveProperty("dfgLUT");
+    expect(THREE.ShaderLib.physical.uniforms).toHaveProperty("dfgLUT");
+  });
+});
+
+// The table, once found, is kept for the page; each of these starts from a page that hasn't found it yet.
+describe("as a page's first stage goes", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("says once, where someone working on the world will see it, when a lit material had no table", async () => {
+    const { releaseShared } = await import("./shared");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { scene, wall } = litRoom();
+      const r = renderer();
+      // Not drawn yet: nothing to say.
+      releaseShared(r, scene);
+      expect(warn).not.toHaveBeenCalled();
+      r.draw(wall, {});
+      releaseShared(r, scene);
+      releaseShared(renderer(new Map([[wall, { uniforms: {} }]])), scene);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("is taken down with the shared things let go of before the renderer forgets what it drew", async () => {
+    const { takeDown } = await import("./shared");
+    const lut = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+    const { scene, wall } = litRoom();
+    const r = renderer();
+    r.draw(wall, { dfgLUT: { value: lut } });
+    r.draw(lut);
+    takeDown(r, scene);
+    // Found while the renderer still knew the wall: the scene going, or the renderer, would have it forget.
+    expect(r.holds(lut)).toBe(false);
+    expect(r.holds(wall)).toBe(false);
+    expect(r.done).toEqual(["dispose", "forceContextLoss"]);
+    expect(r.domElement.isConnected).toBe(false);
   });
 });
 

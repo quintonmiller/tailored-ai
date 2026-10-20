@@ -761,6 +761,15 @@ go, and a stage still drawing them uploads them again on its next frame. A
 cache cleared as a stage goes, as the furniture's materials are
 (`disposeTree`), needs nothing more.
 
+The order a stage goes in matters, so it lives in one place, `takeDown` in
+`avatar/shared.ts`, and `shared.test.ts` holds it there: what is shared goes
+first, while the renderer still knows what it drew, then the stage's own
+things, then the renderer and its drawing context. Three.js doesn't hand out
+its lookup table, so it is found through the lit materials the stage drew. If a
+newer three.js keeps it somewhere else, the console says *The 3D world couldn't
+find three.js's table for lit materials* the first time a stage goes, and old
+stages are staying in memory again.
+
 To check, in a headless Chrome: force a garbage collection
 (`HeapProfiler.collectGarbage`), count the detached `.talk-stage` roots and
 `canvas` elements with `Runtime.queryObjects`, and take a heap snapshot for the
