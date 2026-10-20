@@ -7,7 +7,7 @@ import { doorWords } from "./doors";
 import type { BodyState } from "./motion";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
 import type { ScreenCard } from "./screens";
-import type { Companion, Line, Stage, StageView, Travel, UseSpot } from "./stage";
+import type { Companion, Line, Stage, StageEdit, StageView, Travel, UseSpot } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
 /** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
@@ -84,6 +84,7 @@ export function Avatar({
   onGreeted,
   onBody,
   wear,
+  edit,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -164,6 +165,8 @@ export function Avatar({
   onBody?: (agent: string) => boolean;
   /** What the body wears, by name (see `wear.ts`). */
   wear?: string[];
+  /** Rearranging the room: what is picked, where it is going, and what the page hears; none while you aren't. */
+  edit?: StageEdit;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -278,6 +281,12 @@ export function Avatar({
     shownPlace.current = place;
     if (moved) greetIn(stage.current, place);
   }, [room]);
+  // Rearranging the room, after any new room above, so what was just saved is in place before the marks go on it.
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  useEffect(() => {
+    stage.current?.setEditing(edit ?? null);
+  }, [edit]);
   // Asked to stand by someone in the place you are in already: at once.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new ask says when; the rest is read through refs.
   useEffect(() => {
@@ -375,6 +384,7 @@ export function Avatar({
         if (tasksRef.current) s.setTasks(tasksRef.current);
         if (screenRef.current) s.setScreen(screenRef.current);
         if (calendarRef.current) s.setCalendar(calendarRef.current);
+        if (editRef.current) s.setEditing(editRef.current);
         greetIn(s, placeRef.current);
       })
       .catch((err: unknown) => {
@@ -413,7 +423,11 @@ export function Avatar({
         className="talk-avatar"
         ref={host}
         aria-hidden="true"
-        title="Drag to look around. Click furniture to send it there."
+        title={
+          edit
+            ? "Drag things to move them. Drag the floor to look around."
+            : "Drag to look around. Click furniture to send it there."
+        }
       />
       {picked && (
         <AgentMenu
@@ -436,7 +450,7 @@ export function Avatar({
       )}
       {tools && <div className="talk-tools">{tools}</div>}
       {overlay}
-      {visitor && (
+      {visitor && !edit && (
         <>
           <fieldset className="talk-view" aria-label="How you get around">
             {(["walk", "fly"] as const).map((t) => (
@@ -460,7 +474,7 @@ export function Avatar({
           </p>
         </>
       )}
-      {!fixedView && !visitor && (
+      {!fixedView && !visitor && !edit && (
         <fieldset className="talk-view" aria-label="Avatar view">
           {(["room", "close"] as const).map((v) => (
             <button key={v} type="button" aria-pressed={view === v} onClick={() => choose(v)}>

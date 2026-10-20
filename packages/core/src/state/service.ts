@@ -202,14 +202,21 @@ export class StateService {
     }
   }
 
-  /** Delete a record, keeping the removal in its history. Null when there was nothing to delete. */
-  async delete(caller: StateCaller, ref: StateRef): Promise<StateRecord | null> {
+  /**
+   * Delete a record, keeping the removal in its history. Null when there was
+   * nothing to delete. `expectedVersion` deletes it only if it is still at
+   * that version, as `put` writes: otherwise {@link StateConflictError}, so
+   * whoever changed it meanwhile doesn't lose their change.
+   */
+  async delete(caller: StateCaller, ref: StateRef, expectedVersion?: number): Promise<StateRecord | null> {
     const def = this.requireType(caller, ref.type, "write");
     const provider = await this.providerFor(def);
     if (!provider.delete) throw new StateError(`The "${provider.id}" store cannot delete ${def.name} records.`);
     const existing = await provider.get(ref);
     if (!existing || !this.canSee(caller, existing.scope)) return null;
-    const removed = await provider.delete(ref, caller.actor, caller.source);
+    if (expectedVersion !== undefined && expectedVersion !== existing.version)
+      throw new StateConflictError(ref, expectedVersion, existing.version);
+    const removed = await provider.delete(ref, caller.actor, caller.source, expectedVersion);
     if (removed) {
       this.emit({
         type: removed.type,

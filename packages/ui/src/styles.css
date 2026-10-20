@@ -8666,6 +8666,37 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .talk-near { border-color: var(--accent-dim); }
 .talk-keys { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); margin: 0; padding: 4px 10px; font-family: var(--font); font-size: 11px; color: var(--text-dim); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 
+/* Rearranging a room yourself: a bar over the foot of the stage for what is picked, and a catalogue in the chat's column. */
+.talk-tool.room-edit-done { font-weight: 600; color: #fff; background: var(--accent); border-color: var(--accent); }
+.talk-tool.room-edit-done:hover, .talk-tool.room-edit-done:focus-visible { background: var(--accent-dim); border-color: var(--accent-dim); color: #fff; }
+.talk-tool:disabled { opacity: 0.5; cursor: default; }
+.room-edit-dock { position: absolute; left: 16px; z-index: 5; display: flex; pointer-events: none; }
+.room-edit-dock[hidden] { display: none; }
+.room-edit-bar { pointer-events: auto; display: flex; flex-direction: column; gap: 8px; max-width: min(560px, 100%); padding: 10px 12px; font-family: var(--font); color: var(--text); background: color-mix(in srgb, var(--bg-surface) 92%, transparent); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); backdrop-filter: blur(8px); }
+.room-edit-name { font-size: 13px; margin-right: 4px; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-edit-saving { align-self: center; margin-left: 4px; font-size: 11px; color: var(--text-dim); }
+.room-edit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.room-edit-row button { font-family: var(--font); font-size: 12px; padding: 5px 9px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); cursor: pointer; font-variant-numeric: tabular-nums; }
+.room-edit-row button:hover, .room-edit-row button:focus-visible { border-color: var(--accent); outline: none; }
+.room-edit-row button:disabled { opacity: 0.5; cursor: default; }
+.room-edit-row .room-edit-remove { color: var(--red); }
+.room-edit-row .room-edit-remove:hover, .room-edit-row .room-edit-remove:focus-visible { border-color: var(--red); }
+.room-edit-swatches { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.room-edit-swatch { width: 22px; height: 22px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 50%; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25); }
+.room-edit-swatch:hover, .room-edit-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.room-edit-swatch[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 2px; }
+.room-edit-swatches:disabled .room-edit-swatch { opacity: 0.35; cursor: default; }
+.room-edit-none { color: var(--text-dim); font-weight: 500; }
+.room-edit-keys, .room-edit-said { min-height: 2.8em; }
+.room-edit-keys { margin: 0; font-size: 12px; line-height: 1.4; color: var(--text-dim); }
+.room-edit-said { display: block; margin: 0; font-size: 12px; line-height: 1.4; color: var(--amber); }
+.room-edit-group h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.room-edit-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.room-edit-kinds button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 7px 9px; font-family: var(--font); font-size: 12px; text-align: left; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); cursor: pointer; }
+.room-edit-kinds button:hover, .room-edit-kinds button:focus-visible { border-color: var(--accent); outline: none; }
+.room-edit-kinds button:disabled { opacity: 0.5; cursor: default; }
+.room-edit-goes { font-size: 10px; color: var(--text-dim); }
+
 /* The map: every place, to go to in one click. */
 .world-map { position: absolute; top: 44px; left: 8px; bottom: 8px; z-index: 6; width: min(420px, calc(100% - 16px)); display: flex; flex-direction: column; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); }
 .world-map-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border); }

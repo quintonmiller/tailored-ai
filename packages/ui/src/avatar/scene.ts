@@ -146,16 +146,19 @@ export interface Room {
   theme?: string;
   /** What it is for, in a line. */
   purpose?: string;
-  /** What agents did to it lately with their place tool, newest first. */
+  /** What agents did to it lately with their place tool, and the person on the page, newest first. */
   changes?: RoomChange[];
 }
 
 /** One change to a room: "planner added the bookshelf", and when. */
 export interface RoomChange {
+  /** The agent that made it, or the person, by what agents call them in rooms. */
   who: string;
   /** A few words that follow the agent's name. */
   what: string;
   at: string;
+  /** Made by the person on the page: shown as "you". */
+  person?: boolean;
 }
 
 /**

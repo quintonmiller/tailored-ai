@@ -143,6 +143,15 @@ describe("StateService", () => {
       expect(history.map((c) => c.op)).toEqual(["delete", "create"]);
     });
 
+    it("deletes only while the record is at the version given, so nobody's change is lost", async () => {
+      await service.put(planner, { type: "plan", id: "trip", data: { name: "Trip" } });
+      await service.patch(person, { type: "plan", id: "trip" }, { status: "active" });
+      await expect(service.delete(planner, { type: "plan", id: "trip" }, 1)).rejects.toThrow(StateConflictError);
+      expect(await service.get(planner, { type: "plan", id: "trip" })).toMatchObject({ version: 2 });
+      expect(await service.delete(planner, { type: "plan", id: "trip" }, 2)).toMatchObject({ version: 2 });
+      expect(await service.get(planner, { type: "plan", id: "trip" })).toBeNull();
+    });
+
     it("lets only a person or the system erase a record outright", async () => {
       await service.put(planner, { type: "plan", id: "trip", data: { name: "Trip" } });
       await expect(service.purge(planner, { type: "plan", id: "trip" })).rejects.toThrow("Delete it instead");

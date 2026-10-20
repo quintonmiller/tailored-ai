@@ -138,8 +138,12 @@ export interface StateProvider {
   /**
    * Remove a live record, keeping the removal in its history. Returns the
    * record as it stood, or null if there was nothing to delete.
+   * `expectedVersion` makes it conditional, as for `put`: the live record
+   * must be at exactly that version, or {@link StateConflictError} is thrown.
+   * Core checks it too, so a provider that ignores it is still guarded, if
+   * less tightly.
    */
-  delete?(ref: StateRef, actor: Actor, source?: Source): Promise<StateRecord | null>;
+  delete?(ref: StateRef, actor: Actor, source?: Source, expectedVersion?: number): Promise<StateRecord | null>;
   /** Most recent first. */
   history?(ref: StateRef, opts?: HistoryOptions): Promise<StateChange[]>;
   /** Erase a record and its history outright. An admin action, never the default delete. */

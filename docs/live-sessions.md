@@ -788,7 +788,9 @@ meeting rooms' wing of the main building, so `area` is refused there.
 
 Only members go in. Anyone else is told whose room it is and who can change
 it: "#trip's meeting room is for the members of #trip: guest and host can go
-in and change it." An agent that leaves the room is home again.
+in and change it." An agent that leaves the room is home again. You can
+rearrange any meeting room yourself with **Edit room** (see below), and your
+first change keeps it in the same way.
 
 #### A theme and a purpose
 
@@ -868,11 +870,12 @@ Something new, or made over in another colour or size, grows in; something
 moved glides there from where it stood; and a line over the agent's head
 says what it did: "Added the reading chair by the bookshelf."
 
-The **Room** button, beside **Map** and **Tasks** in a home, a shared place
-or a meeting room, opens the place's card: what it is for, its theme, who can
+The **Room** button, beside **Map** and **Tasks** in a home, a shared place,
+a meeting room or the lobby, opens the place's card: what it is for, its theme, who can
 change it, and its recent changes, newest first, each with who made it and
-when. A place keeps its last 8 changes made with the `place` tool, in its
-record's `changes`, each cut short past 160 characters; the **State** page
+when. A place keeps its last 8 changes made with the `place` tool or with
+**Edit room**, in its record's `changes`, each cut short past 160
+characters; the **State** page
 has the full history, including
 changes made there. In a home whose owner has the `place` tool, the card has
 **Ask planner to make it fit its work**, which opens a chat with the agent
@@ -882,6 +885,78 @@ the same. In a meeting room, it takes you out of reading the room's own
 conversation and into a chat with that agent. An agent whose `tools:` list
 leaves out `place` can't change a room, and the card says so instead of
 offering, with a link to the agent's page, where you can add the tool.
+
+#### Rearranging a room yourself
+
+You can move the furniture too. **Edit room**, beside **Room** over the
+scene, works in a home, a shared place, a meeting room and the lobby; halls
+are laid out by the building, so they have none. The camera steps back to
+take in the whole room, the walking keys rest, and the buttons over the
+scene become **Done**, **Undo**, **Redo** and **Add things**. Drag the
+floor to look round, drag with the right button to slide the view, and use
+the wheel or a pinch to come nearer. Escape or **Done** takes you back to
+where you were.
+
+- **Pick a thing** by clicking or tapping it. A box goes round it and a bar
+  over the foot of the scene names it, with buttons to turn it, copy it,
+  remove it and repaint it.
+- **Drag it** across the floor. It snaps to a 10 cm grid; hold Shift to
+  place it freely. What hangs on a wall slides along it, and over to the
+  other wall, and a small thing like a laptop or a mug goes from one top to
+  another. Where it fits, it shows green; where it doesn't, red, and the bar
+  says why: "It would bump into the floor lamp.", "It would block the way
+  through the door.", "It would be where someone stands to use the couch."
+  Let go somewhere red and it goes back.
+- **Turn it** with R, or Shift+R the other way, a quarter turn at a time;
+  the buttons turn it by a quarter or by 15°. A turn with no room shows red,
+  for you to drag it somewhere it fits.
+- **Remove** it with Delete or Backspace, or **Copy** it: the copy goes
+  beside it, in the same colour and size. The lobby's kiosks and its task
+  board stay, wherever you move them: they're where you make agents, tasks
+  and rooms and see the tasks from inside the world, and nothing in the
+  catalogue stands in for one.
+- **Repaint** it from the swatches: the room's own colours first (its walls,
+  its floor, what is in it), then a few that go with most rooms.
+- **Add things** opens the catalogue in the chat's column (on a phone, a
+  sheet over the lower half): everything an
+  agent can place, grouped as seating, tables, storage, lights, plants,
+  decor, things for the walls, and boards and screens, but a kiosk, which
+  only does something as one of the lobby's. Pick one and it goes somewhere
+  free near the middle, picked, ready to drag where you want it. A task
+  board you add shows the tasks and opens them, like the ones rooms come
+  with.
+
+Whether a thing fits is the server's to say, by the checks the agents'
+`place` tool uses for its own changes: inside the room, clear of the rest,
+not hiding a window, not standing where someone stands to use something, and
+nothing in a doorway or on the floor in front of it (in the lobby, any of its
+doorways). So a room you arrange is one the tool would have made. While you
+drag, the colour comes once the server answers, which on a slow connection
+is a moment after the thing moves.
+
+Each change is saved as you make it, to the place's record through the
+world-state API, as yours. It goes at the top of the room's recent changes
+under the name agents know you by in rooms (`rooms.ownerLabel`, "owner" if
+unset): the **Room** card shows it as "You moved the couch", and the agent
+whose room it is reads "owner moved the couch" the next time it looks. Moving
+the same thing again within a couple of minutes counts as one change. A home
+you changed is never given a newer room by the redraw of untouched homes, and
+an agent's `undo` won't take back what you did: that's yours to undo. A
+change you took back with **Undo** counts for nothing: the home still gets
+newer rooms, and the agent can still undo its own change from before yours. A
+meeting room or the lobby is drawn fresh until it is first changed, by a
+member or by you; your first change keeps it as a record the same way a
+member's does, and the lobby's is `place/lobby` in the global scope. A
+meeting room's purpose stays its room's until someone gives it one.
+
+**Undo** and **Redo** (Ctrl+Z, Ctrl+Shift+Z) take back and make again the
+changes you made in this place, as long as you stay; undoing the first
+change of a meeting room or the lobby lets it be drawn fresh again. If an
+agent changed the room while you were at it, nothing is written over its
+change, by a change, an undo or a redo: you're told who changed it, the room
+comes back as it is now, and what you were about to undo is let go. A change
+you make after an agent's starts your undo afresh, so it never reaches back
+past theirs. No model is called while you rearrange.
 
 #### Task boards and the lobby
 
@@ -1306,10 +1381,12 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name. `company` is everyone else there with a body: `{agent, name, avatar, animations, with?, role?, wear}`, `with` naming the agent there it came to see, for one that messaged it directly. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `wear` change that someone chose what a body wears |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name. `company` is everyone else there with a body: `{agent, name, avatar, animations, with?, role?, wear}`, `with` naming the agent there it came to see, for one that messaged it directly. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `wear` change that someone chose what a body wears |
 | `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, with?, role?, wear?, wearChosen?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent, with `role` and `wear` as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `with` maps each agent there that came to see another there, having messaged it directly, to that agent. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company` (each with `with`, `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `with`, `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for a hall; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for, and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
+| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "remove", item}` or `{op: "color", item, color}`. A `remove` of one of the lobby's kiosks or its task board is a `why`; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |

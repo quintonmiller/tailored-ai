@@ -31,7 +31,8 @@ export function withChangeLines(
   let out = speech;
   const newest = new Set<string>();
   for (const change of changes) {
-    if (newest.has(change.who)) continue;
+    // Yours have no body to show over.
+    if (change.person || newest.has(change.who)) continue;
     newest.add(change.who);
     const at = Date.parse(change.at);
     if (!Number.isFinite(at) || now - at > FRESH_MS) continue;
@@ -46,8 +47,14 @@ export function withChangeLines(
 const list = (names: string[]) =>
   names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : (names[0] ?? "");
 
-/** Who can change a place, in words: a home's owner, a meeting room's members, anyone in a shared place. */
+/** Who can change a place, in words: a home's owner, a meeting room's members, anyone in a shared place, and you. */
 export function keepersWords(id: string, members: string[], canPlace: (agent: string) => boolean): string {
+  // The lobby is the building's: no agent's tool changes it, only you.
+  if (id === "lobby") return "You, with Edit room; agents leave the lobby as it is";
+  return `${agentsWords(id, members, canPlace)}; and you, with Edit room`;
+}
+
+function agentsWords(id: string, members: string[], canPlace: (agent: string) => boolean): string {
   if (id.startsWith("home:")) {
     const owner = id.slice("home:".length);
     return canPlace(owner)
@@ -89,7 +96,7 @@ export function WorldPlace({
   onClose: () => void;
 }) {
   const owner = id.startsWith("home:") ? id.slice("home:".length) : undefined;
-  const kind = owner ? "Home" : id.startsWith("room:") ? "Meeting room" : "Shared place";
+  const kind = owner ? "Home" : id.startsWith("room:") ? "Meeting room" : id === "lobby" ? "Lobby" : "Shared place";
   const changes = room.changes ?? [];
   // A meeting room goes by its room's name, as the map shows it: "#trip".
   const name = room.name ?? "This place";
@@ -113,9 +120,16 @@ export function WorldPlace({
     >
       <dl className="world-facts">
         <dt>For</dt>
-        <dd>{room.purpose ?? <span className="world-panel-quiet">Nobody has said yet</span>}</dd>
-        <dt>Theme</dt>
-        <dd>{themeWords(room.theme)}</dd>
+        {/* The lobby is the building's: nobody gives it a purpose or a theme, so it says what it is for itself. */}
+        {id === "lobby" ? (
+          <dd>Where everyone starts: the kiosks, the task board, the big screen and the calendar</dd>
+        ) : (
+          <>
+            <dd>{room.purpose ?? <span className="world-panel-quiet">Nobody has said yet</span>}</dd>
+            <dt>Theme</dt>
+            <dd>{themeWords(room.theme)}</dd>
+          </>
+        )}
         <dt>Changed by</dt>
         <dd>{keepersWords(id, members, canPlace)}</dd>
       </dl>
@@ -125,16 +139,23 @@ export function WorldPlace({
           <ol>
             {changes.map((c) => (
               <li key={`${c.at} ${c.who}`}>
-                <span className="world-agent-dot" style={{ background: agentColor(c.who) }} aria-hidden="true" />
+                <span
+                  className="world-agent-dot"
+                  style={{ background: c.person ? "var(--text)" : agentColor(c.who) }}
+                  aria-hidden="true"
+                />
                 <span className="world-change-what">
-                  <strong>{nameOf(c.who)}</strong> {c.what}
+                  <strong>{c.person ? "You" : nameOf(c.who)}</strong> {c.what}
                 </span>
                 <time dateTime={c.at}>{ago(c.at)}</time>
               </li>
             ))}
           </ol>
         ) : (
-          <p className="world-panel-quiet">Nothing yet. What agents change here with their place tool shows up here.</p>
+          <p className="world-panel-quiet">
+            Nothing yet. What agents change here with their place tool, and what you change with Edit room, shows up
+            here.
+          </p>
         )}
       </section>
       {owner && onAsk && canPlace(owner) && (

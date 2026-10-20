@@ -182,7 +182,11 @@ describe("writing state over HTTP", () => {
     const changed = await send("PATCH", "/api/state/task/t1", { changes: { done: true } });
     expect(changed.json).toMatchObject({ version: 3, data: { title: "Buy oat milk", done: true } });
 
-    expect((await send("DELETE", "/api/state/task/t1")).status).toBe(200);
+    // Only while nobody has changed it since the version given.
+    expect((await send("DELETE", "/api/state/task/t1?expectedVersion=2")).status).toBe(409);
+    expect((await send("DELETE", "/api/state/task/t1?expectedVersion=two")).status).toBe(400);
+    expect((await get("/api/state/task/t1")).status).toBe(200);
+    expect((await send("DELETE", "/api/state/task/t1?expectedVersion=3")).status).toBe(200);
     expect((await get("/api/state/task/t1")).status).toBe(404);
     expect((await send("DELETE", "/api/state/task/t1")).status).toBe(404);
 
