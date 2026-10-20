@@ -130,14 +130,35 @@ describe("lightingFor", () => {
 });
 
 describe("lightsFor", () => {
-  it("lights the lobby, the halls and the meeting rooms as public places, and every other place as a home", () => {
+  it("lights the town by the sky, the lobby, the office and the meeting rooms as public places, and the rest as homes", () => {
+    expect(lightsFor("town")).toBe("outdoor");
     expect(lightsFor("lobby")).toBe("public");
-    expect(lightsFor("hall:main:homes-2")).toBe("public");
-    expect(lightsFor("hall:summer-house:1")).toBe("public");
+    expect(lightsFor("office")).toBe("public");
+    expect(lightsFor("office:2")).toBe("public");
     expect(lightsFor("room:local:trip")).toBe("public");
     expect(lightsFor("home:planner")).toBe("home");
     expect(lightsFor("shared:lounge")).toBe("home");
     expect(lightsFor(undefined)).toBe("home");
+  });
+});
+
+describe("the town's light", () => {
+  it("is the sun by day, low and warm in the evening, and the moon and the street lamps at night", () => {
+    const noon = lightingFor(12, "outdoor");
+    const evening = lightingFor(18, "outdoor");
+    const night = lightingFor(23, "outdoor");
+    expect(noon.lamp.on).toBe(false);
+    expect(evening.lamp.on && night.lamp.on).toBe(true);
+    expect(noon.sun.intensity).toBeGreaterThan(evening.sun.intensity);
+    expect(evening.sun.intensity).toBeGreaterThan(night.sun.intensity);
+    // Out of doors at night the lamps reach further than a room's, so a street is lit between them.
+    expect(night.lamp.reach ?? 1).toBeGreaterThan(lightingFor(23, "home").lamp.reach ?? 1);
+  });
+
+  it("sees out past the woods round the town to the horizon", () => {
+    const town = { ...DEFAULT_ROOM, width: 160, depth: 150, town: {} as never };
+    expect(farFor(town)).toBeGreaterThan(300);
+    expect(farFor(DEFAULT_ROOM)).toBeLessThan(farFor(town));
   });
 });
 

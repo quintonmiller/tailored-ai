@@ -151,12 +151,12 @@ describe("adding, copying, recolouring and taking away", () => {
   });
 });
 
-describe("doors and halls", () => {
-  it("keeps every one of the lobby's doorways clear, those no hall uses yet too", () => {
+describe("doors", () => {
+  it("keeps the lobby's way out on to the square clear, at its open front", () => {
     expect(doorsFor(LOBBY, lobby())).toEqual(LOBBY_DOORS);
-    // In front of the doorway at the front of the left wall.
-    const [, , left] = LOBBY_DOORS;
-    expect(refused({ op: "move", item: "kiosk-task", at: [-6.3, left.along], facing: 90 }, lobby(), LOBBY)).toBe(
+    // Just inside the way out, in the middle of the front.
+    const [out] = LOBBY_DOORS;
+    expect(refused({ op: "move", item: "kiosk-task", at: [out.along, 4.2], facing: 0 }, lobby(), LOBBY)).toBe(
       "It would block the way through the door.",
     );
   });
@@ -166,12 +166,13 @@ describe("doors and halls", () => {
   });
 
   it("holds several doorways at once, each called the door", () => {
-    const held = withDoorsHeld(lobby(), LOBBY_DOORS);
+    const doors = [...LOBBY_DOORS, { wall: "back" as const, along: 5.7 }, { wall: "left" as const, along: 3.7 }];
+    const held = withDoorsHeld(lobby(), doors);
     const holds = held.props.filter((p) => p.id.startsWith(DOOR_HOLD));
     expect(holds.map((h) => h.id)).toEqual([DOOR_HOLD, `${DOOR_HOLD}-2`, `${DOOR_HOLD}-3`]);
     expect(new Set(holds.map((h) => h.name))).toEqual(new Set(["the door"]));
     // Holding them again replaces them rather than adding more.
-    expect(withDoorsHeld(held, LOBBY_DOORS).props.length).toBe(held.props.length);
+    expect(withDoorsHeld(held, doors).props.length).toBe(held.props.length);
     expect(whyNotOnFloor(held, { kind: "plant" }, [5.7, -4.5], 0)).toBe("It would block the way through the door.");
   });
 
@@ -197,8 +198,9 @@ describe("doors and halls", () => {
     expect(item(place, id as string)).toMatchObject({ kind: "board", label: "Tasks", action: "tasks" });
   });
 
-  it("won't change a hall, which the building lays out", () => {
-    expect(refused({ op: "add", kind: "plant" }, firstHome(), "hall:main:homes-1")).toMatch(/hall/);
+  it("won't change the town or a floor of the office, which are laid out from what there is", () => {
+    expect(refused({ op: "add", kind: "plant" }, firstHome(), "town")).toMatch(/The town is laid out/);
+    expect(refused({ op: "add", kind: "plant" }, firstHome(), "office:2")).toMatch(/The office is laid out/);
   });
 });
 

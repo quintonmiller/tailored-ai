@@ -1355,6 +1355,13 @@ export function doorways(place: Place): Doorway[] {
 export interface DoorSlot {
   wall: Wall;
   along: number;
+  /**
+   * A door out in the open, on the front of a building in the town: where it
+   * stands and the way out of it (degrees, 0 facing +Z), which then say where
+   * it is instead of `wall` and `along`.
+   */
+  at?: [number, number];
+  facing?: number;
 }
 
 /**

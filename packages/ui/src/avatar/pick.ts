@@ -12,11 +12,16 @@ export interface Pickable {
   parent: Pickable | null;
 }
 
-/** What a clickable thing does: go through a door, be used (a kiosk, a board), or send someone to a spot. */
+/**
+ * What a clickable thing does: go through a door, be used (a kiosk, a board),
+ * send someone to a spot, or, for a building in the town, walk you up to its
+ * door (`approach`, a point on the floor).
+ */
 export interface Use {
   door?: RoomDoor;
   action?: string;
   spot?: string;
+  approach?: [number, number];
 }
 
 /** The nearest of the hits (nearest first, as a raycaster gives them), and what it or anything it is part of is for. */
@@ -28,6 +33,7 @@ export function nearestUse<H extends { object: Pickable }>(hits: H[]): { hit: H;
     if (!use.door && o.userData.door) use.door = o.userData.door as RoomDoor;
     if (use.action === undefined && typeof o.userData.action === "string") use.action = o.userData.action;
     if (use.spot === undefined && typeof o.userData.spot === "string") use.spot = o.userData.spot;
+    if (!use.approach && Array.isArray(o.userData.approach)) use.approach = o.userData.approach as [number, number];
   }
   return { hit, use };
 }

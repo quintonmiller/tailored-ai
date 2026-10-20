@@ -1,7 +1,8 @@
 /**
- * The map: who is busy, every agent, the rooms and places, other areas, and
- * the lobby and halls last; a mark for anyone waiting on you; filtered as you
- * type, Enter to go to the first; one click to go.
+ * The map: the town from above, every building a button; who is busy, every
+ * agent, the rooms and places, plots, and the town and the office's floors
+ * last; a mark for anyone waiting on you; filtered as you type, Enter to go
+ * to the first; one click to go.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -114,70 +115,127 @@ describe("WorldMap", () => {
     expect(onGo).toHaveBeenLastCalledWith("shared:lounge");
   });
 
-  it("keeps the lobby in view, and folds the halls away until asked for", () => {
+  it("keeps the town and the town hall in view, and folds the office's floors away until asked for", () => {
     render({
       places: [
-        { id: "lobby", name: "the lobby", kind: "lobby", agents: [] },
-        { id: "hall:main:homes-1", name: "Residences", kind: "hall", agents: [], via: "lobby" },
+        { id: "town", name: "the town", kind: "town", agents: [] },
+        { id: "lobby", name: "the town hall", kind: "lobby", agents: [], via: "town" },
+        { id: "office", name: "the office", kind: "office", agents: [], via: "town" },
         ...places,
       ],
     });
-    expect(sections()).toEqual(["Busy now", "Agents", "Meeting rooms", "Shared places", "Lobby"]);
-    const lobby = tiles().find((t) => t.classList.contains("world-map-lobby"));
-    expect(lobby?.textContent).toMatch(/Make a new agent, task or room/);
-    expect(lobby?.textContent).not.toMatch(/nobody here/);
+    expect(sections()).toEqual(["Busy now", "Agents", "Meeting rooms", "Shared places", "Town"]);
+    const hall = tiles().find((t) => t.classList.contains("world-map-lobby"));
+    expect(hall?.textContent).toMatch(/Make a new agent, task or room/);
+    expect(hall?.textContent).not.toMatch(/nobody here/);
+    expect(tiles().find((t) => t.classList.contains("world-map-town"))?.textContent).toMatch(/every building/);
     const fold = container.querySelector(".world-map-fold") as HTMLButtonElement;
     expect(fold.getAttribute("aria-expanded")).toBe("false");
-    expect(fold.textContent).toMatch(/Halls\s*1/);
-    expect(container.querySelector(".world-map-hall")).toBeNull();
+    expect(fold.textContent).toMatch(/Office floors\s*1/);
+    expect(container.querySelector(".world-map-office")).toBeNull();
     act(() => fold.click());
-    // A hall has nobody living in it to list.
-    expect(container.querySelector(".world-map-hall")?.textContent).toBe("Residences");
+    // A floor of the office has nobody living on it to list.
+    expect(container.querySelector(".world-map-office")?.textContent).toBe("the office");
   });
 
-  it("puts other areas in a section of their own, with what is in each, and goes in by the way in", () => {
+  it("puts plots in a section of their own, with what is on each, and goes in by the way in", () => {
     const { onGo } = render({
       places: [
-        { id: "lobby", name: "the lobby", kind: "lobby", agents: [], area: "main" },
+        { id: "town", name: "the town", kind: "town", agents: [], area: "main" },
         { ...places[0], area: "main" },
         { id: "shared:porch", name: "the summer porch", kind: "shared", agents: [], area: "summer-house" },
         { id: "shared:kitchen", name: "the summer kitchen", kind: "shared", agents: ["writer"], area: "summer-house" },
       ],
       areas: [
-        { id: "main", name: "the main building", places: ["lobby", "home:planner"] },
+        { id: "main", name: "the town", places: ["town", "home:planner"] },
         { id: "summer-house", name: "the summer house", places: ["shared:kitchen", "shared:porch"] },
       ],
       here: "shared:porch",
     });
-    expect(sections()).toEqual(["Busy now", "Agents", "Other areas", "Lobby"]);
+    expect(sections()).toEqual(["Busy now", "Agents", "Plots", "Town"]);
     const area = container.querySelector(".world-map-area-go") as HTMLButtonElement;
     expect(area.textContent).toBe("Summer houseyou are herethe summer porch · the summer kitchen");
     act(() => area.click());
     expect(onGo).toHaveBeenCalledWith("shared:kitchen");
-    // Doors lead round it, so there's nothing to explain.
-    expect(container.querySelector(".world-map-area-here")).toBeNull();
   });
 
-  it("says a place alone in its area has no doors, rather than doors that lead nowhere", () => {
-    render({
-      places: [
-        { id: "lobby", name: "the lobby", kind: "lobby", agents: [], area: "main" },
-        { id: "shared:hideout", name: "the hideout", kind: "shared", agents: [], area: "den" },
-      ],
-      areas: [
-        { id: "main", name: "the main building", places: ["lobby"] },
-        { id: "den", name: "the den", places: ["shared:hideout"] },
-      ],
-      here: "shared:hideout",
+  it("has no plots while everything is in town", () => {
+    render({ areas: [{ id: "main", name: "the town", places: [] }] });
+    expect(sections()).not.toContain("Plots");
+  });
+
+  it("draws the town from above, every building a button that goes into it, the one you are in ringed", () => {
+    const house = (id: string, owner: string, at: [number, number]) => ({
+      id,
+      kind: "house" as const,
+      at,
+      facing: 90,
+      size: [5.2, 4.6, 3] as [number, number, number],
+      label: owner,
+      owner,
+      style: 0.3,
+      street: "Maple Lane",
     });
-    const banner = container.querySelector(".world-map-area-here")?.textContent;
-    expect(banner).toMatch(/You're in the den\. Nothing else is there yet, so it has no doors/);
-  });
-
-  it("has no other areas while everything is in the main building", () => {
-    render({ areas: [{ id: "main", name: "the main building", places: [] }] });
-    expect(sections()).not.toContain("Other areas");
-    expect(container.querySelector(".world-map-area-here")).toBeNull();
+    const { onGo } = render({
+      here: "home:planner",
+      places: [{ ...places[0], street: "Maple Lane" }, ...places.slice(1)],
+      activities: { planner: { agent: "planner", doing: "working", what: "searching the web" } },
+      town: {
+        width: 120,
+        depth: 100,
+        square: { at: [0, 0], radius: 11 },
+        shore: { sand: 40, sea: 50 },
+        stream: {
+          points: [
+            [-18, -50],
+            [-18, 50],
+          ],
+          width: 2.6,
+          bridges: [],
+        },
+        park: { at: [20, -20], size: [20, 14], pond: { at: [20, -20], size: [8, 5] } },
+        roads: [
+          {
+            id: "lane-1",
+            name: "Maple Lane",
+            kind: "lane",
+            width: 5,
+            points: [
+              [-30, -4],
+              [-30, -40],
+            ],
+          },
+        ],
+        buildings: [
+          house("home:planner", "planner", [-36, -10]),
+          house("home:writer", "writer", [-24, -10]),
+          {
+            id: "lobby",
+            kind: "hall",
+            at: [0, -20],
+            facing: 0,
+            size: [18, 9, 6.5],
+            label: "Town hall",
+            style: 0.5,
+            street: "The square",
+          },
+        ],
+        plots: [],
+        trees: [],
+        lamps: [],
+      },
+    });
+    const buildings = [...container.querySelectorAll<HTMLButtonElement>(".world-plan-building")];
+    expect(buildings).toHaveLength(3);
+    const planner = buildings.find((b) => b.getAttribute("aria-current") === "location") as HTMLButtonElement;
+    expect(planner.getAttribute("aria-label")).toBe("Planner's home, Maple Lane · planner is working");
+    // At work: a dot on its house.
+    expect(planner.querySelector(".world-plan-mark")).not.toBeNull();
+    expect(container.querySelector(".world-plan-street")?.textContent).toBe("Maple Lane");
+    const hall = buildings.find((b) => b.classList.contains("hall")) as HTMLButtonElement;
+    expect(hall.textContent).toBe("Town hall");
+    act(() => hall.click());
+    expect(onGo).toHaveBeenLastCalledWith("lobby");
   });
 
   it("goes where you click", () => {
@@ -186,9 +244,9 @@ describe("WorldMap", () => {
     expect(onGo).toHaveBeenCalledWith("room:local:trip");
   });
 
-  it("finds agents, rooms and places as you type, opens the halls for a match, and Enter goes to the first", () => {
+  it("finds agents, rooms and places as you type, opens the office's floors for a match, and Enter goes to the first", () => {
     const { onGo } = render({
-      places: [{ id: "hall:main:rooms-1", name: "Meeting rooms", kind: "hall", agents: [] }, ...places],
+      places: [{ id: "office", name: "the office", kind: "office", agents: [] }, ...places],
     });
     const input = container.querySelector("input") as HTMLInputElement;
     const enter = () => act(() => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
@@ -208,14 +266,14 @@ describe("WorldMap", () => {
     expect(people()).toHaveLength(0);
     enter();
     expect(onGo).toHaveBeenLastCalledWith("room:local:trip");
-    type("meeting");
+    type("office");
     const fold = () => container.querySelector(".world-map-fold") as HTMLButtonElement;
     expect(fold().getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelector(".world-map-hall")?.textContent).toBe("Meeting rooms");
+    expect(container.querySelector(".world-map-office")?.textContent).toBe("the office");
     // Open to show what matched: folding them waits until the search is cleared, and then they are as they were.
     expect(fold().disabled).toBe(true);
     act(() => fold().click());
-    expect(container.querySelector(".world-map-hall")?.textContent).toBe("Meeting rooms");
+    expect(container.querySelector(".world-map-office")?.textContent).toBe("the office");
     type("");
     expect(fold().disabled).toBe(false);
     expect(fold().getAttribute("aria-expanded")).toBe("false");

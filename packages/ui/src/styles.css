@@ -8736,6 +8736,35 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-map-mark.doing-waiting { color: var(--doing-waiting); }
 .world-map-mark.doing-stuck { color: var(--doing-stuck); }
 .world-map-mark.doing-working { color: var(--doing-working); }
+/* The map with the town drawn from above: the plan beside the list, or above it on a narrow screen. */
+.world-map.with-plan { width: min(940px, calc(100% - 16px)); }
+.world-map-split { flex: 1; min-height: 0; display: flex; }
+.world-map-split > .world-map-body { flex: 1; min-width: 0; }
+.world-map-split > .world-plan { flex: 1.3; min-width: 0; align-self: flex-start; margin: 10px 0 10px 10px; }
+@media (max-width: 760px) {
+  .world-map-split { flex-direction: column; overflow-y: auto; }
+  .world-map-split > .world-plan { flex: none; align-self: stretch; margin: 10px 10px 0; }
+  .world-map-split > .world-map-body { overflow: visible; }
+}
+.world-plan { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: #7fae60; }
+.world-plan svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.world-plan-grass { fill: #7fae60; }
+.world-plan-sand { fill: #e6d3a2; }
+.world-plan-sea { fill: #3f86b8; }
+.world-plan-water { fill: #4f93c4; }
+.world-plan-stream { fill: none; stroke: #4f93c4; stroke-linejoin: round; stroke-linecap: round; }
+.world-plan-road { fill: none; stroke: #bdb6a8; stroke-linecap: round; stroke-linejoin: round; }
+.world-plan-road.avenue { stroke: #a8a49c; }
+.world-plan-road.path { stroke: #cdb98e; }
+.world-plan-road.promenade { stroke: #c9a676; }
+.world-plan-square { fill: #e3d9c5; }
+.world-plan-plot { fill: #8fb870; stroke: #efe8d6; stroke-width: 0.5; stroke-dasharray: 1.5 1; }
+.world-plan-building { position: absolute; display: grid; place-items: center; padding: 0; border: 1px solid rgba(20, 24, 30, 0.55); border-radius: 2px; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); cursor: pointer; }
+.world-plan-building:hover, .world-plan-building:focus-visible { z-index: 2; outline: 2px solid var(--accent); outline-offset: 1px; }
+.world-plan-building.here { z-index: 1; outline: 2px solid #fff; box-shadow: 0 0 0 4px var(--accent); }
+.world-plan-label { font-size: 10px; font-weight: 600; color: #1d232c; white-space: nowrap; pointer-events: none; }
+.world-plan-mark { position: absolute; top: 50%; left: 50%; width: 7px; height: 7px; border: 1px solid #14161c; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.world-plan-street { position: absolute; font-size: 9px; font-weight: 600; letter-spacing: 0.02em; color: #f6f2e8; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7); white-space: nowrap; pointer-events: none; }
 /* Who is busy, at the top: one line each, straight to where they are. */
 .world-map-busy-list ul { grid-template-columns: 1fr; gap: 4px; }
 .world-map-busy { width: 100%; display: grid; grid-template-columns: 12px auto 1fr auto; align-items: center; gap: 6px; text-align: left; padding: 6px 8px; font-family: var(--font); font-size: 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--doing-thinking); border-radius: calc(var(--radius) - 2px); cursor: pointer; }

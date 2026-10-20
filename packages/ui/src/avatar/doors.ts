@@ -6,6 +6,8 @@
  *
  * A door faces into its room. On the back wall it looks toward +Z, on the left
  * toward +X, and on the open front and right sides back into the room.
+ * Outdoors, a door on the front of a building faces out on to the street,
+ * which is the place it is in.
  */
 import { type AgentActivity, DOING_COLORS } from "./doing";
 import type { Obstacle } from "./locomotion";
@@ -27,7 +29,12 @@ export const DOOR_REACH = 0.55;
 export const DOOR_HALF = 0.6;
 
 /** Where a door stands on the floor plan, and which way it faces, in degrees (0 faces +Z). */
-export function doorFrame(room: Pick<Room, "width" | "depth">, door: Pick<RoomDoor, "wall" | "along">) {
+export function doorFrame(
+  room: Pick<Room, "width" | "depth">,
+  door: Pick<RoomDoor, "wall" | "along" | "at" | "facing">,
+): { at: [number, number]; facing: number } {
+  // On the front of a building outdoors, wherever that is.
+  if (door.at) return { at: door.at, facing: door.facing ?? 0 };
   switch (door.wall) {
     case "back":
       return { at: [door.along, -room.depth / 2] as [number, number], facing: 0 };
@@ -61,14 +68,16 @@ export function standsClear(room: Pick<Room, "width" | "depth">, obstacles: Obst
  */
 export function arrivalAt(
   room: Pick<Room, "width" | "depth">,
-  door: Pick<RoomDoor, "wall" | "along">,
+  door: Pick<RoomDoor, "wall" | "along" | "at" | "facing">,
   obstacles: Obstacle[] = [],
 ): { at: [number, number]; facing: number } {
   const { at, facing } = doorFrame(room, door);
   const [ix, iz] = inward(facing);
   const point = (d: number): [number, number] => [at[0] + ix * d, at[1] + iz * d];
-  const want = door.wall === "front" || door.wall === "right" ? ARRIVE_IN.open : ARRIVE_IN.wall;
-  const across = door.wall === "back" || door.wall === "front" ? room.depth : room.width;
+  // Out of a building's door you stand on the street a step and a half out, as through a gate.
+  const want = door.at || door.wall === "front" || door.wall === "right" ? ARRIVE_IN.open : ARRIVE_IN.wall;
+  // How far the floor goes straight out from the door: across the room, or a few steps out into the street.
+  const across = door.at ? 6 : door.wall === "back" || door.wall === "front" ? room.depth : room.width;
   // Further in first, then back toward the door, but never so near that you stand in its doorway.
   const step = (k: number) => Math.round((want + k / 10) * 100) / 100;
   const tries: number[] = [];
@@ -88,7 +97,7 @@ export const THRESHOLD = 0.35;
  */
 export function threshold(
   room: Pick<Room, "width" | "depth">,
-  door: Pick<RoomDoor, "wall" | "along">,
+  door: Pick<RoomDoor, "wall" | "along" | "at" | "facing">,
 ): { at: [number, number]; facing: number } {
   const { at, facing } = doorFrame(room, door);
   const [ix, iz] = inward(facing);
@@ -155,9 +164,15 @@ export function doorLight(doing: AgentActivity["doing"] | undefined): { color: n
   return { color: DOING_COLORS[d], glow };
 }
 
-/** Where a door goes, in words for a pointer over it: "to Residences E–N", "to analyst's home", "to #budget". */
+/** Where a door goes, in words for a pointer over it: "out to Maple Lane", "to analyst's home", "to #budget". */
 export function doorWords(door: Pick<RoomDoor, "kind" | "label" | "occupant">): string {
-  if (door.kind === "lobby") return "to the lobby";
+  if (door.kind === "town") return `out to ${door.label === "The square" ? "the square" : door.label}`;
+  if (door.kind === "lobby") return "to the town hall";
+  if (door.kind === "office") {
+    // Into the office, back to a floor of it, or up and down its stairs.
+    const words = door.label === "Office" ? "the office" : door.label.charAt(0).toLowerCase() + door.label.slice(1);
+    return /^(up|down) /.test(words) ? words : `to ${words}`;
+  }
   if (door.kind === "home") {
     const who = door.occupant ?? door.label;
     return `to ${who === "default" ? "the default agent" : who}'s home`;

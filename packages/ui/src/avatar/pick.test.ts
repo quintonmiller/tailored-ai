@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { nearestUse, type Pickable } from "./pick";
 import type { RoomDoor } from "./scene";
 
-const door: RoomDoor = { wall: "back", along: 1, to: "hall:main:homes-1", label: "Residences", kind: "hall" };
+const door: RoomDoor = { wall: "back", along: 1, to: "town", label: "Maple Lane", kind: "town" };
 /** A thing in the room: a group carrying what it is for, and a mesh of it, as the raycaster hits them. */
 const thing = (data: Record<string, unknown>) => {
   const group: Pickable = { userData: data, parent: null };

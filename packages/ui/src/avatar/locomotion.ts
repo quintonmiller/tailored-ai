@@ -48,8 +48,15 @@ export function standingIn([x, z]: readonly [number, number], radius: number): O
   return { minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r, standing: true };
 }
 
-/** The floor grid the way is searched on, in metres. */
+/** The floor grid the way is searched on, in metres: this fine in a room. */
 const CELL = 0.1;
+/** The most cells along a side the grid has: a floor as big as the town is searched on a coarser grid. */
+const MOST_CELLS = 220;
+
+/** The grid cell the way is searched on for a floor this size: fine in a room, coarser over a town. */
+export function cellFor(room: { width: number; depth: number }): number {
+  return Math.max(CELL, Math.max(room.width, room.depth) / MOST_CELLS);
+}
 
 /**
  * The way from where it stands to a point, around the furniture, for a room
@@ -96,10 +103,6 @@ function searchWay(
     const g = { minX: o.minX - radius, maxX: o.maxX + radius, minZ: o.minZ - radius, maxZ: o.maxZ + radius };
     return inBox(from, g) || inBox(to, g) ? o : g;
   });
-  const free = (p: [number, number]) =>
-    Math.abs(p[0]) <= room.width / 2 - radius / 2 &&
-    Math.abs(p[1]) <= room.depth / 2 - radius / 2 &&
-    !boxes.some((o) => inBox(p, o));
   /** Whether a straight leg misses every box: exact, so it never clips a corner between samples. */
   const clear = (a: [number, number], b: [number, number]) => {
     const dx = b[0] - a[0];
@@ -131,18 +134,30 @@ function searchWay(
   };
   if (clear(from, to)) return [to];
 
-  const cols = Math.max(1, Math.ceil(room.width / CELL));
-  const rows = Math.max(1, Math.ceil(room.depth / CELL));
+  const cell = cellFor(room);
+  const cols = Math.max(1, Math.ceil(room.width / cell));
+  const rows = Math.max(1, Math.ceil(room.depth / cell));
   const centre = (i: number, j: number): [number, number] => [
-    -room.width / 2 + (i + 0.5) * CELL,
-    -room.depth / 2 + (j + 0.5) * CELL,
+    -room.width / 2 + (i + 0.5) * cell,
+    -room.depth / 2 + (j + 0.5) * cell,
   ];
   const cellOf = ([x, z]: [number, number]): [number, number] => [
-    Math.min(cols - 1, Math.max(0, Math.floor((x + room.width / 2) / CELL))),
-    Math.min(rows - 1, Math.max(0, Math.floor((z + room.depth / 2) / CELL))),
+    Math.min(cols - 1, Math.max(0, Math.floor((x + room.width / 2) / cell))),
+    Math.min(rows - 1, Math.max(0, Math.floor((z + room.depth / 2) / cell))),
   ];
+  // Every cell whose middle is on the floor, clear of its edges by half the body; then each box's cells shut, those
+  // whose middles are inside it. The same as asking each cell of every box, without asking every cell of every box.
   const open = new Uint8Array(cols * rows);
-  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) open[j * cols + i] = free(centre(i, j)) ? 1 : 0;
+  const edge = (span: number, k: number) => Math.abs(-span / 2 + (k + 0.5) * cell) <= span / 2 - radius / 2;
+  for (let j = 0; j < rows; j++) {
+    if (!edge(room.depth, j)) continue;
+    for (let i = 0; i < cols; i++) if (edge(room.width, i)) open[j * cols + i] = 1;
+  }
+  const first = (min: number, span: number) => Math.max(0, Math.floor((min + span / 2) / cell - 0.5) + 1);
+  const last = (max: number, span: number, n: number) => Math.min(n - 1, Math.ceil((max + span / 2) / cell - 0.5) - 1);
+  for (const o of boxes)
+    for (let j = first(o.minZ, room.depth); j <= last(o.maxZ, room.depth, rows); j++)
+      for (let i = first(o.minX, room.width); i <= last(o.maxX, room.width, cols); i++) open[j * cols + i] = 0;
   const [si, sj] = cellOf(from);
   const [gi, gj] = cellOf(to);
   open[sj * cols + si] = 1;

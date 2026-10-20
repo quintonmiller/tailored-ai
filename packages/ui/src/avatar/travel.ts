@@ -15,6 +15,8 @@ export const WALK_SPEED = 2.75;
 export const RUN_FACTOR = 2;
 /** Metres a second the camera flies: faster again, for getting the measure of a place. */
 export const FLY_SPEED = 6;
+/** Outdoors you walk this many times as fast, so a street takes a few seconds and the far side of town a minute. */
+export const OUTDOOR_PACE = 1.6;
 /** Radians a second your body turns toward where it is going: quick, so it never walks backwards for long. */
 export const VISITOR_TURN = 10;
 /** Seconds the camera takes to close a gap between it and you that walking didn't make, like the first framing. */
@@ -52,9 +54,10 @@ export function heldMove(held: Iterable<string>): { right: number; forward: numb
   return { right, forward, up, running };
 }
 
-/** How fast you go, in metres a second, walking or flying, with Shift held or not. */
-export function travelSpeed(travel: Travel, running: boolean): number {
-  return (travel === "fly" ? FLY_SPEED : WALK_SPEED) * (running ? RUN_FACTOR : 1);
+/** How fast you go, in metres a second, walking or flying, with Shift held or not, indoors or out. */
+export function travelSpeed(travel: Travel, running: boolean, outdoors = false): number {
+  const pace = travel === "fly" ? FLY_SPEED : WALK_SPEED * (outdoors ? OUTDOOR_PACE : 1);
+  return pace * (running ? RUN_FACTOR : 1);
 }
 
 /** A pace this many times a body's own walking speed is a run. Halfway between a walk and a Shift run. */
@@ -84,18 +87,22 @@ export function gait(
 /**
  * How much of a place the camera following you takes in, walking: the metres
  * it sees either side of you, across the narrower way of the part of the stage
- * nothing covers. Close behind you, a good part of the room to start, and a
- * whole hall or the lobby at the widest. The wheel, or a pinch, moves between
- * them.
+ * nothing covers. Close behind you, a good part of the room to start, and the
+ * whole lobby at the widest; outdoors, a street or two to start, and a good
+ * part of the town at the widest. The wheel, or a pinch, moves between them.
  */
-export const REACH = { near: 1.4, start: 4.5, far: 12 };
+export const REACH = { near: 1.4, start: 4.5, far: 12, outdoors: 36, outdoorStart: 11 };
 /** Each notch of the wheel (100 pixels of scroll) takes in this many times as much, or as little. */
 export const REACH_PER_NOTCH = 1.2;
 /** Seconds the camera takes to settle at a new reach, or a new shape of stage: quick, and never a jump. */
 export const ZOOM_SECONDS = 0.18;
 
-/** The widest worth seeing round you in a room: the whole of it from its middle, with a little floor beyond. */
-export function widestReach(room: { width: number; depth: number }): number {
+/**
+ * The widest worth seeing round you in a room: the whole of it from its
+ * middle, with a little floor beyond. Outdoors, a good part of the town.
+ */
+export function widestReach(room: { width: number; depth: number; town?: unknown }): number {
+  if (room.town) return REACH.outdoors;
   return Math.min(REACH.far, Math.max(REACH.start, Math.max(room.width, room.depth) / 2 + 1));
 }
 

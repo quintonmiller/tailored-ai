@@ -16,6 +16,8 @@
  * viewer, 90° toward +X.
  */
 
+import { OUTDOOR_FAR, type TownPlan } from "./town";
+
 export type PropKind =
   | "rug"
   | "couch"
@@ -148,6 +150,8 @@ export interface Room {
   purpose?: string;
   /** What agents did to it lately with their place tool, and the person on the page, newest first. */
   changes?: RoomChange[];
+  /** The town outdoors, when this is it: its buildings, roads, water and trees, which the stage builds instead of walls. */
+  town?: TownPlan;
 }
 
 /** One change to a room: "planner added the bookshelf", and when. */
@@ -210,15 +214,18 @@ export function changesShown(
  * A door in a room: which side it is on and where along it (x on the back and
  * front, z on the left and right), the place it opens on, and what its name
  * plate says. The back and left are walls; a door on the open front or right
- * stands on its own at the floor's edge.
+ * stands on its own at the floor's edge. Outdoors, a door is on the front of
+ * a building: `at` says where, and `facing` the way out of it.
  */
 export interface RoomDoor {
   wall: "back" | "left" | "front" | "right";
   along: number;
+  at?: [number, number];
+  facing?: number;
   /** The place it opens on, by id. */
   to: string;
   label: string;
-  kind: "lobby" | "hall" | "home" | "shared" | "room";
+  kind: "town" | "lobby" | "office" | "home" | "shared" | "room";
   /** The agent whose home it opens on: its light says what that agent is doing. */
   occupant?: string;
 }
@@ -403,18 +410,23 @@ export interface Lighting {
 
 /**
  * How a place is lit after dark. A home is cosy: moonlight and its own lamps.
- * The lobby, the halls and the meeting rooms are public, where anyone may be
+ * The lobby, the office and the meeting rooms are public, where anyone may be
  * at any hour, so the lights overhead are on and they stay bright; only the
- * windows say it is night.
+ * windows say it is night. The town is outdoors: the sun by day, and by night
+ * the moon and the street lamps.
  */
-export type Lights = "home" | "public";
+export type Lights = "home" | "public" | "outdoor";
 
-/** How a place is lit, by its id: the lobby, the halls and the meeting rooms are public; the rest lit as homes. */
+/** How a place is lit, by its id: the town outdoors; the lobby, the office and the meeting rooms public; the rest as homes. */
 export function lightsFor(place: string | undefined): Lights {
-  return place === "lobby" || !!place?.startsWith("hall:") || !!place?.startsWith("room:") ? "public" : "home";
+  if (place === "town") return "outdoor";
+  return place === "lobby" || place === "office" || !!place?.startsWith("office:") || !!place?.startsWith("room:")
+    ? "public"
+    : "home";
 }
 
 export function lightingFor(hour: number, lights: Lights = "home"): Lighting {
+  if (lights === "outdoor") return outdoorLighting(hour);
   if (hour >= 7 && hour < 17) {
     return {
       sun: { color: 0xfff4e0, intensity: 2.4 },
@@ -446,6 +458,34 @@ export function lightingFor(hour: number, lights: Lights = "home"): Lighting {
     sun: { color: 0x9db2ff, intensity: 0.5 },
     sky: { color: 0x7180a6, ground: 0x4a4352, intensity: 0.88 },
     lamp: { on: true, intensity: 2.4, reach: 1.35 },
+    window: { color: 0x2b3a66, glow: 0.25 },
+  };
+}
+
+/**
+ * The town's light: a bright sun and a blue sky by day, low and orange in the
+ * evening, and at night the moon, the sky's glow and the street lamps, enough
+ * to find your way down any street.
+ */
+function outdoorLighting(hour: number): Lighting {
+  if (hour >= 7 && hour < 17)
+    return {
+      sun: { color: 0xfff2dc, intensity: 2.7 },
+      sky: { color: 0xd8e9f8, ground: 0x7a8a5a, intensity: 1.15 },
+      lamp: { on: false, intensity: 0 },
+      window: { color: 0xbfe3ff, glow: 0.4 },
+    };
+  if ((hour >= 17 && hour < 20) || (hour >= 5 && hour < 7))
+    return {
+      sun: { color: 0xffa860, intensity: 1.5 },
+      sky: { color: 0xf0c8a8, ground: 0x6a5a48, intensity: 0.85 },
+      lamp: { on: true, intensity: 1.8, reach: 1.6 },
+      window: { color: 0xffb88a, glow: 0.55 },
+    };
+  return {
+    sun: { color: 0x9db2ff, intensity: 0.65 },
+    sky: { color: 0x6878a8, ground: 0x2e3a3a, intensity: 0.95 },
+    lamp: { on: true, intensity: 3, reach: 1.8 },
     window: { color: 0x2b3a66, glow: 0.25 },
   };
 }
@@ -523,6 +563,7 @@ export const MIN_ASPECT = 0.2;
  * that, so a big room in a narrow frame is never cut off.
  */
 export function farFor(room: Room): number {
+  if (room.town) return OUTDOOR_FAR;
   return Math.max(60, roomDistance(room, MIN_ASPECT) + Math.hypot(room.width, room.depth, room.height));
 }
 

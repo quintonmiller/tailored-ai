@@ -11,6 +11,7 @@ import {
   gait,
   heldMove,
   keepUp,
+  OUTDOOR_PACE,
   pinchReach,
   REACH,
   RUN_FACTOR,
@@ -45,6 +46,15 @@ describe("travelSpeed", () => {
     expect(travelSpeed("fly", false)).toBe(FLY_SPEED);
     expect(FLY_SPEED).toBeGreaterThan(WALK_SPEED * RUN_FACTOR);
     expect(travelSpeed("fly", true)).toBe(FLY_SPEED * RUN_FACTOR);
+  });
+
+  it("walks faster outdoors, where the streets are long, and flies as it always does", () => {
+    expect(travelSpeed("walk", false, true)).toBe(WALK_SPEED * OUTDOOR_PACE);
+    expect(travelSpeed("walk", true, true)).toBe(WALK_SPEED * OUTDOOR_PACE * RUN_FACTOR);
+    expect(OUTDOOR_PACE).toBeGreaterThan(1);
+    // A run across the square and a lane or two takes seconds, not a minute: 60 m in under 8 s.
+    expect(60 / travelSpeed("walk", true, true)).toBeLessThan(8);
+    expect(travelSpeed("fly", false, true)).toBe(FLY_SPEED);
   });
 });
 
@@ -113,6 +123,11 @@ describe("the walking camera's reach", () => {
     // A small room is never wider than the start; a huge one stops at the widest there is.
     expect(widestReach(home)).toBe(REACH.start);
     expect(widestReach({ width: 60, depth: 40 })).toBe(REACH.far);
+    // Outdoors, a good part of the town; and you start further back there than in a room.
+    expect(widestReach({ width: 160, depth: 150, town: {} })).toBe(REACH.outdoors);
+    expect(REACH.outdoors).toBeGreaterThan(REACH.far);
+    expect(REACH.outdoorStart).toBeGreaterThan(REACH.start);
+    expect(REACH.outdoorStart).toBeLessThan(REACH.outdoors);
   });
 
   it("keeps a reach between close behind you and the widest worth seeing", () => {

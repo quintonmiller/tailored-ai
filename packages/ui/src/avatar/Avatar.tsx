@@ -30,6 +30,8 @@ export interface AgentAction {
 /** What the page can tell the avatar to do once it is on screen. */
 export interface AvatarControls {
   cue(cue: Cue): void;
+  /** An agent's body going by in the town, from one door to another (see `Stage.walkBy`). */
+  walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
 }
 
 function savedView(): StageView {
@@ -307,7 +309,7 @@ export function Avatar({
   // biome-ignore lint/correctness/useExhaustiveDependencies: the room and its place arrive together; the room says when.
   useEffect(() => {
     if (!room || !stage.current) return;
-    // Lit as the place it is, before it is shown: the lobby and the halls stay bright after dark.
+    // Lit as the place it is, before it is shown: the lobby and the office stay bright after dark, the town by the sky.
     stage.current.setLights(lightsFor(place));
     const moved = shownPlace.current !== undefined && place !== shownPlace.current;
     if (visitor && moved) stage.current.enter(room, arriveRef.current);
@@ -412,7 +414,7 @@ export function Avatar({
         }
         stage.current = s;
         unsurface = s.onSurfaces(setSurfaces);
-        if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
+        if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c), walkBy: (w) => s.walkBy(w) };
         s.setInsets(insetRef.current);
         // The room, or who is in it, may have arrived or changed while the stage was loading.
         s.setLights(lightsFor(placeRef.current));

@@ -29,6 +29,7 @@ import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
 import type { Companion, UseSpot } from "../avatar/stage";
 import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
+import { isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
@@ -166,7 +167,7 @@ export interface SceneInfo {
   /** What a person rearranging it writes with: the record's version (0 while drawn fresh) and scope. */
   version?: number;
   scope?: string;
-  /** A person may rearrange it: anywhere but a hall, which the building lays out. */
+  /** A person may rearrange it: anywhere but the town and the office's floors, which are laid out from what there is. */
   editable?: boolean;
   /** Fields shown that aren't the record's own: a meeting room's purpose, from its room. */
   lent?: string[];
@@ -1327,6 +1328,34 @@ export function useChatStage({
   );
 
   const controls = useRef<AvatarControls | null>(null);
+  // Out in the town, bodies going from one place to another walk the streets: each time the map hears that someone
+  // went somewhere, from the door of where they were to the door of where they went.
+  const whereWas = useRef<Map<string, string> | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new map is what says someone moved; the rest is read as it is then.
+  useEffect(() => {
+    const now = new Map(map.places.flatMap((p) => p.agents.map((a): [string, string] => [a, p.id])));
+    const was = whereWas.current;
+    whereWas.current = now;
+    if (!was || placeId !== "town" || !isOutdoors(room)) return;
+    for (const trip of tripsBetween(was, now, room.town)) {
+      const wear = map.places.find((p) => p.kind === "home" && p.owner === trip.agent)?.wear;
+      fetch(`/api/live${trip.agent === "default" ? "" : `?agent=${encodeURIComponent(trip.agent)}`}`)
+        .then((res) => (res.ok ? (res.json() as Promise<LiveInfo>) : null))
+        .then((body) => {
+          if (!body?.avatar) return;
+          controls.current?.walkBy({
+            agent: trip.agent,
+            name: nameOf(trip.agent),
+            url: body.avatar,
+            animations: body.animations ?? [],
+            ...(wear ? { wear } : {}),
+            from: trip.from,
+            to: trip.to,
+          });
+        })
+        .catch(() => {});
+    }
+  }, [map.places]);
   // The conversation a voice session talks in. A new chat gets a key on its
   // first spoken turn; the chat adopts it, so what is typed next joins it.
   const minted = useRef<{ agent: string; key: string } | null>(null);
@@ -1591,11 +1620,13 @@ export function useChatStage({
     },
     [placeId, setVisiting],
   );
-  // Homes, shared places and meeting rooms are agents' to change, and the lobby a person's; the halls are the building's.
+  // Homes, shared places and meeting rooms are agents' to change, and the lobby a person's; the town and the office
+  // are laid out from what there is.
   const changeable = !!placeId && (/^(home|shared|room):/.test(placeId) || placeId === "lobby");
-  // Going somewhere: to the agent you came from is back with it.
-  const go = (id: string) => {
-    setVisiting(id === own.id ? null : id);
+  // Going somewhere: to the agent you came from is back with it. Out on to the street by a building's door (`from`),
+  // you stand outside it.
+  const go = (id: string, from?: string) => {
+    setVisiting(id === own.id ? null : id, from);
     setPanel(null);
   };
   // An agent to stand in front of once in its place, asked for by number so asking again is a new ask. Done with
@@ -1726,7 +1757,7 @@ export function useChatStage({
               {step.id === placeId ? (
                 <span aria-current={i === trail.length - 1 ? "location" : undefined}>{step.label}</span>
               ) : (
-                <button type="button" title={`Go to ${step.label}`} onClick={() => go(step.id)}>
+                <button type="button" title={`Go to ${step.label}`} onClick={() => go(step.id, step.from)}>
                   {step.label}
                 </button>
               )}
@@ -1742,6 +1773,7 @@ export function useChatStage({
       <WorldMap
         places={map.places}
         areas={map.areas}
+        {...(map.town ? { town: map.town } : {})}
         problem={map.problem}
         here={placeId}
         activities={shownActivities}

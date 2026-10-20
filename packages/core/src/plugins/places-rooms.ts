@@ -1412,22 +1412,17 @@ export function meetingRoom(name: string, seats: number, purpose = "", chosen?: 
 export const LOBBY = "lobby";
 
 /**
- * The lobby's doorways, in the order the main building's halls take them: the
- * residences at the back on the right, the meeting rooms at the back on the
- * left, the shared places at the front of the left wall.
+ * The lobby's doorway: in the middle of its open front, out on to the square.
+ * The lobby is the town hall's, and the town hall faces the square.
  */
-export const LOBBY_DOORS: DoorSlot[] = [
-  { wall: "back", along: 5.7 },
-  { wall: "back", along: -5.4 },
-  { wall: "left", along: 3.7 },
-];
+export const LOBBY_DOORS: DoorSlot[] = [{ wall: "front", along: 0 }];
 
 /**
- * Where everyone starts, and the biggest room there is, with doorways kept
- * clear on both walls for the halls that lead off it: kiosks to make a new
- * agent, a new task or a new room, a big screen over them showing the
- * dashboard, a board of every open task, a calendar of everyone's next wakes,
- * a lounge by the windows, and tables to sit at.
+ * The town hall's lobby, and the biggest room there is, its way out in the
+ * middle of its open front: kiosks to make a new agent, a new task or a new
+ * room, a big screen over them showing the dashboard, a board of every open
+ * task, a calendar of everyone's next wakes, a lounge by the windows, and
+ * tables to sit at, either side of the way out.
  */
 export function lobby(): Place {
   const width = 14;
@@ -1505,8 +1500,8 @@ export function lobby(): Place {
     height: 3.2,
     palette: { walls: "#e4e1ec", floor: "tile", floorColor: "#cfd3dc" },
     look,
-    // Halls lead off both ends of the back wall and the front of the left one.
-    doors: LOBBY_DOORS.map((d) => ({ wall: d.wall as "back" | "left", at: d.along })),
+    // Its way out is at the open front, where no wall needs a doorway kept.
+    doors: [],
     centre,
     start: { id: "middle", name: "in the middle", place: "the middle of the lobby", at: [0, 0.6], facing: 180 },
     back: [],
@@ -1514,5 +1509,72 @@ export function lobby(): Place {
     corner: { back: 1, left: 1 },
     flips: () => false,
     after,
+  });
+}
+
+/**
+ * A floor of the office, an atrium with the meeting rooms' doors round it:
+ * along the back and left walls (`doors`, kept clear while it is furnished),
+ * and standing along its open right side past what the walls hold, with the
+ * way in at the front on the left and the stairs on at the front on the right.
+ * In the middle, kept as far from every side as a door's approach: a directory
+ * by the way in, a lounge, a table to work at, and plants.
+ */
+export function officeFloor(name: string, width: number, depth: number, doors: DoorSlot[]): Place {
+  const look: Look = {
+    fabric: "#3f5f7a",
+    fabric2: "#c08a4a",
+    wood: "#a87650",
+    rug: "#4f6d8a",
+    accent: "#4f81bd",
+    window: 1.2,
+  };
+  const inner = { left: round(-width / 2 + 2.4), right: round(width / 2 - 2.6), back: round(-depth / 2 + 2.3) };
+  const front = round(depth / 2 - 2.4);
+  const centre: Placed[] = [
+    // By the way in, a directory where the doors are listed.
+    {
+      id: "directory",
+      name: "the directory",
+      kind: "kiosk",
+      at: [round(-width / 2 + 2.5), round(front - 0.2)],
+      facing: 45,
+      label: "Directory",
+    },
+    ...island("chat", [round(inner.left + 1.6), round(inner.back + 1.2)], look, "lounge"),
+    ...island("worktable", [round((inner.left + inner.right) / 2 + 1), round((inner.back + front) / 2)], look, "work"),
+    ...island("reading", [round(inner.right - 1), round(inner.back + 1)], look, "reading"),
+  ];
+  const after: Placed[] = [
+    { kind: "tall_plant", at: [round(-width / 2 + 0.45), round(-depth / 2 + 0.45)], facing: 0 },
+    { kind: "plant", at: [round(width / 2 - 0.5), round(-depth / 2 + 0.5)], facing: 0 },
+  ];
+  return build({
+    name,
+    width,
+    depth,
+    height: 3.2,
+    palette: { walls: "#e6e9ee", floor: "tile", floorColor: "#d7d9dd" },
+    look,
+    doors: doors
+      .filter((d) => d.wall === "back" || d.wall === "left")
+      .map((d) => ({ wall: d.wall as "back" | "left", at: d.along })),
+    centre,
+    start: {
+      id: "middle",
+      name: "in the middle",
+      place: "the middle of the floor",
+      at: [0, round(front - 0.4)],
+      facing: 180,
+    },
+    back: [],
+    left: [],
+    corner: { back: 1, left: 1 },
+    flips: () => false,
+    after,
+    lampsAt: [
+      [round(inner.left - 0.6), round(front + 0.6)],
+      [round(inner.right + 0.6), round(inner.back - 0.6)],
+    ],
   });
 }

@@ -998,24 +998,26 @@ function drawPlate(canvas: HTMLCanvasElement, label: string, ground: string, ink
 }
 
 /**
- * A door's panel and plate colours, by what it opens on: a home's warm wood, a meeting room's slate, glass to a
- * hall. A home's plate is dark, so the light beside it shows in any of its colours, amber too.
+ * A door's panel and plate colours, by what it opens on: a home's warm wood, a meeting room's slate, glass out to
+ * the street and into the town hall and the office. A home's plate is dark, so the light beside it shows in any of
+ * its colours, amber too.
  */
 const DOOR_LOOKS: Record<RoomDoor["kind"], { panel?: number; plate: string; ink: string }> = {
   home: { panel: 0x8a5a3b, plate: "#3a2a1f", ink: "#f2e4c4" },
   shared: { panel: 0x5f7f5a, plate: "#e4dcc6", ink: "#23301f" },
   room: { panel: 0x4f6278, plate: "#2f3a4a", ink: "#f3efe6" },
-  hall: { plate: "#24303f", ink: "#eef1fa" },
+  town: { plate: "#24303f", ink: "#eef1fa" },
   lobby: { plate: "#24303f", ink: "#eef1fa" },
+  office: { plate: "#24303f", ink: "#eef1fa" },
 };
 
-/** One shared see-through pane for doors to halls and the lobby. */
+/** One shared see-through pane for glass doors: out to the street, into the town hall and the office. */
 let glass: THREE.MeshStandardMaterial | undefined;
 
 /**
  * A door, standing at its own origin with its back to the wall and its front
- * toward +Z. On a wall: a frame, a panel (glass for a hall or the lobby), a
- * name plate over it and a mat in front. At an open side of the room the wall
+ * toward +Z. On a wall: a frame, a panel (glass out to the street and into the
+ * town hall and the office), a name plate over it and a mat in front. At an open side of the room the wall
  * is cut away, so the door is too: a low gate of two posts with the plate
  * across them, readable from either side, that never stands between the
  * camera and the room. A home's door has a light by its plate, and a lit strip

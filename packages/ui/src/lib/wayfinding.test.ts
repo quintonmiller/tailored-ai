@@ -1,30 +1,16 @@
 /**
- * Finding your way: where you are, from the area down, and the map's index
- * of agents, rooms and places, corridors last, filtered as you type.
+ * Finding your way: where you are, from the town down, and the map's index
+ * of agents, rooms and places, the town and the office last, filtered as you
+ * type.
  */
 import { describe, expect, it } from "vitest";
 import { areaTitle, type MapArea, type MapPlace, mapIndex, placeTitle, trailTo, wayInto } from "./wayfinding";
 
 const places: MapPlace[] = [
-  { id: "lobby", name: "the lobby", kind: "lobby", agents: [], area: "main" },
-  { id: "hall:main:homes-foyer", name: "Residences", kind: "hall", agents: [], area: "main", via: "lobby" },
-  {
-    id: "hall:main:homes-1",
-    name: "Residences A–M",
-    kind: "hall",
-    agents: [],
-    area: "main",
-    via: "hall:main:homes-foyer",
-  },
-  {
-    id: "hall:main:homes-2",
-    name: "Residences N–Z",
-    kind: "hall",
-    agents: [],
-    area: "main",
-    via: "hall:main:homes-foyer",
-  },
-  { id: "hall:main:rooms-1", name: "Meeting rooms", kind: "hall", agents: [], area: "main", via: "lobby" },
+  { id: "town", name: "the town", kind: "town", agents: [], area: "main" },
+  { id: "lobby", name: "the town hall", kind: "lobby", agents: [], area: "main", via: "town", street: "The square" },
+  { id: "office", name: "the office", kind: "office", agents: [], area: "main", via: "town", street: "The Avenue" },
+  { id: "office:2", name: "the office, 2nd floor", kind: "office", agents: [], area: "main", via: "office" },
   {
     id: "home:analyst",
     name: "analyst's room",
@@ -32,7 +18,8 @@ const places: MapPlace[] = [
     owner: "analyst",
     agents: ["analyst"],
     area: "main",
-    via: "hall:main:homes-1",
+    via: "town",
+    street: "Maple Lane",
   },
   {
     id: "home:writer",
@@ -41,7 +28,8 @@ const places: MapPlace[] = [
     owner: "writer",
     agents: [],
     area: "main",
-    via: "hall:main:homes-2",
+    via: "town",
+    street: "Willow Way",
   },
   {
     id: "home:default",
@@ -50,7 +38,8 @@ const places: MapPlace[] = [
     owner: "default",
     agents: ["default"],
     area: "main",
-    via: "hall:main:homes-1",
+    via: "town",
+    street: "Maple Lane",
   },
   {
     id: "home:meeting-summarizer",
@@ -59,16 +48,26 @@ const places: MapPlace[] = [
     owner: "meeting-summarizer",
     agents: ["meeting-summarizer"],
     area: "summer-house",
-    via: "shared:porch",
+    via: "town",
+    street: "Summer house",
   },
-  { id: "shared:lounge", name: "the lounge", kind: "shared", agents: [], area: "main", via: "lobby" },
+  {
+    id: "shared:lounge",
+    name: "the lounge",
+    kind: "shared",
+    agents: [],
+    area: "main",
+    via: "town",
+    street: "Main Street",
+  },
   {
     id: "shared:porch",
     name: "the porch",
     kind: "shared",
     agents: [],
     area: "summer-house",
-    via: "home:meeting-summarizer",
+    via: "town",
+    street: "Summer house",
   },
   {
     id: "room:local:budget",
@@ -77,7 +76,7 @@ const places: MapPlace[] = [
     agents: ["writer"],
     area: "main",
     purpose: "Money in and out",
-    via: "hall:main:rooms-1",
+    via: "office",
   },
   {
     id: "room:local:trip",
@@ -86,47 +85,57 @@ const places: MapPlace[] = [
     agents: [],
     area: "main",
     purpose: "Plan the Lisbon trip",
-    via: "hall:main:rooms-1",
+    via: "town",
+    street: "The beach",
+  },
+  {
+    id: "room:local:zines",
+    name: "zines",
+    kind: "room",
+    agents: [],
+    area: "main",
+    via: "office:2",
   },
 ];
 const areas: MapArea[] = [
-  { id: "main", name: "the main building", places: ["lobby", "hall:main:homes-foyer", "home:analyst"] },
+  { id: "main", name: "the town", places: ["town", "lobby", "office", "home:analyst"] },
   { id: "summer-house", name: "the summer house", places: ["home:meeting-summarizer", "shared:porch"] },
 ];
 
 describe("trailTo", () => {
-  it("says where a home is: its area, the hall it opens off, and whose home it is", () => {
+  it("says where a home is: the town, the street its door is on, and whose home it is", () => {
     expect(trailTo("home:analyst", places, areas)).toEqual([
-      { id: "lobby", label: "Main building" },
-      { id: "hall:main:homes-1", label: "Residences A–M" },
+      { id: "town", label: "Town" },
+      { id: "town", label: "Maple Lane", from: "home:analyst" },
       { id: "home:analyst", label: "analyst's home" },
     ]);
   });
 
-  it("says where a hall is from the foyer in front of it, and a room from its hall", () => {
-    expect(trailTo("hall:main:homes-2", places, areas).map((c) => c.label)).toEqual([
-      "Main building",
-      "Residences",
-      "Residences N–Z",
+  it("says where a meeting room in the office is, by its floor, and a building of its own by its street", () => {
+    expect(trailTo("room:local:budget", places, areas)).toEqual([
+      { id: "town", label: "Town" },
+      { id: "town", label: "The Avenue", from: "office" },
+      { id: "office", label: "Office" },
+      { id: "room:local:budget", label: "#budget" },
     ]);
-    expect(trailTo("room:local:trip", places, areas).map((c) => c.label)).toEqual([
-      "Main building",
-      "Meeting rooms",
-      "#trip",
+    // On the floor upstairs: the floor, which is reached from the one below.
+    expect(trailTo("room:local:zines", places, areas).map((c) => c.label)).toEqual([
+      "Town",
+      "Office, 2nd floor",
+      "#zines",
     ]);
+    expect(trailTo("room:local:trip", places, areas).map((c) => c.label)).toEqual(["Town", "The beach", "#trip"]);
   });
 
-  it("goes straight from the area to a place off the lobby, and to the lobby itself", () => {
-    expect(trailTo("shared:lounge", places, areas).map((c) => c.label)).toEqual(["Main building", "the lounge"]);
-    expect(trailTo("lobby", places, areas)).toEqual([
-      { id: "lobby", label: "Main building" },
-      { id: "lobby", label: "the lobby" },
-    ]);
+  it("is the town alone for the town, and the square for the town hall", () => {
+    expect(trailTo("town", places, areas)).toEqual([{ id: "town", label: "Town" }]);
+    expect(trailTo("lobby", places, areas).map((c) => c.label)).toEqual(["Town", "The square", "the town hall"]);
   });
 
-  it("starts from another area's way in, and leaves out a place that isn't a hall on the way", () => {
+  it("says a plot's places are out on their plot", () => {
     expect(trailTo("shared:porch", places, areas)).toEqual([
-      { id: "home:meeting-summarizer", label: "Summer house" },
+      { id: "town", label: "Town" },
+      { id: "town", label: "Summer house", from: "shared:porch" },
       { id: "shared:porch", label: "the porch" },
     ]);
   });
@@ -135,41 +144,37 @@ describe("trailTo", () => {
     expect(trailTo("home:default", places, areas).at(-1)?.label).toBe("the default agent's home");
     expect(trailTo("home:nobody", places, areas)).toEqual([]);
     expect(trailTo(undefined, places, areas)).toEqual([]);
-    // Without the areas yet, still the main building.
-    expect(trailTo("home:analyst", places, [])[0]).toEqual({ id: "lobby", label: "Main building" });
+    // Without the areas yet, still the town.
+    expect(trailTo("home:analyst", places, [])[0]).toEqual({ id: "town", label: "Town" });
   });
 
   it("names areas and places the way the trail says them", () => {
     expect(areaTitle("the summer house")).toBe("Summer house");
     expect(areaTitle("Den")).toBe("Den");
     expect(placeTitle({ id: "room:local:x", kind: "room", name: "x" })).toBe("#x");
-    expect(wayInto(areas[0])).toBe("lobby");
+    expect(wayInto(areas[0])).toBe("town");
     expect(wayInto(areas[1])).toBe("home:meeting-summarizer");
     expect(wayInto({ id: "empty", name: "empty", places: [] })).toBeUndefined();
   });
 });
 
 describe("mapIndex", () => {
-  it("leads with agents and rooms, keeps the corridors for last, and puts other areas apart", () => {
+  it("leads with agents and rooms, keeps the town and the office's floors for last, and puts plots apart", () => {
     const index = mapIndex(places, areas, {});
     expect(index.agents.map((a) => a.agent)).toEqual(["analyst", "default", "meeting-summarizer", "writer"]);
-    expect(index.rooms.map((p) => p.id)).toEqual(["room:local:budget", "room:local:trip"]);
-    // The main building's shared places; the porch is in the summer house.
+    expect(index.rooms.map((p) => p.id)).toEqual(["room:local:budget", "room:local:trip", "room:local:zines"]);
+    // The town's shared places; the porch is on the summer house's plot.
     expect(index.shared.map((p) => p.id)).toEqual(["shared:lounge"]);
     expect(index.areas).toEqual([
       {
         area: areas[1],
         way: "home:meeting-summarizer",
-        places: [places[8], places[10]],
+        places: [places[7], places[9]],
       },
     ]);
+    expect(index.town?.id).toBe("town");
     expect(index.lobby?.id).toBe("lobby");
-    expect(index.halls.map((p) => p.id)).toEqual([
-      "hall:main:homes-foyer",
-      "hall:main:homes-1",
-      "hall:main:homes-2",
-      "hall:main:rooms-1",
-    ]);
+    expect(index.floors.map((p) => p.id)).toEqual(["office", "office:2"]);
   });
 
   it("says where an agent's body is when it is out of its home, and what it is doing", () => {
@@ -195,16 +200,17 @@ describe("mapIndex", () => {
     expect(find("lisbon").first).toBe("room:local:trip");
     // A place with or without its "the".
     expect(find("the lounge").shared.map((p) => p.id)).toEqual(["shared:lounge"]);
-    // An area by its name or by what is in it; Enter goes in by its way in.
+    // A plot by its name or by what is on it; Enter goes in by its way in.
     expect(find("porch").areas.map((a) => a.area.id)).toEqual(["summer-house"]);
     expect(find("summer").first).toBe("home:meeting-summarizer");
-    // Halls only when asked for, and the lobby.
-    expect(find("resid").halls.map((p) => p.name)).toEqual(["Residences", "Residences A–M", "Residences N–Z"]);
-    expect(find("resid").lobby).toBeUndefined();
-    expect(find("resid").first).toBe("hall:main:homes-foyer");
+    // The office's floors only when asked for; the town by its square, the town hall by its lobby.
+    expect(find("office").floors.map((p) => p.name)).toEqual(["the office", "the office, 2nd floor"]);
+    expect(find("office").lobby).toBeUndefined();
+    expect(find("office").first).toBe("office");
+    expect(find("square").first).toBe("town");
     expect(find("lobby").first).toBe("lobby");
     const none = find("zzz");
-    expect([none.agents, none.rooms, none.shared, none.areas, none.halls].every((l) => l.length === 0)).toBe(true);
+    expect([none.agents, none.rooms, none.shared, none.areas, none.floors].every((l) => l.length === 0)).toBe(true);
     expect(none.first).toBeUndefined();
   });
 
@@ -217,6 +223,6 @@ describe("mapIndex", () => {
 
   it("puts rooms where something is happening first, and keeps the rest in the order they came", () => {
     const index = mapIndex(places, areas, {}, "", (p) => (p.id === "room:local:trip" ? 0 : 10));
-    expect(index.rooms.map((p) => p.id)).toEqual(["room:local:trip", "room:local:budget"]);
+    expect(index.rooms.map((p) => p.id)).toEqual(["room:local:trip", "room:local:budget", "room:local:zines"]);
   });
 });

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type AgentActivity, hueFor } from "../avatar/doing";
+import type { TownPlan as Plan } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { nameOf } from "../lib/conversations";
 import { byWait } from "../lib/needs";
 import { subscribeStateChanges } from "../lib/state-events";
-import { areaTitle, MAIN, type MapArea, type MapPlace, mapIndex, placeTitle } from "../lib/wayfinding";
+import { areaTitle, type MapArea, type MapPlace, mapIndex, placeTitle } from "../lib/wayfinding";
+import { TownPlan } from "./TownPlan";
 
 export type { MapArea, MapPlace } from "../lib/wayfinding";
 
@@ -119,16 +121,18 @@ export function markWords(mark: { doing: AgentActivity["doing"]; count: number; 
 export const comeOrGone = (type: string) => type === "whereabouts" || type === "visit";
 
 /**
- * The places and areas, asked for while `open` and again whenever someone
- * comes or goes. `fresh` turning true (the map or an agent's card opening)
- * asks again, for what changes without anyone moving: a new agent, a new room.
+ * The places, the areas and the town's plan, asked for while `open` and again
+ * whenever someone comes or goes. `fresh` turning true (the map or an agent's
+ * card opening) asks again, for what changes without anyone moving: a new
+ * agent, a new room.
  */
 export function useWorldMap(
   open: boolean,
   fresh = false,
-): { places: MapPlace[]; areas: MapArea[]; problem: string | null } {
+): { places: MapPlace[]; areas: MapArea[]; town?: Plan; problem: string | null } {
   const [places, setPlaces] = useState<MapPlace[]>([]);
   const [areas, setAreas] = useState<MapArea[]>([]);
+  const [town, setTown] = useState<Plan | undefined>(undefined);
   const [problem, setProblem] = useState<string | null>(null);
   const reload = useRef<() => void>(() => {});
   useEffect(() => {
@@ -141,12 +145,13 @@ export function useWorldMap(
       fetch("/api/ext/builtin:places/map")
         .then(async (res) => {
           if (!res.ok) throw new Error(`The map couldn't be loaded (${res.status}).`);
-          return (await res.json()) as { places?: MapPlace[]; areas?: MapArea[] };
+          return (await res.json()) as { places?: MapPlace[]; areas?: MapArea[]; town?: Plan };
         })
         .then((body) => {
           if (gone || n !== asked) return;
           setPlaces(body.places ?? []);
           setAreas(body.areas ?? []);
+          setTown(body.town);
           setProblem(null);
         })
         .catch((err: unknown) => {
@@ -175,7 +180,7 @@ export function useWorldMap(
   useEffect(() => {
     if (asking) reload.current();
   }, [asking]);
-  return { places, areas, problem };
+  return { places, areas, ...(town ? { town } : {}), problem };
 }
 
 /** A doing in a word or two, for an agent's line on the map. */
@@ -190,17 +195,19 @@ const STATE_WORDS: Record<AgentActivity["doing"], string> = {
 };
 
 /**
- * Every place there is, to go to in one click, laid out for finding someone:
- * who is busy first, with where each of them is; then every agent, coloured
- * by what it is doing, whose home a click goes to (and where its body is, when
- * that is somewhere else); then the rooms agents talk in, the shared places,
- * and the other areas. The lobby and the halls between places come last,
- * folded away until asked for. Typing filters all of it, and Enter goes to the
- * first thing left.
+ * Every place there is, to go to in one click. The town from above, every
+ * building a button (see `TownPlan`), beside a list laid out for finding
+ * someone: who is busy first, with where each of them is; then every agent,
+ * coloured by what it is doing, whose home a click goes to (and where its body
+ * is, when that is somewhere else); then the rooms agents talk in, the shared
+ * places, and the plots at the edge of town. The town, the town hall and the
+ * office's floors come last, the floors folded away until asked for. Typing
+ * filters the list, and Enter goes to the first thing left.
  */
 export function WorldMap({
   places,
   areas = [],
+  town,
   problem,
   here,
   activities,
@@ -209,8 +216,10 @@ export function WorldMap({
   onClose,
 }: {
   places: MapPlace[];
-  /** The areas, the main building first; without them, every place is in the main building. */
+  /** The areas, the town first; without them, every place is in town. */
   areas?: MapArea[];
+  /** The town's plan, drawn from above; without it, the list alone. */
+  town?: Plan;
   problem: string | null;
   /** The place on screen now. */
   here: string | undefined;
@@ -221,7 +230,7 @@ export function WorldMap({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [hallsOpen, setHallsOpen] = useState(false);
+  const [floorsOpen, setFloorsOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -244,10 +253,6 @@ export function WorldMap({
     return mapIndex(places, areas, activities, query, rank);
   }, [places, areas, activities, query]);
   const busy = useMemo(() => busyAgents(places, activities), [places, activities]);
-  // A place alone in an area of its own has no doors: worth saying, or it looks like a room you can't leave.
-  const where = places.find((p) => p.id === here);
-  const lone = where && (where.area ?? MAIN) !== MAIN && places.filter((p) => p.area === where.area).length === 1;
-  const lonely = lone ? areas.find((a) => a.id === where.area) : undefined;
   const first = (id: string) => (searching && id === index.first ? " first" : "");
   const current = (id: string) => (id === here ? "location" : undefined);
 
@@ -270,7 +275,10 @@ export function WorldMap({
           {p.kind === "lobby" && (
             <span className="world-map-purpose">Make a new agent, task or room; see every open task</span>
           )}
-          {p.kind !== "hall" && p.kind !== "lobby" && (
+          {p.kind === "town" && (
+            <span className="world-map-purpose">The square, the streets, and every building to go into</span>
+          )}
+          {p.kind !== "office" && p.kind !== "lobby" && p.kind !== "town" && (
             <span className="world-map-agents">
               {p.agents.length === 0 && (
                 <span className="world-map-nobody">
@@ -309,12 +317,13 @@ export function WorldMap({
       index.rooms.length +
       index.shared.length +
       index.areas.length +
-      index.halls.length +
+      index.floors.length +
+      (index.town ? 1 : 0) +
       (index.lobby ? 1 : 0) >
     0;
 
   return (
-    <div ref={box} className="world-map" role="dialog" aria-label="Map">
+    <div ref={box} className={`world-map${town ? " with-plan" : ""}`} role="dialog" aria-label="Map">
       <div className="world-map-head">
         <strong>Map</strong>
         <input
@@ -335,138 +344,144 @@ export function WorldMap({
         </button>
       </div>
       {problem && <p className="world-map-problem">{problem}</p>}
-      {lonely && (
-        <p className="world-map-area-here">
-          You're in {lonely.name}. Nothing else is there yet, so it has no doors; other areas are a click away here.
-        </p>
-      )}
-      <div className="world-map-body">
-        {!searching && places.length > 0 && (
-          <section aria-label="Busy now" className="world-map-busy-list">
-            <h3>Busy now</h3>
-            {busy.length === 0 ? (
-              <p className="world-map-quiet">Nobody is busy: every agent is idle or asleep.</p>
-            ) : (
+      <div className="world-map-split">
+        {town && (
+          <TownPlan plan={town} places={places} here={here} activities={activities} color={agentColor} onGo={onGo} />
+        )}
+        <div className="world-map-body">
+          {!searching && places.length > 0 && (
+            <section aria-label="Busy now" className="world-map-busy-list">
+              <h3>Busy now</h3>
+              {busy.length === 0 ? (
+                <p className="world-map-quiet">Nobody is busy: every agent is idle or asleep.</p>
+              ) : (
+                <ul>
+                  {busy.map((b) => (
+                    <li key={b.agent}>
+                      <button
+                        type="button"
+                        className={`world-map-busy doing-${b.activity.doing}`}
+                        aria-current={current(b.place.id)}
+                        onClick={() => (b.activity.doing === "waiting" && onNeed ? onNeed(b.agent) : onGo(b.place.id))}
+                      >
+                        <span className="world-map-dot" aria-hidden="true">
+                          {MARKS[b.activity.doing]}
+                        </span>
+                        <span className="world-map-busy-who">{nameOf(b.agent)}</span>
+                        <span className="world-map-busy-what">
+                          {b.activity.what}
+                          {b.activity.detail ? ` · ${b.activity.detail}` : ""}
+                        </span>
+                        <span className="world-map-busy-where">
+                          {b.place.id === here
+                            ? "here"
+                            : b.place.kind === "room"
+                              ? `in #${b.place.name}`
+                              : b.place.kind === "home" && b.place.owner === b.agent
+                                ? "at home"
+                                : `in ${b.place.name}`}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
+          {index.agents.length > 0 && (
+            <section aria-label="Agents" className="world-map-people">
+              <h3>Agents</h3>
               <ul>
-                {busy.map((b) => (
-                  <li key={b.agent}>
+                {index.agents.map(({ agent, home, away }) => {
+                  const doing = activities[agent]?.doing ?? "idle";
+                  // Only what is worth a look is in words; idle and asleep are the dot's to say.
+                  const calm = URGENCY[doing] === undefined;
+                  return (
+                    <li key={agent} className="world-map-person">
+                      <button
+                        type="button"
+                        className={`world-map-who doing-${doing}${first(home.id)}`}
+                        aria-current={current(home.id)}
+                        title={`${nameOf(agent)}${home.role ? `, ${home.role}` : ""}, ${STATE_WORDS[doing]}: go to ${placeTitle(home)}`}
+                        onClick={() => onGo(home.id)}
+                      >
+                        <span className="world-map-dot" aria-hidden="true">
+                          {MARKS[doing]}
+                        </span>
+                        <span className="world-map-who-name">{nameOf(agent)}</span>
+                        <span className="world-map-who-role">
+                          <span
+                            className="world-map-hue"
+                            style={{ background: agentColor(agent) }}
+                            aria-hidden="true"
+                          />
+                          {roleWord(agent, home.role)}
+                        </span>
+                        <span className={`world-map-who-doing${calm ? " calm" : ""}`}>{STATE_WORDS[doing]}</span>
+                      </button>
+                      {away && (
+                        <button
+                          type="button"
+                          className="world-map-away"
+                          aria-current={current(away.id)}
+                          title={`Go to ${placeTitle(away)}, where ${nameOf(agent)} is`}
+                          onClick={() => onGo(away.id)}
+                        >
+                          in {placeTitle(away)}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+          {section("Meeting rooms", index.rooms)}
+          {section("Shared places", index.shared)}
+          {index.areas.length > 0 && (
+            <section aria-label="Plots">
+              <h3>Plots</h3>
+              <ul>
+                {index.areas.map(({ area, way, places: there }) => (
+                  <li key={area.id}>
                     <button
                       type="button"
-                      className={`world-map-busy doing-${b.activity.doing}`}
-                      aria-current={current(b.place.id)}
-                      onClick={() => (b.activity.doing === "waiting" && onNeed ? onNeed(b.agent) : onGo(b.place.id))}
+                      className={`world-map-place world-map-area-go${first(way)}`}
+                      aria-current={there.some((p) => p.id === here) ? "location" : undefined}
+                      onClick={() => onGo(way)}
                     >
-                      <span className="world-map-dot" aria-hidden="true">
-                        {MARKS[b.activity.doing]}
+                      <span className="world-map-name">
+                        {areaTitle(area.name)}
+                        {there.some((p) => p.id === here) && <span className="world-map-here">you are here</span>}
                       </span>
-                      <span className="world-map-busy-who">{nameOf(b.agent)}</span>
-                      <span className="world-map-busy-what">
-                        {b.activity.what}
-                        {b.activity.detail ? ` · ${b.activity.detail}` : ""}
-                      </span>
-                      <span className="world-map-busy-where">
-                        {b.place.id === here
-                          ? "here"
-                          : b.place.kind === "room"
-                            ? `in #${b.place.name}`
-                            : b.place.kind === "home" && b.place.owner === b.agent
-                              ? "at home"
-                              : `in ${b.place.name}`}
-                      </span>
+                      <span className="world-map-purpose">{there.map(placeTitle).join(" · ")}</span>
                     </button>
                   </li>
                 ))}
               </ul>
-            )}
-          </section>
-        )}
-        {index.agents.length > 0 && (
-          <section aria-label="Agents" className="world-map-people">
-            <h3>Agents</h3>
-            <ul>
-              {index.agents.map(({ agent, home, away }) => {
-                const doing = activities[agent]?.doing ?? "idle";
-                // Only what is worth a look is in words; idle and asleep are the dot's to say.
-                const calm = URGENCY[doing] === undefined;
-                return (
-                  <li key={agent} className="world-map-person">
-                    <button
-                      type="button"
-                      className={`world-map-who doing-${doing}${first(home.id)}`}
-                      aria-current={current(home.id)}
-                      title={`${nameOf(agent)}${home.role ? `, ${home.role}` : ""}, ${STATE_WORDS[doing]}: go to ${placeTitle(home)}`}
-                      onClick={() => onGo(home.id)}
-                    >
-                      <span className="world-map-dot" aria-hidden="true">
-                        {MARKS[doing]}
-                      </span>
-                      <span className="world-map-who-name">{nameOf(agent)}</span>
-                      <span className="world-map-who-role">
-                        <span className="world-map-hue" style={{ background: agentColor(agent) }} aria-hidden="true" />
-                        {roleWord(agent, home.role)}
-                      </span>
-                      <span className={`world-map-who-doing${calm ? " calm" : ""}`}>{STATE_WORDS[doing]}</span>
-                    </button>
-                    {away && (
-                      <button
-                        type="button"
-                        className="world-map-away"
-                        aria-current={current(away.id)}
-                        title={`Go to ${placeTitle(away)}, where ${nameOf(agent)} is`}
-                        onClick={() => onGo(away.id)}
-                      >
-                        in {placeTitle(away)}
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        )}
-        {section("Meeting rooms", index.rooms)}
-        {section("Shared places", index.shared)}
-        {index.areas.length > 0 && (
-          <section aria-label="Other areas">
-            <h3>Other areas</h3>
-            <ul>
-              {index.areas.map(({ area, way, places: there }) => (
-                <li key={area.id}>
-                  <button
-                    type="button"
-                    className={`world-map-place world-map-area-go${first(way)}`}
-                    aria-current={there.some((p) => p.id === here) ? "location" : undefined}
-                    onClick={() => onGo(way)}
-                  >
-                    <span className="world-map-name">
-                      {areaTitle(area.name)}
-                      {there.some((p) => p.id === here) && <span className="world-map-here">you are here</span>}
-                    </span>
-                    <span className="world-map-purpose">{there.map(placeTitle).join(" · ")}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {section("Lobby", index.lobby ? [index.lobby] : [])}
-        {index.halls.length > 0 && (
-          <section aria-label="Halls" className="world-map-halls">
-            <button
-              type="button"
-              className="world-map-fold"
-              aria-expanded={searching || hallsOpen}
-              // While searching, the halls are open to show what matched; folding them waits for the search to clear.
-              disabled={searching}
-              onClick={() => setHallsOpen(!hallsOpen)}
-            >
-              <span aria-hidden="true">{searching || hallsOpen ? "▾" : "▸"}</span> Halls
-              <span className="world-map-count">{index.halls.length}</span>
-            </button>
-            {(searching || hallsOpen) && <ul>{index.halls.map(tile)}</ul>}
-          </section>
-        )}
-        {!problem && places.length > 0 && !anything && <p className="world-map-problem">Nothing matches "{query}".</p>}
+            </section>
+          )}
+          {section("Town", [...(index.town ? [index.town] : []), ...(index.lobby ? [index.lobby] : [])])}
+          {index.floors.length > 0 && (
+            <section aria-label="Office floors" className="world-map-floors">
+              <button
+                type="button"
+                className="world-map-fold"
+                aria-expanded={searching || floorsOpen}
+                // While searching, the floors are open to show what matched; folding them waits for the search to clear.
+                disabled={searching}
+                onClick={() => setFloorsOpen(!floorsOpen)}
+              >
+                <span aria-hidden="true">{searching || floorsOpen ? "▾" : "▸"}</span> Office floors
+                <span className="world-map-count">{index.floors.length}</span>
+              </button>
+              {(searching || floorsOpen) && <ul>{index.floors.map(tile)}</ul>}
+            </section>
+          )}
+          {!problem && places.length > 0 && !anything && (
+            <p className="world-map-problem">Nothing matches "{query}".</p>
+          )}
+        </div>
       </div>
     </div>
   );

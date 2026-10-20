@@ -22,10 +22,10 @@ const room = {
   width: 10,
   depth: 6,
   doors: [
-    { wall: "back", along: 3, to: "hall:main:homes-1", label: "Residences", kind: "hall" },
+    { wall: "back", along: 3, to: "office:2", label: "Up to floor 2", kind: "office" },
     { wall: "left", along: 1, to: "home:planner", label: "planner", kind: "home", occupant: "planner" },
     { wall: "front", along: -2, to: "lobby", label: "Lobby", kind: "lobby" },
-    { wall: "right", along: 0, to: "hall:main:homes-2", label: "Residences N–Z", kind: "hall" },
+    { wall: "right", along: 0, to: "room:local:standup", label: "#standup", kind: "room" },
   ] satisfies RoomDoor[],
 };
 const [back, left, front, right] = room.doors;
@@ -119,15 +119,53 @@ describe("doors", () => {
   });
 });
 
+describe("doors on the front of a building, outdoors", () => {
+  const town = { width: 120, depth: 100 };
+  // A house's front door, facing east on to its lane.
+  const door: RoomDoor = {
+    wall: "front",
+    along: 0,
+    at: [10, -20],
+    facing: 90,
+    to: "home:planner",
+    label: "planner",
+    kind: "home",
+  };
+
+  it("stand where they are on the building, facing out on to the street", () => {
+    expect(doorFrame(town, door)).toEqual({ at: [10, -20], facing: 90 });
+  });
+
+  it("put you on the street outside, a step and a half out, facing away from the building", () => {
+    const { at, facing } = arrivalAt(town, door);
+    expect(at[0]).toBeCloseTo(10 + ARRIVE_IN.open);
+    expect(at[1]).toBeCloseTo(-20);
+    expect(facing).toBeCloseTo(Math.PI / 2);
+    expect(inDoorway(town, door, at)).toBe(false);
+    // A lamp post right outside: a little further out.
+    const post = { minX: 11.4, maxX: 11.9, minZ: -20.3, maxZ: -19.7 };
+    expect(arrivalAt(town, door, [post]).at[0]).toBeGreaterThan(post.maxX);
+  });
+
+  it("take you in when you walk up to them, and not when you walk past", () => {
+    expect(doorReached({ ...town, doors: [door] }, [10.3, -20], [-0.05, 0])).toBe(door);
+    expect(doorReached({ ...town, doors: [door] }, [10.3, -20], [0, 0.05])).toBeUndefined();
+  });
+});
+
 describe("doorWords", () => {
   it("says where a door goes, as a pointer over it shows it", () => {
-    expect(doorWords({ kind: "hall", label: "Residences E–N" })).toBe("to Residences E–N");
+    expect(doorWords({ kind: "town", label: "Maple Lane" })).toBe("out to Maple Lane");
+    expect(doorWords({ kind: "town", label: "The square" })).toBe("out to the square");
+    expect(doorWords({ kind: "office", label: "Office" })).toBe("to the office");
+    expect(doorWords({ kind: "office", label: "The office, 2nd floor" })).toBe("to the office, 2nd floor");
+    expect(doorWords({ kind: "office", label: "Up to floor 2" })).toBe("up to floor 2");
     expect(doorWords({ kind: "home", label: "analyst", occupant: "analyst" })).toBe("to analyst's home");
     expect(doorWords({ kind: "home", label: "Default agent", occupant: "default" })).toBe(
       "to the default agent's home",
     );
     expect(doorWords({ kind: "room", label: "#budget" })).toBe("to #budget");
-    expect(doorWords({ kind: "lobby", label: "Lobby" })).toBe("to the lobby");
+    expect(doorWords({ kind: "lobby", label: "Town hall" })).toBe("to the town hall");
     expect(doorWords({ kind: "shared", label: "Lounge" })).toBe("to Lounge");
   });
 });

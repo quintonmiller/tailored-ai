@@ -130,9 +130,10 @@ the time of day: daylight through the windows, the lamps on in the evening,
 the lamps at night, reaching further than in the evening, with enough
 moonlight left to tell a body or a couch from the floor across the room. That
 cosy dark is for homes and shared places. The
-lobby, the halls and the meeting rooms are public, somewhere anyone may be at
+lobby, the office and the meeting rooms are public, somewhere anyone may be at
 any hour, so after dark their lights overhead stay on and they stay bright;
-only the windows say it is night.
+only the windows say it is night. The town outdoors has a sky instead (see
+[The town, and its doors](#the-town-and-its-doors)).
 
 The view frames the part of the room the agent is in, near enough that the
 agent stands about a quarter of the picture tall, and drifts after it as it
@@ -381,7 +382,7 @@ The agent changes it with the `place` tool:
 | `move` | a thing to somewhere new, or turned where it stands with only `facing` |
 | `change` | a thing's `name`, `color`, `scale` or `size` |
 | `remove` | a thing, and whatever stands on it |
-| `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), `name`, `theme` and `purpose` (see [A theme and a purpose](#a-theme-and-a-purpose)), and `area` (see [Areas, halls and doors](#areas-halls-and-doors)); and `wear`, what the agent's body wears, wherever it is (see [What an agent is for](#what-an-agent-is-for-its-home-and-what-it-wears)) |
+| `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), `name`, `theme` and `purpose` (see [A theme and a purpose](#a-theme-and-a-purpose)), and `area` (see [The town, and its doors](#the-town-and-its-doors)); and `wear`, what the agent's body wears, wherever it is (see [What an agent is for](#what-an-agent-is-for-its-home-and-what-it-wears)) |
 | `undo` | the last change, whoever made it, unless it was the system redrawing the room. In a meeting room, undoing the first change brings back the room as it was drawn |
 
 Where things go is said in words: `near` a thing or spot, on one `side` of it
@@ -394,8 +395,8 @@ near a TV or a fire turn to face it. When nothing fits, the tool says why, and
 the agent can move or remove something and try again. Exact `x` and `z`, in
 metres from the middle, work too. Every room keeps a spot for a door, and the
 floor in front of it is kept clear, as far in as you come through it: nothing
-new goes there or hangs over it. `look` says where the door is, or, for a place
-alone in an area of its own, that it has no door yet. "Near the door" puts
+new goes there or hangs over it. `look` says where the door is, and whether
+the place is in town or on a plot of its own at the edge of it. "Near the door" puts
 something beside it, back to its wall where there's room, never in the way in.
 
 What can be added: seats (couch, armchair, beanbag, bed, chair, stool),
@@ -463,11 +464,12 @@ says so and the agent can pass that on.
 
 #### Getting around: the map, walking and flying
 
-The **Map** button on the stage (or `M`) is for finding someone, so it leads
-with people and rooms: who is busy, then every agent, the meeting rooms, the
-shared places and any other areas. The lobby comes after them, and the halls
-and foyers between places last, folded away under **Halls** until you open
-them. Agents are listed by name, as many to a row as fit, so with forty of
+The **Map** button on the stage (or `M`) draws the town from above, beside a
+list for finding someone (see [The town, and its doors](#the-town-and-its-doors)
+for the drawing). The list leads with people and rooms: who is busy, then
+every agent, the meeting rooms, the shared places and any plots. The town and
+the town hall come after them, and the office's floors last, folded away
+under **Office floors** until you open them. Agents are listed by name, as many to a row as fit, so with forty of
 them the meeting rooms are still near the top. Each has a dot in the colour of
 what it is doing: green working, blue thinking or talking, orange waiting on
 you, red stuck, violet asleep, grey idle. They are the colours a door's light
@@ -481,17 +483,18 @@ each, with a mark for anyone waiting on you (`!`), stuck (`?`) or asleep (`z`).
 The map asks the server again each time it opens, so an agent or a room made
 since you last looked is on it.
 
-Typing filters it all as you go: agents by name or role, rooms by name or what they
-are for, places and areas by name (an area by what is in it too), and halls,
-which open up while you search and fold back as they were when you clear it. `Enter` goes to the first thing left, which
+Typing filters the list as you go: agents by name or role, rooms by name or what they
+are for, places and plots by name (a plot by what is on it too), and the
+office's floors, which open up while you search and fold back as they were when you clear it. `Enter` goes to the first thing left, which
 is marked `↵`; `Esc` closes the map. So `M`, a few letters of a name, `Enter`
-takes you to anyone. Within a building, you can also walk from place to place
-through doors (see [Areas, halls and doors](#areas-halls-and-doors)).
+takes you to anyone. You can also walk from place to place, out of one door
+and into another (see [The town, and its doors](#the-town-and-its-doors)).
 
-**Where you are** shows under the stage's buttons, from the area down: "Main
-building › Residences E–N › analyst's home", or "Main building › Meeting
-rooms › #trip". Each step is a click: the area goes to its way in (the lobby,
-for the main building), and the hall to the hall.
+**Where you are** shows under the stage's buttons, from the town down: "Town
+› Maple Lane › analyst's home", or "Town › The Avenue › Office › #standup".
+Each step is a click: "Town" goes to the square, a street takes you out of
+the door on to it (out of analyst's home on to Maple Lane, out of the office
+on to the avenue), and a floor of the office to that floor.
 
 **Busy now**, at the top, lists every agent that is doing something, most
 pressing first: waiting on you, then stuck, then talking, working and
@@ -510,16 +513,19 @@ busy", "2 working").
 
 You arrive in your own body ("you"), in a colour of its own. **Walk** with
 WASD or the arrow keys, which move you the way the camera faces, at a brisk
-2.75 metres a second; hold **Shift** to run at twice that. Click the floor to
+2.75 metres a second (1.6 times that outdoors, where the streets are long);
+hold **Shift** to run at twice that. Click the floor to
 walk there round the furniture, at the same walking pace. Drag to look round.
 The camera moves with you every frame, so it keeps up however fast you go.
 
 **Zoom** with the wheel, or a pinch on a touch screen, from close behind you
-out to an overview of a whole hall or the lobby. It starts wide enough to see
+out to an overview of the whole lobby. It starts wide enough to see
 a good part of the room round you, about 4.5 metres either side, and the page
 keeps whatever you set for as long as it is open: through doors, by the map,
 and back. A small home stops zooming out sooner than the lobby, but the lobby
-still opens out as far as you left it. The zoom is measured in the part of
+still opens out as far as you left it. Outdoors the zoom is kept apart: it
+starts a street or two round you (11 metres either side), opens out to a good
+part of the town (36), and stays how you left it each time you come out. The zoom is measured in the part of
 the stage you can see: with the chat or a panel open over the right of it,
 or along the bottom on a phone, the camera backs off so you see as much round
 you as with it closed, and you stay in the middle of what is left. A panel opening or closing slides the
@@ -548,25 +554,72 @@ because each line is a text-to-speech render, which may run on your GPU. **Back 
 the agent's own view. While you visit, your body is
 yours: the agent's turns still run, but its cues have nothing to move.
 
-#### Areas, halls and doors
+#### The town, and its doors
 
-The places are joined up. Most of them are in **the main building**, where
-the lobby is the hub and three wings lead off it, each through a door of its
-own: the **residences**, with a door for every agent's home; the **meeting
-rooms**, with a door for every room agents talk in; and the **shared
-places**. A wing with one place opens straight off the lobby. More, and they
-are behind a hall: a long room with doors down both sides, benches and plants
-down the middle, lamps for the evening, and a sign with its name by the
-entrance. A hall holds up to 14 doors, read left to right, at the back and
-then facing them at the front. A wing with more than that has several halls,
-each covering a run of the alphabet ("Residences A–F", "Residences G–M"), and
-the lobby's door leads to a foyer with a door to each of them. So any home is
-three doors from the lobby at most: into the foyer, into its hall, into the
-home. Halls are cut where the first letter changes, so a new agent only
-changes the hall its name falls in, unless that hall was full.
+The places are joined up in a **town** you walk round outdoors. In the
+middle is **the square**: paving round a fountain, benches and lamps, and
+the **town hall** along its north side, facing you as you arrive. The kiosks
+stand in front of it, under the big screen on its front, with the task
+board and the calendar beside its door: what the lobby has, out on the
+square, and they work the same (see [Task boards and the
+lobby](#task-boards-and-the-lobby)). The town hall's door goes into the
+lobby, which keeps its own.
 
-A door on the back or left wall is a door in the wall, with a name plate over
-it: the agent's name, the room's `#name`, or where a hall leads. A long name
+The **avenue** runs east and west through the square. Off it run **lanes of
+homes**: every agent's home is a house of its own, facing its lane, up to 12
+to a lane, a lane north of the avenue and one south of it, west of the
+square first, then east, then further out. Lanes are filled in name order
+and cut where the first letter changes, so a new agent only changes the lane
+its name falls in, unless that lane was full. Each lane's name ("Maple Lane",
+"Willow Way") is on a sign at its corner.
+
+A house looks like its owner. Its walls are washed in the agent's colour, the
+one its body and its dot on the map show, with its door, shutters and
+letterbox in that colour itself; its roof, its storeys and its chimney are
+its own. What the agent does stands by it: a satellite dish on a reporter's
+roof, an easel by an artist's door, a cabinet of blinking lights beside a
+coder's, a garden for a housekeeper, a telescope for a researcher, a signpost
+for a travel agent (see [What an agent is
+for](#what-an-agent-is-for-its-home-and-what-it-wears)). Its windows say
+whether anyone is up: lit after dark while the agent is awake, dark once it
+is asleep, and lit by day while it is at work, so a busy street reads at a
+glance. The light by its front door shows what the agent is doing, as every
+home's door does.
+
+East of the square, on the avenue, is **the office**, where the rooms agents
+talk in are. Inside is an atrium: a directory by the way in, and the meeting
+rooms' doors round its walls and standing along its open right side, up to
+14 to a floor. More rooms take more floors, with stairs between them, cut by
+first letter as lanes are. A meeting room dressed as a tavern, a studio, a
+workshop or a library has **a building of its own on Main Street**, which
+runs south from the square past the **shared places**. A beach room is **a
+hut on the sand** at the end of Main Street, where the town meets the sea.
+Behind the office is a park with a pond, a stream comes down the west side
+of town to the sea under a bridge where the avenue crosses it, and woods
+are all round.
+
+**Going in and out.** Every building has its door in the middle of its
+front. Walk into it, or click it, to go in; click a building anywhere else
+and you walk up to its door. Inside, the door you came in by says what
+street it opens on ("Maple Lane", "The square"), and going out through it
+puts you on that street outside the door, facing away from it.
+
+**Outdoors** you walk faster and see further (see [Getting
+around](#getting-around-the-map-walking-and-flying)). The town has a sky:
+the sun by day, low and orange in the evening, and at night the moon, the
+stars and the street lamps, the four nearest you lighting the street and the
+rest glowing. The sun's shadows are drawn round you as you go. A building
+between the camera and you fades to a ghost so you can see past it, as a
+tall thing in a room does.
+
+**Bodies going by.** You only see the bodies in the place you're in, and the
+town is nobody's place. But while you're out in it, an agent whose body goes
+from one place to another (into a meeting room to talk, home again after a
+quiet spell) walks the streets, its name over its head, from the door it
+left by to the door it goes in by, and is gone once it gets there.
+
+A door on the back or left wall of a room is a door in the wall, with a name plate over
+it: the agent's name, the room's `#name`, or the street it opens on. A long name
 is drawn smaller to fit, and a name too long for that at a size worth reading
 goes on two lines, broken at a hyphen, a space or an underscore
 (`#quarterly-` / `planning-and-review`), so a name is never cut off. On the open
@@ -576,12 +629,12 @@ either side, that never stands between you and the room. A door to a home has
 a light by its dark plate, and a lit strip along it, that says what that agent
 is doing, from its `activity` record, in the colours the map uses: green
 working, blue thinking or talking, orange waiting on you, red stuck, grey idle,
-and dim violet asleep. You can see who needs you from the hall, before you
+and dim violet asleep. You can see who needs you from the street, before you
 knock.
 
 **Point at a door** and it lights up, an edge of light round the doorway and
-its mat, and a label by the pointer says where it goes: "to Residences E–N",
-"to analyst's home", "to #trip". The pointer turns into a hand. It keeps up
+its mat, and a label by the pointer says where it goes: "to analyst's home",
+"out to Maple Lane", "to #trip". The pointer turns into a hand. It keeps up
 as you walk or the view moves under a still pointer: once the door has slid
 out from under it, the light and the label go.
 
@@ -594,46 +647,52 @@ on as they were. A click goes to whatever is nearest under the pointer, so a
 chair in front of a door is still a chair. You
 stop on the threshold: a key you held through the door waits until you let it
 go, since the view faces the same way on the other side and holding `W` would
-otherwise walk you straight back out. Everyone stays in their own place: you
-only see the bodies in the room you're in. Going into an
+otherwise walk you straight back out. Going into an
 agent's home through its door switches the chat to that agent, the same as
 going there on the map. From an agent's own view, clicking a door starts a
 visit: you come out of that door on the other side, in your own body.
 
 **Areas.** A home or a shared place can be somewhere else: the `place` tool's
-`room` action takes `area` ("the summer house"), and so does `new`. Places in
-the same area are joined to each other and not to the main building: two by a
-door from one straight into the other, three or more round a hall of their own
-("Summer house hall"). A place alone in its area has no door at all, and the
-map says so. Between areas, you use the map, which still goes anywhere. An agent can build itself a
-summer house with two rooms this way, or move its home out to a cabin with
-the places it made there. `area` "main" puts a place back in the main
-building.
+`room` action takes `area` ("the summer house"), and so does `new`. The
+places of an area are on **a plot of their own at the edge of town**, fenced,
+its name at the gate, at the end of the avenue where a path goes on to it.
+They are a walk away like everywhere else, each with its door out on to the
+plot. An agent can build itself a summer house with two rooms this way, or
+move its home out to a cabin with the places it made there. `area` "main"
+puts a place back on the streets.
 
-Rooms agents talk in always stay in the main building, on the meeting rooms'
-hall, whatever they are dressed as. A trip room is a beach to look at, but it
-is a room of conversation that several agents share, not anyone's own place to
-move, and it has no record of its own to say where it is. Splitting them out by
-theme would leave a string of one-room areas reached only by the map, which is
-what the building is for avoiding.
+Rooms agents talk in always stay in town: in the office, or in a building of
+their own when their theme has one. A meeting room is a room of
+conversation that several agents share, not anyone's own place to move, so
+`area` is refused there.
 
-**The map** lists each other area under **Other areas**, with what is in it;
-a click goes in by its way in. Halls are listed too, folded away under
-**Halls**, so you can still jump straight to one. The trail under the stage's buttons
-says which area you're in.
+**The map** draws the town from above, beside its list: the square, the
+streets and their names, the stream, the park and the shore, and every
+building, each a button that takes you into it. A house is in its owner's
+colour, with a dot when its owner is at work or waiting on you; a building
+anyone else is in has a dot for them; the one you're in is ringed. The list
+puts each plot under **Plots**, with what is on it.
 
-How it works: the building is worked out on every read from the places there
-are, by `places-world.ts` in the places plugin. Nothing about it is stored, so
-an agent's own changes to its room stay its own, and a home nobody has changed
-is still redrawn as rooms improve. A place's door goes wherever its room keeps
-a clear stretch of the back or left wall, at the end nearest the open side,
-which is where the rooms the world starts with keep their doorway. A room
-whose walls an agent has filled gets its door as a gate at the open front or
-right instead. Since the door depends on what is in the room, the page asks
-for it again after each change, and moves it if it moved. Halls are
-`hall:<area>:<wing>-<n>` in the main building (`hall:main:homes-1`) and
-`hall:<area>:<n>` elsewhere; a wing's foyer is `hall:main:<wing>-foyer`, and
-an area's own `hall:<area>:foyer`.
+How it works: the town is worked out on every read from the places there
+are, by `places-town.ts` and `places-world.ts` in the places plugin. It is
+pure, so the same places always make the same town, and nothing about it is
+stored: an agent's own changes to its room stay its own, and a home nobody
+has changed is still redrawn as rooms improve. The town is the place `town`,
+and the office's floors are `office`, `office:2` and so on, all drawn fresh,
+so neither can be rearranged. The server sends the town's plan with it
+(`place.town`), and the page builds it for the frame rate: each building is
+one mesh in its own colours and one for its windows, so it can still fade on
+its own; the roads, the ground, the trees and the lamps are a draw each; and
+a building's door is drawn in full only within 24 metres of where the camera
+looks, with one painted on its front from further off. Outdoors, you walk on
+a coarser grid than in a room, so a walk across town is still found at once.
+A room's own door goes wherever it keeps a clear stretch of the back or left
+wall, at the end nearest the open side, which is where the rooms the world
+starts with keep their doorway. A room whose walls an agent has filled gets
+its door as a gate at the open front or right instead. Since the door
+depends on what is in the room, the page asks for it again after each
+change, and moves it if it moved. The lobby's door out on to the square is
+in the middle of its open front.
 
 #### Who you are talking to
 
@@ -648,7 +707,7 @@ to someone else. The conversation follows who you are with:
   one starts.
 - **Coming back**, with **Back to** or by picking on the map the place the
   agent you came from is in, talks to that agent again, where you left off.
-- **The lobby and shared places** keep the conversation you had.
+- **The town, the lobby and shared places** keep the conversation you had.
 - **A reply on its way**, typed or spoken, is never cut off. The switch waits
   until it's done, and the panel says who is next meanwhile. Coming back
   before it's done, or picking the agent you're still with, calls the switch
@@ -803,8 +862,8 @@ The first change keeps the room. It becomes a `place` record,
 drawn, and the room is drawn from that record from then on. Nothing redraws
 it over someone's change, not even more members joining: they stand where
 there is room. Undoing that first change deletes the record, and the room is
-drawn from its name again. A meeting room keeps its door and stays in the
-meeting rooms' wing of the main building, so `area` is refused there.
+drawn from its name again. A meeting room keeps its door and stays in town,
+in the office or in a building of its own by its theme, so `area` is refused there.
 
 Only members go in. Anyone else is told whose room it is and who can change
 it: "#trip's meeting room is for the members of #trip: guest and host can go
@@ -909,8 +968,8 @@ offering, with a link to the agent's page, where you can add the tool.
 #### Rearranging a room yourself
 
 You can move the furniture too. **Edit room**, beside **Room** over the
-scene, works in a home, a shared place, a meeting room and the lobby; halls
-are laid out by the building, so they have none. The camera steps back to
+scene, works in a home, a shared place, a meeting room and the lobby; the
+town and the office's floors are laid out from what there is, so they have none. The camera steps back to
 take in the whole room, the walking keys rest, and the buttons over the
 scene become **Done**, **Undo**, **Redo** and **Add things**. Drag the
 floor to look round, drag with the right button to slide the view, and use
@@ -1126,7 +1185,9 @@ the screen, where the chat sits, and scroll inside. Keys pressed in a panel
 are the panel's: typing never walks your body, and Space there presses the
 button instead of starting to talk.
 
-**The lobby** is first on the map, and the biggest room. Its three kiosks
+**The lobby**, inside the town hall, is the biggest room, and what it has is
+out on the square too: the same kiosks, task board, screen and calendar, on
+and in front of the town hall's front. Its three kiosks
 start things: walk up and press the button on one, or click one from across
 the room. **New
 agent** opens a fresh chat with the default agent, a request already written
@@ -1514,9 +1575,9 @@ cues, and its text passes through untouched.
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
 | `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name. `company` is everyone else there with a body: `{agent, name, avatar, animations, role?, wear}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `wear` change that someone chose what a body wears |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, role?, wear?, wearChosen?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent, with `role` and `wear` as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, street?, role?, wear?, wearChosen?}], areas: [{id, name, places}], town}`. `kind` is `town` (the outdoors), `lobby` (the town hall's), `office` (a floor of the office), `home` (one per agent with a body, `owner` its agent, with `role` and `wear` as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the town; `areas` lists the town first, then each plot, each area's places its way in first. `via` is the place its way in is through: the town for a building, the floor of the office for a room on one, the floor below for a floor; there is none for the town. `street` is the street a building's door is on ("Maple Lane", "The square"). The page's "where you are" trail is read from them. `town` is the town's plan, for drawing it from above: `{width, depth, square, shore, stream, park, roads: [{id, name?, kind, width, points}], buildings: [{id, kind, at, facing, size, label, owner?, style, street}], plots: [{id, name, at, size, gate}], trees, lamps}`, in metres with +X east and +Z south. A building's `id` is the place its door opens on |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for a hall; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; the town (`town`) and the office's floors (`office`, `office:2`, ...) are laid out from what there is, always drawn fresh. The town's `place` carries `town`, its plan (as for `map`, each house with its owner's `role`), which the page builds the town from. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, at?, facing?, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), or, for a door in the front of a building in the town, where it stands (`at`) and the way out of it (`facing`, degrees, 0 facing south); the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for the town and the office's floors; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
 | `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for, and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
 | `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "remove", item}` or `{op: "color", item, color}`. A `remove` of one of the lobby's kiosks or its task board is a `why`; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
