@@ -475,7 +475,9 @@ export class SignPost {
   /** Size the sign for the screen; its height there in pixels, or undefined with no sign showing. */
   fit(perPixel: number, limits: [number, number]): number | undefined {
     this.perPixel = perPixel;
-    return this.shown && this.group.visible && !this.pooled && this.strength > 0 ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
+    return this.shown && this.group.visible && !this.pooled && this.strength > 0
+      ? fitSprite(this.shown, perPixel, limits)[1]
+      : undefined;
   }
 
   /** Draw it before or after what else floats over heads: tags are drawn at 10. */

@@ -2284,17 +2284,25 @@ foot of the view can be when you fly up high, is put away rather than drawn
 behind the hint.
 Out in the town, how far off a body is counts too. Near the camera, every
 tag is as it is indoors. Draw back, and the tags of those further off shrink
-and fade, and once a body is far (a few pixels high: zoomed out over the
-town, that is nearly everyone), only the ones worth a glance keep a tag: an
-agent waiting on you or stuck, at work or thinking, talking to someone, the
-one the chat is with, the one you are pointing at, and you. Theirs is a
-little smaller and a little faint, so the near ones stand out. The rest go
-quiet, their signs with them, and bodies far off keeping each other company
-(at a café table, on a bench, at the next table along) share one small chat
-mark over their heads instead of a pair of bubbles each. Point at any body,
-however far, and its name is back at full size, with what it is doing: a body
-a few pixels high counts as a little bigger than it is drawn, so it can be
-found with the pointer, and clicked. Indoors, a room is never big enough for
+and fade, and once a body is far (zoomed out over the town, that is nearly
+everyone), only the ones worth a glance keep a tag: an agent waiting on you
+or stuck, at work or thinking, talking to someone, the one the chat is with,
+the one you are pointing at, and you. Theirs is a little smaller and a
+little faint, so the near ones stand out, and so is the "3 thinking" over a
+table thinking together. How far is how much of the town is in view, not
+how many pixels a body is, so the view you arrive at keeps the tags round
+you on a phone as on a big screen, and a notch of zoom does the same on
+both. The rest go quiet, their signs with them, and bodies far off keeping
+each other company (at a café table, on a bench, at the next table along)
+share one small chat mark over their heads instead of a pair of bubbles
+each. It comes in as their names fade, over the names while they are still
+there, and settles on their heads once they are gone. One conversation has
+one sign: if one of them is the agent the chat is with, or the one you point
+at, its own sign says it for all of them. Point anywhere close to a body
+however far, and its name is back at full size, with what it is doing; a
+click there opens its menu when nothing else is under the pointer, and a
+click on the name always does, so a door, a bench or a house beside a far
+passer-by is still yours to click. Indoors, a room is never big enough for
 anyone in it to be far, and nothing changes.
 Point at a body, or walk up to it on a visit, and the tag says more. An idle
 agent's says what it is up to ("watering the plant"), what it did last and

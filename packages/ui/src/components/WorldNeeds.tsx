@@ -59,7 +59,11 @@ export function NeedsList({
                 <span className="world-map-dot" aria-hidden="true">
                   !
                 </span>
-                <span className="world-needs-who" style={{ ["--who" as string]: colorOf(need.agent) }}>
+                {/* The default agent's body keeps the model's own colours, so it has no dot, as in the chat. */}
+                <span
+                  className="world-needs-who"
+                  style={need.agent === "default" ? undefined : { ["--who" as string]: colorOf(need.agent) }}
+                >
                   {nameOf(need.agent)}
                 </span>
                 <span className="world-needs-when">{waited(need) ?? ""}</span>

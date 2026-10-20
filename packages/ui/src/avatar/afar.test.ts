@@ -2,52 +2,83 @@
  * Out in the town, seen from afar: near the camera every tag is as it always
  * is; far off only a body worth a glance keeps one, smaller and a little
  * faint; idle company far off shares one chat mark; and a body a few pixels
- * high can still be pointed at.
+ * high can still be pointed at. How far off is how much of the town is in
+ * view, so the town's usual view is near on a phone as on a big screen.
  */
 import { describe, expect, it } from "vitest";
 import {
   AWAY,
   afar,
-  BODY_M,
   chatGroups,
-  FAR_PX,
+  FAR_REACH,
   FAR_SHRINK,
   FAR_STRENGTH,
   farness,
+  fromAfar,
+  GROUP_FROM,
   markAt,
+  markLift,
   NEAR,
-  NEAR_PX,
+  NEAR_REACH,
   POINT_PX,
   pointedAt,
+  type Seen,
   worthAGlance,
 } from "./afar";
-import { metresPerPixel } from "./overhead";
+import { GAP_PX, metresPerPixel } from "./overhead";
+import { ROOM_VIEW } from "./scene";
+import { followDistance, REACH } from "./travel";
 
-/** Metres a screen pixel covers where a body is drawn `tall` pixels high. */
-const drawn = (tall: number) => BODY_M / tall;
+/** Metres a screen pixel covers at a body that a view `across` pixels wide, framed on it, takes in `reach` metres either side of. */
+const framed = (reach: number, across: number) => (2 * reach) / across;
+
+/**
+ * A stage `w` by `h` pixels, of which `seenH` down from the top can be seen
+ * (a phone's chat over the rest): the metres a pixel covers at your head,
+ * with the camera following you at `reach`, as the stage frames it, and the
+ * pixels across the narrower way of what can be seen.
+ */
+function following(reach: number, w: number, h: number, seenH = h): [number, number] {
+  const aspect = w / seenH;
+  const tall = seenH / h;
+  const depth = followDistance(reach, aspect, ROOM_VIEW.fov, tall);
+  return [metresPerPixel(depth, ROOM_VIEW.fov, h), tall * h * Math.min(1, aspect)];
+}
 
 describe("how far off a body looks", () => {
-  it("is near while it is drawn big enough, far once it is a few pixels high, and eased in between", () => {
-    expect(farness(drawn(NEAR_PX + 30))).toBe(0);
-    expect(farness(drawn(NEAR_PX))).toBe(0);
-    expect(farness(drawn(FAR_PX))).toBe(1);
-    expect(farness(drawn(8))).toBe(1);
-    const mid = farness(drawn((NEAR_PX + FAR_PX) / 2));
-    expect(mid).toBeCloseTo(0.5, 6);
+  it("is near while a view framed on it takes in little round it, far once it takes in most of the town, and eased in between", () => {
+    expect(farness(framed(REACH.outdoorStart, 712), 712)).toBe(0);
+    expect(farness(framed(NEAR_REACH, 712), 712)).toBe(0);
+    expect(farness(framed(FAR_REACH, 712), 712)).toBe(1);
+    expect(farness(framed(REACH.outdoors, 712), 712)).toBe(1);
+    expect(farness(framed((NEAR_REACH + FAR_REACH) / 2, 712), 712)).toBeCloseTo(0.5, 6);
     // Further is never nearer.
     let was = 0;
-    for (let tall = NEAR_PX; tall >= FAR_PX; tall -= 1) {
-      const far = farness(drawn(tall));
+    for (let reach = NEAR_REACH; reach <= FAR_REACH; reach += 0.5) {
+      const far = farness(framed(reach, 712), 712);
       expect(far).toBeGreaterThanOrEqual(was);
       was = far;
     }
   });
 
-  it("is near round you at the town's usual view, and far across it zoomed all the way out", () => {
-    // The camera 35 m back from you, on a stage 712 pixels high: the café beside you is near.
-    expect(farness(metresPerPixel(35, 35, 712))).toBe(0);
-    // Drawn back to the widest view, 114 m: the whole town is far.
-    expect(farness(metresPerPixel(114, 35, 712))).toBe(1);
+  it("is near round you at the town's usual view, on a phone as on a big screen, and far zoomed all the way out", () => {
+    const screens: [string, number, number, number?][] = [
+      ["a big screen", 1100, 900],
+      ["a laptop", 900, 712],
+      ["a phone", 390, 760],
+      ["a phone with its chat over the foot", 390, 844, 350],
+    ];
+    for (const [what, w, h, seenH] of screens) {
+      expect(farness(...following(REACH.outdoorStart, w, h, seenH)), what).toBe(0);
+      expect(farness(...following(REACH.outdoors, w, h, seenH)), what).toBe(1);
+    }
+  });
+
+  it("is as far at the same zoom whatever the screen", () => {
+    const big = farness(...following(20, 1100, 900));
+    expect(big).toBeGreaterThan(0);
+    expect(big).toBeLessThan(1);
+    expect(farness(...following(20, 390, 844, 350))).toBeCloseTo(big, 6);
   });
 });
 
@@ -128,6 +159,79 @@ describe("chat marks shared far off", () => {
         [1, 1.5, 2],
       ]),
     ).toEqual([1, 1.8, 1]);
+  });
+});
+
+describe("who gives a chat sign up to a shared mark", () => {
+  const body = (
+    id: string,
+    x: number,
+    far: number,
+    glance: Seen["glance"] = { doing: "idle" },
+    chatting = true,
+  ): Seen => ({
+    id,
+    at: [x, 0],
+    screen: [x * 100, 0],
+    far,
+    glance,
+    chatting,
+  });
+
+  it("is an idle body keeping company, once it is far enough off, its sign given to its group's one mark", () => {
+    const { looks, marks } = fromAfar([body("a", 0, 0.8), body("b", 1, 0.8)]);
+    expect(marks.map((m) => m.ids)).toEqual([["a", "b"]]);
+    expect(looks.get("a")?.sign).toBe(0);
+    expect(looks.get("b")?.sign).toBe(0);
+  });
+
+  it("isn't one nearer than that: each keeps its own sign, fading with its tag", () => {
+    const far = GROUP_FROM - 0.1;
+    const { looks, marks } = fromAfar([body("a", 0, far), body("b", 1, far)]);
+    expect(marks).toEqual([]);
+    expect(looks.get("a")).toEqual(afar(far, { doing: "idle" }));
+    expect(looks.get("a")?.sign).toBeGreaterThan(0);
+  });
+
+  it("is never one worth a glance: its own sign says it for the group, and the group has no mark", () => {
+    for (const glance of [
+      { doing: "idle" as const, partner: true },
+      { doing: "idle" as const, pointed: true },
+    ]) {
+      const { looks, marks } = fromAfar([body("a", 0, 0.9, glance), body("b", 1, 0.9)]);
+      expect(marks).toEqual([]);
+      expect(looks.get("a")?.sign).toBeGreaterThan(0);
+      // The idle one it chats with is quiet: one conversation, one sign.
+      expect(looks.get("b")?.sign).toBe(0);
+    }
+  });
+
+  it("is nobody who isn't keeping company", () => {
+    const { looks, marks } = fromAfar([body("a", 0, 0.9, { doing: "idle" }, false)]);
+    expect(marks).toEqual([]);
+    expect(looks.get("a")).toEqual(afar(0.9, { doing: "idle" }));
+  });
+
+  it("draws the mark as strongly as their names are faint, so it takes over from them as they fade", () => {
+    const fading = fromAfar([body("a", 0, 0.6), body("b", 1, 0.7)]).marks[0];
+    // The stronger name, a's, is 0.4: the mark is 0.6.
+    expect(fading.strength).toBeCloseTo(0.6, 6);
+    expect(fromAfar([body("a", 0, 1), body("b", 1, 1)]).marks[0].strength).toBe(1);
+  });
+});
+
+describe("where a shared chat mark stands over its group", () => {
+  it("is just over their heads while no name of theirs is drawn under it", () => {
+    expect(markLift([100, 200], 20, [])).toBe(GAP_PX);
+    // A name off to the side is not under it.
+    expect(markLift([100, 200], 20, [{ left: 130, right: 180, top: 170, bottom: 186 }])).toBe(GAP_PX);
+  });
+
+  it("is over a name of theirs still drawn there, where its own sign was, never through it", () => {
+    const name = { left: 80, right: 140, top: 178, bottom: 194 };
+    expect(markLift([100, 200], 20, [name])).toBe(200 - 178 + GAP_PX);
+    // Over the higher of two.
+    expect(markLift([100, 200], 20, [name, { ...name, top: 160, bottom: 176 }])).toBe(200 - 160 + GAP_PX);
   });
 });
 

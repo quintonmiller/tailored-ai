@@ -123,4 +123,18 @@ describe("an agent's colour", () => {
     hear({ type: "body", id: "planner", op: "delete" } as Partial<StateChangeInfo>);
     expect(dots().card).toBe(css(agentColor("planner")));
   });
+
+  it("is no colour in the needs list for the default agent, whose body keeps the model's own colours", async () => {
+    await act(async () =>
+      root.render(
+        <NeedsList
+          needs={[{ ...need, agent: "default" }]}
+          whereOf={() => undefined}
+          onOpen={() => {}}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    expect((container.querySelector(".world-needs-who") as HTMLElement).style.getPropertyValue("--who")).toBe("");
+  });
 });

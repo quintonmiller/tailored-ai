@@ -37,15 +37,16 @@ import { aboutLines, asleepWords } from "../lib/did";
 import {
   type Afar,
   afar,
-  chatGroups,
   farness,
+  fromAfar,
   GROUP_FROM,
   MARK_PX,
   markAt,
+  markLift,
   NEAR,
-  NEAR_PX,
   pointedAt,
-  worthAGlance,
+  type Seen,
+  SMALL_PX,
 } from "./afar";
 import {
   type Anchor,
@@ -120,7 +121,7 @@ import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, likesOf, see
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import { buildModel } from "./models";
 import type { BodyState } from "./motion";
-import { type Box, type Column, GAP_PX, metresPerPixel, stack, TAG_PX } from "./overhead";
+import { type Box, type Column, metresPerPixel, SETTLE_SECONDS, stack, TAG_PX } from "./overhead";
 import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildPlaque, buildProp, buildShell, disposeTree } from "./props";
 import { chatDue, chatPause, drawNotes, type Notes, talkedWords } from "./routines";
@@ -449,6 +450,8 @@ const HINT_MARGIN = 6;
 const GATHERED = 2;
 /** Where a cue over several thinking together is laid out among the tags: after every one, so it goes up over theirs. */
 const CUE_RANK = -1e9;
+/** A chat mark shared by a group far off (`afar.ts`): its sign, and how far over their heads it stands now, in pixels. */
+type ChatMark = { post: SignPost; lift?: number };
 /** A tall thing on the floor this near a body, in metres from its edge, is what it stands by: a panel keeps off it too. */
 const BESIDE_THING = 0.9;
 /** A room's boards to be read, which a faint tag in a crowd never sits over. */
@@ -2089,13 +2092,22 @@ export async function createStage(
         if (agent) return agent;
       }
     }
-    // Out in the town, a body far off is a few pixels high: anywhere close to it will do (`pointedAt`).
+    return undefined;
+  };
+  /**
+   * Out in the town, the agent whose body is close to the pointer though not
+   * under it: one far off is a few pixels high, so anywhere close to it will
+   * do (`pointedAt`). Only once nothing else is under the pointer: a door, a
+   * bench or a building beside a small body is what the pointer is on.
+   */
+  const agentNear = (e: At): string | undefined => {
     if (!isOutdoors(room)) return undefined;
+    const r = canvas.getBoundingClientRect();
     camera.updateMatrixWorld();
     const small = [...companions].flatMap(([agent, c]) => {
       const on = bodyOnStage(c);
       const tall = on ? on.box.bottom - on.box.top : 0;
-      return on && tall < NEAR_PX ? [{ id: agent, box: on.box }] : [];
+      return on && tall < SMALL_PX ? [{ id: agent, box: on.box }] : [];
     });
     return pointedAt([e.clientX - r.left, e.clientY - r.top], small);
   };
@@ -2157,8 +2169,17 @@ export async function createStage(
       me.goTo(room, it.approach, obstacles);
       return;
     }
-    if (it?.spot) go(it.spot);
-    else if (opts.visitor && travel === "walk") {
+    if (it?.spot) {
+      go(it.spot);
+      return;
+    }
+    // Nothing else here, close to a body drawn too small to click on itself: it is that body that was clicked.
+    const near = opts.onPick && !surface ? agentNear(e) : undefined;
+    if (near) {
+      opts.onPick?.(near, { x: e.clientX, y: e.clientY });
+      return;
+    }
+    if (opts.visitor && travel === "walk") {
       const to = floorAt(e);
       if (to) {
         greeting = undefined;
@@ -2179,16 +2200,19 @@ export async function createStage(
   const hoverAt = (e: At) => {
     // Rearranging, what is under the pointer is something to pick up (see `onEditMove`), not somewhere to go.
     if (editing) return;
-    const who = agentAt(e);
-    if (who !== hovered) hover(who);
+    const on = agentAt(e);
     // A surface brought up to read when clicked says so while the pointer is on it: found as a click finds it
     // (`surfaceUnder`), so a face on anything says so, a model's on a wall too, and what a click does is what it says.
-    const surface = !who && overAFace(e) ? surfaceUnder(e) : undefined;
+    const surface = !on && overAFace(e) ? surfaceUnder(e) : undefined;
     const reads = surface && !reading && layer.howUsed(surface) === "focus" ? surface : undefined;
     // A click on a surface does what the surface is for, not what is behind or around it.
     const it = reads ? undefined : pick(e);
     // A body stands in front of a door; the door behind it isn't what the pointer is on.
-    const door = !who && !leaving && opts.onDoor ? it?.door : undefined;
+    const door = !on && !leaving && opts.onDoor ? it?.door : undefined;
+    // Close to a body drawn too small to point at, out in the town, its tag comes back all the same, and what is
+    // beside it still says what it is: a click there is the body's only once nothing else is under it.
+    const who = on ?? agentNear(e);
+    if (who !== hovered) hover(who);
     const box = canvas.getBoundingClientRect();
     hoverDoor(door, { x: e.clientX - box.left, y: e.clientY - box.top });
     layer.hover(reads);
@@ -2199,7 +2223,7 @@ export async function createStage(
       });
     hoveredSurface = reads;
     // The room's plaque lights up, and says what a click on it opens, unless that is open on it already.
-    const plaqued = !who && !!plaque && it?.action === "place" && !onPlaque;
+    const plaqued = !on && !!plaque && it?.action === "place" && !onPlaque;
     if (plaqued !== overPlaque) {
       plaque?.highlight(plaqued);
       overPlaque = plaqued;
@@ -3828,8 +3852,11 @@ export async function createStage(
   const onScreen = new THREE.Vector3();
   /** What floats over each head on the stage this frame, by whose head: its tag, sign and bubble, as boxes. */
   let overheads = new Map<string, Box[]>();
-  /** The chat marks shared by far-off groups keeping each other company, by the first of each group (`afar.ts`). */
-  const chatMarks = new Map<string, SignPost>();
+  /**
+   * The chat marks shared by far-off groups keeping each other company, by the first of each group (`afar.ts`): each
+   * one's sign, and how far over their heads it stands now, in screen pixels.
+   */
+  const chatMarks = new Map<string, ChatMark>();
   /** The corners of some boxes, for the box round all of them. */
   const boxCorners = (boxes: Box[]): [number, number][] =>
     boxes.flatMap((b): [number, number][] => [
@@ -3861,26 +3888,32 @@ export async function createStage(
       ...departing.map((d, i): [string, string | undefined] => [`leaving ${i}`, d.agent]),
     ]);
     camera.updateMatrixWorld();
+    const outdoors = isOutdoors(room);
+    // Pixels across the narrower way of what can be seen, as the camera frames it (`followDistance`): how far off a
+    // body looks is how much of the town is in view round it (`farness`), the same on a phone as on a big screen.
+    const across = visibleTall() * stageH * Math.min(1, visibleAspect());
     const columns: Column[] = [];
-    // One cue over each group thinking together, laid out with the tags: last of all, so it goes up over theirs.
+    // One cue over each group thinking together, laid out with the tags: last of all, so it goes up over theirs. Far
+    // off, it is drawn as the tag of one at work is (`afar`): a little smaller and fainter.
     for (const [key, cue] of poolThinking()) {
       const depth = -onScreen.copy(cue.at).applyMatrix4(camera.matrixWorldInverse).z;
       cue.sprite.visible = depth > 0.05;
       if (!cue.sprite.visible) continue;
       cue.perPixel = metresPerPixel(depth, camera.fov, stageH);
+      const look = outdoors ? afar(farness(cue.perPixel, across), { doing: "thinking" }) : NEAR;
+      cue.sprite.material.opacity = look.tag;
       onScreen.copy(cue.at).project(camera);
       columns.push({
         id: key,
         x: ((onScreen.x + 1) / 2) * stageW,
         y: ((1 - onScreen.y) / 2) * stageH,
-        tag: fitSprite(cue.sprite, cue.perPixel, TAG_PX),
+        tag: fitSprite(cue.sprite, cue.perPixel, [TAG_PX[0] * look.size, TAG_PX[1] * look.size]),
         rank: CUE_RANK,
         focus: true,
       });
     }
-    const outdoors = isOutdoors(room);
     const partner = opts.partner?.();
-    const seen: { id: string; f: Figure; agent?: string; depth: number; perPixel: number; x: number; y: number }[] = [];
+    const seen: (Seen & { f: Figure; depth: number; perPixel: number })[] = [];
     for (const [id, f] of bodies) {
       // A body put away, like yours while you fly, shows nothing over its head for others to make way for.
       if (!f.body.visible) continue;
@@ -3890,32 +3923,36 @@ export async function createStage(
       if (depth <= 0.05) continue;
       onScreen.copy(crown).project(camera);
       const perPixel = metresPerPixel(depth, camera.fov, stageH);
-      const x = ((onScreen.x + 1) / 2) * stageW;
-      const y = ((1 - onScreen.y) / 2) * stageH;
-      seen.push({ id, f, agent: agentOf.get(id), depth, perPixel, x, y });
+      const agent = agentOf.get(id);
+      seen.push({
+        id,
+        f,
+        depth,
+        perPixel,
+        at: [f.walker.place.x, f.walker.place.z],
+        screen: [((onScreen.x + 1) / 2) * stageW, ((1 - onScreen.y) / 2) * stageH],
+        // Indoors, nobody is far.
+        far: outdoors ? farness(perPixel, across) : 0,
+        glance: {
+          ...(agent && !opts.still && activities[agent] ? { doing: activities[agent].doing } : {}),
+          speaking: f.speaking(clock),
+          pointed: closeTo(agent ?? id),
+          partner: !!agent && agent === partner,
+          you: f === me,
+        },
+        chatting: !!shows.get(f)?.behavior.chat,
+      });
     }
     // Out in the town, seen from afar (`afar.ts`): near, as always; far off, only a body worth a glance keeps its tag,
     // and those keeping each other company share one small chat mark.
-    const looks = new Map<string, Afar>();
-    const chatters: { id: string; at: [number, number]; screen: [number, number] }[] = [];
-    for (const b of seen) {
-      if (!outdoors) continue;
-      const far = farness(b.perPixel);
-      const glance = {
-        ...(b.agent && !opts.still && activities[b.agent] ? { doing: activities[b.agent].doing } : {}),
-        speaking: b.f.speaking(clock),
-        pointed: closeTo(b.agent ?? b.id),
-        partner: !!b.agent && b.agent === partner,
-        you: b.f === me,
-      };
-      let look = afar(far, glance);
-      if (far >= GROUP_FROM && !worthAGlance(glance) && shows.get(b.f)?.behavior.chat) {
-        look = { ...look, sign: 0 };
-        chatters.push({ id: b.id, at: [b.f.walker.place.x, b.f.walker.place.z], screen: [b.x, b.y] });
-      }
-      looks.set(b.id, look);
-    }
-    for (const { id, f, depth, perPixel, x, y } of seen) {
+    const { looks, marks } = outdoors ? fromAfar(seen) : { looks: new Map<string, Afar>(), marks: [] };
+    for (const {
+      id,
+      f,
+      depth,
+      perPixel,
+      screen: [x, y],
+    } of seen) {
       const over = f.fitOver(perPixel, clock, looks.get(id) ?? NEAR);
       // Whoever is talking keeps its tag's place over its head, so its bubble's tail can reach it there; then the tag
       // under the pointer, or of the one you stand by; then the nearer.
@@ -3928,38 +3965,39 @@ export async function createStage(
       const body = feet && { left: x - half, right: x + half, top: y, bottom: Math.max(y + half, feet[1]) };
       columns.push({ id, x, y, rank, focus: close || speaking, ...(body ? { body } : {}), ...over });
     }
-    const groups = chatGroups(chatters);
     const figures = new Map(seen.map((b) => [b.id, b.f]));
-    const marked = new Set<string>();
-    for (const group of groups) {
-      const key = group[0];
-      marked.add(key);
+    // Each shared chat mark over the middle of its group, sized for the screen: where its foot is there, and how big.
+    const placing: { mark: ChatMark; ids: string[]; foot: [number, number]; size: number }[] = [];
+    for (const { ids, strength } of marks) {
+      const key = ids[0];
       let mark = chatMarks.get(key);
       if (!mark) {
-        mark = new SignPost();
-        mark.set("chat", clock);
+        mark = { post: new SignPost() };
+        mark.post.set("chat", clock);
         // Under the tags, which are drawn at 10.
-        mark.order(9.5);
-        scene.add(mark.group);
+        mark.post.order(9.5);
+        scene.add(mark.post.group);
         chatMarks.set(key, mark);
       }
-      const crowns = group.map((id) => (figures.get(id) as Figure).crown().toArray() as [number, number, number]);
-      mark.group.position.set(...markAt(crowns));
-      const depth = -onScreen.copy(mark.group.position).applyMatrix4(camera.matrixWorldInverse).z;
+      mark.post.strength = strength;
+      const crowns = ids.map((id) => (figures.get(id) as Figure).crown().toArray() as [number, number, number]);
+      const where = mark.post.group.position.set(...markAt(crowns));
+      const depth = -onScreen.copy(where).applyMatrix4(camera.matrixWorldInverse).z;
       if (depth <= 0.05) continue;
-      // Just over their heads, where they are, and under any name drawn there: a mark never makes a tag move, nor
-      // goes off up the screen to make way for one, which would leave it over nobody.
-      mark.fit(metresPerPixel(depth, camera.fov, stageH), MARK_PX);
-      mark.place(GAP_PX);
+      const size = mark.post.fit(metresPerPixel(depth, camera.fov, stageH), MARK_PX);
+      onScreen.copy(where).project(camera);
+      const foot: [number, number] = [((onScreen.x + 1) / 2) * stageW, ((1 - onScreen.y) / 2) * stageH];
+      if (size !== undefined) placing.push({ mark, ids, foot, size });
     }
+    const marked = new Set(marks.map((m) => m.ids[0]));
     for (const [key, mark] of chatMarks)
       if (!marked.has(key)) {
-        mark.dispose();
+        mark.post.dispose();
         chatMarks.delete(key);
       }
     // For anyone inspecting the page, like `data-hovered`: of the bodies far off, how many keep a tag and how many
     // are quiet, and the chat marks shared between them.
-    const far = seen.filter((b) => farness(b.perPixel) >= GROUP_FROM).map((b) => looks.get(b.id) ?? NEAR);
+    const far = seen.filter((b) => b.far >= GROUP_FROM).map((b) => looks.get(b.id) ?? NEAR);
     const kept = far.filter((l) => l.tag > 0).length;
     const afarWords = outdoors ? `far: ${kept} tagged, ${far.length - kept} quiet, ${chatMarks.size} chat marks` : "";
     if (host.dataset.afar !== afarWords) host.dataset.afar = afarWords;
@@ -4001,7 +4039,21 @@ export async function createStage(
       const at = laid.get(id);
       if (at) f.placeOver(at, dt, 12 + Math.max(0, said.indexOf(id)));
     }
-    for (const mark of chatMarks.values()) mark.update(clock);
+    // A shared chat mark just over its group's heads, where they are, or over any of their names still drawn there
+    // (`markLift`): it never makes a tag move, nor goes off up the screen to make way for anyone else's, which would
+    // leave it over nobody. It glides, as the tags do, while their names fade.
+    const byId = new Map(columns.map((c) => [c.id, c]));
+    for (const { mark, ids, foot, size } of placing) {
+      const tags = ids.flatMap((id) => {
+        const c = byId.get(id);
+        const at = laid.get(id);
+        return c?.tag && at && !at.hidden ? [overBox(c.x + at.tagAcross, c.y - at.tag, c.tag)] : [];
+      });
+      const to = markLift(foot, size, tags);
+      mark.lift = mark.lift === undefined ? to : ease(mark.lift, to, dt, SETTLE_SECONDS);
+      mark.post.place(mark.lift);
+    }
+    for (const mark of chatMarks.values()) mark.post.update(clock);
   }
 
   // When the controls that step aside (`opts.fades`) were last looked at.
@@ -4970,7 +5022,7 @@ export async function createStage(
       for (const d of departing.splice(0)) d.fig.dispose();
       for (const c of cues.values()) disposeSprite(c.sprite);
       cues.clear();
-      for (const mark of chatMarks.values()) mark.dispose();
+      for (const mark of chatMarks.values()) mark.post.dispose();
       chatMarks.clear();
       shows.clear();
       unfade();

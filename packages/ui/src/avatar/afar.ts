@@ -8,22 +8,27 @@
  * between them, rather than one each. Pointing at a body always brings its
  * name back, as it is near.
  *
- * How far off a body is is how big it is drawn: the metres a screen pixel
- * covers at its head, as the tag's own size is worked out (`overhead.ts`).
- * Zoomed out over the town, everything is far; zoomed in on the square, the
- * people round you are near again. Indoors, nothing here applies: a room is
- * never big enough for anyone in it to be far. Pure, so it is tested without
- * a GPU.
+ * How far off a body is is how big it is drawn against how much of the
+ * town is in view: the metres a screen pixel covers at its head, as the
+ * tag's own size is worked out (`overhead.ts`), across the narrower way of
+ * what can be seen. Measured so, the town's usual view round you is near on
+ * a phone as on a big screen, and the same zoom is as far on both. Zoomed
+ * out over the town, everything is far; zoomed in on the square, the people
+ * round you are near again. Indoors, nothing here applies: a room is never
+ * big enough for anyone in it to be far. Pure, so it is tested without a GPU.
  */
 import type { AgentActivity } from "./doing";
-import type { Box } from "./overhead";
+import { type Box, GAP_PX } from "./overhead";
 
-/** About how tall a body stands, in metres: how big one comes out on the screen. */
-export const BODY_M = 1.6;
-/** A body drawn at least this many pixels tall is near: what is over its head is as it always is. */
-export const NEAR_PX = 40;
-/** One drawn this many pixels tall or less is far: only a body worth a glance keeps its tag. */
-export const FAR_PX = 22;
+/**
+ * A body is near while it is drawn as big as one in the middle of a view
+ * that takes in this many metres either side, across its narrower way
+ * (`REACH` in `travel.ts`), or bigger: a notch or so out from where the
+ * town's view starts, at 11.
+ */
+export const NEAR_REACH = 14;
+/** One drawn as small as one in the middle of a view this wide, or smaller, is far: most of the way out. */
+export const FAR_REACH = 26;
 /** How big a far tag is drawn, against the smallest a near one is: smaller, still big enough to read. */
 export const FAR_SHRINK = 0.82;
 /** How strongly a far tag worth a glance is drawn: a little faint, so the near ones stand out. */
@@ -38,19 +43,23 @@ export const GROUP_M = 4;
 export const GROUP_PX = 28;
 /** CSS pixels on screen for each pixel of a shared chat mark's canvas: small, between 17 and 23 pixels across. */
 export const MARK_PX: [number, number] = [0.13, 0.18];
-/** The least a far body is to point at, in CSS pixels across and down: a body a few pixels tall is hard to find. */
+/** A body drawn less than this many CSS pixels tall is small to point at: anywhere close to it will do (`pointedAt`). */
+export const SMALL_PX = 40;
+/** The least a small body is to point at, in CSS pixels across and down: a body a few pixels tall is hard to find. */
 export const POINT_PX = 22;
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 /**
- * How far off a body looks, from 0 (near) to 1 (far), by `perPixel`, the
- * metres a screen pixel covers at its head: eased in between, so a tag fades
- * as the camera draws back rather than all at once.
+ * How far off a body looks, from 0 (near) to 1 (far): by `perPixel`, the
+ * metres a screen pixel covers at its head, and `across`, the CSS pixels
+ * across the narrower way of what can be seen, which together say how much
+ * of the town a view framed on it would take in either side. Eased in
+ * between, so a tag fades as the camera draws back rather than all at once.
  */
-export function farness(perPixel: number): number {
-  const tall = BODY_M / Math.max(1e-6, perPixel);
-  const u = clamp((NEAR_PX - tall) / (NEAR_PX - FAR_PX), 0, 1);
+export function farness(perPixel: number, across: number): number {
+  const reach = (perPixel * Math.max(1, across)) / 2;
+  const u = clamp((reach - NEAR_REACH) / (FAR_REACH - NEAR_REACH), 0, 1);
   return u * u * (3 - 2 * u);
 }
 
@@ -140,6 +149,44 @@ export function chatGroups(chatters: Chatter[], metres = GROUP_M, pixels = GROUP
   return [...out.values()];
 }
 
+/** A body out in the town as `fromAfar` takes it: where it is, how far off it looks, and what it is doing. */
+export interface Seen extends Chatter {
+  /** How far off it looks (`farness`). */
+  far: number;
+  glance: Glance;
+  /** It is keeping someone company, under a chat sign. */
+  chatting?: boolean;
+}
+
+/** A chat mark shared by a group keeping each other company far off: who, and how strongly it is drawn. */
+export interface Mark {
+  ids: string[];
+  /** Strong as their names are faint: it takes over from them as they fade, rather than all at once. */
+  strength: number;
+}
+
+/**
+ * How everyone out in the town is drawn from where the camera is: each
+ * body's tag and sign (`afar`), by id, and the chat marks shared between
+ * them. Bodies keeping each other company from `GROUP_FROM` off give their
+ * chat signs up, and each group of them (`chatGroups`) has one mark; but
+ * where one of a group is worth a glance (the one the chat is with, the one
+ * under the pointer), it keeps its own sign, which says it for the group,
+ * and the group has no mark. One conversation, one sign, whoever is in it.
+ */
+export function fromAfar(bodies: Seen[]): { looks: Map<string, Afar>; marks: Mark[] } {
+  const looks = new Map(bodies.map((b): [string, Afar] => [b.id, afar(b.far, b.glance)]));
+  const company = bodies.filter((b) => b.chatting && b.far >= GROUP_FROM);
+  const worth = new Set(company.filter((b) => worthAGlance(b.glance)).map((b) => b.id));
+  const marks: Mark[] = [];
+  for (const ids of chatGroups(company)) {
+    for (const id of ids) if (!worth.has(id)) looks.set(id, { ...(looks.get(id) ?? NEAR), sign: 0 });
+    if (ids.some((id) => worth.has(id))) continue;
+    marks.push({ ids, strength: 1 - Math.max(...ids.map((id) => looks.get(id)?.tag ?? 0)) });
+  }
+  return { looks, marks };
+}
+
 /**
  * Where a group's shared chat mark stands in the room: over the middle of
  * them on the ground, on the top of the tallest head among them, so it sits
@@ -155,11 +202,26 @@ export function markAt(crowns: [number, number, number][]): [number, number, num
 }
 
 /**
- * The far body the pointer is on, when the pointer missed every body itself:
- * each counts as at least `least` pixels across and tall round its middle,
- * so one drawn a few pixels high can still be pointed at, and the nearest
- * middle wins where two overlap. Only bodies drawn small are given in: a
- * near one is only where it is drawn.
+ * How far up from its group's heads a shared chat mark stands, in screen
+ * pixels: `gap` over them, unless one of their names is still drawn there,
+ * fading as the camera draws back; then `gap` over that name, where its own
+ * sign was, so the mark is never drawn through a name. `at` is the foot of
+ * the mark on the screen, `width` how wide it is, `tags` where its group's
+ * names are drawn.
+ */
+export function markLift(at: [number, number], width: number, tags: Box[], gap = GAP_PX): number {
+  let lift = gap;
+  for (const t of tags)
+    if (t.right > at[0] - width / 2 && t.left < at[0] + width / 2) lift = Math.max(lift, at[1] - t.top + gap);
+  return lift;
+}
+
+/**
+ * The small body the pointer is close to, when the pointer is on no body
+ * itself: each counts as at least `least` pixels across and tall round its
+ * middle, so one drawn a few pixels high can still be pointed at, and the
+ * nearest middle wins where two overlap. Only bodies drawn small are given
+ * in: a near one is only where it is drawn.
  */
 export function pointedAt(
   at: [number, number],
