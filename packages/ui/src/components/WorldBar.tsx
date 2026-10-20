@@ -83,30 +83,67 @@ export interface BarItem {
   count?: number;
 }
 
-/** Pixels the row gives each thing in it, and between them: icons, icons with words, the menu, and where you are. */
-export const BAR = { icon: 34, gap: 4, letter: 7, wordsMax: 150, here: 72, travel: 68, pad: 8 };
+/**
+ * Pixels the row gives each thing in it, and between them, as drawn: an
+ * icon, the space between an icon and its words and a letter of them (12px
+ * of the page's monospace), the most a name takes, the least kept for where
+ * you are, the way you get around, and the row's own padding and border.
+ */
+export const BAR = { icon: 35, gap: 4, beside: 6, letter: 7.2, wordsMax: 150, here: 72, travel: 77, pad: 8 };
 
-/** How wide a thing is in the row. */
+/**
+ * How much each of the stage's tools wants a place in the row: the map keeps
+ * its place however little room there is; then what agents wait on you for,
+ * then whom you can talk to beside you, then the tasks.
+ */
+export const RANKS = { map: 5, needs: 4, near: 3, tasks: 2 };
+
+/** The fewest letters of a name worth showing beside its icon: with room for fewer, the icon alone, the name in its tip. */
+const FEWEST = 3;
+
+/** How wide a thing is in the row, all of it. */
 const widthOf = (item: BarItem) =>
-  item.words ? Math.min(BAR.wordsMax, BAR.icon + item.words.length * BAR.letter) : BAR.icon;
+  item.words ? Math.min(BAR.wordsMax, BAR.icon + BAR.beside + item.words.length * BAR.letter) : BAR.icon;
 
 /**
  * Which things are in the row and which in the menu, for a row `width`
  * pixels wide: as many of those that want a place as fit, the keenest first,
  * in the order given; beside them the way you get around, the menu's button,
- * and room for where you are. The rest are in the menu, in the order given.
+ * and room for where you are. A name that doesn't all fit takes what room is
+ * left, cut short (`squeezed`, its width), or with too little for a few
+ * letters, its icon alone. The rest are in the menu, in the order given.
  */
-export function barLayout(items: BarItem[], width: number): { row: BarItem[]; menu: BarItem[] } {
+export function barLayout(
+  items: BarItem[],
+  width: number,
+): { row: BarItem[]; menu: BarItem[]; squeezed: Record<string, number> } {
   let left = width - BAR.pad - BAR.travel - BAR.icon - BAR.here - 3 * BAR.gap;
   const keen = items.filter((i) => i.rank !== undefined).sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0));
-  const inRow = new Set<string>();
+  const inRow = new Map<string, BarItem>();
+  const squeezed: Record<string, number> = {};
   for (const item of keen) {
-    const w = widthOf(item) + BAR.gap;
-    if (w > left) continue;
-    left -= w;
-    inRow.add(item.id);
+    const w = widthOf(item);
+    if (w + BAR.gap <= left) {
+      left -= w + BAR.gap;
+      inRow.set(item.id, item);
+      continue;
+    }
+    if (!item.words) continue;
+    const room = left - BAR.gap;
+    if (room >= BAR.icon + BAR.beside + FEWEST * BAR.letter) {
+      squeezed[item.id] = Math.floor(room);
+      left = 0;
+      inRow.set(item.id, item);
+    } else if (room >= BAR.icon) {
+      left -= BAR.icon + BAR.gap;
+      inRow.set(item.id, { ...item, words: undefined });
+    }
   }
-  return { row: items.filter((i) => inRow.has(i.id)), menu: items.filter((i) => !inRow.has(i.id)) };
+  return {
+    row: items.flatMap((i) => inRow.get(i.id) ?? []),
+    menu: items.filter((i) => !inRow.has(i.id)),
+    squeezed,
+  };
 }
 
 /** How long a finger is held on an icon before it says what it is, and how long it says it after. */
@@ -197,7 +234,7 @@ export function WorldBar({
     measure();
     return () => watch.disconnect();
   }, []);
-  const { row, menu } = barLayout(items, width);
+  const { row, menu, squeezed } = barLayout(items, width);
   useEffect(() => {
     if (!open) return;
     const key = (e: KeyboardEvent) => {
@@ -207,15 +244,17 @@ export function WorldBar({
       e.stopPropagation();
       setOpen(false);
     };
-    const away = (e: PointerEvent) => {
+    // Closed by a click elsewhere, once that click has done what it does: the page's Chat button, pressed with the
+    // menu open, still sees the chat stepped aside for it and brings it back, rather than putting it away.
+    const away = (e: MouseEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
     };
     window.addEventListener("keydown", key, true);
-    window.addEventListener("pointerdown", away);
+    window.addEventListener("click", away);
     box.current?.querySelector<HTMLButtonElement>(".world-more-menu button")?.focus();
     return () => {
       window.removeEventListener("keydown", key, true);
-      window.removeEventListener("pointerdown", away);
+      window.removeEventListener("click", away);
     };
   }, [open]);
   const where = trail.at(-1);
@@ -234,6 +273,7 @@ export function WorldBar({
             aria-pressed={item.pressed}
             aria-expanded={item.expanded}
             title={item.title ?? item.label}
+            style={squeezed[item.id] ? { maxWidth: squeezed[item.id] } : undefined}
             data-tip={held["data-tip"]}
             onPointerDown={held.onPointerDown}
             onPointerUp={held.onPointerUp}

@@ -19,6 +19,7 @@ import {
   lightsFor,
   lookTarget,
   MIN_ASPECT,
+  NIGHT_GLOW,
   nearestWithin,
   OPEN_SIDES,
   OWN_NEAREST,
@@ -155,6 +156,18 @@ describe("the town's light", () => {
     expect(evening.sun.intensity).toBeGreaterThan(night.sun.intensity);
     // Out of doors at night the lamps reach further than a room's, so a street is lit between them.
     expect(night.lamp.reach ?? 1).toBeGreaterThan(lightingFor(23, "home").lamp.reach ?? 1);
+  });
+
+  it("gives the town's buildings a faint glow of their own at night only, so a roof turned from the moon isn't black", () => {
+    for (const hour of [21, 23, 2]) expect(lightingFor(hour, "outdoor").glow).toBe(NIGHT_GLOW);
+    for (const hour of [6, 12, 18]) expect(lightingFor(hour, "outdoor").glow).toBeUndefined();
+    // Indoors the lamps do it.
+    expect(lightingFor(23, "home").glow).toBeUndefined();
+    expect(lightingFor(23, "public").glow).toBeUndefined();
+    // Faint, and moonlit blue: a fifth or less of full in every channel, blue the most.
+    const [r, g, b] = [NIGHT_GLOW >> 16, (NIGHT_GLOW >> 8) & 0xff, NIGHT_GLOW & 0xff];
+    expect(Math.max(r, g, b)).toBeLessThanOrEqual(0x55);
+    expect(b).toBeGreaterThan(Math.max(r, g));
   });
 
   it("sees out past the woods round the town to the horizon", () => {
@@ -594,15 +607,19 @@ describe("fitView", () => {
   // The camera's way of looking, as the room view has it, to put the points where the camera would see them.
   const { azimuth: a, elevation: e, fov } = ROOM_VIEW;
   const back = new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a));
-  /** Each point's place across and up the frame, -1 to 1 at its edges, from a camera framed as `fitView` says. */
-  const onFrame = (points: [number, number, number][], aspect: number, tall = 1) => {
-    const { target, distance } = fitView(points, aspect, tall);
+  /**
+   * Each point's place across and up what can be seen, -1 to 1 at its edges,
+   * from a camera framed as `fitView` says. The camera's own frame is the
+   * whole stage: what can be seen is `tall` of it each way, its shape
+   * `aspect`, so a point at its edge is at `tall` in the camera's frame.
+   */
+  const onFrame = (points: [number, number, number][], aspect: number, tall = 1, foot = 0) => {
+    const { target, distance } = fitView(points, aspect, tall, foot);
     const camera = new THREE.PerspectiveCamera(fov, aspect, 0.05, 500);
     camera.position.copy(new THREE.Vector3(...target).addScaledVector(back, distance));
     camera.lookAt(...target);
     camera.updateMatrixWorld();
-    // With part of the stage covered, the frame is that much shorter: a point at the edge of the part is at `tall`.
-    return points.map((p) => new THREE.Vector3(...p).project(camera)).map((v) => [v.x, v.y / tall]);
+    return points.map((p) => new THREE.Vector3(...p).project(camera)).map((v) => [v.x / tall, v.y / tall]);
   };
   // You at the door of a meeting room, its table in the middle and its task board on the back wall.
   const you: [number, number, number][] = [
@@ -621,15 +638,38 @@ describe("fitView", () => {
   const points = [...you, ...table, ...board];
 
   it("has you, the table and the board all in the frame, with a margin, however the frame is shaped", () => {
+    // Wide and narrow, and two short: one wide strip over a phone's chat, one narrow, held in by its width.
     for (const [aspect, tall] of [
       [1.6, 1],
       [0.9, 1],
       [2.6, 0.45],
+      [0.7, 0.5],
     ]) {
       for (const [x, y] of onFrame(points, aspect, tall)) {
         expect(Math.abs(x), `${aspect} ${tall}`).toBeLessThanOrEqual(0.93);
         expect(Math.abs(y), `${aspect} ${tall}`).toBeLessThanOrEqual(0.93);
       }
+    }
+  });
+
+  it("keeps them all above the keys hint along the foot, using the rest of the frame", () => {
+    for (const [aspect, tall, foot] of [
+      [1.6, 1, 0.08],
+      [0.9, 1, 0.15],
+      [2.6, 0.45, 0.25],
+    ]) {
+      const seen = onFrame(points, aspect, tall, foot);
+      // The hint covers the bottom `foot` of the height: -1 up to -1 + 2 * foot.
+      for (const [x, y] of seen) {
+        expect(Math.abs(x), `${aspect} ${tall} ${foot}`).toBeLessThanOrEqual(0.93);
+        expect(y, `${aspect} ${tall} ${foot}`).toBeGreaterThanOrEqual(-1 + 2 * foot);
+        expect(y, `${aspect} ${tall} ${foot}`).toBeLessThanOrEqual(0.93);
+      }
+      // And no further back than it has to be: something is at an edge of what is left, across or up and down.
+      const out = Math.max(
+        ...seen.map(([x, y]) => Math.max(Math.abs(x) / 0.92, Math.abs(y - foot) / ((1 - foot) * 0.92))),
+      );
+      expect(out, `${aspect} ${tall} ${foot}`).toBeGreaterThan(0.97);
     }
   });
 

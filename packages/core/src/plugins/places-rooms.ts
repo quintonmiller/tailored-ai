@@ -371,6 +371,8 @@ interface Placed extends Omit<Piece, "u" | "v"> {
   facing: number;
   /** A wall thing's wall, and how far along it. */
   wall?: { side: "back" | "left"; along: number };
+  /** Something stood `on` another, turned this many degrees from the way that one faces: a screen turned round. */
+  turn?: number;
 }
 
 /**
@@ -434,7 +436,7 @@ function furnish(start: Place, pieces: Placed[]): Place {
     if (piece.on) {
       const base = ids.get(piece.on);
       const got = base ? findPlacement(place, placing, { on: base }) : "";
-      if (typeof got !== "string") to = got;
+      if (typeof got !== "string") to = piece.turn ? { ...got, facing: got.facing + piece.turn } : got;
     } else if (kind.mount === "wall" && piece.wall) {
       const { side, along } = piece.wall;
       // A bigger one hangs with its middle where a normal one's would be.
@@ -1002,8 +1004,9 @@ function island(kind: Island, [x, z]: [number, number], look: Look, key: string)
 
 /**
  * A front desk at `at`, its working side turned to `facing`, where whoever
- * minds it stands at its screen, looking back over it at whoever comes in: a
- * screen on it of who is doing what, a plant, and a stool pulled out beside.
+ * minds it stands, looking back over it at whoever comes in: on it a screen
+ * of who is doing what, turned round to face them, so whoever walks up can
+ * read it and bring it up close; a plant; and a stool pulled out beside.
  */
 function frontDesk(at: [number, number], facing: number, look: Look, key: string): Placed[] {
   const f = (facing * Math.PI) / 180;
@@ -1014,7 +1017,7 @@ function frontDesk(at: [number, number], facing: number, look: Look, key: string
   ];
   return [
     { key: `${key}:desk`, kind: "desk", name: "the front desk", at, facing, color: look.wood },
-    { kind: "monitor", name: "the front desk screen", on: `${key}:desk`, at, facing, shows: "status" },
+    { kind: "monitor", name: "the front desk screen", on: `${key}:desk`, at, facing, turn: 180, shows: "status" },
     { kind: "small_plant", name: "the front desk plant", on: `${key}:desk`, at, facing },
     { kind: "stool", name: "the front desk stool", at: by(0.95, 0.55), facing: facing + 160 },
   ];
@@ -1850,6 +1853,17 @@ export function officeFloor(name: string, width: number, depth: number, doors: D
   ];
   // The way in, at the front on the left, which the front desk is minded toward.
   const wayIn: [number, number] = [round(-width / 2 + 2), round(depth / 2)];
+  // The notices hang on the back wall past its last door, however many doors the floor has, and the plant by them at
+  // their far end, toward the corner: a full floor's doors take all but the last metre and a half of that wall.
+  const pastDoors = Math.max(
+    -width / 2,
+    ...doors.filter((d) => d.wall === "back").map((d) => d.along + DOORWAY.width / 2),
+  );
+  const notices = round(Math.max(width / 2 - 2.4, pastDoors + 0.1 + KINDS.feed.footprint[0] / 2));
+  const byNotices: [number, number] = [
+    round(notices + KINDS.feed.footprint[0] / 2 + 0.04 + KINDS.plant.footprint[0] / 2),
+    round(-depth / 2 + KINDS.plant.footprint[1] / 2 + 0.05),
+  ];
   const desk: [number, number] = [round(inner.right - 0.4), round(front - 0.5)];
   const towardIn = (Math.atan2(wayIn[0] - desk[0], wayIn[1] - desk[1]) * 180) / Math.PI;
   const after: Placed[] = [
@@ -1871,23 +1885,17 @@ export function officeFloor(name: string, width: number, depth: number, doors: D
       color: look.wood,
     },
     { kind: "books", name: "the magazines", on: "wait:table", at: [0, 0], facing: 0 },
-    // The notices: what got done lately, on the back wall past the doors, with a plant beside it.
+    // The notices: what got done lately, past the doors (see `notices`).
     {
       id: "notices",
       name: "the notice board",
       kind: "feed",
       at: [0, 0],
       facing: 0,
-      wall: { side: "back", along: round(width / 2 - 2.4) },
+      wall: { side: "back", along: notices },
     },
-    {
-      kind: "tall_plant",
-      name: "the plant by the notices",
-      at: [round(width / 2 - 3.5), round(-depth / 2 + 0.45)],
-      facing: 0,
-    },
+    { kind: "plant", name: "the plant by the notices", at: byNotices, facing: 0 },
     { kind: "tall_plant", at: [round(-width / 2 + 0.45), round(-depth / 2 + 0.45)], facing: 0 },
-    { kind: "plant", at: [round(width / 2 - 0.5), round(-depth / 2 + 0.5)], facing: 0 },
     // In the corner beside the way in, the latest lines from every room, for whoever comes in: a stand, turned to the
     // middle of the floor.
     {

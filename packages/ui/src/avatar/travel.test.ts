@@ -4,6 +4,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  ARRIVAL_WALKED,
+  Arrival,
   clampReach,
   ease,
   FLY_NOTCH_SECONDS,
@@ -19,6 +21,7 @@ import {
   REACH,
   RUN_FACTOR,
   reachAt,
+  SHORT_STRIP,
   travelSpeed,
   WALK_SPEED,
   wheelPixels,
@@ -229,5 +232,75 @@ describe("reachAt", () => {
     ])
       for (const reach of [1.4, 4.5, 11])
         expect(reachAt(followDistance(reach, aspect, 35, tall), aspect, 35, tall)).toBeCloseTo(reach, 6);
+  });
+});
+
+describe("the shot of a room on the way in", () => {
+  const widest = 6;
+
+  it("backs off to show the room while you stand where you came in, and is fitted again as what can be seen changes", () => {
+    const shot = new Arrival();
+    shot.begin([-3, 2]);
+    shot.fit(5.5, REACH.start, 1, widest);
+    expect(shot.reach).toBe(5.5);
+    // A panel opened: the shot needs more again.
+    shot.fit(6.5, REACH.start, 1, widest);
+    expect(shot.reach).toBe(widest);
+    // Needing less than your own reach on a whole stage, it keeps yours.
+    shot.fit(3, REACH.start, 1, widest);
+    expect(shot.reach).toBeUndefined();
+  });
+
+  it("is over once you zoom: a refit or someone coming in after doesn't put the shot back over your zoom", () => {
+    const shot = new Arrival();
+    shot.begin([-3, 2]);
+    shot.fit(5.5, REACH.start, 1, widest);
+    shot.zoomed();
+    expect(shot.holds).toBe(false);
+    expect(shot.reach).toBeUndefined();
+    // The chat closes, a body comes in: fitted again, still yours.
+    shot.fit(6, 2, 1, widest);
+    shot.fit(5.5, 2, 0.3, widest);
+    expect(shot.reach).toBeUndefined();
+  });
+
+  it("is over once you walk off, and eases back to your reach", () => {
+    const shot = new Arrival();
+    shot.begin([0, 0]);
+    shot.fit(5.5, REACH.start, 1, widest);
+    shot.moved([ARRIVAL_WALKED * 0.8, 0]);
+    expect(shot.holds).toBe(true);
+    shot.settle(REACH.start, 0.1, 0.7);
+    expect(shot.reach).toBe(5.5);
+    shot.moved([ARRIVAL_WALKED * 1.2, 0]);
+    expect(shot.holds).toBe(false);
+    shot.settle(REACH.start, 0.1, 0.7);
+    expect(shot.reach).toBeLessThan(5.5);
+    expect(shot.reach).toBeGreaterThan(REACH.start);
+    for (let i = 0; i < 100; i++) shot.settle(REACH.start, 0.1, 0.7);
+    expect(shot.reach).toBeUndefined();
+    // With motion reduced, back at once.
+    shot.begin([0, 0]);
+    shot.fit(5.5, REACH.start, 1, widest);
+    shot.moved([2, 0]);
+    shot.settle(REACH.start, 0.016, 0);
+    expect(shot.reach).toBeUndefined();
+    // Flown off, or brought to stand before someone: over at once.
+    shot.begin([0, 0]);
+    shot.fit(5.5, REACH.start, 1, widest);
+    shot.drop();
+    expect([shot.holds, shot.reach]).toEqual([false, undefined]);
+  });
+
+  it("comes in closer in a short strip, where your reach would draw the room as a sliver, never nearer than close behind", () => {
+    const shot = new Arrival();
+    shot.begin([0, 0]);
+    shot.fit(2.6, REACH.start, SHORT_STRIP - 0.2, widest);
+    expect(shot.reach).toBe(2.6);
+    shot.fit(0.5, REACH.start, SHORT_STRIP - 0.2, widest);
+    expect(shot.reach).toBe(REACH.near);
+    // On a taller part of the stage it leaves your reach be.
+    shot.fit(2.6, REACH.start, SHORT_STRIP + 0.2, widest);
+    expect(shot.reach).toBeUndefined();
   });
 });

@@ -652,11 +652,16 @@ where you are. Hold a finger on an icon to see what it is; the pointer shows
 it too. **⋯**, or the name of where you are, opens a menu with the rest in
 words (this place, Edit room, Back to, the voices) and the way to where you
 are, each step of it a click. While the menu is open the chat steps aside for
-it, as it does for a card. With little room in the row, the tasks give way to
-the menu first; the map stays. The scene is framed under the row, in the full
-width of what the chat leaves, and the session's key that would take a line
-of its own over it is left off. The keys hint along the foot says what a
-finger does instead: tap to walk there, drag to look, pinch to zoom.
+it, as it does for a card; a tap anywhere else closes it, and a tap on
+**Chat** brings the chat back. The map keeps its place in the row however
+little room there is: the tasks give way to the menu first, then the name of
+whoever is beside you is cut short, or with no room for a few letters shows
+as its talk icon alone, the name in its words when you hold a finger on it.
+The scene is framed under the row, in the full width of what the chat
+leaves, and the session's key that would take a line of its own over it is
+left off. The keys hint along the foot says what a finger does instead: tap
+to go, drag to look, pinch to zoom; flying, drag to turn and pinch to move
+in.
 
 **Busy now**, at the top, lists every agent that is doing something, most
 pressing first: waiting on you, then stuck, then talking, working and
@@ -697,9 +702,12 @@ picture over rather than jumping.
 the room is gathered round as well as you: its table and its task board, and
 everyone sat at the table, however tall their bodies, rather than you alone at
 the door. It frames them in what you can see, beside the chat or a panel if
-one is open, and frames them again if one opens while you stand there. Walk a
-step or two and it comes round to you, as it always follows you; zoom, and
-the zoom is yours from there.
+one is open and above the keys hint, and frames them again if one opens while
+you stand there. In the short strip over a phone's chat it comes in closer as
+well, so the room fills the strip rather than drawing as a sliver in the
+middle of it. Walk a step or two, or zoom, and that shot is over: the camera
+comes round to you, as it always follows you, at the reach you zoomed to, and
+a panel opening or someone coming in afterwards leaves it there.
 
 **Fly** puts your body away and lets the camera go
 anywhere, faster again (6 metres a second, twice that with Shift): WASD to
@@ -765,10 +773,11 @@ home's door does.
 
 East of the square, on the avenue, is **the office**, where the rooms agents
 talk in are. Inside is an atrium: a directory by the way in, which opens
-the map with every room listed, a front desk minded toward the way in with a
-screen of who is doing what, a couch to wait on, a lounge, a table to work at,
-a reading corner, plants, a notice board of what got done lately on the back
-wall past the doors, and the meeting rooms' doors round its walls and standing along its open right side, up to
+the map with every room listed, a front desk minded toward the way in, its
+screen of who is doing what turned to whoever walks up, a couch to wait on, a
+lounge, a table to work at, a reading corner, plants, a notice board of what
+got done lately on the back wall past the last of its doors, however many a
+floor has, with a plant beside it, and the meeting rooms' doors round its walls and standing along its open right side, up to
 14 to a floor. More rooms take more floors, with stairs between them, cut by
 first letter as lanes are. A meeting room dressed as a tavern, a studio, a
 workshop or a library has **a building of its own on Main Street**, which
@@ -790,8 +799,10 @@ around](#getting-around-the-map-walking-and-flying)). The town has a sky:
 the sun by day, high in the south behind you as you face the town hall, low
 and orange in the evening, and at night the moon, the stars and the street
 lamps, the four nearest you lighting the street and the rest glowing. The
-moonlight is bright enough to read every roof and wall across town in blue, so
-nothing between the camera and you is a black mass. Shadows
+moonlight lights the walls across town in blue, and the buildings give off a
+faint glow of their own after dark, so a roof turned away from the moon is a
+dark blue roof rather than a black mass. The nearest buildings on Main Street
+still fill the foot of the picture as you arrive. Shadows
 fall away from the sun and are drawn round you as you go. The sea and the
 stream stop you at the water's edge; you cross the stream at its bridges. A building
 between the camera and you fades to a pale ghost, one even glow over its
@@ -1867,9 +1878,10 @@ small fixed room, and the agent can't change it.
 #### Screens and calendars
 
 The town hall's lobby has its kiosks, task board, calendar and widgets, a
-lounge by the left wall, tables, a reading corner, a front desk with a screen
-of who is doing what on the open side, and benches to wait on either side of
-the way out, its back corners left clear for a door an agent puts in.
+lounge by the left wall, tables, a reading corner, a front desk on the open
+side with its screen of who is doing what turned to the room, and benches to
+wait on either side of the way out, its back corners left clear for a door an
+agent puts in.
 
 The lobby has a big **screen** over its kiosks. It shows your dashboard, the
 one on the **Board** page, a widget at a time: the first five a screen can

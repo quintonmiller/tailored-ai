@@ -7,7 +7,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BAR, type BarItem, barLayout, WorldBar } from "./WorldBar";
+import { BAR, type BarItem, barLayout, RANKS, WorldBar } from "./WorldBar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -21,34 +21,66 @@ const item = (id: string, rank?: number, more: Partial<BarItem> = {}): BarItem =
 });
 
 describe("what is in the row", () => {
-  const tools = [
-    item("needs", 4, { tone: "needs", count: 2 }),
-    item("map", 3),
-    item("tasks", 2),
-    item("near", 5, { label: "Talk to planner", words: "planner" }),
+  // The row is the stage less 8 pixels each side: 374 on a 390 phone, 344 on a 360 one.
+  const [W390, W360] = [374, 344];
+  const tools = (near: string, needs = true) => [
+    ...(needs ? [item("needs", RANKS.needs, { tone: "needs", count: 2 })] : []),
+    item("map", RANKS.map),
+    item("tasks", RANKS.tasks),
+    item("near", RANKS.near, { label: `Talk to ${near}`, words: near }),
     item("place"),
     item("edit"),
     item("back"),
     item("voices"),
   ];
+  const ids = (xs: BarItem[]) => xs.map((i) => i.id);
 
   it("keeps what is used most and what wants you now, in the order given, and the rest for the menu", () => {
-    const { row, menu } = barLayout(
-      tools.filter((i) => i.id !== "needs"),
-      390,
-    );
-    expect(row.map((i) => i.id)).toEqual(["map", "tasks", "near"]);
-    expect(menu.map((i) => i.id)).toEqual(["place", "edit", "back", "voices"]);
+    const { row, menu, squeezed } = barLayout(tools("writer", false), W390);
+    expect(ids(row)).toEqual(["map", "tasks", "near"]);
+    expect(ids(menu)).toEqual(["place", "edit", "back", "voices"]);
+    expect(squeezed).toEqual({});
   });
 
-  it("gives up the least wanted to the menu first when the row is too narrow for them all", () => {
-    // Someone beside you and something waiting on you, on a phone: the tasks give way, the map stays.
-    const { row, menu } = barLayout(tools, 390);
-    expect(row.map((i) => i.id)).toEqual(["needs", "map", "near"]);
-    expect(menu.map((i) => i.id)).toEqual(["tasks", "place", "edit", "back", "voices"]);
+  it("gives up the tasks to the menu first when the row is too narrow, and the map stays whatever the name", () => {
+    // Someone beside you and something waiting on you, on a phone: the tasks give way, the map and the count stay.
+    for (const [width, near] of [
+      [W390, "planner"],
+      [W390, "trip-planner"],
+      [W360, "planner"],
+      [W360, "assistant"],
+      [W360, "trip-planner"],
+      [W360, "a-very-long-agent-name"],
+    ] as const) {
+      const { row, menu } = barLayout(tools(near), width);
+      expect(ids(row), `${width} ${near}`).toEqual(["needs", "map", "near"]);
+      expect(ids(menu), `${width} ${near}`).toEqual(["tasks", "place", "edit", "back", "voices"]);
+    }
+    // At 390 a short name like "writer" shows whole and a longer one is cut short to the room left; at 360, with the
+    // count there too, there is room for the icon alone, the name in its tip.
+    expect(barLayout(tools("writer"), W390).squeezed).toEqual({});
+    const cut = barLayout(tools("trip-planner"), W390).squeezed.near;
+    expect(cut).toBeGreaterThanOrEqual(BAR.icon + BAR.beside + 3 * BAR.letter);
+    expect(barLayout(tools("writer"), W360).row.find((i) => i.id === "near")?.words).toBeUndefined();
+    // Never more than the row has: what is in it, its gaps, and what is kept for the rest, add up to its width.
+    const used = BAR.pad + BAR.travel + BAR.icon + BAR.here + 3 * BAR.gap + 2 * (BAR.icon + BAR.gap) + cut + BAR.gap;
+    expect(used).toBeLessThanOrEqual(W390);
+    // With nothing waiting on you, a name like "planner" shows whole on a 360 phone too.
+    expect(barLayout(tools("planner", false), W360).squeezed).toEqual({});
+  });
+
+  it("shows the icon alone, its name in its tip, with no room for a few letters; and keeps the map however narrow", () => {
+    // Room after the map and the count for an icon, not for letters.
+    const width = BAR.pad + BAR.travel + BAR.icon + BAR.here + 3 * BAR.gap + 3 * (BAR.icon + BAR.gap) + 10;
+    const { row } = barLayout(tools("assistant"), width);
+    expect(ids(row)).toEqual(["needs", "map", "near"]);
+    expect(row.find((i) => i.id === "near")?.words).toBeUndefined();
+    expect(row.find((i) => i.id === "near")?.label).toBe("Talk to assistant");
+    const tight = barLayout(tools("assistant"), BAR.pad + BAR.travel + BAR.icon + BAR.here + 4 * BAR.gap + BAR.icon);
+    expect(ids(tight.row)).toEqual(["map"]);
     // However narrow, nothing is lost: what isn't in the row is in the menu.
-    const tight = barLayout(tools, 120);
-    expect(tight.row.length + tight.menu.length).toBe(tools.length);
+    const none = barLayout(tools("assistant"), 120);
+    expect(none.row.length + none.menu.length).toBe(tools("assistant").length);
     // Someone to talk to beside you says so in words, but never takes the row's whole width.
     expect(BAR.wordsMax).toBeLessThan(200);
   });
@@ -114,6 +146,59 @@ describe("the row over a phone's stage", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(container.querySelector(".world-more-menu")).toBeNull();
+  });
+
+  it("draws a name cut short no wider than the room it was given, and says it whole to a screen reader", () => {
+    // The row measures itself; with nothing to measure by, it is taken as 360 wide.
+    act(() =>
+      root.render(
+        <WorldBar
+          items={[
+            item("needs", RANKS.needs, { tone: "needs", count: 1 }),
+            item("map", RANKS.map, { label: "Map" }),
+            item("near", RANKS.near, { label: "Talk to trip-planner", words: "trip-planner", tone: "near" }),
+          ]}
+          trail={trail}
+          here="home:planner"
+          onStep={() => {}}
+        />,
+      ),
+    );
+    const near = container.querySelector<HTMLButtonElement>('[aria-label="Talk to trip-planner"]');
+    const given = barLayout(
+      [item("needs", RANKS.needs), item("map", RANKS.map), item("near", RANKS.near, { words: "trip-planner" })],
+      360,
+    ).squeezed.near;
+    expect(given).toBeGreaterThan(0);
+    expect(near?.style.maxWidth).toBe(`${given}px`);
+    expect(near?.querySelector(".world-bar-words")?.textContent).toBe("trip-planner");
+    expect(container.querySelector('[aria-label="Map"]')).not.toBeNull();
+  });
+
+  it("closes on a click elsewhere only once what was clicked has seen it open", () => {
+    const onOpen = vi.fn();
+    // The page's Chat button, say: pressed with the menu open, it brings the chat back, as the menu had stepped it aside.
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    const sawOpen: boolean[] = [];
+    elsewhere.addEventListener("click", () => sawOpen.push(onOpen.mock.lastCall?.[0]));
+    act(() =>
+      root.render(
+        <WorldBar items={[item("map", 5)]} trail={trail} here="home:planner" onStep={() => {}} onOpen={onOpen} />,
+      ),
+    );
+    act(() => container.querySelector<HTMLButtonElement>('[aria-label="More"]')?.click());
+    expect(onOpen).toHaveBeenLastCalledWith(true);
+    // A finger or the pointer going down elsewhere isn't yet a click: the menu stays.
+    act(() => {
+      elsewhere.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    });
+    expect(container.querySelector(".world-more-menu")).not.toBeNull();
+    act(() => elsewhere.click());
+    expect(sawOpen).toEqual([true]);
+    expect(container.querySelector(".world-more-menu")).toBeNull();
+    expect(onOpen).toHaveBeenLastCalledWith(false);
+    elsewhere.remove();
   });
 
   it("says what an icon is under a finger held on it, and the lift that ends the hold isn't a press", () => {

@@ -81,7 +81,7 @@ import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
 import { useVoice } from "./voice";
 import { type Said, WorldAgent } from "./WorldAgent";
-import { type BarItem, WorldBar } from "./WorldBar";
+import { type BarItem, RANKS, WorldBar } from "./WorldBar";
 import { WorldCalendar } from "./WorldCalendar";
 import { WorldDashboard } from "./WorldDashboard";
 import { comeOrGone, type MapPlace, useWorldMap, WorldMap } from "./WorldMap";
@@ -2152,7 +2152,7 @@ export function useChatStage({
             label: `Needs you · ${needs.length}`,
             title: "What agents are waiting on you for",
             icon: "needs",
-            rank: 4,
+            rank: RANKS.needs,
             tone: "needs" as const,
             count: needs.length,
             expanded: panel?.kind === "needs",
@@ -2165,7 +2165,7 @@ export function useChatStage({
       label: "Map",
       title: "Every place there is (M)",
       icon: "map",
-      rank: 3,
+      rank: RANKS.map,
       expanded: mapOpen,
       onClick: () => setPanel(mapOpen ? null : { kind: "map" }),
     },
@@ -2174,7 +2174,7 @@ export function useChatStage({
       label: "Tasks",
       title: "Every task, without leaving the world",
       icon: "tasks",
-      rank: 2,
+      rank: RANKS.tasks,
       expanded: panel?.kind === "tasks",
       onClick: () => {
         if (panel?.kind === "tasks") return setPanel(null);
@@ -2188,7 +2188,7 @@ export function useChatStage({
             id: "near",
             label: `Talk to ${near}`,
             icon: "talk",
-            rank: 5,
+            rank: RANKS.near,
             words: nameOf(near),
             tone: "near" as const,
             onClick: () => chatWith(near),

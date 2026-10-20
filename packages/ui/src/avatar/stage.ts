@@ -148,6 +148,7 @@ import { byPhone, heardThrough, standBy, talkingHere, talkMove } from "./talk";
 import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
 import { type BuiltTown, buildTown } from "./townscape";
 import {
+  Arrival,
   clampReach,
   ease,
   flyPinchStep,
@@ -413,12 +414,12 @@ const VIEW_SECONDS = 0.8;
  * street seen clear through it, rather than its walls and roof going murky.
  */
 const TOWN_GHOST: Ghost = { color: 0xdfe7f5, faded: 0.2 };
-/** Metres you walk from where you came into a room before the camera, showing the room, comes back round to you. */
-const LEAD_WALKED = 0.6;
-/** Seconds it takes to come back round to you. */
+/** Seconds the camera takes to come back round to you from the shot of a room on the way in. */
 const LEAD_SECONDS = 0.7;
 /** How high the head of a tall body sat at a meeting table comes: the shot on the way in keeps it in. */
 const SEATED_TOP = 1.9;
+/** Pixels kept between what the shot on the way in frames and the keys hint along the stage's foot. */
+const HINT_MARGIN = 6;
 
 interface Framing {
   target: THREE.Vector3;
@@ -1460,7 +1461,7 @@ export async function createStage(
     layer.dom.style.setProperty("--surface-paper", lights === "home" && l.lamp.on ? LAMPLIT : "none");
     // Outdoors: the sky for the hour, the street lamps on after dark, and the far distance lost in the sky's haze.
     if (town) {
-      town.setHour(hour, l.lamp.on);
+      town.setHour(hour, l.lamp.on, l.glow ?? 0);
       town.setWindows(activities, hour, occupied);
       scene.fog = new THREE.Fog(skyFor(hour).horizon, 90, 380);
       aimSun(sunAt ?? [me.walker.place.x, me.walker.place.z]);
@@ -1599,29 +1600,38 @@ export async function createStage(
    * Coming into a room on a visit, the camera shows what the room is
    * gathered round as well as you (`centrepieces`): its table and its task
    * board, rather than you alone at the door. It looks `lead` past your head,
-   * taking in `leadReach` while that is more than the reach you zoomed to,
-   * until you walk off from where you came in (`leadAt`); then it comes back
-   * to you, smoothly.
+   * taking in what `entering` says, until you walk off from where you came in
+   * or zoom; then it comes back to you, smoothly.
    */
   const lead = new THREE.Vector3();
-  let leadReach: number | undefined;
-  let leadAt: [number, number] | undefined;
+  const entering = new Arrival();
   /** Done with the shot of the room on the way in, at once: flying off, or brought to stand before someone. */
   const dropLead = () => {
-    leadAt = undefined;
+    entering.drop();
     lead.set(0, 0, 0);
-    leadReach = undefined;
   };
   /** How much round you the walking camera takes in this moment: on the way in, what it shows of the room. */
-  const reachShown = () => leadReach ?? reachNow();
+  const reachShown = () => entering.reach ?? reachNow();
   /** How far back the camera following a visitor sits: the reach they zoomed to, in what can be seen of this room. */
   const followBack = () =>
     followDistance(clampReach(reachShown(), widestReach(room)), visibleAspect(), ROOM_VIEW.fov, visibleTall());
+  /**
+   * The share of what can be seen that the keys hint covers along its foot:
+   * the shot on the way in is framed above it, so your feet aren't under it.
+   */
+  const hintFoot = () => {
+    const h = part.bottom - part.top;
+    const tops = hints
+      .filter((b) => b.left < part.right && part.left < b.right && b.top < part.bottom)
+      .map((b) => b.top);
+    if (!tops.length || h <= 0) return 0;
+    return Math.min(0.4, Math.max(0, (part.bottom - Math.min(...tops) + HINT_MARGIN) / h));
+  };
   /** Where you stand come into a room, and how much of it the camera shows from there: see `lead`. */
   const aimArrival = () => {
     lead.set(0, 0, 0);
-    leadReach = undefined;
-    if (!leadAt || !opts.visitor || travel !== "walk" || isOutdoors(room)) return;
+    entering.reach = undefined;
+    if (!entering.holds || !opts.visitor || travel !== "walk" || isOutdoors(room)) return;
     const boxes = centrepieces(room).flatMap((id) => {
       const thing = things.get(id);
       return thing ? [new THREE.Box3().setFromObject(thing)] : [];
@@ -1654,10 +1664,10 @@ export async function createStage(
         ),
       ),
     ];
-    const shot = fitView(points, visibleAspect(), visibleTall());
+    const shot = fitView(points, visibleAspect(), visibleTall(), hintFoot());
     const reach = reachAt(shot.distance, visibleAspect(), ROOM_VIEW.fov, visibleTall());
     // Further than the room's widest is the whole room already: as near as that, looking where the shot says.
-    if (reach > reachNow()) leadReach = clampReach(reach, widestReach(room));
+    entering.fit(reach, reachNow(), visibleTall(), widestReach(room));
     lead.set(...shot.target).sub(me.head());
   };
 
@@ -1773,7 +1783,7 @@ export async function createStage(
       return;
     }
     // Still where you came in, the shot of the room is fitted to what can be seen now: a chat panel opened beside it.
-    if (leadAt) aimArrival();
+    if (entering.holds) aimArrival();
     // A visitor's camera eases to its distance each frame (`frameUp`); flying, it stays where it was flown.
     if (tween || opts.visitor) return;
     // Keep the angle the person dragged to; only the distance follows the frame's shape.
@@ -1787,7 +1797,7 @@ export async function createStage(
   resize();
   // On a visit, come in showing what the room is gathered round as well as you.
   if (opts.visitor) {
-    leadAt = [me.walker.place.x, me.walker.place.z];
+    entering.begin([me.walker.place.x, me.walker.place.z]);
     aimArrival();
   }
   settle(framing(view));
@@ -1824,8 +1834,9 @@ export async function createStage(
   const zoomTo = (reach: number) => {
     if (isOutdoors(room)) outdoorReachKept = reach;
     else reachKept = reach;
-    // Zoomed by hand, the reach is the person's from here, the room's shot on the way in or not.
-    leadReach = undefined;
+    // Zoomed by hand, the shot on the way in is over, as if you had walked off: the reach is yours from here, the
+    // camera comes back round to you as you zoom, and a panel opening or someone coming in doesn't put the shot back.
+    entering.zoomed();
   };
   /** The chat page's view of the agent, which the wheel and a pinch bring nearer or take further back. */
   const ownView = () => !opts.visitor && !opts.still && view === "room";
@@ -3170,7 +3181,7 @@ export async function createStage(
           rekeep();
           show(c.agent, figure);
           // Still where you came in: the shot of the room takes in whoever has just come.
-          if (leadAt) aimArrival();
+          if (entering.holds) aimArrival();
           // The agent you came to see: you stand in front of it now that it is here.
           if (greeting === c.agent) standBefore(c.agent);
           // In through the door, and on to somewhere free.
@@ -3468,16 +3479,13 @@ export async function createStage(
     if (through) leave(through);
     if (tween || travel !== "walk" || editing || reading) return;
     // Walked off from where you came in: the camera comes back round to you, and in to the reach you zoomed to.
-    if (leadAt && Math.hypot(p.x - leadAt[0], p.z - leadAt[1]) > LEAD_WALKED) leadAt = undefined;
-    if (!leadAt && (lead.lengthSq() > 0 || leadReach !== undefined)) {
+    entering.moved([p.x, p.z]);
+    if (!entering.holds && lead.lengthSq() > 0) {
       const k = opts.reducedMotion ? 1 : 1 - Math.exp(-dt / LEAD_SECONDS);
       lead.multiplyScalar(1 - k);
       if (lead.lengthSq() < 1e-4) lead.set(0, 0, 0);
-      if (leadReach !== undefined) {
-        leadReach = opts.reducedMotion ? reachNow() : ease(leadReach, reachNow(), dt, LEAD_SECONDS);
-        if (Math.abs(leadReach - reachNow()) < 0.02) leadReach = undefined;
-      }
     }
+    entering.settle(reachNow(), dt, opts.reducedMotion ? 0 : LEAD_SECONDS);
     const head = me.head().add(lead);
     const t = controls.target;
     const step = new THREE.Vector3(...keepUp([t.x, t.y, t.z], [head.x, head.y, head.z], moved, dt));
@@ -4306,7 +4314,7 @@ export async function createStage(
       me.placeAt(to.at, to.facing);
       lastAt = [to.at[0], to.at[1]];
       // The camera shows what the room is gathered round as well as you, until you walk off from here.
-      leadAt = [to.at[0], to.at[1]];
+      entering.begin([to.at[0], to.at[1]]);
       aimArrival();
       // You stop on the threshold; Shift still runs once you set off again.
       for (const key of [...held])

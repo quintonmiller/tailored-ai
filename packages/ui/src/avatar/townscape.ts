@@ -573,8 +573,11 @@ export interface BuiltTown {
   sky: THREE.Group;
   /** Light each building's windows for the hour, by what its owner is doing, and who is in it when that is known. */
   setWindows(activities: Record<string, AgentActivity>, hour: number, inside?: ReadonlySet<string>): void;
-  /** Colour the sky, show the stars or not, and light the street lamps, for an hour. */
-  setHour(hour: number, lamps: boolean): void;
+  /**
+   * Colour the sky, show the stars or not, and light the street lamps, for
+   * an hour; and give the buildings `glow` of their own (none by day).
+   */
+  setHour(hour: number, lamps: boolean, glow: number): void;
   dispose(): void;
 }
 
@@ -934,7 +937,7 @@ export function buildTown(plan: TownPlan): BuiltTown {
   );
   sky.add(domeMesh, stars, sun, moon);
 
-  const setHour = (hour: number, lampsOn: boolean) => {
+  const setHour = (hour: number, lampsOn: boolean, glow: number) => {
     const { zenith, horizon, stars: night } = skyFor(hour);
     const top = new THREE.Color(zenith);
     const low = new THREE.Color(horizon);
@@ -958,6 +961,8 @@ export function buildTown(plan: TownPlan): BuiltTown {
       body.lookAt(0, 0, 0);
     }
     lampGlow.emissiveIntensity = lampsOn ? 1.4 : 0;
+    // The buildings' walls and roofs, all in the one paint: a faded one's see-through copy keeps up with it.
+    paint.emissive.setHex(glow);
   };
 
   const setWindows = (activities: Record<string, AgentActivity>, hour: number, inside?: ReadonlySet<string>) => {

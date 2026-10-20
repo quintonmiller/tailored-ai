@@ -460,6 +460,12 @@ export interface Lighting {
   lamp: { on: boolean; intensity: number; reach?: number };
   /** The window glass glows with what is outside. */
   window: { color: number; glow: number };
+  /**
+   * Outdoors at night, the colour the town's buildings give off of their
+   * own: the moonlight off everything round, which no one light gives, so a
+   * roof turned from the moon reads as a roof rather than a black mass.
+   */
+  glow?: number;
 }
 
 /**
@@ -516,6 +522,9 @@ export function lightingFor(hour: number, lights: Lights = "home"): Lighting {
   };
 }
 
+/** The town's buildings' own glow at night (see `Lighting.glow`): a dim moonlit blue. */
+export const NIGHT_GLOW = 0x283252;
+
 /**
  * The town's light: a bright sun and a blue sky by day, low and orange in the
  * evening, and at night the moon, the sky's glow and the street lamps, enough
@@ -536,13 +545,15 @@ function outdoorLighting(hour: number): Lighting {
       lamp: { on: true, intensity: 1.8, reach: 1.6 },
       window: { color: 0xffb88a, glow: 0.55 },
     };
-  // A clear night: moonlight enough to read every roof and wall across town as blue shapes, so nothing between the
-  // camera and you is a black mass, and the street lamps' pools still warm round each one.
+  // A clear night: moonlight enough to read the walls across town as blue shapes, and the street lamps' pools still
+  // warm round each one. A roof turned from the moon has only the sky's glow, which leaves a dark one black: the
+  // buildings' own faint glow keeps it a roof.
   return {
     sun: { color: 0xa9bcff, intensity: 1.15 },
     sky: { color: 0x8496cc, ground: 0x3c4a50, intensity: 1.9 },
     lamp: { on: true, intensity: 3, reach: 1.8 },
     window: { color: 0x2b3a66, glow: 0.25 },
+    glow: NIGHT_GLOW,
   };
 }
 
@@ -631,11 +642,15 @@ function viewAxes(): { back: V3; right: V3; up: V3 } {
  * camera sees them, and far enough back that the furthest out is inside the
  * edge, a point nearer the camera needing more room by as much as it is
  * nearer. `aspect` and `tall` are the shape of what can be seen, as for
- * `roomDistance`.
+ * `roomDistance`; `foot` is the share of its height along the bottom that is
+ * covered (the keys hint), which the points are kept above.
  */
-export function fitView(points: V3[], aspect: number, tall = 1): { target: V3; distance: number } {
-  const tanV = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * FRAME_FILL * tall;
-  const tanH = tanV * aspect;
+export function fitView(points: V3[], aspect: number, tall = 1, foot = 0): { target: V3; distance: number } {
+  // Half of what can be seen, each way, as the tangent of the angle out to its edge; up and down, what is left over
+  // the foot.
+  const half = Math.tan((ROOM_VIEW.fov * Math.PI) / 360) * tall;
+  const tanH = half * aspect * FRAME_FILL;
+  const tanV = half * (1 - foot) * FRAME_FILL;
   const { back, right, up } = viewAxes();
   const dot = (p: V3, q: V3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
   if (!points.length) return { target: [...ROOM_TARGET], distance: 0 };
@@ -644,14 +659,23 @@ export function fitView(points: V3[], aspect: number, tall = 1): { target: V3; d
   const mid = (xs: number[]) => (Math.min(...xs) + Math.max(...xs)) / 2;
   const deep = points.reduce((sum, p) => sum + dot(p, back), 0) / points.length;
   const [r, u] = [mid(across), mid(high)];
-  const target = [0, 1, 2].map((i) => right[i] * r + up[i] * u + back[i] * deep) as V3;
+  const middle = [0, 1, 2].map((i) => right[i] * r + up[i] * u + back[i] * deep) as V3;
   let distance = 0;
   for (const p of points) {
-    const d: V3 = [p[0] - target[0], p[1] - target[1], p[2] - target[2]];
+    const d: V3 = [p[0] - middle[0], p[1] - middle[1], p[2] - middle[2]];
     const toward = dot(d, back);
-    distance = Math.max(distance, Math.abs(dot(d, right)) / tanH + toward, Math.abs(dot(d, up)) / tanV + toward);
+    // Up and down it is measured from the middle of what is left over the foot, where the points are put (below):
+    // a point nearer the camera sits that much higher in it.
+    distance = Math.max(
+      distance,
+      Math.abs(dot(d, right)) / tanH + toward,
+      Math.abs(dot(d, up) + half * foot * toward) / tanV + toward,
+    );
   }
-  return { target, distance };
+  // The middle of what is left over the foot is above the middle of what can be seen, by the foot's share of its
+  // half-height: the camera looks that much below the middle of the points, so they sit up there.
+  const drop = distance * half * foot;
+  return { target: [0, 1, 2].map((i) => middle[i] - up[i] * drop) as V3, distance };
 }
 
 /** Tables a room isn't gathered round: beside a chair, or under a lamp. */

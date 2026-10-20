@@ -8,7 +8,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DOORWAY,
-  type DoorSlot,
   doorProblems,
   doorways,
   findPlacement,
@@ -37,6 +36,7 @@ import {
   sharedPlace,
   THEMES,
 } from "../plugins/places-rooms.js";
+import { FLOOR_DOORS, floorLayout } from "../plugins/places-world.js";
 import { validateAgainstSchema } from "../state/validate.js";
 
 const seeds = Array.from({ length: 120 }, (_, i) => `home:agent-${i}`);
@@ -292,11 +292,14 @@ describe("the town hall and the office, furnished to be used", () => {
     const hall = lobby();
     const desk = hall.props.find((p) => p.name === "the front desk");
     expect(desk?.kind).toBe("desk");
-    expect(hall.props.find((p) => p.on === desk?.id && p.kind === "monitor")?.shows).toBe("status");
+    const screen = hall.props.find((p) => p.on === desk?.id && p.kind === "monitor");
+    expect(screen?.shows).toBe("status");
     // Minded from the side away from the room, looking back over it at the middle.
     const minded = hall.spots.find((s) => s.item === desk?.id);
     expect(minded?.activity).toBe("type");
     expect(apart(minded?.facing ?? 0, toward(minded?.at ?? [0, 0], [0, 0]))).toBeLessThan(30);
+    // Its screen of who is doing what is turned the same way, to the room, for whoever comes up to the desk to read.
+    expect(apart(screen?.facing ?? 0, minded?.facing ?? 180)).toBeLessThan(30);
     const benches = hall.props.filter((p) => p.kind === "bench");
     expect(benches.map((b) => Math.sign(b.at[0])).sort()).toEqual([-1, 1]);
     // Somewhere to sit on each, and the way in from the square to the kiosks left open between them.
@@ -305,30 +308,12 @@ describe("the town hall and the office, furnished to be used", () => {
     expect(unreachable(hall)).toEqual([]);
   });
 
-  it("gives every office floor a front desk turned to the way in, a couch to wait on, and a notice board", () => {
-    const floors: [number, number, DoorSlot[]][] = [
-      [
-        12,
-        12,
-        [
-          { wall: "back", along: -3.85 },
-          { wall: "back", along: -1.95 },
-          { wall: "back", along: -0.05 },
-          { wall: "left", along: -3.85 },
-        ],
-      ],
-      [12, 12, [{ wall: "back", along: -3 }]],
-      [
-        14,
-        13,
-        [-5.6, -3.7, -1.8, 0.1, 2]
-          .map((along) => ({ wall: "back" as const, along }))
-          .concat([-4.5, -2.6, -0.7, 1.2].map((along) => ({ wall: "left" as const, along }))),
-      ],
-    ];
-    for (const [width, depth, doors] of floors) {
+  it("gives every office floor, however full, a front desk turned to the way in, a couch to wait on, and notices", () => {
+    // Every floor there can be, from one room to a full one, its doors where the world lays them.
+    for (let rooms = 1; rooms <= FLOOR_DOORS; rooms++) {
+      const { width, depth, rooms: doors } = floorLayout(rooms);
       const floor = officeFloor("the ground floor", width, depth, doors);
-      const name = `${width}x${depth}, ${doors.length} doors`;
+      const name = `${rooms} rooms, ${width} wide`;
       expect(placeProblems(floor), name).toEqual([]);
       expect(doorProblems(floor, doors), name).toEqual([]);
       expect(
@@ -341,11 +326,23 @@ describe("the town hall and the office, furnished to be used", () => {
       expect(apart(minded?.facing ?? 0, toward(minded?.at ?? [0, 0], [-width / 2 + 2, depth / 2])), name).toBeLessThan(
         30,
       );
+      // Its screen is turned the way they look, to whoever comes in, not to them.
+      const screen = floor.props.find((p) => p.on === desk?.id && p.kind === "monitor");
+      expect(screen?.shows, name).toBe("status");
+      expect(apart(screen?.facing ?? 0, minded?.facing ?? 180), name).toBeLessThan(30);
       expect(
         floor.props.some((p) => p.kind === "couch"),
         name,
       ).toBe(true);
-      expect(floor.props.find((p) => p.id === "notices")?.kind, name).toBe("feed");
+      // The notices on the back wall, clear of every door along it however many there are, with a plant by them.
+      const notices = floor.props.find((p) => p.id === "notices");
+      expect(notices?.kind, name).toBe("feed");
+      const plant = floor.props.find((p) => p.name === "the plant by the notices");
+      expect(plant, name).toBeDefined();
+      expect(
+        Math.hypot((plant?.at[0] ?? 99) - (notices?.at[0] ?? 0), (plant?.at[1] ?? 99) - (notices?.at[1] ?? 0)),
+        name,
+      ).toBeLessThan(1.6);
     }
   });
 });

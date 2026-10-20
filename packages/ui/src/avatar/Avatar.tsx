@@ -768,10 +768,10 @@ export function Avatar({
             {reading
               ? "Esc, F or click away to step back"
               : inBar
-                ? // A narrow stage is mostly a phone's: a finger's ways round, short enough to read on one line.
+                ? // A narrow stage is mostly a phone's: a finger's ways round, short enough for one line at 360 pixels.
                   travel === "walk"
-                  ? "Tap to walk there · drag to look · pinch to zoom"
-                  : "Drag to turn · pinch to zoom · WASD to fly"
+                  ? "Tap to go · drag to look · pinch to zoom"
+                  : "Drag to turn · pinch to move in"
                 : travel === "walk"
                   ? "WASD or arrows to walk · Shift to run · click the floor to go there · click a screen to use it · drag to look · wheel to zoom"
                   : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to fly on or back"}
