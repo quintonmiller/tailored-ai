@@ -1058,6 +1058,75 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       g.add(screen);
       return { group: g, ...(built.screen ? { screen: built.screen } : {}) };
     }
+    case "cafe_table": {
+      // A bistro table: a small round top on a slender stem and a cast foot.
+      const top = main(0xe9e4da);
+      cylinder(g, 0.36, 0.36, 0.03, top, 0, 0.735, 0, 24);
+      cylinder(g, 0.37, 0.37, 0.012, tint(top, -0.25), 0, 0.716, 0, 24).castShadow = false;
+      cylinder(g, 0.025, 0.03, 0.7, 0x2b2b30, 0, 0.36, 0, 8);
+      cylinder(g, 0.22, 0.24, 0.025, 0x2b2b30, 0, 0.012, 0, 14);
+      return { group: g };
+    }
+    case "cafe_chair": {
+      // A bistro chair: thin dark legs, a round woven seat, and a hooped back.
+      const seat = main(0xb4864f);
+      const frame = 0x2b2b30;
+      for (const [x, z] of [
+        [-0.16, -0.16],
+        [0.16, -0.16],
+        [-0.16, 0.16],
+        [0.16, 0.16],
+      ])
+        cylinder(g, 0.014, 0.014, 0.46, frame, x, 0.23, z, 6);
+      cylinder(g, 0.21, 0.2, 0.04, seat, 0, 0.47, 0, 18);
+      for (const x of [-0.17, 0.17]) cylinder(g, 0.013, 0.013, 0.4, frame, x, 0.68, -0.18, 6);
+      const hoop = solid(new THREE.TorusGeometry(0.17, 0.016, 6, 18, Math.PI), paint(frame), 0, 0.86, -0.18);
+      g.add(hoop);
+      box(g, 0.32, 0.1, 0.02, seat, 0, 0.8, -0.18);
+      return { group: g };
+    }
+    case "coffee_cart": {
+      // A coffee cart: a counter on wheels, a striped awning on posts, a machine on top, and a menu board.
+      const body = main(0x3c7d5a);
+      box(g, 1.8, 0.95, 0.8, body, 0, 0.55, 0);
+      box(g, 1.86, 0.05, 0.86, 0x7a5a3a, 0, 1.05, 0);
+      for (const x of [-0.7, 0.7]) {
+        const wheel = cylinder(g, 0.13, 0.13, 0.06, 0x2b2b30, x, 0.13, 0.42, 14);
+        wheel.rotation.x = Math.PI / 2;
+      }
+      for (const x of [-0.86, 0.86]) cylinder(g, 0.02, 0.02, 1.3, 0xd8d4cc, x, 1.7, -0.36, 6);
+      // The awning, in stripes, sloping down to the front.
+      for (let i = 0; i < 6; i++) {
+        const stripe = box(g, 0.32, 0.03, 1.0, i % 2 ? 0xf2efe6 : body, -0.8 + i * 0.32, 2.3, 0.05);
+        stripe.rotation.x = 0.22;
+      }
+      box(g, 0.34, 0.42, 0.3, 0x8f949c, -0.45, 1.29, -0.15);
+      box(g, 0.08, 0.05, 0.1, 0x2b2b30, -0.45, 1.2, 0.02);
+      cylinder(g, 0.05, 0.04, 0.09, 0xf5f3ef, 0.1, 1.12, 0.1, 10);
+      cylinder(g, 0.05, 0.04, 0.09, 0xf5f3ef, 0.24, 1.12, 0.05, 10);
+      // The menu board on the front, the café's name over it.
+      const face = canvasFace(1.1, 0.42, 420);
+      drawPlate(face.canvas, "Café", "#2f2a26", "#f3e6cf");
+      const menu = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.42), face.material);
+      menu.position.set(0, 0.62, 0.405);
+      g.add(menu);
+      return { group: g };
+    }
+    case "whiteboard": {
+      // A wide whiteboard in a light frame, with a tray of markers: the page writes what its room said last on it.
+      rounded(g, [1.5, 1.0, 0.035], 0.01, satin(0xd5d9de), [0, 0.5, 0]);
+      const face = canvasFace(1.44, 0.94, 640);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.44, 0.94), face.material);
+      mesh.position.set(0, 0.5, 0.0185);
+      g.add(mesh);
+      rounded(g, [1.3, 0.03, 0.07], 0.01, satin(0xb3b9c1), [0, 0.0, 0.035]);
+      for (const [i, color] of [0x2f6fd6, 0x2b2b30].entries()) {
+        const marker = cylinder(g, 0.009, 0.009, 0.13, color, 0.3 + i * 0.16, 0.024, 0.04, 8);
+        marker.rotation.z = Math.PI / 2;
+        marker.castShadow = false;
+      }
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh, size: [1.44, 0.94] } };
+    }
     case "sign": {
       // A dark plate with its words lit, so it reads from across a hall.
       box(g, 1.44, 0.4, 0.03, 0x2a2e38, 0, 0.18, 0).castShadow = false;
@@ -1129,7 +1198,13 @@ let glass: THREE.MeshStandardMaterial | undefined;
 export function buildDoor(
   door: Pick<RoomDoor, "label" | "kind" | "occupant">,
   opts: { freestanding: boolean; trim?: string; height: number },
-): { group: THREE.Group; light?: THREE.MeshBasicMaterial; highlight: (on: boolean) => void } {
+): {
+  group: THREE.Group;
+  light?: THREE.MeshBasicMaterial;
+  highlight: (on: boolean) => void;
+  /** A meeting room's door: what the card pinned on it says, or nothing for no card. */
+  note?: (words: string | undefined) => void;
+} {
   const g = new THREE.Group();
   const look = DOOR_LOOKS[door.kind] ?? DOOR_LOOKS.room;
   const trim = hex(opts.trim, 0xf2efe8);
@@ -1211,7 +1286,14 @@ export function buildDoor(
     glow.visible = on;
     face.material.emissiveIntensity = on ? FACE_LIT : FACE_GLOW;
   };
-  if (!door.occupant) return { group: g, highlight };
+  // On the panel at eye height, in front of its sunk panels; on a gate, under the plate, read from either side.
+  const note =
+    door.kind === "room"
+      ? pinNote(g, opts.freestanding ? 0.62 : 1.45 * k, faces, (side) =>
+          opts.freestanding ? 0.06 + side * 0.012 : 0.1,
+        )
+      : undefined;
+  if (!door.occupant) return { group: g, highlight, ...(note ? { note } : {}) };
   // Drawn in its own colour, untouched by the lights or the tone mapping, so it stays that colour at night too.
   const light = new THREE.MeshBasicMaterial({ color: 0xe6eaf0, toneMapped: false });
   // A bulb beside the plate on a wall, on top of a gate's post seen from all round; and a strip along the plate,
@@ -1236,7 +1318,40 @@ export function buildDoor(
     mesh.castShadow = false;
     g.add(mesh);
   }
-  return { group: g, light, highlight };
+  return { group: g, light, highlight, ...(note ? { note } : {}) };
+}
+
+/**
+ * A card pinned on a door at `y`, on each face given (`z` out from the door
+ * for each), saying when its room last talked: written again each time it is
+ * set, hidden with no words.
+ */
+function pinNote(
+  g: THREE.Group,
+  y: number,
+  faces: number[],
+  z: (side: number) => number,
+): (words: string | undefined) => void {
+  const face = canvasFace(0.82, 0.2, 520);
+  const cards: THREE.Mesh[] = [];
+  for (const side of faces) {
+    const card = new THREE.Mesh(new THREE.PlaneGeometry(0.82, 0.2), face.material);
+    card.position.set(0, y, z(side));
+    if (side < 0) card.rotation.y = Math.PI;
+    card.visible = false;
+    card.castShadow = false;
+    g.add(card);
+    cards.push(card);
+  }
+  let shown: string | undefined;
+  return (words) => {
+    if (words === shown) return;
+    shown = words;
+    for (const card of cards) card.visible = !!words;
+    if (!words) return;
+    drawPlate(face.canvas, words, "#f6f1e3", "#3a3328");
+    face.texture.needsUpdate = true;
+  };
 }
 
 /**

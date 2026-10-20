@@ -41,6 +41,7 @@ import {
   type Wake,
   withRepeats,
 } from "./calendar";
+import type { Notes } from "./routines";
 import type { Prop } from "./scene";
 import { PAGE_MS, pageAt, type ScreenCard, screenWidgets, type Tone } from "./screens";
 import type { Stage, SurfaceView, UseSpot } from "./stage";
@@ -72,6 +73,8 @@ export interface FaceData {
   widgets?: DashboardWidgetSpec[];
   /** What the calendars here show. */
   calendar?: CalendarView;
+  /** What a meeting room's whiteboard says: its room's last few lines. */
+  notes?: Notes;
   /** Something on a face was used: what it is for, where on it, and which thing in the room the face is on. */
   onUse?: (action: string, on?: UseSpot, thing?: string) => void;
   /** A note was moved to another column on a board: save it. Rejects with why it couldn't be. */
@@ -213,6 +216,8 @@ function PropFace({ prop, choice }: { prop: Prop; choice: FaceChoice }) {
       return <ScreenFace {...(choice.arg ? { pin: choice.arg } : {})} />;
     case "calendar":
       return <CalendarFace />;
+    case "whiteboard":
+      return <NotesFace />;
     case "kiosk":
       return <KioskFace label={prop.label ?? ""} action={prop.action} />;
     default:
@@ -228,6 +233,40 @@ function PropFace({ prop, choice }: { prop: Prop; choice: FaceChoice }) {
         />
       ) : null;
   }
+}
+
+/**
+ * A meeting room's whiteboard: what its room said last, a line each, who said
+ * it in their colour and how it began; and how long ago that was. Only the
+ * first few words of each, two rows at most: the conversation itself is the
+ * room's. A whiteboard with no room to speak for (one an agent put up
+ * somewhere else) is clean.
+ */
+function NotesFace() {
+  const { notes } = useContext(Faces);
+  if (!notes) return <div className="sf-notes" />;
+  return (
+    <div className="sf-notes">
+      <div className="sf-notes-head">
+        <span className="sf-notes-room">#{notes.room}</span>
+        {notes.talked && <span className="sf-notes-when">{notes.talked}</span>}
+      </div>
+      {notes.lines.length ? (
+        <ul className="sf-notes-lines">
+          {notes.lines.map((l, i) => (
+            <li key={i} className="sf-notes-line">
+              <span className="sf-notes-who" style={{ color: l.ink }}>
+                {l.agent ? nameOf(l.agent) : l.who}
+              </span>
+              <span className="sf-notes-words">{l.words}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="sf-notes-none">Nothing said here yet.</p>
+      )}
+    </div>
+  );
 }
 
 /** An agent's name with the colour its body wears, for a note or a line on a calendar: the dot by its name elsewhere. */

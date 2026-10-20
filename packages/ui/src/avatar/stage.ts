@@ -12,7 +12,10 @@
  * table and turn to whoever speaks. Two agents talking in the same place
  * face each other, the one who spoke first stepping over when they are far
  * apart; one talking to an agent somewhere else holds a phone to its ear, and
- * the far side's words come out of it (`talk.ts`).
+ * the far side's words come out of it (`talk.ts`). An agent out on its day
+ * (`routines.ts`) sits at its seat, a coffee or a book in hand, and chats with
+ * whoever is at the same table or bench; outdoors it walks from its own door
+ * to its seat and back.
  * Imported only when an avatar is configured, so three.js stays out of the
  * main bundle.
  *
@@ -67,7 +70,16 @@ import {
 } from "./body";
 import { type CalendarView, drawCalendar } from "./calendar";
 import type { Cue } from "./cues";
-import { type AgentActivity, type Behavior, behaviorFor, heldFor, sameBehavior, stationSpot } from "./doing";
+import {
+  type AgentActivity,
+  type Behavior,
+  behaviorFor,
+  chatsAt,
+  heldFor,
+  sameBehavior,
+  seatToTake,
+  stationSpot,
+} from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
 import { footprint, heightOf, type Kinds, type Move, moveKey, onFloor, onTop, onWall, ridersOf } from "./editing";
 import { type Fadeable, paintFaded } from "./fade";
@@ -81,6 +93,7 @@ import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
 import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildPlaque, buildProp, buildShell, disposeTree } from "./props";
+import { chatDue, chatPause, drawNotes, type Notes, talkedWords } from "./routines";
 import {
   changesShown,
   closeDistance,
@@ -198,6 +211,8 @@ export interface Companion {
    * chose to stay at. `url` is already the model it chose, if it chose one.
    */
   looks?: BodyLooks;
+  /** Outdoors, where it comes from when it turns up: the door of the place it was in. */
+  from?: [number, number];
 }
 
 export interface Stage {
@@ -257,6 +272,12 @@ export interface Stage {
   setGlances(glances: Record<string, ScreenCard>): void;
   /** Light the place as a home, cosy after dark, or as a public place (the lobby, a hall), bright at any hour. */
   setLights(lights: Lights): void;
+  /** What a meeting room's whiteboards say: its room's last few lines, and when it last talked. */
+  setNotes(notes: Notes | undefined): void;
+  /** When each room last talked, by its meeting room's id: the card pinned on its door says so. */
+  setTalked(talked: Record<string, string>): void;
+  /** The buildings in the town with someone in them: their windows light up. */
+  setOccupied(buildings: string[]): void;
   /**
    * Come into another place through a door: the room is swapped for it, and
    * you stand just inside the door back to `from` (at its start, when it has
@@ -530,6 +551,8 @@ export async function createStage(
     looks?: BodyLooks;
     /** Someone clicked an agent's body (or its tag): which agent, and where on the page. */
     onPick?: (agent: string, at: { x: number; y: number }) => void;
+    /** Outdoors, where an agent's body goes when it leaves: the door of where it is going, when that is known. */
+    exitFor?: (agent: string) => [number, number] | undefined;
     /** The body here is the visitor's own, moved by keys and clicks, not an agent's. */
     visitor?: boolean;
     /** The agent the visitor is standing next to, when it changes; undefined when none is. */
@@ -674,6 +697,15 @@ export async function createStage(
   let widgetFaces: { prop: string; title: string; screen: Face }[] = [];
   let glances: Record<string, ScreenCard> = {};
   let glancesKey = "{}";
+  // Whiteboards, and what a meeting room's say; the cards on doors saying when each room last talked.
+  let whiteboards: Face[] = [];
+  let notes: Notes | undefined;
+  let notesKey = "";
+  let doorNotes: { to: string; note: (words: string | undefined) => void }[] = [];
+  let talked: Record<string, string> = {};
+  let notedMinute = -1;
+  // The buildings in the town with someone in them, once the page has said.
+  let occupied: Set<string> | undefined;
   let cards: ScreenCard[] = [];
   let cardsKey = "[]";
   let shownPage = -1;
@@ -710,6 +742,19 @@ export async function createStage(
       else drawScreen(w.screen.canvas, card, 0, 1);
       w.screen.texture.needsUpdate = true;
     }
+  };
+  /** Write a meeting room's last few lines on its whiteboards, and the time since on each, as of this minute. */
+  const drawWhiteboards = () => {
+    for (const b of whiteboards) {
+      drawNotes(b.canvas, notes);
+      b.texture.needsUpdate = true;
+    }
+  };
+  /** The card on each meeting room's door: how long since its room talked, now. */
+  const noteDoors = () => {
+    const now = Date.now();
+    notedMinute = Math.floor(now / 60_000);
+    for (const d of doorNotes) d.note(talkedWords(talked[d.to], now));
   };
   // Until the page says what is on them (and in a photo, where it never does), calendars show today's date alone.
   const drawCalendars = () => {
@@ -802,6 +847,7 @@ export async function createStage(
     screens = [];
     calendars = [];
     widgetFaces = [];
+    whiteboards = [];
     // Outdoors, the town in place of a floor and walls: its buildings fade when they hide you, and a click on one
     // walks you up to its door.
     clearTown();
@@ -856,6 +902,7 @@ export async function createStage(
           screens.push({ ...built.screen, ...(prop.shows ? { pin: prop.shows.trim().toLowerCase() } : {}) });
         else if (prop.kind === "calendar") calendars.push(built.screen);
         else if (prop.kind === "board") boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
+        else if (prop.kind === "whiteboard") whiteboards.push(built.screen);
         else if (prop.kind !== "kiosk")
           widgetFaces.push({ prop: prop.id, title: prop.name ?? prop.kind, screen: built.screen });
         layer.add({
@@ -924,6 +971,7 @@ export async function createStage(
     }
     // The doors to other places: on a wall, or standing at an open side.
     doorLights = [];
+    doorNotes = [];
     doorHighlights = new Map();
     // The door the pointer was over is gone with the room it was in.
     if (overDoor) hoverDoor(undefined);
@@ -957,11 +1005,13 @@ export async function createStage(
         fadeable.push({ group: built.group, wall: door.wall, level: 1 });
       else fadeable.push({ group: built.group, solid: solidOf(new THREE.Box3().setFromObject(built.group)), level: 1 });
       if (built.light && door.occupant) doorLights.push({ occupant: door.occupant, light: built.light });
+      if (built.note) doorNotes.push({ to: door.to, note: built.note });
       doorHighlights.set(door, built.highlight);
     }
     plaque = undefined;
     hangPlaque();
     lightDoors();
+    noteDoors();
     layer.sweep();
     scene.add(furniture);
     // Somewhere to stand by a plant, the task board, a sideboard: worked out once what is in the way is known.
@@ -970,6 +1020,7 @@ export async function createStage(
     drawScreens();
     drawCalendars();
     drawGlances();
+    drawWhiteboards();
     warm.length = 0;
     // A big room's lamps reach further, so the light still meets in the middle; outdoors, a street lamp's pool.
     lampReach = town ? 9 : Math.max(5, Math.hypot(room.width, room.depth) / 2.2);
@@ -1324,7 +1375,7 @@ export async function createStage(
     // Outdoors: the sky for the hour, the street lamps on after dark, and the far distance lost in the sky's haze.
     if (town) {
       town.setHour(hour, l.lamp.on);
-      town.setWindows(activities, hour);
+      town.setWindows(activities, hour, occupied);
       scene.fog = new THREE.Fog(skyFor(hour).horizon, 90, 380);
       aimSun(sunAt ?? [me.walker.place.x, me.walker.place.z]);
       lightStreets(litAt ?? [me.walker.place.x, me.walker.place.z]);
@@ -2617,15 +2668,16 @@ export async function createStage(
     const behavior = behaviorFor(activity);
     const was = shows.get(f);
     const close = closeTo(agent) && !(f === me && opts.visitor);
-    const status = behavior.label
-      ? close && activity?.doing === "asleep"
-        ? `asleep · ${asleepWords(activity)}`
-        : behavior.detail
-          ? `${behavior.label} · ${behavior.detail}`
-          : behavior.label
-      : close
-        ? (errands.get(f)?.errand.label ?? stayTag(agent, f) ?? "idle")
-        : undefined;
+    const status =
+      behavior.label && (!behavior.quiet || close)
+        ? close && activity?.doing === "asleep"
+          ? `asleep · ${asleepWords(activity)}`
+          : behavior.detail
+            ? `${behavior.label} · ${behavior.detail}`
+            : behavior.label
+        : close
+          ? (errands.get(f)?.errand.label ?? stayTag(agent, f) ?? "idle")
+          : undefined;
     // The agent you talk to needs no name; the others always show theirs.
     f.label(
       f === me ? (opts.visitor ? "you" : undefined) : f.name,
@@ -2647,6 +2699,25 @@ export async function createStage(
     if (behavior.gesture && was?.doing !== activity?.doing)
       f.gesture(behavior.gesture, clock, undefined, { auto: true });
   }
+
+  // When each body keeping someone company next moves its hands or nods, and how many times it has; and until when
+  // each is making a gesture of its own. Weak, so a body gone from the stage is let go with it.
+  const chats = new WeakMap<Figure, { n: number; at: number }>();
+  const ownGesture = new WeakMap<Figure, number>();
+  /**
+   * Keeping someone company, sat down: now and then it talks with its hands,
+   * nods along, or laughs. A gesture of its own comes first: one it chose
+   * with the body tool, or one a person made from its card, plays out before
+   * the chat goes on.
+   */
+  const chat = (f: Figure, agent: string, t: number) => {
+    let c = chats.get(f);
+    if (!c) chats.set(f, (c = { n: 0, at: t + chatPause(agent, 0) }));
+    if (f.walker.busy) return;
+    const move = chatDue(c, agent, t, ownGesture.get(f));
+    // Never over a gesture kept going, as a doing's own gesture isn't.
+    if (move) f.gesture(move, t, undefined, { auto: true });
+  };
 
   /**
    * Each frame, what a body's activity asks of where it is: hold its thing
@@ -2696,9 +2767,26 @@ export async function createStage(
     if (held.prop) f.hold(held.prop, held.hold);
     else f.hold(errandHold?.prop, errandHold?.how);
     if (!s || !b) return;
+    // Its seat on an outing, its bed for the night: it goes there, and keeps to it. With someone else there (a host on
+    // its couch, an agent come to talk, you), it sits at the nearest free seat instead, or stays sat where it is, and
+    // takes its own once it is free.
+    const seat = b.spot && b.spot !== f.current && spotById(room, b.spot) ? b.spot : undefined;
+    if (seat && free && t - s.checked > 1.5 && !f.walker.busy) {
+      s.checked = t;
+      const to = seatToTake(
+        seat,
+        room.spots,
+        { x: f.walker.place.x, z: f.walker.place.z, spotActivity: spot?.activity, ...(f.here ? { spot: f.here } : {}) },
+        taken(f),
+      );
+      if (to && f === me) go(to);
+      else if (to) f.go(room, to, waysFor(f));
+    }
+    // Chatting wherever it has settled: at its seat, the one it sat at instead, or about its home with guests round.
+    if (chatsAt(b, f.here)) chat(f, agent, t);
     // In a meeting room everyone keeps their seat at the table: nobody leaves it for a desk to think at.
     const station = isMeeting(room) && b.station !== "seat" ? undefined : b.station;
-    if (station && free && t - s.checked > 1.5 && !f.walker.busy && !f.pending) {
+    if (station && !seat && b.spot !== f.here && free && t - s.checked > 1.5 && !f.walker.busy && !f.pending) {
       s.checked = t;
       const to = stationSpot(
         station,
@@ -2730,7 +2818,8 @@ export async function createStage(
     const ids = new Set(company.map((c) => c.agent));
     // The agent you came to see has gone before its body got here: you aren't sent to it if it comes back later.
     if (greeting && !ids.has(greeting)) greeting = undefined;
-    const way = opts.still ? undefined : doorway();
+    const outdoors = isOutdoors(room);
+    const way = opts.still || outdoors ? undefined : doorway();
     for (const [agent, fig] of companions) {
       if (ids.has(agent)) continue;
       turnedFor.delete(fig);
@@ -2739,15 +2828,26 @@ export async function createStage(
       standing.delete(fig);
       facedAt.delete(fig);
       companions.delete(agent);
-      // Gone home, or somewhere else: out through the door, or simply gone from a room without one.
-      if (!way) {
+      // Gone home, or somewhere else: out through the door, or simply gone from a room without one. Outdoors, it
+      // walks to the door of where it is going, however far that is.
+      const exit = outdoors && !opts.still ? opts.exitFor?.(agent) : way?.at;
+      if (!exit) {
         fig.dispose();
         continue;
       }
       fig.doze(false);
+      fig.hold(undefined, undefined);
       fig.label(fig.name, undefined);
-      fig.goTo(room, way.at, ways());
-      departing.push({ fig, from: clock });
+      // Off to work, it says so over its head as it goes; back from an outing with nothing on, it shows nothing.
+      fig.signs.set(behaviorFor(activities[agent]).sign, clock);
+      fig.goTo(room, exit, ways());
+      const far = Math.hypot(exit[0] - fig.walker.place.x, exit[1] - fig.walker.place.z);
+      departing.push({
+        fig,
+        from: clock,
+        agent,
+        ...(outdoors ? { until: clock + (far * 1.6) / PASSING_PACE + 8 } : {}),
+      });
     }
     // Arriving after the stage has settled in this place is coming in; any sooner, it was here already.
     const coming = !opts.still && performance.now() - placedAt > SETTLED_MS;
@@ -2778,8 +2878,20 @@ export async function createStage(
             VRMUtils.deepDispose(model.scene);
             return;
           }
-          const entrance = coming && gen === placeGen ? doorway() : undefined;
-          const seat = arrivalSpot();
+          // Its own seat, when its day gives it one here (`routines.ts`) and nobody has it; somewhere free otherwise.
+          const own = behaviorFor(activities[c.agent]).spot;
+          const kept = own && !taken().has(own) ? spotById(room, own) : undefined;
+          const seat = kept ?? arrivalSpot();
+          // Outdoors it comes from the door of where it was, when the page knows; indoors, through the door.
+          const from = isOutdoors(room) ? still.from : undefined;
+          const entrance =
+            coming && gen === placeGen
+              ? from
+                ? { at: from, facing: seat ? Math.atan2(seat.at[0] - from[0], seat.at[1] - from[1]) : 0 }
+                : isOutdoors(room)
+                  ? undefined
+                  : doorway()
+              : undefined;
           const start = entrance
             ? { id: "", name: "", place: "", at: entrance.at, facing: (entrance.facing * 180) / Math.PI }
             : seat;
@@ -2809,13 +2921,16 @@ export async function createStage(
 
   /** Another agent's body, built from a model as it chose to look, standing at `start`. */
   function makeCompanion(model: VRM, c: Companion, start: Spot | undefined) {
+    const carriage = carriageOf(c.looks);
     const figure = new Figure(model, room, start, {
       reducedMotion: opts.reducedMotion,
       animations: c.animations,
       tint: tintOf(c.looks?.color, c.agent),
       ...(c.looks?.size ? { size: c.looks.size } : {}),
-      carriage: carriageOf(c.looks),
+      carriage,
       wear: c.wear,
+      // The town's streets are long: a body crossing it walks briskly, as one going by does, in its own way of walking.
+      ...(isOutdoors(room) ? { pace: PASSING_PACE * (carriage.walk?.speed ?? 1) } : {}),
       ...(opts.still ? {} : { pick: pickFor(c.agent, () => companions.get(c.agent)) }),
     }) as Figure & { name?: string; built?: string; carried?: string };
     figure.name = c.name;
@@ -2963,6 +3078,7 @@ export async function createStage(
       if (at) f.face(at, clock);
       f.gesture(now.name, clock, now.seconds);
     }
+    ownGesture.set(f, clock + (now.seconds ?? EMOTE_SECONDS));
     if (back) turnedFor.set(f, back);
   }
   /** Bodies done with a gesture turn back to what their spot faces, if they are still standing at it. */
@@ -3498,6 +3614,8 @@ export async function createStage(
       hour = hourNow();
       light(lightingFor(hour, lights));
     }
+    // "Talked 5 min ago" goes on counting on the doors. The page writes the whiteboards again each minute.
+    if (doorNotes.length && Math.floor(Date.now() / 60_000) !== notedMinute) noteDoors();
     // The screens turn to the next page as the clock comes round to it, and a clock on one keeps the time.
     if (screens.length) {
       const wall = Date.now();
@@ -3961,16 +4079,33 @@ export async function createStage(
       rekeep();
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
+      // One on its way out shows what it went to do, as that comes in.
+      for (const d of departing) if (d.agent) d.fig.signs.set(behaviorFor(activities[d.agent]).sign, clock);
       lightDoors();
       // Outdoors, each house's windows follow its owner: lit while it works, dark once it sleeps. Only those whose
       // look changed are repainted.
-      town?.setWindows(activities, hour);
+      town?.setWindows(activities, hour, occupied);
       // A call heard of after what was said on it: the far side's words, waiting for a phone here to come out of.
       for (const [agent, line] of inOrder(speech)) hear(agent, line);
     },
     setTasks(next) {
       tasks = next;
       drawBoards();
+    },
+    setNotes(next) {
+      const key = JSON.stringify(next ?? null);
+      if (key === notesKey) return;
+      notesKey = key;
+      notes = next;
+      drawWhiteboards();
+    },
+    setTalked(next) {
+      talked = next;
+      noteDoors();
+    },
+    setOccupied(next) {
+      occupied = new Set(next);
+      town?.setWindows(activities, hour, occupied);
     },
     setScreen(next) {
       const key = JSON.stringify(next);

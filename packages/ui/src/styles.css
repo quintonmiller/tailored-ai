@@ -9226,6 +9226,24 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .sf-big[class*="is-"] { color: var(--tone); }
 .sf-tag[class*="is-"] { background: var(--tone); }
 
+/* A meeting room's whiteboard: what its room said last, a line each, in marker. */
+.sf-notes {
+  position: absolute; inset: 0; display: flex; flex-direction: column; padding: 26px 30px 18px; color: var(--sf-paper-ink);
+  background: #fbfcfd; filter: var(--surface-paper, none);
+}
+.sf-notes-head { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+.sf-notes-room { min-width: 0; font: 760 50px/1.1 var(--sf-font); color: #24427a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-notes-when { flex: none; font: 560 28px var(--sf-font); color: #7a8294; }
+.sf-notes-lines { display: flex; flex-direction: column; gap: 16px; min-height: 0; margin: 0; padding: 0; list-style: none; }
+/* Each line flows on from who said it, two rows at most, so four long ones and long names still fit the board. */
+.sf-notes-line {
+  flex: none; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  font: 450 38px/1.25 var(--sf-font); color: #1f2430; overflow-wrap: anywhere;
+}
+.sf-notes-who { margin-right: 0.3em; font-weight: 750; }
+.sf-notes-who::after { content: ":"; }
+.sf-notes-none { margin: 0; font: italic 400 32px var(--sf-font); color: #a3aab8; }
+
 /* The task board: a whiteboard with a column for each stage and a sticky note for each task. */
 .sf-board {
   position: absolute; inset: 0; display: flex; flex-direction: column; padding: 22px 22px 16px; color: var(--sf-paper-ink);

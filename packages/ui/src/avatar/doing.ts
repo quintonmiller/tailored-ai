@@ -35,6 +35,13 @@ export interface AgentActivity {
    * puts here (`withTalks` in `talk.ts`).
    */
   talk?: { with: string; phone?: boolean; started?: boolean };
+  /**
+   * What its day has it doing while it has nothing else to: out on an errand,
+   * a host, or asleep for the night; the seat it is at and its company, when
+   * its body is on the stage. The places plugin's `visit` record, which the
+   * page puts here (`withRoutines` in `routines.ts`).
+   */
+  routine?: { errand: string; spot?: string; with?: string[] };
 }
 
 /**
@@ -67,8 +74,8 @@ export const DOING_VARS: Record<string, string> = Object.fromEntries(
 /** How a thing is held: up to the eyes, at the ear, in front of the chest, or out ahead. */
 export type Hold = "up" | "ear" | "chest" | "out";
 
-/** A sign over the head: thinking dots, a speech bubble, a phone, an exclamation, a question, sleep. */
-export type Sign = "think" | "talk" | "phone" | "wait" | "stuck" | "sleep";
+/** A sign over the head: thinking dots, a speech bubble, a phone, an exclamation, a question, sleep, chatting. */
+export type Sign = "think" | "talk" | "phone" | "wait" | "stuck" | "sleep" | "chat";
 
 /** Where it goes to do something, by what the spot is for: a seat, its desk, or the task board. */
 export type Station = "seat" | "desk" | "board";
@@ -95,6 +102,12 @@ export interface Behavior {
   detail?: string;
   /** A one-off gesture when it starts doing this. */
   gesture?: string;
+  /** The spot it goes to and keeps to: its seat on an outing, its bed for the night. */
+  spot?: string;
+  /** Keeping someone company: it turns to them, and talks with its hands and nods now and then. */
+  chat?: boolean;
+  /** Its words are said only up close, as an idle body's are: a square of people out isn't a wall of tags. */
+  quiet?: boolean;
 }
 
 /** The things the stage can put in a hand, and how each is held. */
@@ -163,10 +176,39 @@ export function behaviorFor(a: AgentActivity | undefined): Behavior {
     case "stuck":
       return { ...label, sign: "stuck", stays: true, gesture: "shrug" };
     case "asleep":
-      return { ...label, sign: "sleep", asleep: true, station: "seat", stays: true };
+      return {
+        ...label,
+        sign: "sleep",
+        asleep: true,
+        station: "seat",
+        stays: true,
+        ...(a.routine?.spot ? { spot: a.routine.spot } : {}),
+      };
     default:
-      return IDLE;
+      return a.routine ? outing(a, a.routine) : IDLE;
   }
+}
+
+/** What an outing puts in a hand: a coffee at the café, a book to read. */
+const OUTING_HOLDS: Record<string, string> = { cafe: "mug", read: "book" };
+
+/**
+ * Out on an errand, or with someone round: it says what it is doing, sits at
+ * its seat, holds its coffee or its book, and, with company, turns to them
+ * and chats, under a sign that says so and never with words. One whose seat
+ * isn't here (on the map, on a card) has only the words.
+ */
+function outing(a: AgentActivity, r: NonNullable<AgentActivity["routine"]>): Behavior {
+  const company = r.with?.[0];
+  const held = OUTING_HOLDS[r.errand];
+  return {
+    label: a.what,
+    quiet: true,
+    stays: !!(r.spot || company),
+    ...(r.spot ? { spot: r.spot } : {}),
+    ...(company ? { sign: "chat" as const, chat: true, face: company } : {}),
+    ...(held && r.spot ? { prop: held, hold: HELD[held] ?? "chest" } : {}),
+  };
 }
 
 /**
@@ -218,6 +260,25 @@ export function stationSpot<S extends { id: string; at: [number, number]; activi
   return spots.filter((s) => fits(s) && !taken.has(s.id)).sort((a, b) => distance(a) - distance(b))[0];
 }
 
+/**
+ * Where a body out on its day goes to sit: its own seat (`own`) while nobody
+ * else has it; with someone else there (a host on its couch, an agent come
+ * to talk, a visitor), the nearest free seat, unless it is sat down already.
+ * Undefined when it stays where it is.
+ */
+export function seatToTake<S extends { id: string; at: [number, number]; activity?: string; for?: string }>(
+  own: string,
+  spots: S[],
+  here: { x: number; z: number; spotActivity?: string; spot?: string },
+  taken: Set<string>,
+): string | undefined {
+  return taken.has(own) ? stationSpot("seat", spots, here, taken)?.id : own;
+}
+
+/** Whether a body keeping company chats where it is: settled at a spot, or anywhere about a home it has guests in. */
+export const chatsAt = (b: Pick<Behavior, "chat" | "spot">, here: string | undefined): boolean =>
+  !!b.chat && (!b.spot || here !== undefined);
+
 /** Two behaviours that look the same: nothing to redo. */
 export function sameBehavior(a: Behavior, b: Behavior): boolean {
   const keys: (keyof Behavior)[] = [
@@ -232,6 +293,9 @@ export function sameBehavior(a: Behavior, b: Behavior): boolean {
     "stays",
     "label",
     "detail",
+    "spot",
+    "chat",
+    "quiet",
   ];
   return keys.every((k) => a[k] === b[k]);
 }

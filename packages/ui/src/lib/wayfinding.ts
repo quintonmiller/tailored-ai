@@ -23,6 +23,8 @@ export interface MapPlace extends BodyLooks {
   purpose?: string;
   /** A room of conversation's members, wherever their bodies are; `agents` are those talking in it now. */
   members?: string[];
+  /** When a room of conversation last talked, as far as the server knows. */
+  talked?: string;
   /** The place its way in is through: the town for a building, the floor of the office for a room on one. */
   via?: string;
   /** A home's owner, in a word ("coder", "writer"), when what it is for can be read. */

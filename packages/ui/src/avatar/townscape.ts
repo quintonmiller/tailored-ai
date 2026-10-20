@@ -566,8 +566,8 @@ export interface BuiltTown {
   obstacles: Obstacle[];
   /** The sky dome, the stars, the sun and the moon: they keep round the camera. */
   sky: THREE.Group;
-  /** Light the windows for what each agent is doing, at an hour. */
-  setWindows(activities: Record<string, AgentActivity>, hour: number): void;
+  /** Light each building's windows for the hour, by what its owner is doing, and who is in it when that is known. */
+  setWindows(activities: Record<string, AgentActivity>, hour: number, inside?: ReadonlySet<string>): void;
   /** Colour the sky, show the stars or not, and light the street lamps, for an hour. */
   setHour(hour: number, lamps: boolean): void;
   dispose(): void;
@@ -955,10 +955,10 @@ export function buildTown(plan: TownPlan): BuiltTown {
     lampGlow.emissiveIntensity = lampsOn ? 1.4 : 0;
   };
 
-  const setWindows = (activities: Record<string, AgentActivity>, hour: number) => {
+  const setWindows = (activities: Record<string, AgentActivity>, hour: number, inside?: ReadonlySet<string>) => {
     for (const b of buildings) {
       const doing = b.building.owner ? activities[b.building.owner]?.doing : undefined;
-      const look = windowLook(b.building.kind, hour, doing);
+      const look = windowLook(b.building.kind, hour, doing, inside ? inside.has(b.building.id) : undefined);
       if (look === b.look) continue;
       b.look = look;
       paintGlass(b.glass, look);

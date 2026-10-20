@@ -10,6 +10,7 @@ import { type AgentActivity, DOING_VARS } from "./doing";
 import { doorWords } from "./doors";
 import { type FaceData, SurfacePortals, type SurfaceStage, type TaskMove } from "./Faces";
 import type { BodyState } from "./motion";
+import { type Notes, talkedWords } from "./routines";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
 import type { ScreenCard } from "./screens";
 import type { Companion, Line, PanelOptions, Stage, StageEdit, StageView, SurfaceView, Travel, UseSpot } from "./stage";
@@ -104,6 +105,10 @@ export function Avatar({
   calendar,
   world,
   onApprove,
+  notes,
+  talked,
+  occupied,
+  exitFor,
   onUse,
   onTaskMove,
   onLine,
@@ -181,6 +186,14 @@ export function Avatar({
   world?: WorldData;
   /** Approve or deny what an agent waits on, from a needs-you board on a wall. */
   onApprove?: (need: Need, approved: boolean) => Promise<unknown>;
+  /** What a meeting room's whiteboards say: its room's last few lines (`routines.ts`). */
+  notes?: Notes;
+  /** When each room last talked, by its meeting room's id, for the cards on doors. */
+  talked?: Record<string, string>;
+  /** The buildings in the town with someone in them, whose windows light up. */
+  occupied?: string[];
+  /** Outdoors, the door of the place an agent's body is going to as it leaves. */
+  exitFor?: (agent: string) => [number, number] | undefined;
   /**
    * A kiosk, a board, a screen or a calendar was clicked: what it does, and
    * on a board the note or column clicked, on a screen the page that was up.
@@ -352,6 +365,25 @@ export function Avatar({
   useEffect(() => {
     if (world) stage.current?.setGlances(glances);
   }, [glances, world]);
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+  useEffect(() => {
+    stage.current?.setNotes(notes);
+  }, [notes]);
+  const talkedRef = useRef(talked);
+  talkedRef.current = talked;
+  useEffect(() => {
+    if (talked) stage.current?.setTalked(talked);
+  }, [talked]);
+  const occupiedRef = useRef(occupied);
+  occupiedRef.current = occupied;
+  const occupiedKey = (occupied ?? []).join("\n");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when who is where changed; the ref holds it.
+  useEffect(() => {
+    if (occupiedRef.current) stage.current?.setOccupied(occupiedRef.current);
+  }, [occupiedKey]);
+  const exitRef = useRef(exitFor);
+  exitRef.current = exitFor;
   const placeRef = useRef(place);
   placeRef.current = place;
   const onUseRef = useRef(onUse);
@@ -378,6 +410,7 @@ export function Avatar({
       ...(widgets ? { widgets } : {}),
       ...(calendar ? { calendar } : {}),
       ...(world ? { world } : {}),
+      ...(notes ? { notes } : {}),
       onUse: (action, on, thing) => onUseRef.current?.(action, on, thing),
       ...(onTaskMove
         ? { onTaskMove: (id: string, change: TaskMove) => moveRef.current?.(id, change) ?? Promise.resolve() }
@@ -388,7 +421,7 @@ export function Avatar({
           }
         : {}),
     }),
-    [tasks, screen, widgets, calendar, world, onTaskMove, onApprove],
+    [tasks, screen, widgets, calendar, world, notes, onTaskMove, onApprove],
   );
   const lineRef = useRef(onLine);
   lineRef.current = onLine;
@@ -482,6 +515,7 @@ export function Avatar({
               }
             : {}),
           onUse: (action: string, on?: UseSpot, thing?: string) => onUseRef.current?.(action, on, thing),
+          exitFor: (who: string) => exitRef.current?.(who),
           onFocus: setReading,
           // A surface under the pointer says what clicking it does, as a door says where it goes; so does the plaque.
           onSurfaceHover: (label: string | undefined, at?: { x: number; y: number }) =>
@@ -491,8 +525,13 @@ export function Avatar({
           ...(doors
             ? {
                 onDoor: (door: RoomDoor) => doorRef.current?.(door),
-                onDoorHover: (door: RoomDoor | undefined, at?: { x: number; y: number }) =>
-                  setDoorTip(door && at ? { words: doorWords(door), x: at.x, y: at.y } : null),
+                onDoorHover: (door: RoomDoor | undefined, at?: { x: number; y: number }) => {
+                  // A meeting room's door says how long since its room talked, as the card on it does.
+                  const said = door ? talkedWords(talkedRef.current?.[door.to], Date.now()) : undefined;
+                  setDoorTip(
+                    door && at ? { words: `${doorWords(door)}${said ? ` · ${said}` : ""}`, x: at.x, y: at.y } : null,
+                  );
+                },
               }
             : {}),
           lights: lightsFor(placeRef.current),
@@ -556,6 +595,9 @@ export function Avatar({
         if (screenRef.current) s.setScreen(screenRef.current);
         if (calendarRef.current) s.setCalendar(calendarRef.current);
         if (Object.keys(glancesRef.current).length) s.setGlances(glancesRef.current);
+        if (notesRef.current) s.setNotes(notesRef.current);
+        if (talkedRef.current) s.setTalked(talkedRef.current);
+        if (occupiedRef.current) s.setOccupied(occupiedRef.current);
         if (editRef.current) s.setEditing(editRef.current);
         greetIn(s, placeRef.current);
       })
@@ -755,7 +797,8 @@ function AgentMenu({
       window.removeEventListener("pointerdown", away);
     };
   }, [onClose]);
-  const status = activity && activity.doing !== "idle" ? activity.what : "idle";
+  // Out on its day, it says where, though it has nothing to do.
+  const status = activity && (activity.doing !== "idle" || activity.routine) ? activity.what : "idle";
   const when = activity?.doing !== "idle" ? since(activity?.since) : undefined;
   return (
     <div
