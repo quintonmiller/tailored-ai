@@ -53,7 +53,7 @@ import {
   withDoorwayHeld,
   withSpots,
 } from "../plugins/places-layout.js";
-import { homePlace, LOBBY, sharedPlace } from "../plugins/places-rooms.js";
+import { homePlace, LOBBY, meetingRoom, sharedPlace } from "../plugins/places-rooms.js";
 import { doorsIn, layWorld, type WorldPlace } from "../plugins/places-world.js";
 import "../state/builtin.js";
 import { type StateCaller, StateService } from "../state/service.js";
@@ -504,6 +504,64 @@ describe("joining two places", () => {
       }
     }
     expect(joinedAll).toBe(24);
+  });
+
+  it("keeps clear of a meeting room's whiteboard, ticker and task board, and of café tables, chairs and the cart", () => {
+    // The meeting rooms the world draws, every size and look: the way back never hangs over what is on their walls.
+    let joinedAll = 0;
+    let besideAll = 0;
+    for (let n = 2; n <= 13; n++) {
+      const meeting = meetingRoom(`#room-${n}`, n, ["", "trip planning", "reading group", "band practice"][n % 4]);
+      expect(meeting.props.some((p) => p.kind === "whiteboard")).toBe(true);
+      const joined = joinPlaces(
+        end("home:a", homePlace(`home:agent-${n}`, `agent-${n}'s room`), "a's home"),
+        end(`room:local:room-${n}`, meeting, `#room-${n}'s meeting room`),
+        {},
+        made,
+        nameOf,
+      );
+      if (typeof joined === "string") throw new Error(`#room-${n}: ${joined}`);
+      joinedAll++;
+      const slots = [
+        ...townDoorsOf("x", joined.far),
+        ...(joined.far.links ?? []).map((l) => ({ wall: l.wall, along: l.along })),
+      ];
+      expect(doorProblems(joined.far, slots)).toEqual([]);
+      expect(doorOf(joined.far)).toEqual(doorOf(meeting));
+      // Asked for by the whiteboard itself, a door goes beside it, or nowhere: never over it or the board.
+      const out = townDoorsOf("x", meeting);
+      const by = findDoorSlot(meeting, { near: "the whiteboard" }, [
+        ...out.map((slot) => ({ slot, name: "the door out" })),
+      ]);
+      if (typeof by !== "string") {
+        besideAll++;
+        expect(doorProblems(meeting, [...out, by])).toEqual([]);
+      }
+    }
+    expect(joinedAll).toBe(12);
+    expect(besideAll).toBeGreaterThan(6);
+    // A place set out as a café: a cart against the back wall with an activity feed beside it, a table and chair
+    // by the left wall and a whiteboard on it. A door asked for on either wall goes beside them, never in front.
+    const cafe = withSpots({
+      ...roomy(),
+      props: [
+        { id: "cart", name: "the coffee cart", kind: "coffee_cart", at: [0, -2.5], facing: 0 },
+        { id: "feed", name: "the activity feed", kind: "feed", at: [2.6, -2.97], facing: 0, elevation: 0.9 },
+        { id: "table", name: "the café table", kind: "cafe_table", at: [-2.9, 2.0], facing: 90 },
+        { id: "chair", name: "the café chair", kind: "cafe_chair", at: [-3.0, 1.3], facing: 90 },
+        { id: "board", name: "the whiteboard", kind: "whiteboard", at: [-3.47, -1.9], facing: 90, elevation: 1.05 },
+      ],
+    });
+    for (const wall of ["back", "left"] as const) {
+      const slot = findDoorSlot(cafe, { wall }, []);
+      if (typeof slot === "string") throw new Error(slot);
+      expect(slot.wall).toBe(wall);
+      expect(doorProblems(cafe, [slot])).toEqual([]);
+    }
+    expect(whyNoDoor(cafe, { wall: "back", along: 0 }, [])).toBe("The coffee cart stands in front of it.");
+    expect(whyNoDoor(cafe, { wall: "back", along: 2.4 }, [])).toBe("The activity feed hangs where it would be.");
+    expect(whyNoDoor(cafe, { wall: "left", along: -1.9 }, [])).toBe("The whiteboard hangs where it would be.");
+    expect(whyNoDoor(cafe, { wall: "left", along: 1.5 }, [])).toBe("The café table stands in front of it.");
   });
 
   it("refuses a second door to the same place, a place with all the doors it can have, and no room for the way back", () => {

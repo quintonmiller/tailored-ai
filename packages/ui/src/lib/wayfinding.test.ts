@@ -301,6 +301,19 @@ describe("where a body went", () => {
     expect(moveOf({ type: "visit", id: "planner", before: { place: "room:local:trip" } })).toEqual({
       from: "room:local:trip",
     });
+    // Where the body lives, when the page knows it: where a visit began, out on its day to a friend's, and where
+    // it went once the visit was over.
+    expect(moveOf({ type: "visit", id: "planner", after: { place: "home:writer" } }, "home:planner")).toEqual({
+      from: "home:planner",
+      to: "home:writer",
+    });
+    expect(moveOf({ type: "visit", id: "planner", before: { place: "home:writer" } }, "shared:lounge")).toEqual({
+      from: "home:writer",
+      to: "shared:lounge",
+    });
+    expect(
+      moveOf({ type: "visit", id: "planner", before: { place: "town" }, after: { place: "room:local:trip" } }, "x"),
+    ).toEqual({ from: "town", to: "room:local:trip" });
     // A visit made longer goes nowhere, and other records say nothing of where a body went.
     expect(moveOf({ type: "visit", id: "planner", before: { place: "a" }, after: { place: "a" } })).toBeUndefined();
     expect(moveOf({ type: "place", id: "shared:lounge", after: { place: "x" } })).toBeUndefined();

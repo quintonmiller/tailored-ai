@@ -1261,12 +1261,15 @@ export function useChatStage({
   const showStage = has3d && stageOn;
   // Where each body last went, and came from, while the world is shown: it walks out by the door to where it went,
   // and in by the door from where it was, when the room has one (a door someone put in, perhaps), rather than by the
-  // room's first door.
+  // room's first door. A visit, to talk or out on its day, begins and ends where the body lives.
+  const lives = useRecords<{ place?: string }>("whereabouts", showStage);
+  const livesRef = useRef(lives);
+  livesRef.current = lives;
   const [moves, setMoves] = useState<Record<string, BodyMove>>({});
   useEffect(() => {
     if (!showStage) return;
     return subscribeStateChanges((change) => {
-      const move = moveOf(change);
+      const move = moveOf(change, livesRef.current[change.id]?.place ?? `home:${change.id}`);
       if (move) setMoves((m) => ({ ...m, [change.id]: move }));
     });
   }, [showStage]);

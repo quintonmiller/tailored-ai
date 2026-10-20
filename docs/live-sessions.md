@@ -862,7 +862,8 @@ It refuses, saying why, a door it can't put in:
   or into the town hall, which is the town's (you can put one in there from
   Edit room);
 - a door with **no room** for it: a door needs 1.6 m with nothing hanging
-  there and the floor in front of it clear, on its side of the room and on
+  there (a picture, a widget, a meeting room's whiteboard) and the floor in
+  front of it clear, on its side of the room and on
   the way back's. The rooms the world draws keep their walls for furniture and
   the town's door, so a door with nowhere asked for usually ends up at an open
   side;
@@ -893,7 +894,10 @@ leaves the door be.
 
 Agents' bodies use these doors too. One going to a place its room has a door
 to walks out through that door, not the town's, and comes in at the way back
-on the other side.
+on the other side: going to talk in a meeting room, and out on its day,
+dropping in on a friend whose home its own has a door to, and coming back.
+A door put in to a meeting room has the card on it saying when its room last
+talked, like the office's door to it, and says so when you point at it.
 
 Inside, a door put in looks like the town's: a door in the back or left wall
 with its plate over it, or a gate at the open front or right, in the look of
