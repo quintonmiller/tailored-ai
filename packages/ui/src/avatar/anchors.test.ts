@@ -8,11 +8,14 @@ import {
   GAP,
   JUMP_PX,
   layoutPanels,
+  PANEL_ROOM,
   type PanelIn,
   PLAQUE,
   type Placed,
   plaqueSpot,
+  ROOM_BESIDE,
   SHEET_BELOW,
+  stripTaken,
   talkAnchor,
   type Where,
   walkedAway,
@@ -115,6 +118,22 @@ describe("where a panel goes beside what it is about", () => {
     expect(meet(boxOf(crowded.get("talk") as Placed, [340, 260]), top)).toBe(false);
   });
 
+  it("slides along its side to go round your tag and a button, rather than cover either", () => {
+    const who = body(600, 200);
+    // Your tag just where it would go on the right, and a button where it would go on the left.
+    const tag = { left: 700, right: 760, top: 300, bottom: 330 };
+    const button = { left: 300, right: 360, top: 350, bottom: 380 };
+    const at = layoutPanels([card(who)], view, [], Number.POSITIVE_INFINITY, [tag, button]).get("card") as Placed;
+    const box = boxOf(at, [340, 260]);
+    expect(["right", "left"]).toContain(at.side);
+    expect(meet(box, tag)).toBe(false);
+    expect(meet(box, button)).toBe(false);
+    expect(meet(box, who.box)).toBe(false);
+    expect(inside(box, view)).toBe(true);
+    // Its tail still meets its edge at the shoulder.
+    expect(at.y + at.tail).toBe(who.keep.bottom);
+  });
+
   it("keeps panels out of each other's way, the higher ranked where it would be alone", () => {
     const a = card(body(500, 200), { id: "agent's card", rank: 2 });
     const b = card(body(560, 210), { id: "talk", rank: 1, size: [320, 300] });
@@ -149,6 +168,31 @@ describe("where a panel goes beside what it is about", () => {
     expect(meet(boxOf(at, [380, 200]), face)).toBe(false);
     // Still across the middle: higher up, rather than off to one side.
     expect(at.x + 190).toBeCloseTo((view.left + view.right) / 2, 0);
+  });
+
+  it("holds a tall panel in front of you between the buttons over the stage and the hint at its foot", () => {
+    const tools = { left: 20, right: 700, top: 60, bottom: 100 };
+    const hint = { left: 20, right: 1000, top: 640, bottom: 680 };
+    const map = card(undefined, { held: "front", size: [660, 520] });
+    const at = layoutPanels([map], view, [], Number.POSITIVE_INFINITY, [tools, hint]).get("card") as Placed;
+    const box = boxOf(at, [660, 520]);
+    expect(meet(box, tools)).toBe(false);
+    expect(meet(box, hint)).toBe(false);
+    expect(at.x + 330).toBeCloseTo((view.left + view.right) / 2, 0);
+  });
+
+  it("keeps a card beside a body off the keys hint along the foot, but lets a map held up lie over it", () => {
+    const hint = { left: 20, right: 1000, top: 640, bottom: 680 };
+    // Low on the stage: beside it as it would go, the card reaches down over the hint.
+    const who = body(300, 420, 240);
+    const at = layoutPanels([card(who)], view, [], Number.POSITIVE_INFINITY, [], [hint]).get("card") as Placed;
+    expect(meet(boxOf(at, [340, 260]), hint)).toBe(false);
+    expect(meet(boxOf(at, [340, 260]), who.keep)).toBe(false);
+    // Too tall to miss both the buttons and the hint: over the hint, never the buttons.
+    const tools = { left: 20, right: 1180, top: 12, bottom: 70 };
+    const map = card(undefined, { held: "front", size: [660, 600] });
+    const held = layoutPanels([map], view, [], Number.POSITIVE_INFINITY, [tools], [hint]).get("card") as Placed;
+    expect(meet(boxOf(held, [660, 600]), tools)).toBe(false);
   });
 
   it("docks an optional panel at the side when every place beside its agent is taken", () => {
@@ -215,15 +259,35 @@ describe("a panel following what it is beside", () => {
 
 describe("walking away from what a panel is about", () => {
   it("puts it away once you are further off than the room and further than you stood", () => {
-    expect(walkedAway(1.5, AWAY_AT - 0.1, 3)).toBe(false);
-    expect(walkedAway(1.5, AWAY_AT + 0.1, 3)).toBe(true);
+    // It stayed where it was: you are as far from it as from where it was.
+    expect(walkedAway(1.5, AWAY_AT - 0.1, AWAY_AT - 0.1)).toBe(false);
+    expect(walkedAway(1.5, AWAY_AT + 0.1, AWAY_AT + 0.1)).toBe(true);
     // Opened from across a big room: you can go a little further still.
-    expect(walkedAway(4, 4 + AWAY_MORE - 0.1, 3)).toBe(false);
-    expect(walkedAway(4, 4 + AWAY_MORE + 0.1, 3)).toBe(true);
+    expect(walkedAway(4, 4 + AWAY_MORE - 0.1, 4 + AWAY_MORE - 0.1)).toBe(false);
+    expect(walkedAway(4, 4 + AWAY_MORE + 0.1, 4 + AWAY_MORE + 0.1)).toBe(true);
   });
 
-  it("leaves it open when the agent walks off and you stay: its card goes with it", () => {
-    expect(walkedAway(1.5, 8, 0)).toBe(false);
+  it("leaves it open when the agent walks off, even as you take a step, and when you follow it: its card goes with it", () => {
+    expect(walkedAway(1.5, 8, 1.5)).toBe(false);
+    // It went 6 metres to its desk while you took a step the other way.
+    expect(walkedAway(1.5, 7.5, 2.5)).toBe(false);
+    // You followed it there: far from where it stood, beside it now.
+    expect(walkedAway(1.5, 1.2, 6)).toBe(false);
+  });
+});
+
+describe("the strip kept for panels", () => {
+  it("is taken from the scene to read up close, for something docked, or on a stage with no room beside a thing", () => {
+    const wide = { room: PANEL_ROOM, stage: 1300, seen: 1300, reading: false, docked: false };
+    // A card beside an agent on a wide stage goes on whichever side has room: the camera stays.
+    expect(stripTaken(wide)).toBe(false);
+    expect(stripTaken({ ...wide, reading: true })).toBe(true);
+    expect(stripTaken({ ...wide, docked: true })).toBe(true);
+    // With the whole chat open, what can be seen is narrower than the stage.
+    expect(stripTaken({ ...wide, seen: ROOM_BESIDE - 1 })).toBe(true);
+    // Nothing to keep it for; or sheets along the foot instead.
+    expect(stripTaken({ ...wide, room: 0, reading: true })).toBe(false);
+    expect(stripTaken({ ...wide, stage: SHEET_BELOW - 1, seen: SHEET_BELOW - 1, reading: true })).toBe(false);
   });
 });
 
@@ -310,6 +374,20 @@ describe("where the room's plaque hangs", () => {
     expect(plaqueSpot(room([door("back", 2.2)]))?.at).toEqual([2.2 - PLAQUE.beside, -2.5]);
     // A rug on the floor there is no matter.
     expect(plaqueSpot(room([door("back", 0)], [thing("rug", [1, -2.3], "rug")]))?.at).toEqual([PLAQUE.beside, -2.5]);
+  });
+
+  it("keeps clear of a wide thing on the wall by the whole of its width, and not of a narrow one as far off", () => {
+    // A task board's middle 0.8 m along from where the plaque would go: its edge reaches past the plaque's.
+    const board = { ...thing("board", [PLAQUE.beside + 0.8, -2.45], "board"), action: "tasks" };
+    expect(plaqueSpot(room([door("back", 0)], [board]))?.at).toEqual([-PLAQUE.beside, -2.5]);
+    const poster = thing("poster", [PLAQUE.beside + 0.8, -2.45], "poster");
+    expect(plaqueSpot(room([door("back", 0)], [poster]))?.at).toEqual([PLAQUE.beside, -2.5]);
+    // A shape is as wide as it was made.
+    const slab = {
+      ...thing("slab", [PLAQUE.beside + 0.8, -2.45], "block"),
+      size: [1.6, 1, 0.2] as [number, number, number],
+    };
+    expect(plaqueSpot(room([door("back", 0)], [slab]))?.at).toEqual([-PLAQUE.beside, -2.5]);
   });
 
   it("keeps clear of another door, and hangs nowhere when every door is at an open side or has no room beside it", () => {

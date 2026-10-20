@@ -569,6 +569,7 @@ describe("your conversation in the world", () => {
       ...sceneAt(null),
       stage: <TalkInWorld />,
       talk: { phone, name: "talker" },
+      stageUp: true,
       worldPanel: false,
       chatCovered: false,
       closePanel: () => {},
@@ -628,5 +629,92 @@ describe("your conversation in the world", () => {
     expect((world().querySelector(".world-talk-input") as HTMLInputElement).value).toBe(ROOM_ASK);
     // Ready to send where you are: the whole chat stays hidden.
     expect(container.querySelector(".chat")?.classList.contains("chat-panel-hidden")).toBe(true);
+  });
+
+  const classes = () => container.querySelector(".chat")?.classList as DOMTokenList;
+
+  it("keeps the chat's bar until the world is on screen, and the whole chat when the world can't be shown", async () => {
+    let scene: Record<string, unknown> = { ...sceneTalking(), talk: null, stageUp: false };
+    fakeScene = () => scene;
+    await render();
+    // Still loading: the whole chat is hidden, but its bar is the box to type in until the world has one.
+    expect(classes().contains("chat-panel-hidden")).toBe(true);
+    expect(classes().contains("chat-box-in-world")).toBe(false);
+    scene = sceneTalking();
+    await render();
+    expect(classes().contains("chat-box-in-world")).toBe(true);
+    // No WebGL, or the avatar wouldn't load: the chat is the only place to talk, so it shows.
+    scene = { ...sceneTalking(), talk: null, stageUp: false, stageFailed: true };
+    await render();
+    expect(classes().contains("chat-panel-hidden")).toBe(false);
+    expect(classes().contains("chat-box-in-world")).toBe(false);
+  });
+
+  it("opens the whole chat to read a meeting room's own conversation, and puts it away once you talk to someone", async () => {
+    let chatWith: ((name: string) => void) | undefined;
+    fakeScene = (opts) => {
+      chatWith = opts.onChatWith;
+      return { ...sceneAt("room:local:trip"), stageUp: true, closePanel: () => {} };
+    };
+    await render();
+    const tab = (name: string) =>
+      [...container.querySelectorAll(".chat-with-tabs button")].find((b) => b.textContent === name) as HTMLElement;
+    // The room's own conversation is read in the chat: the world shows it only in bubbles over heads.
+    expect(classes().contains("chat-panel-hidden")).toBe(false);
+    expect(tab("Room").getAttribute("aria-selected")).toBe("true");
+    await act(async () => chatWith?.("planner"));
+    await settle();
+    expect(classes().contains("chat-panel-hidden")).toBe(true);
+    // Hidden and shown again yourself while reading the room, it is yours: it stays as you go to someone.
+    const chat = [...container.querySelectorAll(".chat-toolbar-btn")].find(
+      (b) => b.textContent === "Chat",
+    ) as HTMLButtonElement;
+    await act(async () => tab("Room").click());
+    await settle();
+    expect(classes().contains("chat-panel-hidden")).toBe(false);
+    await act(async () => chat.click());
+    await act(async () => chat.click());
+    await act(async () => chatWith?.("planner"));
+    await settle();
+    expect(classes().contains("chat-panel-hidden")).toBe(false);
+  });
+
+  it("makes Stop a new button once Send is pressed, so the focus Send kept never lands on Stop", async () => {
+    let release = () => {};
+    held = new Promise<void>((r) => {
+      release = r;
+    });
+    fakeScene = () => sceneTalking();
+    await render();
+    const input = world().querySelector(".world-talk-input") as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "Hey!");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const send = [...world().querySelectorAll(".world-talk-bar button")].find(
+      (b) => b.textContent === "Send",
+    ) as HTMLButtonElement;
+    send.focus();
+    await act(async () => send.click());
+    await settle();
+    const stop = world().querySelector(".world-talk-bar .chat-stop-btn") as HTMLButtonElement;
+    expect(stop).not.toBeNull();
+    expect(stop).not.toBe(send);
+    expect(document.activeElement).not.toBe(stop);
+    await act(async () => release());
+    await settle();
+  });
+
+  it("takes files dropped on the box in the world, with a box short enough to show its words", async () => {
+    fakeScene = () => sceneTalking();
+    await render();
+    const bar = world().querySelector(".world-talk-bar") as HTMLElement;
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    Object.defineProperty(over, "dataTransfer", { value: { types: ["Files"] } });
+    await act(async () => bar.dispatchEvent(over));
+    expect(over.defaultPrevented).toBe(true);
+    expect(bar.classList.contains("dragging")).toBe(true);
+    // Its header names who it is with: the box says only what it is for.
+    expect((world().querySelector(".world-talk-input") as HTMLInputElement).placeholder).toBe("Message…");
   });
 });

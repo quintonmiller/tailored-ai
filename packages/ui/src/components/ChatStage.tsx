@@ -24,7 +24,7 @@ import {
   type Wake,
 } from "../avatar/calendar";
 import type { Cue } from "../avatar/cues";
-import { type AgentActivity, hueFor } from "../avatar/doing";
+import type { AgentActivity } from "../avatar/doing";
 import type { TaskMove } from "../avatar/Faces";
 import { MODEL_TYPE, type ModelDef } from "../avatar/models";
 import type { BodyState } from "../avatar/motion";
@@ -35,6 +35,7 @@ import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
 import { isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { changeBody, makeGesture } from "../lib/body";
+import { useAgentColor } from "../lib/body-colors";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
@@ -42,7 +43,7 @@ import { type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
 import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
-import { trailTo } from "../lib/wayfinding";
+import { trailTo, plaqueWords as wordsOnPlaque } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
@@ -1288,8 +1289,35 @@ export function useChatStage({
     watch.observe(el);
     return () => watch.disconnect();
   }, [editor.editing]);
+  // The colour each agent's body is drawn in, as its dot is: the one it chose, or the one its name gives it. Its card
+  // and your conversation with it are edged in it.
+  const colorOf = useAgentColor();
+  // Whether the stage is too narrow for panels beside anything, as the stage itself measures it: they are sheets
+  // along its foot. A guess from the screen until it is on screen to say.
+  const [sheets, setSheets] = useState(!wide);
+  // The stage is on screen, and has been since this view of it came: your conversation is in it then. One that
+  // couldn't be shown leaves the chat beside it as the only place to talk.
+  const [stageUp, setStageUp] = useState(false);
+  const [stageFailed, setStageFailed] = useState(false);
+  useEffect(() => {
+    if (showStage) return;
+    setStageUp(false);
+    setStageFailed(false);
+  }, [showStage]);
+  const onShown = useCallback((up: boolean) => {
+    // Taken down only to be built again (another agent, a visit): it is as good as up meanwhile, so the box to type
+    // in doesn't hop between the world and the chat's column while the next one loads.
+    if (up) {
+      setStageUp(true);
+      setStageFailed(false);
+    }
+  }, []);
+  const onProblem = useCallback(() => {
+    setStageUp(false);
+    setStageFailed(true);
+  }, []);
   // On a phone the catalogue is a sheet over the foot of the scene, where the bar would be: one at a time.
-  const sheet = editor.adding && !wide;
+  const sheet = editor.adding && sheets;
   // The map says where you are, for the trail over the stage, and where an agent's body is, for its card and for
   // going to it from what needs you. Opening any of them asks again, for anything new nobody moved to tell it about.
   const map = useWorldMap(
@@ -1547,8 +1575,9 @@ export function useChatStage({
     return () => window.removeEventListener("keydown", toggle);
   }, [showStage, editor.editing]);
 
-  // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel, in your
-  // conversation in the world, or on a surface in the room.
+  // Space to talk, like a walkie-talkie, unless the person is typing, or pressing a button in a panel or on a surface
+  // in the room. A button in your conversation in the world isn't one of those: Space there talks, as it did on the
+  // chat's own buttons.
   const { hold, release } = voice;
   // Whether Space started talking. Letting it go ends that wherever the key comes up: clicking a body while
   // holding it puts the focus in that body's menu, which would otherwise keep the microphone open, and the key
@@ -1558,7 +1587,7 @@ export function useChatStage({
     if (!info.enabled) return;
     const typing = (e: KeyboardEvent) =>
       (e.target as HTMLElement | null)?.closest?.(
-        "input, textarea, select, [contenteditable='true'], [role='dialog'], .world-surface, .world-anchor",
+        "input, textarea, select, [contenteditable='true'], [role='dialog'], .world-surface",
       );
     const down = (e: KeyboardEvent) => {
       if (e.code === "Space" && !e.repeat && !typing(e)) {
@@ -2083,7 +2112,7 @@ export function useChatStage({
     );
   }
   // Where each panel goes, in the place on screen: who has a body here, what is in it, and whether its plaque hangs.
-  const plaqueWords = changeable ? room.name : undefined;
+  const plaqueWords = changeable && placeId && room.name ? wordsOnPlaque(placeId, room.name) : undefined;
   const where = useMemo(
     (): Where => ({
       here: new Set(here),
@@ -2096,17 +2125,18 @@ export function useChatStage({
   // the world, the room being rearranged, the map, that agent's own card, or a meeting room's own conversation.
   const roomTalk = !!showing.visiting?.startsWith("room:") && readingRoom;
   const theirCard = (panel?.kind === "agent" || panel?.kind === "need") && panel.agent === talking;
-  const talkShown = dialogue && showStage && !panelOpen && !editor.editing && !mapOpen && !theirCard && !roomTalk;
+  const talkShown =
+    dialogue && showStage && stageUp && !panelOpen && !editor.editing && !mapOpen && !theirCard && !roomTalk;
   // Face to face when its body is here; on a visit anywhere else, a call.
   const onPhone = !!showing.visiting && !where.here.has(talking);
-  const talkHue = hueFor(talking);
+  const talkColor = colorOf(talking);
   const panels: WorldPanelSpec[] = [];
   if (panel && overlay) {
     const anchor = anchorFor(
       { kind: panel.kind, ...("agent" in panel ? { agent: panel.agent } : {}), ...atOf(panel) },
       where,
     );
-    const hue = "agent" in panel ? hueFor(panel.agent) : undefined;
+    const color = "agent" in panel ? colorOf(panel.agent) : undefined;
     panels.push({
       id: "card",
       kind: panel.kind,
@@ -2115,7 +2145,7 @@ export function useChatStage({
       look: lookOf(anchor),
       rank: 2,
       onAway: closePanel,
-      ...(hue !== undefined ? { hue } : {}),
+      ...(color !== undefined ? { color } : {}),
     });
   }
   if (editor.editing && editor.shelf)
@@ -2137,11 +2167,13 @@ export function useChatStage({
       rank: 1,
       optional: true,
       fallback: "dock",
-      ...(talkHue !== undefined ? { hue: talkHue } : {}),
+      color: talkColor,
     });
-  // A panel beside something has the right of the stage kept for it, so whatever it is beside is framed with room
-  // next to it; one held in front of you (the map) is read over the scene.
-  const panelRoom = wide && panels.some((p) => !("held" in p.anchor && p.anchor.held === "front")) ? PANEL_ROOM : 0;
+  // A card beside something, or docked at the side, has a strip on the right kept for it, which the stage takes from
+  // the scene only when the card needs it (`stripTaken`): a board read up close, the catalogue, a narrow stage. One
+  // held in front of you (the map) is read over the scene, and your conversation goes wherever there is room.
+  const panelRoom =
+    !sheets && panels.some((p) => !p.optional && !("held" in p.anchor && p.anchor.held === "front")) ? PANEL_ROOM : 0;
   const stage: ReactNode =
     showStage && info.avatar ? (
       <Avatar
@@ -2158,6 +2190,9 @@ export function useChatStage({
         insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
         panelRoom={panelRoom}
         panels={panels}
+        onShown={onShown}
+        onSheets={setSheets}
+        onProblem={onProblem}
         {...(plaqueWords ? { plaque: plaqueWords } : {})}
         insetTop={covered?.top ?? 0}
         // Rearranging, the room is framed above the bar over the stage's foot, so what you drag is never under it; on a
@@ -2195,7 +2230,7 @@ export function useChatStage({
               className="room-edit-dock"
               style={{
                 // Clear of the chat's column when it is open, and of the catalogue docked at the side.
-                right: (panelOpen && wide ? PANEL_WIDTH : 0) + (editor.adding && wide ? PANEL_ROOM : 0) + 16,
+                right: (panelOpen && wide ? PANEL_WIDTH : 0) + (editor.adding && !sheets ? PANEL_ROOM : 0) + 16,
                 bottom: (covered?.bottom ?? 0) + 16,
               }}
             >
@@ -2243,6 +2278,13 @@ export function useChatStage({
      * words, while a card has most of the room.
      */
     talk: talkShown ? { phone: onPhone, name: nameOf(talking), brief: !!panel } : null,
+    /**
+     * The stage is on screen, so your conversation is in the world (`talk`
+     * says whether it is showing just now); or it couldn't be shown, so the
+     * chat beside it is the only place to talk.
+     */
+    stageUp,
+    stageFailed,
     /** Close what is open over the stage, and stop rearranging the room. */
     closePanel: () => {
       closePanel();

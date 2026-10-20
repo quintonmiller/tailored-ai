@@ -5,9 +5,10 @@
  * browser's microphone, recorder and audio are faked; the stream is real
  * enough to split an event across two network chunks.
  */
-import { act, useState } from "react";
+import { act, type ReactNode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PANEL_ROOM } from "../avatar/anchors";
 import { doingCss } from "../avatar/doing";
 import type { StageInput } from "../avatar/stage";
 import {
@@ -19,11 +20,13 @@ import {
   newest,
   roomOf,
   TalkButton,
+  TalkSlot,
   tasksFor,
   useChatStage,
   wakesFor,
   withModels,
 } from "./ChatStage";
+import { agentColor } from "./WorldMap";
 
 const stage = vi.hoisted(() => ({
   calls: [] as {
@@ -55,6 +58,8 @@ const stage = vi.hoisted(() => ({
   speech: [] as Record<string, { text: string; at: string }>[],
   cues: [] as string[],
   insets: [] as number[],
+  /** The strip beside the chat's column kept for panels in the world, each time the insets were set. */
+  panelRooms: [] as number[],
   /** Every room the stage was shown, first to last. */
   rooms: [] as { name?: string; props: { name: string }[]; doors?: { to: string; along: number }[] }[],
   /** Who else the stage was told is in the room, each time. */
@@ -138,7 +143,10 @@ vi.mock("../avatar/stage", () => ({
         stage.mounted--;
       },
       setView: () => {},
-      setInsets: ({ right }: { right: number }) => stage.insets.push(right),
+      setInsets: ({ right, panels = 0 }: { right: number; panels?: number }) => {
+        stage.insets.push(right);
+        stage.panelRooms.push(panels);
+      },
       setRoom: (room: { name?: string; props: { name: string }[] }, moved?: boolean) => {
         stage.rooms.push(room);
         stage.moves.push(!!moved);
@@ -226,6 +234,8 @@ let modelNames: string[] = ["robot.vrm"];
 let plannerLooks: Record<string, unknown> = {};
 /** The gestures agents are making, as the server's emote records say. */
 let emoteRecords: { id: string; data: { name: string; at: string } }[] = [];
+/** The `body` records there are, as the dots by names read them: a colour an agent chose. */
+let bodyRecords: { id: string; data: { color?: string } }[] = [];
 /** What writing what a body wears answers: 200, or a failure. */
 let wearStatus = 200;
 /** Where the door of the agent's own place is, as the server says. */
@@ -415,6 +425,7 @@ beforeEach(() => {
   stage.calls.length = 0;
   stage.cues.length = 0;
   stage.insets.length = 0;
+  stage.panelRooms.length = 0;
   stage.rooms.length = 0;
   stage.arrivals.length = 0;
   stage.entered.length = 0;
@@ -481,6 +492,7 @@ beforeEach(() => {
   modelNames = ["robot.vrm"];
   plannerLooks = {};
   emoteRecords = [];
+  bodyRecords = [];
   wearStatus = 200;
   stage.wears.length = 0;
   stage.companyWear.length = 0;
@@ -529,6 +541,7 @@ beforeEach(() => {
       if (url.startsWith("/api/state/activity")) return new Response(JSON.stringify({ records: activityRecords }));
       if (url.startsWith("/api/state/speech")) return new Response(JSON.stringify({ records: speechRecords }));
       if (url.startsWith("/api/state/emote?")) return new Response(JSON.stringify({ records: emoteRecords }));
+      if (url.startsWith("/api/state/body?")) return new Response(JSON.stringify({ records: bodyRecords }));
       if (url === "/api/agents") return new Response(JSON.stringify(agentsInfo));
       if (url === "/api/ext/builtin:places/map")
         return new Response(
@@ -764,9 +777,14 @@ async function settle(ms = 30) {
   });
 }
 
-async function render(props: Partial<ChatStageOptions> & { following?: boolean } = {}) {
+/** Render the scene; `talk` is what the page would draw as your conversation in the world. */
+async function render(props: Partial<ChatStageOptions> & { following?: boolean } = {}, talk: ReactNode = null) {
   await act(async () => {
-    root.render(<Harness {...props} />);
+    root.render(
+      <TalkSlot.Provider value={talk}>
+        <Harness {...props} />
+      </TalkSlot.Provider>,
+    );
   });
   // The stage is imported on demand: when one is due, wait until it exists.
   const due = typeof liveInfo.avatar === "string" && localStorage.getItem("tai.chat.stage") !== "off";
@@ -1855,6 +1873,9 @@ describe("the chat page's scene", () => {
     expect(card.querySelector(".world-agent-wear")?.textContent).toMatch(
       /^An adventurer hat · what suits a travel agent/,
     );
+    // The chips are a click away, so the card by its shoulder stays short.
+    expect(card.querySelector(".world-wear-chip")).toBeNull();
+    await act(async () => (card.querySelector(".world-agent-wear [aria-expanded]") as HTMLButtonElement).click());
     const chips = [...card.querySelectorAll(".world-wear-chip")] as HTMLButtonElement[];
     expect(chips.filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.textContent)).toEqual([
       "adventurer hat",
@@ -2057,6 +2078,7 @@ describe("the chat page's scene", () => {
     await press(await pick("planner"), "About planner");
     await settle(60);
     const card = container.querySelector(".world-agent") as HTMLElement;
+    await act(async () => (card.querySelector(".world-agent-wear [aria-expanded]") as HTMLButtonElement).click());
     const pressed = () =>
       [...card.querySelectorAll(".world-wear-chip")]
         .filter((c) => c.getAttribute("aria-pressed") === "true")
@@ -2164,6 +2186,23 @@ describe("the chat page's scene", () => {
     expect(posts.some((p) => p.url.endsWith("/turn"))).toBe(true);
     // Coming up there isn't a press of the menu's button.
     expect(up.defaultPrevented).toBe(true);
+  });
+
+  it("talks while Space is held on a button in your conversation in the world, as on the chat's own buttons", async () => {
+    await render(
+      { dialogue: true, panelOpen: false },
+      <button type="button" className="fake-send">
+        Send
+      </button>,
+    );
+    // Clicked with the mouse, Send keeps the focus: Space is still talking, not another press of it.
+    const button = container.querySelector('.world-anchor[data-panel="talk"] .fake-send') as HTMLButtonElement;
+    button.focus();
+    const down = new KeyboardEvent("keydown", { code: "Space", bubbles: true, cancelable: true });
+    await act(async () => button.dispatchEvent(down));
+    await settle();
+    expect(down.defaultPrevented).toBe(true);
+    expect(posts.some((p) => p.url === "/api/live/sessions")).toBe(true);
   });
 
   it("leaves keys pressed in a panel to the panel: Space there doesn't start talking", async () => {
@@ -2453,10 +2492,11 @@ describe("the chat page's scene", () => {
       expect(anchorOf("agent")).toEqual({ agent: "planner" });
       const card = container.querySelector('.world-anchor[data-panel="agent"]') as HTMLElement;
       expect(card.classList.contains("world-anchor-card")).toBe(true);
-      expect(card.style.getPropertyValue("--who")).not.toBe("");
+      // Edged in the colour its body is drawn in, as the dot by its name is.
+      expect(card.style.getPropertyValue("--who-color")).toBe(agentColor("planner"));
       expect(card.querySelector(".world-panel-title")?.textContent).toMatch(/planner/);
-      // A card has the right of the stage kept for it, so the agent is framed with room beside it.
-      expect(stage.insets.at(-1)).toBeGreaterThan(440);
+      // A card has a strip kept for it beside the chat's column, which the stage takes when there is no room beside.
+      expect(stage.panelRooms.at(-1)).toBe(PANEL_ROOM);
       await act(async () => tool("Map").click());
       await settle();
       expect(anchorOf("map")).toEqual({ held: "front" });
@@ -2522,7 +2562,8 @@ describe("the chat page's scene", () => {
     it("hangs the room's plaque by its door, and opens the room's card on it", async () => {
       await render();
       await settle(60);
-      expect(stage.plaques.at(-1)).toBe("talker's room");
+      // It says what the trail over the stage calls the place, not the name the home was built with.
+      expect(stage.plaques.at(-1)).toBe("talker's home");
       await act(async () => stage.onUse?.("place"));
       await settle();
       expect(anchorOf("place")).toEqual({ plaque: true });
@@ -2584,6 +2625,56 @@ describe("the chat page's scene", () => {
       await press(await pick("talker"), "About talker");
       expect(anchorOf("agent")).toEqual({ agent: "talker" });
       expect(anchorOf("talk")).toBeUndefined();
+    });
+
+    it("edges an agent's card in the colour it chose for its body", async () => {
+      placeId = "shared:lounge";
+      company = [planner];
+      bodyRecords = [{ id: "planner", data: { color: "#ee7f6d" } }];
+      await render();
+      await settle(60);
+      await press(await pick("planner"), "About planner");
+      const card = container.querySelector('.world-anchor[data-panel="agent"]') as HTMLElement;
+      expect(card.style.getPropertyValue("--who-color")).toBe("#ee7f6d");
+    });
+
+    it("edges your conversation in the colour of the body of whoever you talk to", async () => {
+      await render({ dialogue: true, panelOpen: false });
+      await settle(60);
+      const talk = container.querySelector('.world-anchor[data-panel="talk"]') as HTMLElement;
+      expect(talk.style.getPropertyValue("--who-color")).toBe(agentColor("talker"));
+    });
+
+    it("closes what was opened beside something as you go through a door, but what waits on you comes along", async () => {
+      homeExtra = [{ ...wall("board"), action: "tasks" }];
+      // Somebody with no body to go to: nothing of theirs opens anywhere in its place.
+      activityRecords = [
+        {
+          id: "scheduler",
+          data: { agent: "scheduler", doing: "waiting", what: "has a question", question: "Window?" },
+        },
+      ];
+      await render();
+      await settle(60);
+      await act(async () => stage.onUse?.("tasks", { task: "t1" }, "board"));
+      await settle();
+      expect(anchorOf("task")).toEqual({ thing: "board" });
+      await act(async () => stage.onDoor?.({ to: "town" }));
+      await settle(60);
+      // The board it was beside is behind you: out in the town it would be beside nothing, or another of that name.
+      expect(anchorOf("task")).toBeUndefined();
+      expect(container.querySelector(".world-anchor")).toBeNull();
+      // The list of what waits on you, held in front of you, goes through the door with you.
+      act(() => root.unmount());
+      root = createRoot(container);
+      await render();
+      await settle(60);
+      await act(async () => tool("Needs you · 1").click());
+      await settle();
+      expect(anchorOf("needs")).toEqual({ held: "front" });
+      await act(async () => stage.onDoor?.({ to: "town" }));
+      await settle(60);
+      expect(anchorOf("needs")).toEqual({ held: "front" });
     });
   });
 

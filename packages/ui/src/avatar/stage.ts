@@ -42,6 +42,7 @@ import {
   PLAQUE,
   type Placed,
   plaqueSpot,
+  stripTaken,
   walkedAway,
 } from "./anchors";
 import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
@@ -204,7 +205,9 @@ export interface Stage {
   /**
    * Say how much of the stage is covered, in pixels: a chat panel down the
    * right, a toolbar along the top, the chat along the bottom of a phone. The
-   * camera frames what is left, and what is said is kept inside it.
+   * camera frames what is left, and what is said is kept inside it. `panels`
+   * is a strip beside the right one kept for panels beside things, taken from
+   * the scene only when they need it (`stripTaken`).
    */
   setInsets(insets: { right: number; top?: number; bottom?: number; panels?: number }): void;
   /** Walk to a spot in the room, by id. False when there is no such spot. */
@@ -546,6 +549,8 @@ export async function createStage(
     onDoorHover?: (door: RoomDoor | undefined, at?: { x: number; y: number }) => void;
     /** The controls laid over the top of the stage: what is said is kept out from under them. */
     overlays?: () => Element[];
+    /** What else is laid over the stage that the page's panels keep clear of, though the camera frames past it. */
+    hints?: () => Element[];
     /** A surface was brought up to read close up, or put down (undefined). */
     onFocus?: (surface: string | undefined) => void;
     /** The pointer came over a surface a click brings up (what it is, and where on the page), or left it. */
@@ -716,7 +721,7 @@ export async function createStage(
   };
   // The room's plaque by its door, which opens the room's card: the words the page gave for it, and what was built.
   let plaqueWords: string | undefined;
-  let plaque: { group: THREE.Group; highlight: (on: boolean) => void } | undefined;
+  let plaque: ReturnType<typeof buildPlaque> | undefined;
   let overPlaque = false;
   /**
    * Hang the plaque in the room as it is now, beside a door in a wall with
@@ -726,13 +731,22 @@ export async function createStage(
   const hangPlaque = () => {
     if (plaque) {
       const old = plaque.group;
+      // Faded with its wall, it wears copies of its own materials: those go back first, so its own are what is freed.
+      const faded = fadeable.find((f) => f.group === old);
+      if (faded) {
+        faded.level = 1;
+        paintFaded(faded);
+      }
+      fadeable = fadeable.filter((f) => f.group !== old);
       furniture.remove(old);
-      disposeTree(old);
+      // Only what is its own: its rim is painted in a colour the rest of the furniture shares.
+      plaque.dispose();
       const i = clickable.indexOf(old);
       if (i >= 0) clickable.splice(i, 1);
-      fadeable = fadeable.filter((f) => f.group !== old);
       plaque = undefined;
     }
+    // The pointer resting on the one taken down: what a click on it opened goes with it.
+    if (overPlaque) opts.onPlaqueHover?.(undefined);
     overPlaque = false;
     const spot = plaqueWords && !opts.still ? plaqueSpot(given) : undefined;
     if (!spot || !plaqueWords) return;
@@ -1341,11 +1355,18 @@ export async function createStage(
   /** How a visitor gets around: walking their body, with the camera following, or flying the camera. */
   let travel: Travel = "walk";
   /** Pixels of the stage covered by something laid over it: a chat panel on the right, a toolbar, a phone's chat below. */
+  /** Pixels on the right the scene isn't framed in: the chat's column, and the strip for panels while it is taken. */
   let insetRight = 0;
   let insetTop = 0;
   let insetBottom = 0;
-  /** Pixels of `insetRight` kept for the page's panels beside things (`anchors.ts`): theirs to go in, not the scene's. */
+  /** The chat's column, as wide as the page says: always kept out of the scene's framing. */
+  let columnRight = 0;
+  /** Pixels on the right the page keeps for its panels beside things (`anchors.ts`), taken only as `stripTaken` says. */
   let panelRoom = 0;
+  /** How many panels are docked at the side and not to be put away: while any is, the strip is taken for them. */
+  let docked = 0;
+  /** How many panels are on the room's plaque: while any is, the plaque doesn't say what a click on it opens. */
+  let onPlaque = 0;
   /** How tall a panel shown as a sheet over the stage's foot is, on a narrow stage: the camera frames what is above it. */
   let sheetTall = 0;
   /** The stage's size in pixels, as of the last resize: read every frame, so not asked of the page every frame. */
@@ -1355,18 +1376,41 @@ export async function createStage(
   let covered: Box[] = [];
   /** The part of the stage the camera frames into: what is not covered, clear of the controls where they are in the way. */
   let part: Part = { left: 0, right: stageW, top: 0, bottom: stageH };
+  /** What else on the stage the page's panels keep clear of, as last measured: the keys hint along its foot. */
+  let hints: Box[] = [];
+  /**
+   * Take the strip kept for panels from the scene, or give it back, as what
+   * is open and what is being read say (`stripTaken`); whether that moved the
+   * edge of what the scene is framed in.
+   */
+  const applyStrip = (): boolean => {
+    const take = stripTaken({
+      room: panelRoom,
+      stage: stageW,
+      seen: stageW - columnRight,
+      reading: !!reading,
+      docked: docked > 0,
+    });
+    const right = columnRight + (take ? panelRoom : 0);
+    if (right === insetRight) return false;
+    insetRight = right;
+    return true;
+  };
   /** Measure the controls over the stage, and so the part it frames into; whether that part changed. */
   const measureOverlays = () => {
     const box = host.getBoundingClientRect();
-    covered = (opts.overlays?.() ?? [])
-      .map((e) => e.getBoundingClientRect())
-      .filter((r) => r.width > 0 && r.height > 0)
-      .map((r) => ({
-        left: r.left - box.left,
-        right: r.right - box.left,
-        top: r.top - box.top,
-        bottom: r.bottom - box.top,
-      }));
+    const boxes = (els: Element[]) =>
+      els
+        .map((e) => e.getBoundingClientRect())
+        .filter((r) => r.width > 0 && r.height > 0)
+        .map((r) => ({
+          left: r.left - box.left,
+          right: r.right - box.left,
+          top: r.top - box.top,
+          bottom: r.bottom - box.top,
+        }));
+    covered = boxes(opts.overlays?.() ?? []);
+    hints = boxes(opts.hints?.() ?? []);
     const was = part;
     part = framedIn(
       { left: 0, right: stageW - insetRight, top: insetTop, bottom: stageH - insetBottom - sheetTall },
@@ -1483,6 +1527,7 @@ export async function createStage(
   const resize = () => {
     stageW = Math.max(1, host.clientWidth);
     stageH = Math.max(1, host.clientHeight);
+    applyStrip();
     renderer.setSize(stageW, stageH, false);
     layer.setSize(stageW, stageH);
     camera.aspect = stageW / stageH;
@@ -1769,8 +1814,8 @@ export async function createStage(
         y: e.clientY - box.top,
       });
     hoveredSurface = reads;
-    // The room's plaque lights up, and says what a click on it opens.
-    const plaqued = !who && !!plaque && it?.action === "place";
+    // The room's plaque lights up, and says what a click on it opens, unless that is open on it already.
+    const plaqued = !who && !!plaque && it?.action === "place" && !onPlaque;
     if (plaqued !== overPlaque) {
       plaque?.highlight(plaqued);
       overPlaque = plaqued;
@@ -1852,11 +1897,10 @@ export async function createStage(
   }
   // A visitor's keys: held keys move them every frame, unless they are typing or working in a panel over the stage.
   const held = new Set<string>();
-  // Keys pressed in a panel in the world (a conversation's buttons, say) are the panel's, as a dialog's are.
+  // Keys pressed in a card in the world are the card's, as it is a dialog. Your conversation in the world is not one:
+  // after a click on its buttons, the keys still walk you, as they did after a click in the chat's column.
   const typing = (e: KeyboardEvent) =>
-    (e.target as HTMLElement | null)?.closest?.(
-      "input, textarea, select, [contenteditable='true'], [role='dialog'], .world-anchor",
-    );
+    (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true'], [role='dialog']");
   // Keys held through a door, until they are let go: the view faces the same way on the other side, so holding W
   // into a door at the back would otherwise walk you straight back out of the one you came in by.
   const waiting = new Set<string>();
@@ -2303,8 +2347,9 @@ export async function createStage(
     if (!reading) readFrom = { position: camera.position.clone(), target: controls.target.clone() };
     reading = id;
     // Said first: the page's styles tidy the tools over the stage away for reading, and the surface is framed round
-    // what is left of them.
+    // what is left of them, and of the strip a card beside it has.
     host.dataset.reading = id;
+    applyStrip();
     measureOverlays();
     const f = readingFraming(id);
     if (!f) return;
@@ -2332,6 +2377,8 @@ export async function createStage(
   function putDown(instant = false) {
     if (!reading) return;
     reading = undefined;
+    // The strip kept for a card beside the surface goes back to the scene, unless something else needs it.
+    if (applyStrip()) measureOverlays();
     raiseWall(undefined);
     layer.focus(undefined);
     canvas.style.pointerEvents = "";
@@ -3181,14 +3228,16 @@ export async function createStage(
     size: [number, number];
     /** Where it was put last frame. */
     at?: Placed;
-    /** Where you stood, and how far that was from what it is about, when it was first put beside it. */
-    from?: { you: [number, number]; off: number };
+    /** Where you stood, where what it is about was, and how far apart, when it was first put beside it. */
+    from?: { you: [number, number]; it: [number, number]; off: number };
     /** You walked away from it, and the page heard. */
     left?: boolean;
     watch?: ResizeObserver;
   }
   const pins = new Set<Pin>();
   let pinCount = 0;
+  /** The panel that was the sheet over the stage's foot last frame, whose height the camera frames above. */
+  let sheetOf: Pin | undefined;
   const onStageAt = new THREE.Vector3();
   /** Where a point in the room is on the stage, in CSS pixels; none when it is behind the camera. */
   const onStage = (p: THREE.Vector3): [number, number] | undefined => {
@@ -3262,6 +3311,7 @@ export async function createStage(
    */
   function placePanels(dt: number) {
     if (!pins.size) {
+      sheetOf = undefined;
       if (sheetTall) {
         sheetTall = 0;
         if (measureOverlays()) refit();
@@ -3271,7 +3321,7 @@ export async function createStage(
     camera.updateMatrixWorld();
     const view: Box = {
       left: EDGE,
-      right: stageW - (insetRight - panelRoom) - EDGE,
+      right: stageW - columnRight - EDGE,
       top: insetTop + EDGE,
       bottom: stageH - insetBottom - EDGE,
     };
@@ -3306,8 +3356,8 @@ export async function createStage(
         ...(shown ? { target: shown } : { held }),
       });
     }
-    const laid = layoutPanels(panels, view, avoid, stageW, keepClear);
-    let sheet = 0;
+    const laid = layoutPanels(panels, view, avoid, stageW, keepClear, hints);
+    let sheet: Pin | undefined;
     for (const p of pins) {
       const next = laid.get(p.id);
       if (!next) continue;
@@ -3322,23 +3372,30 @@ export async function createStage(
       if (el.style.getPropertyValue("--tail") !== tail) el.style.setProperty("--tail", tail);
       const room = `${Math.round(Math.max(160, view.bottom - view.top))}px`;
       if (el.style.getPropertyValue("--room-h") !== room) el.style.setProperty("--room-h", room);
+      // Never wider than what can be seen: the whole chat open beside the world takes the rest.
+      const across = `${Math.round(Math.max(200, view.right - view.left))}px`;
+      if (el.style.getPropertyValue("--view-w") !== across) el.style.setProperty("--view-w", across);
       if (!("placed" in el.dataset)) el.dataset.placed = "";
-      if (at.side === "sheet") sheet = p.size[1];
+      if (at.side === "sheet") sheet = p;
       // Walked off from what it is about, having stood somewhere else as it opened: the page is told, once.
       const floor = floors.get(p);
       if (p.onAway && !p.left && walking && floor && !loose) {
         const you: [number, number] = [me.walker.place.x, me.walker.place.z];
         const off = Math.hypot(floor[0] - you[0], floor[1] - you[1]);
-        if (!p.from) p.from = { you, off };
-        else if (walkedAway(p.from.off, off, Math.hypot(you[0] - p.from.you[0], you[1] - p.from.you[1]))) {
+        if (!p.from) p.from = { you, it: floor, off };
+        else if (walkedAway(p.from.off, off, Math.hypot(p.from.it[0] - you[0], p.from.it[1] - you[1]))) {
           p.left = true;
           p.onAway();
         }
       }
     }
-    // A sheet over the stage's foot covers it as a phone's chat does: the camera frames what is above.
-    if (Math.abs(sheet - sheetTall) > 4) {
-      sheetTall = sheet;
+    // A sheet over the stage's foot covers it as a phone's chat does: the camera frames what is above. While the
+    // same panel stays the sheet it only ever grows, so a reply coming in, or its oldest line going, never keeps
+    // sliding the camera up and down.
+    const tall = sheet ? (sheet === sheetOf ? Math.max(sheetTall, sheet.size[1]) : sheet.size[1]) : 0;
+    sheetOf = sheet;
+    if (Math.abs(tall - sheetTall) > 4) {
+      sheetTall = tall;
       if (measureOverlays()) refit();
     }
   }
@@ -3353,11 +3410,20 @@ export async function createStage(
       pin.watch.observe(el);
     }
     pins.add(pin);
+    // Docked at the side for good, it has the strip kept for panels: the scene is framed in what is left.
+    const docks = !o.optional && "held" in anchor && anchor.held === "dock";
+    if (docks) docked++;
+    const plaqued = "plaque" in anchor;
+    if (plaqued) onPlaque++;
+    if (docks && applyStrip() && measureOverlays()) refit();
     // Somewhere at once, rather than wherever it fell until the next frame.
     placePanels(0);
     return () => {
       pin.watch?.disconnect();
       pins.delete(pin);
+      if (docks) docked--;
+      if (plaqued) onPlaque--;
+      if (docks && applyStrip() && measureOverlays()) refit();
     };
   };
 
@@ -3660,12 +3726,13 @@ export async function createStage(
       moveCamera(framing(next));
     },
     setInsets({ right, top = 0, bottom = 0, panels = 0 }) {
-      panelRoom = Math.max(0, Math.min(right, panels));
-      if (right === insetRight && top === insetTop && bottom === insetBottom) return;
-      insetRight = Math.max(0, right);
+      const was = insetRight;
+      const moved = top !== insetTop || bottom !== insetBottom || Math.max(0, right) !== columnRight;
+      columnRight = Math.max(0, right);
+      panelRoom = Math.max(0, panels);
       insetTop = Math.max(0, top);
       insetBottom = Math.max(0, bottom);
-      resize();
+      if (applyStrip() || moved || insetRight !== was) resize();
     },
     walkTo: go,
     cue: handleCue,

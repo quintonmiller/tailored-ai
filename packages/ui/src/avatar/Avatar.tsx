@@ -1,6 +1,6 @@
 import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { DashboardWidgetSpec } from "../api";
-import type { Anchor } from "./anchors";
+import { type Anchor, SHEET_BELOW } from "./anchors";
 import type { BoardTask } from "./boards";
 import type { BodyLooks, EmoteRecord } from "./body";
 import type { CalendarView } from "./calendar";
@@ -22,6 +22,8 @@ const DOOR_TIP_ROOM = 240;
  * in, whose box runs on past them as wide as all of them end to end.
  */
 export const OVERLAYS = ":scope > .talk-view, :scope > .talk-back, :scope > .talk-tools > :not(.talk-tools-break)";
+/** What else is laid over the stage that panels in the world keep clear of, though the camera frames past it. */
+export const HINTS = ":scope > .talk-keys";
 
 /** One thing the menu on an agent's body offers. */
 export interface AgentAction {
@@ -48,8 +50,8 @@ export interface WorldPanelSpec extends PanelOptions {
   node: ReactNode;
   /** How it looks: a card by a body, pinned beside a thing, on the plaque, held, docked, a conversation, a phone. */
   look: string;
-  /** The hue it is edged in: an agent's card and your talk with it wear the agent's colour. */
-  hue?: number;
+  /** The colour it is edged in, as CSS: an agent's card and your talk with it wear the colour of the agent's body. */
+  color?: string;
 }
 
 function savedView(): StageView {
@@ -114,6 +116,8 @@ export function Avatar({
   panels,
   panelRoom = 0,
   plaque,
+  onShown,
+  onSheets,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -214,6 +218,10 @@ export function Avatar({
   panelRoom?: number;
   /** The words on the room's plaque by its door, whose click opens the room's card; none, no plaque. */
   plaque?: string;
+  /** The stage is on screen, with whatever is kept beside things in it; or it was taken down to be built again. */
+  onShown?: (shown: boolean) => void;
+  /** Whether the stage is too narrow for panels beside anything (`SHEET_BELOW`): they are sheets along its foot. */
+  onSheets?: (sheets: boolean) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -228,13 +236,32 @@ export function Avatar({
   const chooseRef = useRef(chooseIdle);
   chooseRef.current = chooseIdle;
   const choosing = !!chooseIdle;
-  // The panels' strip is covered too, as far as framing goes: whatever a panel is beside has room next to it.
-  const insets = { right: insetRight + panelRoom, top: insetTop, bottom: insetBottom, panels: panelRoom };
+  // The panels' strip beside the chat's column, which the stage takes from the scene when a panel needs it.
+  const insets = { right: insetRight, top: insetTop, bottom: insetBottom, panels: panelRoom };
   const insetRef = useRef(insets);
   insetRef.current = insets;
   useEffect(() => {
-    stage.current?.setInsets({ right: insetRight + panelRoom, top: insetTop, bottom: insetBottom, panels: panelRoom });
+    stage.current?.setInsets({ right: insetRight, top: insetTop, bottom: insetBottom, panels: panelRoom });
   }, [insetRight, insetTop, insetBottom, panelRoom]);
+  // Whether panels are sheets, by the same measure the stage lays them out by: the stage's own width.
+  const sheetsRef = useRef(onSheets);
+  sheetsRef.current = onSheets;
+  const shownRef = useRef(onShown);
+  shownRef.current = onShown;
+  useEffect(() => {
+    const el = host.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let was: boolean | undefined;
+    const check = () => {
+      const now = el.clientWidth > 0 && el.clientWidth < SHEET_BELOW;
+      if (now !== was) sheetsRef.current?.(now);
+      was = now;
+    };
+    const watch = new ResizeObserver(check);
+    watch.observe(el);
+    check();
+    return () => watch.disconnect();
+  }, []);
   // The stage once it is on screen, for the panels kept beside things in it, which need it to be placed.
   const [shown, setShown] = useState<Stage | null>(null);
   // Told only once there is a plaque, or was: a photo's stage, which never has one, is left alone.
@@ -440,6 +467,7 @@ export function Avatar({
           // The view toggle and the tools over the top of the stage: what is said stays out from under them, and
           // where they reach far down a short stage the agent is framed clear of them.
           overlays: () => [...(host.current?.parentElement?.querySelectorAll(OVERLAYS) ?? [])],
+          hints: () => [...(host.current?.parentElement?.querySelectorAll(HINTS) ?? [])],
           ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {
@@ -477,6 +505,7 @@ export function Avatar({
         }
         stage.current = s;
         setShown(s);
+        shownRef.current?.(true);
         unsurface = s.onSurfaces(setSurfaces);
         if (controlsRef.current)
           controlsRef.current.current = { cue: (c) => s.cue(c), walkBy: (w) => s.walkBy(w), where: () => s.where() };
@@ -509,6 +538,7 @@ export function Avatar({
       stage.current?.dispose();
       stage.current = null;
       setShown(null);
+      shownRef.current?.(false);
       setSurfaces([]);
       setReading(undefined);
       setDoorTip(null);
@@ -619,7 +649,7 @@ function Anchored({ panel, stage }: { panel: WorldPanelSpec; stage: Stage }) {
   const el = useRef<HTMLDivElement>(null);
   const awayRef = useRef(panel.onAway);
   awayRef.current = panel.onAway;
-  const { anchor, rank, optional, fallback, look, hue } = panel;
+  const { anchor, rank, optional, fallback, look, color } = panel;
   const key = JSON.stringify(anchor);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the key says when the anchor changed; the anchor is read with it.
   useEffect(() => {
@@ -636,7 +666,7 @@ function Anchored({ panel, stage }: { panel: WorldPanelSpec; stage: Stage }) {
       ref={el}
       className={`world-anchor world-anchor-${look}`}
       data-panel={panel.kind}
-      style={hue === undefined ? undefined : ({ ["--who" as string]: `${hue}` } as CSSProperties)}
+      style={color === undefined ? undefined : ({ ["--who-color" as string]: color } as CSSProperties)}
     >
       {/* A pin through it, or a clip at its top, as its look says. */}
       <span className="world-anchor-mark" aria-hidden="true" />

@@ -1148,14 +1148,17 @@ export function buildDoor(
  * own origin with its back to the wall and its face toward +Z: the room's
  * name on a dark plate in a brass rim, and under it a line saying what a
  * click on it opens. It lights up while the pointer is on it, as a door does.
+ * `dispose` frees what is its own, for taking it down while the rest of the
+ * room stays: its rim is painted in a colour other furniture shares.
  */
 export function buildPlaque(
   name: string,
   width: number,
   height: number,
-): { group: THREE.Group; highlight: (on: boolean) => void } {
+): { group: THREE.Group; highlight: (on: boolean) => void; dispose: () => void } {
   const g = new THREE.Group();
-  box(g, width + 0.04, height + 0.04, 0.025, 0xb8935a, 0, 0, 0.0125).castShadow = false;
+  const rim = box(g, width + 0.04, height + 0.04, 0.025, 0xb8935a, 0, 0, 0.0125);
+  rim.castShadow = false;
   const face = canvasFace(width, height, 900);
   const ctx = face.canvas.getContext("2d");
   if (ctx) {
@@ -1181,7 +1184,13 @@ export function buildPlaque(
   const highlight = (on: boolean) => {
     face.material.emissiveIntensity = on ? FACE_LIT : FACE_GLOW;
   };
-  return { group: g, highlight };
+  const dispose = () => {
+    rim.geometry.dispose();
+    plate.geometry.dispose();
+    face.material.map?.dispose();
+    face.material.dispose();
+  };
+  return { group: g, highlight, dispose };
 }
 
 /**

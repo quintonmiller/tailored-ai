@@ -62,6 +62,7 @@ describe("your conversation beside an agent", () => {
           heard="And the flights?"
           replying="Looking at"
           status="Calling search…"
+          elapsed={6}
           onFull={() => full++}
         >
           <input aria-label="Message planner" />
@@ -75,7 +76,7 @@ describe("your conversation beside an agent", () => {
       ["world-talk-line world-talk-you", "And the flights?"],
       ["world-talk-line world-talk-agent world-talk-live", "Looking at"],
     ]);
-    expect(container.querySelector(".world-talk-status")?.textContent).toBe("Calling search…");
+    expect(container.querySelector(".world-talk-status")?.textContent).toBe("Calling search… · 6s");
     expect(container.querySelector("section")?.getAttribute("aria-label")).toBe("Talking with planner");
     // Not a dialog: keys outside it still walk you, and Escape still stops a reply.
     expect(container.querySelector("[role='dialog']")).toBeNull();
@@ -87,7 +88,7 @@ describe("your conversation beside an agent", () => {
   it("is a call to an agent somewhere else, and says how to start with nothing said yet", () => {
     act(() =>
       root.render(
-        <WorldTalk name="writer" lines={[]} phone onFull={() => {}}>
+        <WorldTalk name="writer" lines={[]} phone voice onFull={() => {}}>
           <input aria-label="Message writer" />
         </WorldTalk>,
       ),
@@ -105,5 +106,50 @@ describe("your conversation beside an agent", () => {
     );
     expect(container.querySelector(".world-talk-hint")).toBeNull();
     expect(container.querySelector(".world-talk-live [aria-label='Replying']")).not.toBeNull();
+  });
+
+  it("offers Space to talk only where live voice is on", () => {
+    act(() =>
+      root.render(
+        <WorldTalk name="writer" lines={[]} onFull={() => {}}>
+          <input aria-label="Message writer" />
+        </WorldTalk>,
+      ),
+    );
+    expect(container.querySelector(".world-talk-hint")?.textContent).toBe("Say something to writer. Type below.");
+  });
+
+  it("reads a reply out once it has all come in, not with every word, nor the seconds ticking by", () => {
+    const talk = (replying?: string, elapsed?: number) =>
+      act(() =>
+        root.render(
+          <WorldTalk
+            name="planner"
+            lines={[
+              { who: "you", text: "Where should we stay?" },
+              { who: "agent", text: "Alfama." },
+            ]}
+            {...(replying !== undefined ? { replying } : {})}
+            status="Calling search…"
+            {...(elapsed ? { elapsed } : {})}
+            onFull={() => {}}
+          >
+            <input aria-label="Message planner" />
+          </WorldTalk>,
+        ),
+      );
+    const aloud = () => container.querySelector("[aria-live]");
+    talk("Looking", 6);
+    // Only one place is read out: not the lines as the reply streams into them.
+    expect(container.querySelectorAll("[aria-live]")).toHaveLength(1);
+    expect(aloud()?.textContent).toBe("");
+    expect(container.querySelector(".world-talk-lines")?.getAttribute("aria-busy")).toBe("true");
+    // The seconds are shown, but not to a screen reader, which would read them out every second.
+    const seconds = [...(container.querySelector(".world-talk-status")?.querySelectorAll("span") ?? [])].find((e) =>
+      e.textContent?.includes("6s"),
+    );
+    expect(seconds?.getAttribute("aria-hidden")).toBe("true");
+    talk();
+    expect(aloud()?.textContent).toBe("Alfama.");
   });
 });

@@ -345,9 +345,9 @@ agent chooses with the `body` tool's `change` action and `wear`:
 `"glasses, scarf"`, `"none"`, or `"default"` for what suits its role again.
 The `place` tool's `room` action takes the same `wear`, for an agent given
 `place` but not `body`, and `look` says what it wears. **On its card** (see
-[What it is doing](#what-it-is-doing)), a row of chips under **Wears** puts
-each thing on or takes it off, in place of whatever was in its place, and
-**back to what suits** goes back to the role's. Either way the choice is the
+[What it is doing](#what-it-is-doing)), **change** under **Wears** opens a
+row of chips, each putting a thing on or taking it off, in place of whatever
+was in its place, and **back to what suits** goes back to the role's. Either way the choice is the
 `wear` of the agent's `body` record (see
 [An agent in charge of its body](#an-agent-in-charge-of-its-body)), kept apart
 from the home so that choosing a hat never counts as changing the room. No
@@ -1191,33 +1191,51 @@ pointing at it:
   to the wall beside the board they came from, a pin through the top. The
   new-task form opens beside the lobby's kiosk; the dashboard and a
   calendar's full list beside their screen and calendar.
-- **The room's card** hangs on its plaque. Every home, shared place, meeting
-  room and the lobby has a small brass-edged plaque on the wall beside a
-  door, with the room's name and "About this room" on it: click it, or the
-  **Room** button, and the card opens there.
+- **The room's card** hangs on its plaque. A home, shared place or meeting
+  room with a door in its back or left wall has a small brass-edged plaque
+  on the wall beside it, clear of anything else on that wall, with "About
+  this room" under what the trail over the stage calls the place ("planner's
+  home", "#budget"), or a name its agent gave it: click it, or the **Room**
+  button, and the card opens there. Where the only door is at the open front
+  (the town hall's, onto the square), there is no plaque, and the card is
+  held in front of you.
 - **The map** and the **Needs you** list are held in front of you, like a
   tablet, a clip at the top. They sit in the middle of what can be seen,
-  low down, clear of faces where they can be.
+  low down, clear of faces and of the buttons over the stage where they can
+  be; the keys hint along the foot steps aside while one is held.
 - **The catalogue** you rearrange a room from is docked at the right, out of
   the room's way.
 
-Opening one moves the camera gently: the scene slides left to leave room on
-the right, so whatever the card is beside has room next to it, and a board
-you are reading is framed again in what is left. A card never covers the
-face of the agent it is about, its name or what it is saying, nor the
-thing it is pinned to, the buttons over the stage, or your own head; it
-keeps off everyone else's faces and names where it can, and two panels
-never overlap. A card whose thing is off the screen is held in front of
-you instead. **Escape** or **×** closes it, and so does walking away: about
-the width of a room further than you stood when it opened (an agent walking
-off with its card open doesn't count; the card goes with it). Going through
-a door closes anything opened beside something in the place you left; the
-**Needs you** list, which you hold, comes along.
+A card goes on whichever side of its thing has room, and the camera stays
+where it is. It moves only where there is no room beside: while you read a
+board up close, the board slides left so its card fits on the right; while
+you rearrange, the room is framed beside the catalogue; and on a stage
+narrower than 1000 pixels, the scene slides left to leave room on the right.
+A card never covers the face of the agent it is about, its name or what it
+is saying, nor the thing it is pinned to, the buttons over the stage, the
+keys hint along its foot, or your own head: where the first place it tries
+would, it slides along that side of its thing until it is clear. It keeps
+off everyone else's faces and names where it can, two panels never
+overlap, and none is wider than what can be seen beside the whole chat when
+that is open. A card whose thing is off the screen is held in front of you
+instead. An agent's card keeps to what the agent is doing, has said and
+when it runs, with **change** under **Wears** opening the chips for what it
+wears. **Escape** or **×** closes a card, and so does walking away: about
+the width of a room further than you stood when it opened. An agent walking
+off with its card open doesn't count, even as you take a step, and nor does
+following it: the card goes with it. Going through a door closes anything
+opened beside something in the place you left; the **Needs you** list,
+which you hold, comes along. The menu that opens where you click a body,
+and the label by the pointer over a door or the plaque, show over the
+panels.
 
 The cards are ordinary page elements, so Tab, focus and screen readers work
 in them as anywhere on the page, and keys pressed in one are its own: typing
 never walks your body, and Space presses the button you are on instead of
-starting to talk. On a phone, or a stage narrower than 600 pixels, there is
+starting to talk. Your conversation isn't a card: after a click on one of
+its buttons, the walking keys still walk you and Space still talks, as in
+the chat's own bar, and Send becoming **Stop** is a new button, so a Space
+meant for talking never stops the reply you just sent. On a phone, or a stage narrower than 600 pixels, there is
 no room beside anything: what opens is a sheet along the bottom, one at a
 time, and the camera frames the room above it.
 
@@ -1232,8 +1250,11 @@ sign uses ("Calling web_search…"), and its body shows the same over its
 head. Tool calls waiting on your OK show here too, to approve or reject. The
 box to type in is underneath, with **+** to attach a file, **Talk** to hold
 and speak (Space still works when you aren't typing) and **Send** or
-**Stop**: everything the chat's bar does. **Whole chat** opens the full
-conversation in the column.
+**Stop**, and files dropped on it are attached: everything the chat's bar
+does. **Whole chat** opens the full conversation in the column. A screen
+reader reads a reply out once, when it has all come in, rather than again
+with every few words, and reads what the agent is doing when that changes,
+not each second it has been at it.
 
 Talking to an agent whose body isn't where you are is a call: the same
 conversation, in a phone in your hand, headed "On the phone with planner",
@@ -1242,9 +1263,13 @@ far](#near-and-far)). With nobody to stand beside in the agent's own view,
 it docks at the side. While a card has most of the room, the conversation
 shows only your last exchange and keeps out of the card's way, docked at the
 side if it has to be; it steps aside altogether while the agent's own card
-is open, while you hold the map, while you rearrange the room, in a meeting
-room while you read the room's own conversation, and while the whole chat
-is open.
+is open, while you hold the map, while you rearrange the room, and while the
+whole chat is open. A meeting room's own conversation is read in the whole
+chat, which opens for it as you arrive; pick someone to talk to and it goes
+again, unless you opened it yourself. Until the world is on screen, the
+chat's own bar at the foot is the box to type in; and where the world can't
+be shown at all (no WebGL, or the avatar won't load), the whole chat stays
+open.
 
 ##### How panels in the world work, for work on the world
 
@@ -1261,17 +1286,23 @@ What it is beside is worked out on the stage each frame: a body's box from
 its crown to its feet, and its head with what floats over it as the part
 never to cover; a thing's box from what was built. Where each panel goes is
 pure and tested (`avatar/anchors.ts`): `layoutPanels` tries each side of its
-thing and the screen's edges, scores what each would cover (a face, the
-controls, your head, another panel, the edge of the stage), and places the
-higher ranked first so the rest keep out of their way; `follow` eases a
-panel to its new place so a breathing body never shakes it; `walkedAway`
-says when you have left; `anchorFor` and `talkAnchor` say which panel goes
-beside what, and `plaqueSpot` where the plaque hangs. The stage writes each
-panel's place as a transform, the side it went to as `data-side` and where
-its tail meets its edge as `--tail`, so a panel's look is all CSS. The
-Avatar component draws the page's panels (`panels`, each with an `anchor`,
-a `node`, a `look` and a rank), keeps `panelRoom` pixels on the right for
-them, and tells the stage what its plaque says (`plaque`).
+thing, slid along that side past whatever must stay clear, and the screen's
+edges, scores what each would cover (a face, the controls, the keys hint,
+your head, another panel, the edge of the stage), and places the higher
+ranked first so the rest keep out of their way; `follow` eases a panel to
+its new place so a breathing body never shakes it; `walkedAway` says when
+you have left; `stripTaken` says when the strip kept for panels is taken
+from the scene's framing; `anchorFor` and `talkAnchor` say which panel goes
+beside what, and `plaqueSpot` where the plaque hangs, clear of things on
+its wall by their width. The stage writes each panel's place as a
+transform, the side it went to as `data-side`, where its tail meets its
+edge as `--tail`, and how much of the stage can be seen as `--room-h` and
+`--view-w`, so a panel's look is all CSS. The Avatar component draws the
+page's panels (`panels`, each with an `anchor`, a `node`, a `look`, a rank
+and the `color` of the agent it is about), offers `panelRoom` pixels on the
+right for them, tells the stage what its plaque says (`plaque`), and tells
+the page when the stage is on screen (`onShown`) and when its panels are
+sheets (`onSheets`, by the stage's own width).
 
 #### Surfaces: using what hangs on the walls
 
@@ -1844,8 +1875,8 @@ time, or that every agent is paused, and what its last run said. Idle or
 asleep, it says what the agent did last and how long ago, and for an agent
 that doesn't run on its own, the next wake it booked with the `schedule`
 tool (from its activity record's `next`). Under **Wears**, it says what the
-body wears and whether that is what suits its role, with a chip for each
-thing a body can wear (see
+body wears and whether that is what suits its role, and **change** opens a
+chip for each thing a body can wear (see
 [What an agent is for](#what-an-agent-is-for-its-home-and-what-it-wears)). Its buttons chat with it, go to
 where its body is (a meeting room, while it is talking in one), send it home
 from somewhere else, and pause it for four hours or wake it. **Open its

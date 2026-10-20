@@ -11,7 +11,7 @@
  * are on the screen each frame, and puts each panel where this says.
  */
 import type { Box } from "./overhead";
-import type { Room, RoomDoor } from "./scene";
+import type { Prop, Room, RoomDoor } from "./scene";
 
 /**
  * What a panel is beside: an agent's body (its card, what it waits on, your
@@ -119,10 +119,14 @@ export function boxRound(points: [number, number][]): Box | undefined {
  * it prefers, the other, then above and below. Beside it, a panel's top sits
  * a little above the part it must not cover, so its tail points at a
  * shoulder, or the middle of a thing, and it reads down from there. Each side
- * is tried as it is, and pushed back onto the screen: off the edge or over
- * the thing it is beside, whichever is less bad, wins.
+ * is tried as it is, then slid along that side: flush with either end of the
+ * target, and just past each box it must keep clear of (`clear`), so a button
+ * or your own tag in the way is gone round rather than covered, as far as its
+ * tail still meets what it is beside. Each of those is tried as it is, and
+ * pushed back onto the screen: off the edge or over the thing it is beside,
+ * whichever is less bad, wins.
  */
-function candidates(p: PanelIn, view: Box): { box: Box; side: Side }[] {
+function candidates(p: PanelIn, view: Box, clear: Box[] = []): { box: Box; side: Side }[] {
   const t = p.target as NonNullable<PanelIn["target"]>;
   const [w, h] = p.size;
   const room = {
@@ -146,11 +150,23 @@ function candidates(p: PanelIn, view: Box): { box: Box; side: Side }[] {
     first === "right" ? ["right", "left", "above", "below"] : ["left", "right", "above", "below"];
   return order.flatMap((side) => {
     const [x, y] = at[side];
-    const kept = boxAt(clamp(x, view.left, view.right - w), clamp(y, view.top, view.bottom - h), p.size);
-    return [
-      { box: boxAt(x, y, p.size), side },
-      { box: kept, side },
-    ];
+    const upright = side === "right" || side === "left";
+    // Where along its side it can go: down a side, or across the top or foot.
+    const slides = upright
+      ? [y, t.box.top, t.box.bottom - h, ...clear.flatMap((c) => [c.bottom + GAP / 2, c.top - GAP / 2 - h])]
+      : [x, t.box.left, t.box.right - w, ...clear.flatMap((c) => [c.right + GAP / 2, c.left - GAP / 2 - w])];
+    const point = upright ? aim : (t.keep.left + t.keep.right) / 2;
+    const length = upright ? h : w;
+    return slides
+      .filter((s, i) => i === 0 || (s <= point - TAIL_INSET && s + length >= point + TAIL_INSET))
+      .flatMap((s) => {
+        const [sx, sy] = upright ? [x, s] : [s, y];
+        const kept = boxAt(clamp(sx, view.left, view.right - w), clamp(sy, view.top, view.bottom - h), p.size);
+        return [
+          { box: boxAt(sx, sy, p.size), side },
+          { box: kept, side },
+        ];
+      });
   });
 }
 
@@ -190,7 +206,9 @@ function tailFor(box: Box, side: Side, p: PanelIn): number {
  * be seen, above anything open there already. In front of you, in the middle
  * and a little low, as a map is held; or, where that would cover someone's
  * face (`avoid`) or another panel, as near the middle as misses them: higher,
- * or to one side.
+ * or to one side; or, where all of those touch what must stay clear (the
+ * buttons over the stage, the keys hint along its foot), in the middle just
+ * clear of one of them, below or above it.
  */
 function heldBox(p: PanelIn, view: Box, panels: Box[], avoid: Box[], clear: Box[] = []): Box {
   const [w, h] = p.size;
@@ -207,8 +225,11 @@ function heldBox(p: PanelIn, view: Box, panels: Box[], avoid: Box[], clear: Box[
       clamp(view.top + (view.bottom - view.top - h) * down, view.top, view.bottom - h),
       p.size,
     );
+  const middle = clamp(view.left + (view.right - view.left - w) / 2, view.left, view.right - w);
+  const by = (y: number) => boxAt(middle, clamp(y, view.top, view.bottom - h), p.size);
+  const clearOf = clear.flatMap((c) => [by(c.bottom + GAP / 2), by(c.top - GAP / 2 - h)]);
   let best: { box: Box; cost: number } | undefined;
-  for (const box of [at(0.5, 0.55), at(0.5, 0.15), at(0.5, 0.95), at(0.12, 0.5), at(0.88, 0.5)]) {
+  for (const box of [at(0.5, 0.55), at(0.5, 0.15), at(0.5, 0.95), at(0.12, 0.5), at(0.88, 0.5), ...clearOf]) {
     const k = cost(box, p, view, panels, avoid, clear);
     if (!best || k < best.cost) best = { box, cost: k };
     if (k === 0) break;
@@ -220,8 +241,9 @@ function heldBox(p: PanelIn, view: Box, panels: Box[], avoid: Box[], clear: Box[
  * Where every panel goes this frame: each beside what it is about, on the
  * side with room, never over the face of an agent or the thing it is about,
  * kept on the screen (`view`), never over what must stay clear (`clear`: the
- * controls laid over the stage, your own head), and off the faces, names and
- * bubbles there (`avoid`) where it can be; and out of each other's way, the
+ * controls laid over the stage, your own head; and `hints`, the keys hint
+ * along its foot, but for a panel held in front of you), and off the faces,
+ * names and bubbles there (`avoid`) where it can be; and out of each other's way, the
  * higher ranked placed first. A
  * panel with nothing to be beside is held: in front of you, or docked at the
  * side. One that is optional and could only go over another panel is
@@ -236,8 +258,12 @@ export function layoutPanels(
   avoid: Box[] = [],
   stageWidth = Number.POSITIVE_INFINITY,
   clear: Box[] = [],
+  hints: Box[] = [],
 ): Map<string, Placed> {
   const out = new Map<string, Placed>();
+  // A panel beside something, or docked, keeps clear of the hints along the stage's foot too. One held in front of
+  // you lies over them where it has to, as a map held up would, rather than over a button.
+  const kept = [...clear, ...hints];
   // Ties go the same way every frame, so nothing swaps places for no reason.
   const order = [...panels].sort((a, b) => b.rank - a.rank || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   if (stageWidth < SHEET_BELOW) {
@@ -247,7 +273,7 @@ export function layoutPanels(
   const placed: Box[] = [];
   for (const p of order) {
     if (!p.target) {
-      const box = heldBox(p, view, placed, avoid, clear);
+      const box = heldBox(p, view, placed, avoid, p.held === "dock" ? kept : clear);
       if (p.optional && placed.some((b) => overlap(box, b) > 0)) {
         out.set(p.id, { x: box.left, y: box.top, side: "away", tail: 0 });
         continue;
@@ -257,8 +283,8 @@ export function layoutPanels(
       continue;
     }
     let best: { box: Box; side: Side; cost: number } | undefined;
-    for (const c of candidates(p, view)) {
-      const k = cost(c.box, p, view, placed, avoid, clear);
+    for (const c of candidates(p, view, kept)) {
+      const k = cost(c.box, p, view, placed, avoid, kept);
       if (!best || k < best.cost) best = { ...c, cost: k };
       if (k === 0) break;
     }
@@ -272,7 +298,7 @@ export function layoutPanels(
     });
     if (p.optional && placed.some((x) => overlap(b.box, grown(x)) > 0)) {
       // Docked at the side rather than over a card; put away only when the side is taken too.
-      const dock = heldBox({ ...p, held: "dock" }, view, placed, avoid, clear);
+      const dock = heldBox({ ...p, held: "dock" }, view, placed, avoid, kept);
       if (placed.some((x) => overlap(dock, x) > 0)) out.set(p.id, { x: dock.left, y: dock.top, side: "away", tail: 0 });
       else {
         placed.push(dock);
@@ -313,17 +339,42 @@ export function follow(was: Placed | undefined, next: Placed, dt: number): Place
 export const AWAY_AT = 4.5;
 /** Metres further than you stood when it opened you can go before walking off puts it away. */
 export const AWAY_MORE = 2.5;
-/** Metres you have to have walked yourself: an agent walking off from you takes its card along instead. */
-export const AWAY_WALKED = 1;
 
 /**
  * Whether you have walked away from what a panel is about: now `now` metres
- * off it, having stood `from` off as it opened, and having walked `walked`
- * metres from where you stood then. Only your own walking counts: an agent
- * going off to its desk takes its card with it, beside it all the way.
+ * off it, and `left` metres off where it was as it opened, having stood
+ * `from` off it then. Only your own walking counts. An agent going off to its
+ * desk takes its card along, so you have to be that far from where it stood
+ * as well as from it; and following it there isn't walking away from it.
  */
-export function walkedAway(from: number, now: number, walked: number): boolean {
-  return walked >= AWAY_WALKED && now > Math.max(AWAY_AT, from + AWAY_MORE);
+export function walkedAway(from: number, now: number, left: number): boolean {
+  return Math.min(now, left) > Math.max(AWAY_AT, from + AWAY_MORE);
+}
+
+/**
+ * A stage at least this wide, as far as can be seen, has room beside a thing
+ * in its middle for a panel on either side: the scene isn't slid over for one.
+ */
+export const ROOM_BESIDE = 1000;
+
+/**
+ * Whether the strip on the right kept for panels (`PANEL_ROOM`) is taken from
+ * the scene, which is then framed in what is left: while you read a surface
+ * up close, which would otherwise fill the stage with nowhere beside it for
+ * its card; while something is docked at the side (the catalogue), so what
+ * you rearrange is never under it; and on a stage too narrow to leave room
+ * beside a thing in its middle. Otherwise a panel goes on whichever side of
+ * its thing has room, and the camera stays where it is. Never on a stage of
+ * sheets, which have the foot of it instead.
+ */
+export function stripTaken(o: {
+  room: number;
+  stage: number;
+  seen: number;
+  reading: boolean;
+  docked: boolean;
+}): boolean {
+  return o.room > 0 && o.stage >= SHEET_BELOW && (o.reading || o.docked || o.seen < ROOM_BESIDE);
 }
 
 /** What can be open over the world, by kind, as the chat page's scene keeps it. */
@@ -411,16 +462,51 @@ export function sameAnchor(a: Anchor, b: Anchor): boolean {
 
 /** How big the room's plaque is in metres, how high its middle hangs, and how far from the middle of its door. */
 export const PLAQUE = { width: 0.42, height: 0.26, elevation: 1.45, beside: 1.02 };
-/** How far along the wall from the plaque anything else has to be for it to hang there: a thing, or another door. */
-const PLAQUE_CLEAR = { thing: 0.72, door: 1.0, wall: 0.7 };
+/**
+ * How far along the wall from the plaque's edge anything else has to be for it
+ * to hang there: a thing, or another door; and how far out from the wall a
+ * thing has to stand for it not to matter.
+ */
+const PLAQUE_CLEAR = { thing: 0.05, door: 1.0, wall: 0.7 };
+
+/**
+ * Metres across of the things that can stand or hang by a door, as the places
+ * plugin sizes them, for the wide ones: anything else is taken as about 0.9.
+ * The longer side of a thing on the floor counts, as it may be turned.
+ */
+const ACROSS: Record<string, number> = {
+  board: 1.4,
+  sign: 1.4,
+  screen: 1.6,
+  map: 1.3,
+  painting: 1.2,
+  pegboard: 1.2,
+  window: 1.2,
+  calendar: 1.0,
+  bed: 2.0,
+  couch: 1.6,
+  desk: 1.2,
+  table: 1.2,
+  tv: 1.2,
+  fireplace: 1.3,
+  bench: 1.3,
+  sideboard: 1.6,
+  round_table: 1.0,
+};
+
+/** How wide a thing is along the wall it is by, in metres: by its size, or its kind's, as scaled. */
+export function acrossOf(p: Pick<Prop, "kind" | "size" | "scale">): number {
+  if (p.size) return Math.max(p.size[0], p.size[2]);
+  return (ACROSS[p.kind] ?? 0.9) * (p.scale ?? 1);
+}
 
 /**
  * Where the room's plaque hangs: on the wall beside a door in a wall (the
  * back or the left), at eye height, on whichever side of it is clear of
- * anything else on or against that wall and of the room's corner. The door
- * it is beside, where on the floor plan it is, and which way it faces, in
- * degrees as a prop's `facing`. None when every door is at an open side, or
- * has no clear wall beside it.
+ * anything else on or against that wall, by the whole of its width, and of
+ * the room's corner. The door it is beside, where on the floor plan it is,
+ * and which way it faces, in degrees as a prop's `facing`. None when every
+ * door is at an open side, or has no clear wall beside it.
  */
 export function plaqueSpot(
   room: Pick<Room, "width" | "depth" | "props" | "doors">,
@@ -438,7 +524,10 @@ export function plaqueSpot(
           const [x, z] = p.at;
           const off = back ? z + room.depth / 2 : x + room.width / 2;
           const alongIt = back ? x : z;
-          return off < PLAQUE_CLEAR.wall && Math.abs(alongIt - along) < PLAQUE_CLEAR.thing;
+          return (
+            off < PLAQUE_CLEAR.wall &&
+            Math.abs(alongIt - along) < acrossOf(p) / 2 + PLAQUE.width / 2 + PLAQUE_CLEAR.thing
+          );
         }) ||
         (room.doors ?? []).some(
           (d) => d !== door && d.wall === door.wall && Math.abs(d.along - along) < PLAQUE_CLEAR.door,

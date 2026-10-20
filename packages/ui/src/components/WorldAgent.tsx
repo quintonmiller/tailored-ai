@@ -123,6 +123,8 @@ export function WorldAgent({
   const [problem, setProblem] = useState<string | null>(null);
   // What it wears as last asked for here, until the map catches up.
   const [dressed, setDressed] = useState<string[] | undefined>(undefined);
+  // The chips for what it wears, shown only once asked for: the card floats by the agent's shoulder, kept short.
+  const [dressing, setDressing] = useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: what the map says now is what is worn; asking is over.
   useEffect(() => {
     setDressed(undefined);
@@ -297,21 +299,32 @@ export function WorldAgent({
                     </button>
                   </>
                 )}
+                {" · "}
+                <button
+                  type="button"
+                  className="world-panel-inline"
+                  aria-expanded={dressing}
+                  onClick={() => setDressing(!dressing)}
+                >
+                  {dressing ? "done" : "change"}
+                </button>
               </span>
-              <span className="world-wear" role="group" aria-label={`What ${name} wears`}>
-                {Object.keys(WEAR).map((thing) => (
-                  <button
-                    key={thing}
-                    type="button"
-                    className="world-wear-chip"
-                    aria-pressed={worn.includes(thing)}
-                    disabled={busy}
-                    onClick={() => dress(toggleWear(worn, thing))}
-                  >
-                    {thing}
-                  </button>
-                ))}
-              </span>
+              {dressing && (
+                <span className="world-wear" role="group" aria-label={`What ${name} wears`}>
+                  {Object.keys(WEAR).map((thing) => (
+                    <button
+                      key={thing}
+                      type="button"
+                      className="world-wear-chip"
+                      aria-pressed={worn.includes(thing)}
+                      disabled={busy}
+                      onClick={() => dress(toggleWear(worn, thing))}
+                    >
+                      {thing}
+                    </button>
+                  ))}
+                </span>
+              )}
             </dd>
           </>
         )}

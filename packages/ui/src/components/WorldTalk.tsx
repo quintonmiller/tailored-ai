@@ -47,6 +47,10 @@ function Handset() {
  * to an agent somewhere else is a call: the same conversation, in a phone.
  * The whole chat is a click away. Not a dialog: keys pressed outside it still
  * walk you, and Escape still stops a reply.
+ *
+ * For a screen reader, a reply is read out once, when it has all come in,
+ * rather than again with every few words that arrive; and what the agent is
+ * doing is read when that changes, not with every second it has been at it.
  */
 export function WorldTalk({
   name,
@@ -54,7 +58,9 @@ export function WorldTalk({
   heard,
   replying,
   status,
+  elapsed,
   phone = false,
+  voice = false,
   approvals,
   problem,
   children,
@@ -69,8 +75,12 @@ export function WorldTalk({
   replying?: string;
   /** What it is doing about your turn: thinking, or the tool it is using. */
   status?: string;
+  /** Seconds it has been at your turn, shown beside what it is doing. */
+  elapsed?: number;
   /** On the phone: it is somewhere else. */
   phone?: boolean;
+  /** Holding Space talks out loud: live voice is on. */
+  voice?: boolean;
   /** Tool calls waiting on your approval. */
   approvals?: ReactNode;
   /** What went wrong with talking out loud: no microphone, say. */
@@ -80,6 +90,8 @@ export function WorldTalk({
   onFull: () => void;
 }) {
   const said = heard ? [...lines, { who: "you" as const, text: heard }] : lines;
+  // Its last answer, once it has all come in: what a screen reader reads out.
+  const answered = replying === undefined ? [...said].reverse().find((l) => l.who === "agent")?.text : undefined;
   return (
     <section
       className={`world-talk${phone ? " world-talk-phone" : ""}`}
@@ -100,10 +112,11 @@ export function WorldTalk({
           Whole chat
         </button>
       </header>
-      <ol className="world-talk-lines" aria-live="polite" aria-label="What was said">
+      <ol className="world-talk-lines" aria-label="What was said" aria-busy={replying !== undefined}>
         {said.length === 0 && replying === undefined && (
           <li className="world-talk-hint">
-            {phone ? "They'll hear you down the line." : `Say something to ${name}.`} Type below, or hold Space to talk.
+            {phone ? "They'll hear you down the line." : `Say something to ${name}.`}{" "}
+            {voice ? "Type below, or hold Space to talk." : "Type below."}
           </li>
         )}
         {said.map((l, i) => (
@@ -122,10 +135,14 @@ export function WorldTalk({
           </li>
         )}
       </ol>
+      <p className="world-talk-aloud" aria-live="polite">
+        {answered}
+      </p>
       {status && (
         <output className="world-talk-status">
           <span className="world-talk-pulse" aria-hidden="true" />
           {status}
+          {elapsed ? <span aria-hidden="true"> · {elapsed}s</span> : null}
         </output>
       )}
       {problem && <p className="world-talk-problem">{problem}</p>}
