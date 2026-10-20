@@ -447,6 +447,10 @@ export class SignPost {
   private since = 0;
   /** Metres a screen pixel covers where it stands, as last laid out: its bob is in screen pixels, like the rest. */
   private perPixel = 0.005;
+  /** How strongly it is drawn: 1 as always, fainter far off, 0 put away (see `afar.ts`). */
+  strength = 1;
+  /** Where it is drawn among what floats over heads, when not where a sprite is drawn by default. */
+  private drawOrder: number | undefined;
 
   /** Show a sign, or none. */
   set(sign: Sign | undefined, clock: number) {
@@ -456,7 +460,8 @@ export class SignPost {
     if (this.shown) disposeSprite(this.shown);
     this.shown = sign ? sprite(drawSign(sign), sign === "sleep" ? 0.3 : 0.24) : undefined;
     if (this.shown) {
-      this.shown.visible = !this.pooled;
+      if (this.drawOrder !== undefined) this.shown.renderOrder = this.drawOrder;
+      this.shown.visible = !this.pooled && this.strength > 0;
       this.group.add(this.shown);
     }
   }
@@ -464,13 +469,19 @@ export class SignPost {
   /** Its sign said by a cue over the group it thinks with, or by itself again. */
   pool(on: boolean) {
     this.pooled = on;
-    if (this.shown) this.shown.visible = !on;
+    if (this.shown) this.shown.visible = !on && this.strength > 0;
   }
 
   /** Size the sign for the screen; its height there in pixels, or undefined with no sign showing. */
   fit(perPixel: number, limits: [number, number]): number | undefined {
     this.perPixel = perPixel;
-    return this.shown && this.group.visible && !this.pooled ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
+    return this.shown && this.group.visible && !this.pooled && this.strength > 0 ? fitSprite(this.shown, perPixel, limits)[1] : undefined;
+  }
+
+  /** Draw it before or after what else floats over heads: tags are drawn at 10. */
+  order(n: number) {
+    this.drawOrder = n;
+    if (this.shown) this.shown.renderOrder = n;
   }
 
   /** Stand it `lift` screen pixels up from the top of the head, and `across` to the right, over its tag. */
@@ -483,14 +494,16 @@ export class SignPost {
     if (!s) return;
     const t = clock - this.since;
     const px = this.perPixel;
+    // Put away while a cue over the group says it, or far off while it isn't worth a glance.
+    s.visible = this.strength > 0 && !this.pooled;
     if (this.current === "sleep") {
       const u = (t % 2.6) / 2.6;
       s.position.set(6 * u * px, 18 * u * px, 0);
-      s.material.opacity = Math.min(1, 4 * u) * (1 - u * u);
+      s.material.opacity = Math.min(1, 4 * u) * (1 - u * u) * this.strength;
     } else {
       s.position.set(0, 3 * Math.sin(t * 2.4) * px, 0);
       const pop = Math.min(1, t / 0.25);
-      s.material.opacity = pop;
+      s.material.opacity = pop * this.strength;
       if (this.current === "wait") s.position.y += 3 * Math.abs(Math.sin(t * 5)) * px;
     }
   }

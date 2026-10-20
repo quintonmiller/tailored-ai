@@ -158,6 +158,27 @@ describe("where it stays", () => {
     expect(chosenSpotIn(room, { place: "x", spot: "window-2", name: "at the window" })).toBe("window");
   });
 
+  it("finds the spot in front of a thing an agent made, and for one on top of something, that thing's", () => {
+    const made: Room = {
+      ...room,
+      props: [
+        ...room.props,
+        { id: "model", name: "the bookcase", kind: "model", at: [1.6, 1.2], facing: 180, size: [1, 1.6, 0.4] },
+        // A long table, sat at from its far end, with a vase an agent made at the end nearer the middle of the room.
+        { id: "table", name: "the long table", kind: "table", at: [0.8, 0.3], facing: 0, spot: "table" },
+        { id: "small_model", name: "the vase", kind: "small_model", at: [0.8, 1.4], facing: 0, on: "table" },
+      ],
+      spots: [
+        ...room.spots,
+        { id: "idle:model", name: "by the bookcase", place: "the bookcase", at: [1.6, 0.5], facing: 0 },
+        { id: "table", name: "at the long table", place: "the long table", at: [0.8, -0.9], facing: 0, item: "table" },
+      ],
+    };
+    expect(chosenSpotIn(made, { place: "x", item: "model", name: "by the bookcase" })).toBe("idle:model");
+    // The middle of the room is nearer the vase; the table it stands on is what it is by.
+    expect(chosenSpotIn(made, { place: "x", item: "small_model", name: "by the vase" })).toBe("table");
+  });
+
   it("puts a conversation first, then work, then a person talking to it, then the spot it chose, then its routine", () => {
     const all = { talking: true, working: true, engaged: true, spot: true };
     expect(planFor(all)).toBe("talk");

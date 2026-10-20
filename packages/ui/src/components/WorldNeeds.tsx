@@ -44,6 +44,7 @@ export function NeedsList({
   onOpen: (need: Need) => void;
   onClose: () => void;
 }) {
+  const colorOf = useAgentColor();
   return (
     <WorldPanel kicker="Needs you" title="Waiting on you" className="world-needs" onClose={onClose}>
       {needs.length === 0 ? (
@@ -58,7 +59,9 @@ export function NeedsList({
                 <span className="world-map-dot" aria-hidden="true">
                   !
                 </span>
-                <span className="world-needs-who">{nameOf(need.agent)}</span>
+                <span className="world-needs-who" style={{ ["--who" as string]: colorOf(need.agent) }}>
+                  {nameOf(need.agent)}
+                </span>
                 <span className="world-needs-when">{waited(need) ?? ""}</span>
                 <span className="world-needs-what">
                   {needWords(need)}

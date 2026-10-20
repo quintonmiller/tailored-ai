@@ -137,6 +137,34 @@ describe("idleSpots", () => {
     }
   });
 
+  it("adds somewhere to stand in front of what an agent made, on the floor or on a wall, but nothing to do there", () => {
+    const room: Room = {
+      ...home,
+      props: [
+        ...home.props,
+        // A bookcase out on the floor, turned to face the couch, as big as it was made.
+        prop("bookcase", "model", [2, 1.2], { facing: 180, size: [1.2, 1.6, 0.4], scale: 2 }),
+        prop("clock", "wall_model", [3.96, 1], { facing: -90, elevation: 1.6, size: [0.4, 0.4, 0.06] }),
+        prop("vase", "small_model", [1.5, -2.65], { on: "desk", size: [0.2, 0.3, 0.2] }),
+      ],
+    };
+    const spots = idleSpots(room, [...obstacles, box([2, 1.2], 1.2, 0.4)]);
+    const bookcase = spots.find((s) => s.id === "idle:bookcase");
+    // A step out past its front: half its depth, already as big as it was made, and a step as long as it is big.
+    expect(bookcase?.at[0]).toBeCloseTo(2, 2);
+    expect(bookcase?.at[1]).toBeCloseTo(1.2 - 0.2 - 1, 2);
+    expect(Math.abs(bookcase?.facing ?? 0)).toBeCloseTo(0, 0);
+    expect(bookcase).toMatchObject({ name: "by the bookcase", place: "the bookcase", activity: "look" });
+    expect(bookcase?.for).toBeUndefined();
+    const clock = spots.find((s) => s.id === "idle:clock");
+    expect(clock?.at[0]).toBeLessThan(3.96 - 0.5);
+    // One on top of something else is stood by at that, not here.
+    expect(spots.some((s) => s.id === "idle:vase")).toBe(false);
+    // Nothing to do there of its own accord: a body only goes there when it says so.
+    const all = { ...room, spots: [...room.spots, ...spots] };
+    expect(errandAt(all, "idle:bookcase", 10, seeded("x"))).toBeUndefined();
+  });
+
   it("adds none for a thing with nowhere clear in front of it", () => {
     const blocked = [...obstacles, box([0, -2.3], 3, 1.2)];
     expect(idleSpots(home, blocked).some((s) => s.id === "idle:board")).toBe(false);

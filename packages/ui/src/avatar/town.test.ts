@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { agentColor } from "../components/WorldMap";
+import { hexToHsl } from "./body";
 import { hueFor } from "./doing";
 import { findPath, slide } from "./locomotion";
 import { DEFAULT_ROOM } from "./scene";
@@ -80,6 +81,25 @@ describe("a house's look", () => {
     expect(light(look.trim)).toBeLessThan(light(look.accent));
     // Two owners, two colours.
     expect(houseLook("writer", 0.3).walls).not.toBe(look.walls);
+  });
+
+  it("is washed in the colour its owner chose for its body, when it chose one, as the map's dot is", () => {
+    const [hue, s] = hexToHsl("#e0457b") as [number, number, number];
+    const look = houseLook("planner", 0.3, "#e0457b");
+    expect(look.accent).toBe(hsl(hue, 0.52, 0.52));
+    expect(look.walls).toBe(hsl(hue, 0.42, 0.84));
+    expect(s).toBeGreaterThan(0.52);
+    // Its roof and its shape are its own style's still.
+    expect({ ...look, walls: 0, trim: 0, accent: 0 }).toEqual({
+      ...houseLook("planner", 0.3),
+      walls: 0,
+      trim: 0,
+      accent: 0,
+    });
+    // A grey body's house is grey; anything that isn't a colour is the name's.
+    const grey = houseLook("planner", 0.3, "#808080");
+    expect(grey.accent).toBe(hsl(0, 0, 0.52));
+    expect(houseLook("planner", 0.3, "teal")).toEqual(houseLook("planner", 0.3));
   });
 
   it("takes its roof, its storeys and its chimney from its own style, the same each time", () => {

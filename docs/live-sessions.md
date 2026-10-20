@@ -271,9 +271,12 @@ Its voice is set by `voice.voice`, as before.
 
 Agents sharing one model are told apart first by colour: each body is the
 model turned round the colour wheel by an amount drawn from the agent's
-name, and the dot by its name on its card, in the chat, on the map, in the
-needs list and on boards and calendars is the same colour, the one it chose
-once it chooses. The default agent keeps the model's own colours. An agent can
+name, and the dot by its name on its card and its menu, in the chat, on the
+map and the town plan, in the needs list and on boards, calendars and the
+status board, and the ink of its name on a whiteboard, is the same colour,
+the one it chose once it chooses. Every one of them reads it from one place
+on the page (`useAgentColor` in `lib/body-colors.ts`), so a new colour shows
+everywhere at once. The default agent keeps the model's own colours. An agent can
 choose a colour of its own, and another of the models the deployment has, as
 can you on its card (see [An agent in charge of its body](#an-agent-in-charge-of-its-body)).
 
@@ -402,7 +405,11 @@ body action="go" to="sit on the couch" for="20 min"
   up, or the stretch it makes on getting somewhere, waits until it is over.
 - **`go`** walks to a spot in the place it is in, said in words: `"the
   couch"`, `"by the window"`, `"sit on the couch"`, `"by the plant"` (a thing
-  with no spot of its own: it stands by it). It stays there until it chooses
+  with no spot of its own: it stands by it), or by something an agent made
+  and put there, by its name (`"by the bookcase"`; see
+  [Things agents make](#things-agents-make)). `look` lists those with the
+  spots. It stands in front of the thing, facing it, or by whatever it sits
+  on. It stays there until it chooses
   otherwise (`to="anywhere"`), or for as long as `for` says (`"30 min"`,
   `"an hour"`). Words that name no spot here are a place, as for the
   `place` tool's `go`: home, a shared place, or the meeting room of a room it
@@ -813,9 +820,10 @@ its name falls in, unless that lane was full. Each lane's name ("Maple Lane",
 "Willow Way") is on a sign at its corner.
 
 A house looks like its owner. Its walls are washed in the agent's colour, the
-one its body and its dot on the map show, with its door, shutters and
-letterbox in that colour itself; its roof, its storeys and its chimney are
-its own. What the agent does stands by it: a satellite dish on a reporter's
+one its body and its dot on the map show (the one it chose with its `body`
+tool, once it chooses: the house takes it the next time the town is drawn),
+with its door, shutters and letterbox in that colour itself; its roof, its
+storeys and its chimney are its own. What the agent does stands by it: a satellite dish on a reporter's
 roof, an easel by an artist's door, a cabinet of blinking lights beside a
 coder's, a garden for a housekeeper, a telescope for a researcher, a signpost
 for a travel agent (see [What an agent is
@@ -1808,7 +1816,10 @@ not `place`. Made again, it shows as it is now wherever it stands, fitted to
 the box it was placed in with its shape kept (one on a wall by its width and
 height, so made deeper it stands out further rather than shrinking). Where it
 goes stays what it was made for: to have it somewhere else, make one under
-another name. Deleted, it leaves an empty frame
+another name. Placed, it is somewhere to go: an agent's `body` tool goes and
+stays `"by the bookcase"`, standing in front of it and facing it (by the desk
+or table one stands on), and `look` lists what agents made with the spots.
+Deleted, it leaves an empty frame
 until someone takes it away. The page draws each model cheaply: every part of
 one colour and finish is one mesh in one shared material, so a bookcase of
 thirty parts is a handful of draw calls.
@@ -2271,6 +2282,20 @@ whose tag was put away and the tag is back. A tag
 whose head is under the keys hint along the foot of the stage, as one at the
 foot of the view can be when you fly up high, is put away rather than drawn
 behind the hint.
+Out in the town, how far off a body is counts too. Near the camera, every
+tag is as it is indoors. Draw back, and the tags of those further off shrink
+and fade, and once a body is far (a few pixels high: zoomed out over the
+town, that is nearly everyone), only the ones worth a glance keep a tag: an
+agent waiting on you or stuck, at work or thinking, talking to someone, the
+one the chat is with, the one you are pointing at, and you. Theirs is a
+little smaller and a little faint, so the near ones stand out. The rest go
+quiet, their signs with them, and bodies far off keeping each other company
+(at a café table, on a bench, at the next table along) share one small chat
+mark over their heads instead of a pair of bubbles each. Point at any body,
+however far, and its name is back at full size, with what it is doing: a body
+a few pixels high counts as a little bigger than it is drawn, so it can be
+found with the pointer, and clicked. Indoors, a room is never big enough for
+anyone in it to be far, and nothing changes.
 Point at a body, or walk up to it on a visit, and the tag says more. An idle
 agent's says what it is up to ("watering the plant"), what it did last and
 how long ago ("last: searched the web, 40 min ago"), and when it next wakes
@@ -2452,6 +2477,9 @@ Out in the town you see them at the café, on the benches and by the pond, and
 a body setting out walks from its own door to its seat, and back to its door
 when it goes home. Its name is over its head; come near, or point at it, and
 its tag says what it is doing ("having a coffee at the café with writer").
+Zoomed out, the town is calm: a body with nothing on keeps quiet from afar,
+and a table of them chatting shows one small chat mark (see
+[What it is doing](#what-it-is-doing)).
 The map shows who is out in the town under the town, and clicking it, its
 menu and its card say it too. One put to bed for the night says "asleep ·
 overnight until 7:10". A seat someone else is in (a host on its own

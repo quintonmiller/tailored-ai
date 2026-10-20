@@ -7,6 +7,7 @@
 import { type VRM, type VRMHumanBoneName, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { type Afar, NEAR } from "./afar";
 import { makesOwnGesture, type Tint } from "./body";
 import { type ClipLibrary, type ClipRole, GESTURE_ROLES, loadClipLibrary, rolesFor } from "./clips";
 import type { Hold } from "./doing";
@@ -190,6 +191,11 @@ export class Figure {
   private tagSize: [number, number] = [0, 0];
   /** How strongly its tag is drawn now, easing toward what the stage last said: faint in a crowd, unless it's to read. */
   private tagStrength = 1;
+  /**
+   * How its tag and sign are drawn from where the camera is (`afar.ts`): as always near, smaller and fainter far off
+   * out in the town, and put away there unless it is worth a glance.
+   */
+  private afar: Afar = NEAR;
   /** The line from its tag down to its head, while the tag has gone off its head to make way for another. */
   private leader: THREE.Sprite | undefined;
   /**
@@ -608,12 +614,18 @@ export class Figure {
    * Size what floats over its head for the screen, `perPixel` metres a
    * screen pixel there: its tag, its sign and, while it is speaking at
    * `clock`, its bubble. Returns their sizes on the screen, in pixels, and
-   * when it started saying what is in the bubble.
+   * when it started saying what is in the bubble. Seen from afar (`far`), its
+   * tag and sign are drawn smaller, and one put away isn't there to make way
+   * for.
    */
-  fitOver(perPixel: number, clock: number): Over {
+  fitOver(perPixel: number, clock: number, far: Afar = NEAR): Over {
     this.perPixel = perPixel;
+    this.afar = far;
     const out: Over = {};
-    if (this.shownTag.sprite) out.tag = this.tagSize = fitSprite(this.shownTag.sprite, perPixel, TAG_PX);
+    const sized = ([lo, hi]: [number, number]): [number, number] => [lo * far.size, hi * far.size];
+    if (this.shownTag.sprite && far.tag > 0)
+      out.tag = this.tagSize = fitSprite(this.shownTag.sprite, perPixel, sized(TAG_PX));
+    this.signs.strength = far.sign;
     // Speaking, its bubble is over its tag, which stays, so who is talking can be told in a crowd; the sign is put
     // away until it's done.
     if (this.line && this.speaking(clock) && !this.yielding) {
@@ -621,7 +633,7 @@ export class Figure {
       out.said = this.line.from;
       return out;
     }
-    const sign = this.signs.fit(perPixel, SIGN_PX);
+    const sign = far.sign > 0 ? this.signs.fit(perPixel, sized(SIGN_PX)) : undefined;
     if (sign !== undefined) out.sign = sign;
     return out;
   }
@@ -647,13 +659,13 @@ export class Figure {
     this.lifted = lifted;
     if (at.gone) this.yielding = true;
     const px = this.perPixel;
-    this.tagStrength = ease(this.tagStrength, at.faded ? FAINT_TAG : 1, dt, SETTLE_SECONDS);
+    this.tagStrength = ease(this.tagStrength, (at.faded ? FAINT_TAG : 1) * this.afar.tag, dt, SETTLE_SECONDS);
     const shown = this.shownTag.sprite;
     if (shown) {
       liftSprite(shown, lifted.tag, px, lifted.tagAcross);
       shown.material.opacity = this.tagStrength;
-      // Put away while a bubble brought on to the screen is over it.
-      shown.visible = !at.hidden;
+      // Put away while a bubble brought on to the screen is over it, or far off when it isn't worth a glance.
+      shown.visible = !at.hidden && this.afar.tag > 0;
     }
     this.signs.place(lifted.sign, lifted.tagAcross);
     this.placeLeader();
@@ -696,7 +708,7 @@ export class Figure {
     const foot: [number, number] | undefined =
       at && shown ? [Math.max(at.tagAcross - reach, Math.min(at.tagAcross + reach, 0)), at.tag] : undefined;
     const p =
-      foot && at && !at.hidden && Math.hypot(foot[0], foot[1]) - GAP_PX > LEADER_PX
+      foot && at && !at.hidden && this.afar.tag > 0 && Math.hypot(foot[0], foot[1]) - GAP_PX > LEADER_PX
         ? pointer(foot, [0, 0], GAP_PX, LEADER_WIDTH_PX)
         : undefined;
     if (!p) {

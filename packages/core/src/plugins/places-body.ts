@@ -31,6 +31,7 @@ import { StateConflictError, StateError } from "../state/types.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
 import { findItem, findSpot, type Place, parseColor } from "./places-layout.js";
+import { isModelKind } from "./places-models.js";
 import { aOrAn, parseWear, type Role, WEAR, WEAR_MOST, wearWords } from "./places-roles.js";
 
 export const BODY_TYPE = "body";
@@ -464,7 +465,8 @@ export function spotWords(words: string): string {
 /**
  * Where in a place words mean: one of its spots ("the couch", "by the
  * window", "sit on the couch"), or a thing in it that has none of its own,
- * to stand by ("by the plant"). Undefined when the place has neither.
+ * to stand by ("by the plant"), an agent-made model among them ("by the
+ * bookcase"). Undefined when the place has neither.
  */
 export function spotIn(place: Place, words: string): { spot?: string; item?: string; name: string } | undefined {
   const t = spotWords(words);
@@ -481,6 +483,16 @@ export function spotIn(place: Place, words: string): { spot?: string; item?: str
     return n.includes(t) || t.includes(n);
   });
   return near ? { spot: near.id, name: near.name } : undefined;
+}
+
+/**
+ * Where a body can go in a place, as `look` lists them: each spot's place
+ * once, and then each thing an agent made and put there (`places-models.ts`),
+ * which brings no spot but can be stood by.
+ */
+export function spotsToGo(place: Place): string[] {
+  const made = place.props.filter((p) => isModelKind(p.kind)).map((p) => p.name);
+  return [...place.spots.map((s) => s.place), ...made].filter((p, i, all) => p && all.indexOf(p) === i);
 }
 
 /** Where a body stays, as it follows "stay": "on the couch", "at the window", "in the middle of the room". */
@@ -769,7 +781,7 @@ export class BodyTool implements Tool {
       body.away && !ranOut(body.away.until, now)
         ? ` You go home in ${lengthWords(Date.parse(body.away.until) - now)}.`
         : "";
-    const spots = here.place.spots.map((s) => s.place).filter((p, i, all) => p && all.indexOf(p) === i);
+    const spots = spotsToGo(here.place);
     return [
       `${here.words}${staying}${away}`,
       selfWords(body, wore, own),
@@ -885,7 +897,7 @@ export class BodyTool implements Tool {
       (await this.world.go(service, caller, agent, to)) ??
       (named && named !== to.toLowerCase() ? await this.world.go(service, caller, agent, named) : undefined);
     if (!went) {
-      const spots = here.place.spots.map((s) => s.place).filter((p, i, all) => p && all.indexOf(p) === i);
+      const spots = spotsToGo(here.place);
       return fail(
         `There's no spot or place called "${to}".${spots.length ? ` Spots here: ${spots.join(", ")}.` : ""} The place tool's places action lists where you can go.`,
       );

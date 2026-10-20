@@ -2581,6 +2581,7 @@ export function useChatStage({
         speech={saidAll}
         menuFor={menuFor}
         visitor={!!showing.visiting}
+        partner={talking}
         onNear={setNear}
         onPresent={setPresent}
         tools={editor.editing ? editor.tools : tools}

@@ -35,6 +35,19 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { nameOf } from "../lib/conversations";
 import { aboutLines, asleepWords } from "../lib/did";
 import {
+  type Afar,
+  afar,
+  chatGroups,
+  farness,
+  GROUP_FROM,
+  MARK_PX,
+  markAt,
+  NEAR,
+  NEAR_PX,
+  pointedAt,
+  worthAGlance,
+} from "./afar";
+import {
   type Anchor,
   boxRound,
   EDGE,
@@ -107,7 +120,7 @@ import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, likesOf, see
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import { buildModel } from "./models";
 import type { BodyState } from "./motion";
-import { type Box, type Column, metresPerPixel, stack, TAG_PX } from "./overhead";
+import { type Box, type Column, GAP_PX, metresPerPixel, stack, TAG_PX } from "./overhead";
 import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildPlaque, buildProp, buildShell, disposeTree } from "./props";
 import { chatDue, chatPause, drawNotes, type Notes, talkedWords } from "./routines";
@@ -143,7 +156,7 @@ import {
 import { drawScreen, drawStrip, pageAt, type ScreenCard } from "./screens";
 import { takeDown } from "./shared";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
-import { disposeSprite, fitSprite, liftSprite, thinkingCue } from "./signs";
+import { disposeSprite, fitSprite, liftSprite, SignPost, thinkingCue } from "./signs";
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { behindView, blocksView, facingSurface, focusDistance, focusFraming, overWalls, solidInWay } from "./surfaces";
 import { byPhone, heardThrough, presentIn, standBy, talkingHere, talkMove } from "./talk";
@@ -696,6 +709,11 @@ export async function createStage(
     onSurfaceHover?: (label: string | undefined, at?: { x: number; y: number }) => void;
     /** The pointer came over the room's plaque (where on the page), or left it. */
     onPlaqueHover?: (at: { x: number; y: number } | undefined) => void;
+    /**
+     * The agent the chat beside the stage is with, when that isn't the body
+     * this stage shows: out in the town its tag is kept however far off it is.
+     */
+    partner?: () => string | undefined;
   } = {},
 ): Promise<Stage> {
   // The room as the page gave it, and as drawn: with spots added by things that bring none (see `idleSpots`).
@@ -2071,7 +2089,15 @@ export async function createStage(
         if (agent) return agent;
       }
     }
-    return undefined;
+    // Out in the town, a body far off is a few pixels high: anywhere close to it will do (`pointedAt`).
+    if (!isOutdoors(room)) return undefined;
+    camera.updateMatrixWorld();
+    const small = [...companions].flatMap(([agent, c]) => {
+      const on = bodyOnStage(c);
+      const tall = on ? on.box.bottom - on.box.top : 0;
+      return on && tall < NEAR_PX ? [{ id: agent, box: on.box }] : [];
+    });
+    return pointedAt([e.clientX - r.left, e.clientY - r.top], small);
   };
   let downAt: [number, number] | null = null;
   const onDown = (e: PointerEvent) => {
@@ -3802,6 +3828,8 @@ export async function createStage(
   const onScreen = new THREE.Vector3();
   /** What floats over each head on the stage this frame, by whose head: its tag, sign and bubble, as boxes. */
   let overheads = new Map<string, Box[]>();
+  /** The chat marks shared by far-off groups keeping each other company, by the first of each group (`afar.ts`). */
+  const chatMarks = new Map<string, SignPost>();
   /** The corners of some boxes, for the box round all of them. */
   const boxCorners = (boxes: Box[]): [number, number][] =>
     boxes.flatMap((b): [number, number][] => [
@@ -3826,6 +3854,12 @@ export async function createStage(
       ...companions,
       ...departing.map((d, i): [string, Figure] => [`leaving ${i}`, d.fig]),
     ];
+    // Whose body each is, for what it is doing: a body leaving is still its agent's, and yours is nobody's.
+    const agentOf = new Map<string, string | undefined>([
+      [opts.visitor ? "you" : self, opts.visitor ? undefined : self],
+      ...[...companions.keys()].map((a): [string, string] => [a, a]),
+      ...departing.map((d, i): [string, string | undefined] => [`leaving ${i}`, d.agent]),
+    ]);
     camera.updateMatrixWorld();
     const columns: Column[] = [];
     // One cue over each group thinking together, laid out with the tags: last of all, so it goes up over theirs.
@@ -3844,6 +3878,9 @@ export async function createStage(
         focus: true,
       });
     }
+    const outdoors = isOutdoors(room);
+    const partner = opts.partner?.();
+    const seen: { id: string; f: Figure; agent?: string; depth: number; perPixel: number; x: number; y: number }[] = [];
     for (const [id, f] of bodies) {
       // A body put away, like yours while you fly, shows nothing over its head for others to make way for.
       if (!f.body.visible) continue;
@@ -3853,28 +3890,87 @@ export async function createStage(
       if (depth <= 0.05) continue;
       onScreen.copy(crown).project(camera);
       const perPixel = metresPerPixel(depth, camera.fov, stageH);
-      const over = f.fitOver(perPixel, clock);
+      const x = ((onScreen.x + 1) / 2) * stageW;
+      const y = ((1 - onScreen.y) / 2) * stageH;
+      seen.push({ id, f, agent: agentOf.get(id), depth, perPixel, x, y });
+    }
+    // Out in the town, seen from afar (`afar.ts`): near, as always; far off, only a body worth a glance keeps its tag,
+    // and those keeping each other company share one small chat mark.
+    const looks = new Map<string, Afar>();
+    const chatters: { id: string; at: [number, number]; screen: [number, number] }[] = [];
+    for (const b of seen) {
+      if (!outdoors) continue;
+      const far = farness(b.perPixel);
+      const glance = {
+        ...(b.agent && !opts.still && activities[b.agent] ? { doing: activities[b.agent].doing } : {}),
+        speaking: b.f.speaking(clock),
+        pointed: closeTo(b.agent ?? b.id),
+        partner: !!b.agent && b.agent === partner,
+        you: b.f === me,
+      };
+      let look = afar(far, glance);
+      if (far >= GROUP_FROM && !worthAGlance(glance) && shows.get(b.f)?.behavior.chat) {
+        look = { ...look, sign: 0 };
+        chatters.push({ id: b.id, at: [b.f.walker.place.x, b.f.walker.place.z], screen: [b.x, b.y] });
+      }
+      looks.set(b.id, look);
+    }
+    for (const { id, f, depth, perPixel, x, y } of seen) {
+      const over = f.fitOver(perPixel, clock, looks.get(id) ?? NEAR);
       // Whoever is talking keeps its tag's place over its head, so its bubble's tail can reach it there; then the tag
       // under the pointer, or of the one you stand by; then the nearer.
       const close = closeTo(id);
       const speaking = f.speaking(clock);
       const rank = (speaking ? 2 : close ? 1 : 0) * 1000 - depth;
-      const x = ((onScreen.x + 1) / 2) * stageW;
-      const y = ((1 - onScreen.y) / 2) * stageH;
       // Its body down to its feet, for bubbles brought down beside a speaker to keep off, and tails to go round.
       const feet = onStage(f.body.position);
       const half = 0.3 / perPixel;
       const body = feet && { left: x - half, right: x + half, top: y, bottom: Math.max(y + half, feet[1]) };
       columns.push({ id, x, y, rank, focus: close || speaking, ...(body ? { body } : {}), ...over });
     }
+    const groups = chatGroups(chatters);
+    const figures = new Map(seen.map((b) => [b.id, b.f]));
+    const marked = new Set<string>();
+    for (const group of groups) {
+      const key = group[0];
+      marked.add(key);
+      let mark = chatMarks.get(key);
+      if (!mark) {
+        mark = new SignPost();
+        mark.set("chat", clock);
+        // Under the tags, which are drawn at 10.
+        mark.order(9.5);
+        scene.add(mark.group);
+        chatMarks.set(key, mark);
+      }
+      const crowns = group.map((id) => (figures.get(id) as Figure).crown().toArray() as [number, number, number]);
+      mark.group.position.set(...markAt(crowns));
+      const depth = -onScreen.copy(mark.group.position).applyMatrix4(camera.matrixWorldInverse).z;
+      if (depth <= 0.05) continue;
+      // Just over their heads, where they are, and under any name drawn there: a mark never makes a tag move, nor
+      // goes off up the screen to make way for one, which would leave it over nobody.
+      mark.fit(metresPerPixel(depth, camera.fov, stageH), MARK_PX);
+      mark.place(GAP_PX);
+    }
+    for (const [key, mark] of chatMarks)
+      if (!marked.has(key)) {
+        mark.dispose();
+        chatMarks.delete(key);
+      }
+    // For anyone inspecting the page, like `data-hovered`: of the bodies far off, how many keep a tag and how many
+    // are quiet, and the chat marks shared between them.
+    const far = seen.filter((b) => farness(b.perPixel) >= GROUP_FROM).map((b) => looks.get(b.id) ?? NEAR);
+    const kept = far.filter((l) => l.tag > 0).length;
+    const afarWords = outdoors ? `far: ${kept} tagged, ${far.length - kept} quiet, ${chatMarks.size} chat marks` : "";
+    if (host.dataset.afar !== afarWords) host.dataset.afar = afarWords;
     // The keys hint along the foot of the stage, walking or flying: what is said is read above it.
-    const seen = stageW - insetRight;
+    const seenW = stageW - insetRight;
     const foot = hints
-      .filter((h) => h.top > stageH / 2 && h.right - h.left > seen / 2)
+      .filter((h) => h.top > stageH / 2 && h.right - h.left > seenW / 2)
       .reduce((y, h) => Math.min(y, h.top), stageH - insetBottom);
     const laid = stack(columns, {
       left: 0,
-      right: seen,
+      right: seenW,
       top: insetTop,
       bottom: foot,
       covered,
@@ -3905,6 +4001,7 @@ export async function createStage(
       const at = laid.get(id);
       if (at) f.placeOver(at, dt, 12 + Math.max(0, said.indexOf(id)));
     }
+    for (const mark of chatMarks.values()) mark.update(clock);
   }
 
   // When the controls that step aside (`opts.fades`) were last looked at.
@@ -4873,6 +4970,8 @@ export async function createStage(
       for (const d of departing.splice(0)) d.fig.dispose();
       for (const c of cues.values()) disposeSprite(c.sprite);
       cues.clear();
+      for (const mark of chatMarks.values()) mark.dispose();
+      chatMarks.clear();
       shows.clear();
       unfade();
       // The renderer and all it drew, in the order that lets the page forget them (`shared.ts`).

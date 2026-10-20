@@ -455,6 +455,23 @@ export function withLooks<P extends { kind: string; owner?: string }>(
 ) {
   return places.map((p) => (p.kind === "home" && p.owner ? { ...p, ...looksOf(p.owner, roleOf(p.owner), chosen) } : p));
 }
+/**
+ * The town's buildings as the page draws them: each house saying what its
+ * owner does, so what stands by it can show it, and the colour its owner
+ * chose for its body, which the house is washed in, as the dot by its name is.
+ */
+export function townBuildings<B extends { owner?: string }>(
+  buildings: B[],
+  roleOf: (agent: string) => Role | undefined,
+  chosen: Chosen,
+): (B & { role?: string; color?: string })[] {
+  return buildings.map((b) => {
+    if (!b.owner) return b;
+    const color = chosen.bodies.get(b.owner)?.color;
+    return { ...b, role: roleOf(b.owner)?.id, ...(color ? { color } : {}) };
+  });
+}
+
 /** Shared places are `place` records everyone can see, named `shared:<slug>`. */
 const SHARED = "shared:";
 
@@ -3639,16 +3656,10 @@ const plugin: Plugin = (ctx) => {
       }
       const chosen = await chosenBodies(service, PLUGIN_CALLER);
       const known = bodyModels();
-      // The town's houses say what their owners do, so what stands by each can show it.
+      // The town's houses say what their owners do and are washed in the colours they chose (`townBuildings`).
       const town = (found.place as Place & { town?: Town }).town;
       const place = town
-        ? {
-            ...found.place,
-            town: {
-              ...town,
-              buildings: town.buildings.map((b) => (b.owner ? { ...b, role: roleOf(b.owner)?.id } : b)),
-            },
-          }
+        ? { ...found.place, town: { ...town, buildings: townBuildings(town.buildings, roleOf, chosen) } }
         : found.place;
       const models = await modelsIn(service, PLUGIN_CALLER, components(), found.place.props);
       return {

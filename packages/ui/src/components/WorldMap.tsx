@@ -4,6 +4,7 @@ import type { AgentActivity } from "../avatar/doing";
 import { outWords, talkedWords } from "../avatar/routines";
 import type { TownPlan as Plan } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
+import { useAgentColor } from "../lib/body-colors";
 import { nameOf } from "../lib/conversations";
 import { byWait } from "../lib/needs";
 import { subscribeStateChanges } from "../lib/state-events";
@@ -281,11 +282,9 @@ export function WorldMap({
 }) {
   const [query, setQuery] = useState("");
   const [floorsOpen, setFloorsOpen] = useState(false);
-  // Each home's owner in the colour it chose for its body, on the plan as in the list.
-  const colorOf = useMemo(() => {
-    const chosen = new Map(places.flatMap((p) => (p.owner && p.color ? [[p.owner, p.color] as const] : [])));
-    return (agent: string) => agentColor(agent, chosen.get(agent));
-  }, [places]);
+  // Each agent in the colour it chose for its body, on the plan as in the list: the one colour every dot by its name
+  // is (`useAgentColor`), kept current as it chooses again.
+  const colorOf = useAgentColor();
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -492,11 +491,7 @@ export function WorldMap({
                         </span>
                         <span className="world-map-who-name">{nameOf(agent)}</span>
                         <span className="world-map-who-role">
-                          <span
-                            className="world-map-hue"
-                            style={{ background: agentColor(agent, home.color) }}
-                            aria-hidden="true"
-                          />
+                          <span className="world-map-hue" style={{ background: colorOf(agent) }} aria-hidden="true" />
                           {roleWord(agent, home.role)}
                         </span>
                         <span className={`world-map-who-doing${calm ? " calm" : ""}`}>{STATE_WORDS[doing]}</span>

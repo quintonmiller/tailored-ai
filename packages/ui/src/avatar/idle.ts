@@ -100,12 +100,20 @@ const PLANTS = 3;
 const round = (n: number) => Math.round(n * 100) / 100;
 const deg = (r: number) => (r * 180) / Math.PI;
 
+/** Kinds of thing an agent made with its `build` tool that stand on the floor or hang on a wall (`models.ts`). */
+const MADE = new Set(["model", "wall_model"]);
+/** How far out from the front of a thing an agent made a body stands by it, in metres. */
+const MADE_REACH = 0.5;
+
 /**
  * Spots in front of the things in a room that bring none of their own: a
  * plant to water, the task board to study, a sideboard to make a coffee at
- * (or watch the fish on it), a picture to look at. Each stands clear of the
- * furniture (`obstacles`, as built) and of the room's own spots, facing the
- * thing; a thing with nowhere clear in front of it gets none.
+ * (or watch the fish on it), a picture to look at, and anything an agent
+ * made and put here, to go and stand by when an agent says so ("by the
+ * bookcase", with its `body` tool). Each stands clear of the furniture
+ * (`obstacles`, as built) and of the room's own spots, facing the thing; a
+ * thing with nowhere clear in front of it gets none. Nothing idle is done by
+ * a made thing: a body only stands and looks at it.
  */
 export function idleSpots(room: Room, obstacles: Obstacle[]): Spot[] {
   const out: Spot[] = [];
@@ -132,6 +140,21 @@ export function idleSpots(room: Room, obstacles: Obstacle[]): Spot[] {
       facing: round(deg(Math.atan2(prop.at[0] - at[0], prop.at[1] - at[1]))),
       ...(what === "board" || what === "picture" ? { activity: "look" as const } : {}),
       for: what,
+    });
+  }
+  for (const prop of room.props) {
+    if (!MADE.has(prop.kind) || prop.on || room.spots.some((s) => s.item === prop.id)) continue;
+    // Out past its front by a step: its size is the box it was laid out in, already as big as it was made.
+    const depth = prop.size?.[2] ?? 0.5;
+    const at = standBy(prop, { reach: depth / 2 / (prop.scale ?? 1) + MADE_REACH }, clear);
+    if (!at) continue;
+    out.push({
+      id: `idle:${prop.id}`,
+      name: `by ${prop.name}`,
+      place: prop.name,
+      at,
+      facing: round(deg(Math.atan2(prop.at[0] - at[0], prop.at[1] - at[1]))),
+      activity: "look",
     });
   }
   return out;

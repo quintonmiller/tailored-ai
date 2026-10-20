@@ -287,14 +287,18 @@ export function chosenNow(
 /**
  * The spot in the room a chosen place to stay means: the spot itself; by a
  * thing, its own spot, or one the page added in front of it (`idleSpots`),
- * or the nearest spot to it; and failing those, whatever spot its words
- * name. Undefined once nothing there fits: the thing was taken away.
+ * or, for a thing on top of another, the other's; or the nearest spot to it;
+ * and failing those, whatever spot its words name. Undefined once nothing
+ * there fits: the thing was taken away.
  */
 export function chosenSpotIn(room: Room, chosen: ChosenSpot): string | undefined {
   if (chosen.spot && room.spots.some((s) => s.id === chosen.spot)) return chosen.spot;
   const item = chosen.item ? room.props.find((p) => p.id === chosen.item) : undefined;
   if (item) {
-    const own = room.spots.find((s) => s.item === item.id || s.id === `idle:${item.id}` || s.id === item.spot);
+    const ownOf = (p: { id: string; spot?: string }) =>
+      room.spots.find((s) => s.item === p.id || s.id === `idle:${p.id}` || s.id === p.spot);
+    const base = item.on ? room.props.find((p) => p.id === item.on) : undefined;
+    const own = ownOf(item) ?? (base ? ownOf(base) : undefined);
     if (own) return own.id;
     const near = room.spots
       .map((s) => ({ s, d: Math.hypot(s.at[0] - item.at[0], s.at[1] - item.at[1]) }))
