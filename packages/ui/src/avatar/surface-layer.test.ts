@@ -127,6 +127,74 @@ describe("SurfaceLayer", () => {
     expect(layer.surfaceAt(again.mesh)).toBeUndefined();
   });
 
+  it("tells the page again when a live surface is laid again with something new on it", () => {
+    const first = face();
+    layer.add({ ...board, anchor: first.mesh, size: [1.32, 0.82], face: first.mesh });
+    const heard = vi.fn();
+    layer.subscribe(heard);
+    look([0, 1.4, -2], [0, 1.4, -4], 1000);
+    layer.ready("0:board");
+    // The room is rebuilt with the board renamed: the same surface, live all the while, with its new heading.
+    layer.release();
+    layer.markStale((s) => !!s.prop);
+    const again = face();
+    const renamed = { ...board.prop, label: "Trip tasks" } as Prop;
+    layer.add({
+      ...board,
+      label: "the trip board",
+      prop: renamed,
+      anchor: again.mesh,
+      size: [1.32, 0.82],
+      face: again.mesh,
+    });
+    layer.sweep();
+    expect(heard).toHaveBeenLastCalledWith([expect.objectContaining({ label: "the trip board", prop: renamed })]);
+  });
+
+  it("leaves a face that isn't live where it is when its surface is taken away", () => {
+    const { mesh, own } = face();
+    layer.add({ ...board, anchor: mesh, size: [1.32, 0.82], face: mesh });
+    // Never live, and wearing something else for now (a see-through copy, while its wall fades).
+    const copy = new THREE.MeshBasicMaterial({ transparent: true });
+    mesh.material = copy;
+    const freed = vi.spyOn(mesh.geometry, "dispose");
+    layer.remove("0:board");
+    expect(mesh.parent).toBe(room);
+    expect(freed).not.toHaveBeenCalled();
+    expect(mesh.material).toBe(copy);
+    expect(mesh.material).not.toBe(own);
+  });
+
+  it("takes a surface away only for the laying of it it was asked by", () => {
+    const anchor = new THREE.Object3D();
+    room.add(anchor);
+    const first = layer.add({ id: "note", label: "a note", anchor, size: [0.5, 0.3] });
+    const second = layer.add({ id: "note", label: "a note, again", anchor, size: [0.5, 0.3] });
+    // A remover from the first laying, called late: the surface laid again stays.
+    layer.remove("note", first);
+    expect(layer.labelOf("note")).toBe("a note, again");
+    layer.remove("note", second);
+    expect(layer.labelOf("note")).toBeUndefined();
+  });
+
+  it("lets go of the see-through copy a faded face wore when it is brought up to read", () => {
+    const { mesh, own } = face();
+    layer.add({ ...board, anchor: mesh, size: [1.32, 0.82], face: mesh });
+    const copy = own.clone();
+    copy.userData.opacity = 1;
+    const freed = vi.spyOn(copy, "dispose");
+    mesh.material = copy;
+    layer.focus("0:board");
+    layer.ready("0:board");
+    look([0, 1.4, -2], [0, 1.4, -4], 1000);
+    expect((mesh.material as THREE.Material).userData.hole).toBe(true);
+    expect(freed).toHaveBeenCalled();
+    // Put down, it goes back to its own picture, not the copy.
+    layer.focus(undefined);
+    look([0, 1.4, 60], [0, 1.4, 100], 2000);
+    expect(mesh.material).toBe(own);
+  });
+
   it("finds where a line of sight meets a surface, in its own pixels", () => {
     const { mesh } = face();
     layer.add({ ...board, anchor: mesh, size: [1.32, 0.82], face: mesh });

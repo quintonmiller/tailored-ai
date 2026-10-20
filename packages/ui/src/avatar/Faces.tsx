@@ -71,20 +71,22 @@ export type SurfaceStage = Pick<Stage, "surfaceReady" | "focusSurface" | "surfac
 
 /** Every live surface, each drawn into its own element. */
 export function SurfacePortals({ views, data, stage }: { views: SurfaceView[]; data: FaceData; stage: SurfaceStage }) {
+  const reading = views.some((v) => v.focused);
   return (
     <Faces.Provider value={data}>
-      {views.map((v) => createPortal(<SurfaceFrame view={v} stage={stage} />, v.el, v.id))}
+      {views.map((v) => createPortal(<SurfaceFrame view={v} stage={stage} reading={reading} />, v.el, v.id))}
     </Faces.Provider>
   );
 }
 
 /**
  * One surface's face: inert until it is in use, and once brought up to read,
- * with the keyboard in it, a Tab from its first button. Tells the stage once
- * it is drawn, so the surface shows through the picture only with something
- * on it.
+ * with the keyboard in it, a Tab from its first button. While another is
+ * read, a kiosk is inert too: a click off what is read only steps back, and
+ * never presses a kiosk on the way. Tells the stage once it is drawn, so the
+ * surface shows through the picture only with something on it.
  */
-function SurfaceFrame({ view, stage }: { view: SurfaceView; stage: SurfaceStage }) {
+function SurfaceFrame({ view, stage, reading }: { view: SurfaceView; stage: SurfaceStage; reading: boolean }) {
   const root = useRef<HTMLElement>(null);
   const { id, focused } = view;
   useLayoutEffect(() => {
@@ -98,7 +100,7 @@ function SurfaceFrame({ view, stage }: { view: SurfaceView; stage: SurfaceStage 
     (): SurfaceApi => ({ id, focused, el: view.el, pointOn: (e) => stage.surfacePoint(id, e) }),
     [stage, id, focused, view.el],
   );
-  const active = view.use === "direct" || focused;
+  const active = focused || (view.use === "direct" && !reading);
   return (
     <SurfaceContext.Provider value={api}>
       <section
@@ -188,7 +190,7 @@ function BoardFace({ heading }: { heading: string }) {
   const { tasks, onUse, onTaskMove } = useContext(Faces);
   const surface = useContext(SurfaceContext);
   const root = useRef<HTMLDivElement>(null);
-  // Notes moved here and not yet seen moved in the tasks the page has: shown where they were put meanwhile.
+  // Notes moved here and not yet saved: shown where they were put meanwhile.
   const [moved, setMoved] = useState<Record<string, string>>({});
   const [problem, setProblem] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -209,10 +211,19 @@ function BoardFace({ heading }: { heading: string }) {
     if (!change || !onTaskMove) return;
     setProblem(null);
     setMoved((was) => ({ ...was, [task.id]: change.status }));
+    // Done with, saved or not, unless the note has been moved again since: the page's tasks say where it is now,
+    // as the server keeps it, or where it was if the move failed.
+    const settle = () =>
+      setMoved((was) => {
+        if (was[task.id] !== change.status) return was;
+        const { [task.id]: _, ...rest } = was;
+        return rest;
+      });
     try {
       await onTaskMove(task.id, change);
+      settle();
     } catch (err) {
-      setMoved(({ [task.id]: _, ...rest }) => rest);
+      settle();
       setProblem(`Couldn't move “${task.title}”: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
@@ -263,6 +274,20 @@ function BoardFace({ heading }: { heading: string }) {
           {open} open · {shown.length - open} done
         </span>
       </header>
+      {/* From across a room: how many in each column, big, and a bar for each note (the CSS shows one or the other). */}
+      <div className="sf-board-far" aria-hidden="true">
+        {columns.map((col) => (
+          <div key={col.id} className="sf-far-col" style={{ ["--note" as string]: col.color }}>
+            <span className="sf-far-count">{col.notes.length + col.more}</span>
+            <span className="sf-far-title">{col.title}</span>
+            <span className="sf-far-bars">
+              {col.notes.map((task) => (
+                <span key={task.id} className="sf-far-bar" />
+              ))}
+            </span>
+          </div>
+        ))}
+      </div>
       <div className="sf-board-cols">
         {columns.map((col) => (
           <section
@@ -288,6 +313,7 @@ function BoardFace({ heading }: { heading: string }) {
                   key={task.id}
                   className={`sf-note${drag?.id === task.id && drag.at ? " is-lifted" : ""}`}
                   style={{ ["--tilt" as string]: `${((i % 3) - 1) * 0.6}deg` }}
+                  title={task.title}
                   aria-label={`${task.title}${task.assignee ? `, ${nameOf(task.assignee)}` : ""}. Shift and the arrows move it.`}
                   onPointerDown={(e) => onDown(e, task)}
                   onPointerMove={onMove}
@@ -313,11 +339,8 @@ function BoardFace({ heading }: { heading: string }) {
                 </button>
               ))}
               {!col.notes.length && <span className="sf-col-empty">Nothing here</span>}
-              {col.more > 0 && (
-                <button type="button" className="sf-col-more" onClick={() => onUse?.("tasks", { column: col.id })}>
-                  +{col.more} more
-                </button>
-              )}
+              {/* Only ever seen from where it can't be pressed: brought up, every note shows. */}
+              {col.more > 0 && <span className="sf-col-more">+{col.more} more</span>}
             </div>
           </section>
         ))}
@@ -390,12 +413,18 @@ function usePage(count: number, focused: boolean): { page: number; pick: (page: 
   };
 }
 
+/** Pixels a finger has to move sideways across a screen being read to turn its page. */
+const SWIPE_PX = 36;
+
 /**
  * A screen: outside a home, the dashboard's first few widgets, each drawn by
  * the Board page's own renderer; in a home, what its owner is up to. A page
  * at a time, turning over as the clock says, with a dot for each; read close
- * up, it holds still and the dots and arrows turn it. A task in a widget
- * opens its card; the page's title opens the whole dashboard there.
+ * up, it holds still, and the dots, the arrow buttons by them, the arrow keys
+ * or a swipe turn it. A task in a widget opens its card; the page's title
+ * opens the whole dashboard there. Every widget stays drawn while the screen
+ * is live, the pages not up hidden, so a page turning shows what its widget
+ * had already, rather than starting again from nothing.
  */
 function ScreenFace() {
   const { cards = [], widgets, onUse } = useContext(Faces);
@@ -415,6 +444,18 @@ function ScreenFace() {
     if (!to) return;
     e.preventDefault();
     onUse?.("tasks", "task" in to ? { task: to.task } : undefined);
+  };
+  // A swipe across the page, read close up on a phone (a finger has no arrow keys): from where it went down.
+  const swipe = useRef<[number, number] | null>(null);
+  const onSwipeDown = (e: PointerEvent<HTMLDivElement>) => {
+    swipe.current = surface.focused && count > 1 && e.pointerType !== "mouse" ? [e.clientX, e.clientY] : null;
+  };
+  const onSwipeUp = (e: PointerEvent<HTMLDivElement>) => {
+    const from = swipe.current;
+    swipe.current = null;
+    if (!from) return;
+    const dx = e.clientX - from[0];
+    if (Math.abs(dx) >= SWIPE_PX && Math.abs(dx) > Math.abs(e.clientY - from[1])) pick(page + (dx < 0 ? 1 : -1));
   };
   // Read close up, the arrows turn the page from wherever the keyboard is on the screen: the screen itself, as it
   // is when brought up, its dots or its links.
@@ -445,12 +486,35 @@ function ScreenFace() {
         )}
         {widget?.type !== "clock" && !card?.clock && <span className="sf-screen-clock">{clockTime(now)}</span>}
       </header>
-      {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: it only catches clicks on the links inside, which take keys themselves. */}
-      <div className="sf-screen-body" key={id ?? "none"} onClick={onLink}>
-        {widget ? <WidgetPage widget={widget} /> : card ? <CardPage card={card} /> : null}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: it only catches clicks on the links inside, which take keys themselves, and swipes, which the arrows and dots do too. */}
+      <div
+        className="sf-screen-body"
+        onClick={onLink}
+        onPointerDown={onSwipeDown}
+        onPointerUp={onSwipeUp}
+        onPointerCancel={() => {
+          swipe.current = null;
+        }}
+      >
+        {pages.length
+          ? pages.map((w, i) => (
+              <div key={w.id} className="sf-screen-page" hidden={i !== page}>
+                <WidgetPage widget={w} />
+              </div>
+            ))
+          : card && (
+              <div key={card.id} className="sf-screen-page">
+                <CardPage card={card} />
+              </div>
+            )}
       </div>
       {count > 1 && (
         <footer className="sf-screen-foot">
+          {surface.focused && (
+            <button type="button" className="sf-turn-by" aria-label="Page before" onClick={() => pick(page - 1)}>
+              ‹
+            </button>
+          )}
           <span className="sf-dots" role="tablist" aria-label="Pages">
             {Array.from({ length: count }, (_, i) => (
               <button
@@ -464,6 +528,11 @@ function ScreenFace() {
               />
             ))}
           </span>
+          {surface.focused && (
+            <button type="button" className="sf-turn-by" aria-label="Page after" onClick={() => pick(page + 1)}>
+              ›
+            </button>
+          )}
           {!surface.focused && (
             <span
               className="sf-turn"
@@ -568,7 +637,8 @@ function CalendarFace() {
     left -= wakes.length;
     return [{ ...day, wakes }];
   });
-  const more = (view?.wakes.length ?? 0) - (limit - Math.max(0, left));
+  const more = surface.focused ? 0 : (view?.wakes.length ?? 0) - (limit - Math.max(0, left));
+  const next = view?.wakes[0];
   const done = view ? view.done.slice(0, surface.focused ? undefined : DONE_SHOWN) : [];
   const wake = (w: Wake) => (
     <button
@@ -596,6 +666,25 @@ function CalendarFace() {
           <span className="sf-cal-month">{today.toLocaleDateString([], { month: "long", year: "numeric" })}</span>
         </span>
       </button>
+      {/* From across a room: the next wake, big (the CSS shows this or the list). */}
+      {view && (
+        <div className="sf-cal-far" aria-hidden="true">
+          {next ? (
+            <>
+              <span className="sf-cal-far-when">
+                Next · {days[0]?.label}
+                {view.wakes.length > 1 ? ` · ${view.wakes.length - 1} more` : ""}
+              </span>
+              <span className="sf-cal-far-time">{clock(next.at)}</span>
+              {view.names && <span className="sf-cal-far-who">{nameOf(next.agent)}</span>}
+              <span className="sf-cal-far-what">{next.what}</span>
+            </>
+          ) : (
+            <span className="sf-cal-far-none">Nothing booked</span>
+          )}
+          {view.note && <span className="sf-cal-far-note">{view.note}</span>}
+        </div>
+      )}
       {view && (
         <div className="sf-cal-body">
           <p className="sf-cal-title">{view.title}</p>
@@ -607,11 +696,8 @@ function CalendarFace() {
             </section>
           ))}
           {!days.length && <p className="sf-cal-empty">Nothing booked</p>}
-          {more > 0 && (
-            <button type="button" className="sf-cal-more" onClick={() => onUse?.("calendar")}>
-              +{more} more
-            </button>
-          )}
+          {/* Only ever seen from where it can't be pressed: brought up, every wake shows. */}
+          {more > 0 && <span className="sf-cal-more">+{more} more</span>}
           {done.length > 0 && (
             <section className="sf-cal-dayblock sf-cal-done">
               <h4 className="sf-cal-head">Done today</h4>

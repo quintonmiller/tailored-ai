@@ -13,15 +13,27 @@ import { type FaceData, SurfacePortals, type SurfaceStage } from "./Faces";
 import type { Prop } from "./scene";
 import type { SurfaceView } from "./stage";
 
-vi.mock("../components/widgets", () => ({
-  widgetRenderers: {
-    tasks: () => (
-      <a className="widget-task-title" href="#/tasks/t-9">
-        Pack the bags
-      </a>
-    ),
-  },
-}));
+/** How many times a widget has been drawn from nothing: each time is a "Loading…" and another fetch. */
+const mounted = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("../components/widgets", async () => {
+  const { useEffect } = await import("react");
+  return {
+    widgetRenderers: {
+      tasks: () => (
+        <a className="widget-task-title" href="#/tasks/t-9">
+          Pack the bags
+        </a>
+      ),
+      status: () => {
+        useEffect(() => {
+          mounted.count++;
+        }, []);
+        return <p className="widget-status">Online</p>;
+      },
+    },
+  };
+});
 
 let host: HTMLDivElement;
 let root: Root;
@@ -76,6 +88,17 @@ const press = (el: Element, type: string, init: Record<string, unknown> = {}) =>
   });
 
 describe("SurfacePortals", () => {
+  it("keeps a kiosk inert while another surface is read, so a click off it only steps back", () => {
+    const onUse = vi.fn();
+    const kiosk = view("kiosk", {}, { action: "new-task", label: "New task" });
+    const board = view("board", { focused: true });
+    draw([kiosk, board], { tasks, onUse });
+    const inert = (v: SurfaceView) => v.el.firstElementChild?.hasAttribute("inert");
+    expect(inert(kiosk)).toBe(true);
+    draw([kiosk, { ...board, focused: false }], { tasks, onUse });
+    expect(inert(kiosk)).toBe(false);
+  });
+
   it("draws each live surface into its own element and says when it has", () => {
     const board = view("board");
     draw([board], { tasks });
@@ -121,7 +144,8 @@ describe("the board", () => {
   });
 
   it("moves a note with Shift and an arrow: there at once, and saved as a card saves it", async () => {
-    const onTaskMove = vi.fn(() => Promise.resolve());
+    let saved: () => void = () => {};
+    const onTaskMove = vi.fn(() => new Promise<void>((done) => (saved = done)));
     const board = view("board", { focused: true });
     draw([board], { tasks, onTaskMove });
     const note = board.el.querySelector("[data-column='blocked'] .sf-note") as HTMLElement;
@@ -129,8 +153,33 @@ describe("the board", () => {
       note.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true }));
     });
     expect(onTaskMove).toHaveBeenCalledWith("t-3", { status: "in_progress", blocked_reason: null });
-    const doing = [...board.el.querySelectorAll("[data-column='doing'] .sf-note-title")].map((n) => n.textContent);
-    expect(doing).toContain("Ask about check-out");
+    const doing = () =>
+      [...board.el.querySelectorAll("[data-column='doing'] .sf-note-title")].map((n) => n.textContent);
+    expect(doing()).toContain("Ask about check-out");
+    // Saved: the page has the task as it is now, and the board shows that.
+    const now = tasks.map((t) => (t.id === "t-3" ? { ...t, status: "in_progress" } : t));
+    draw([board], { tasks: now, onTaskMove });
+    await act(async () => saved());
+    expect(doing()).toContain("Ask about check-out");
+  });
+
+  it("shows a saved note where the page's tasks have it, not where it was asked to go", async () => {
+    let saved: () => void = () => {};
+    const onTaskMove = vi.fn(() => new Promise<void>((done) => (saved = done)));
+    const board = view("board", { focused: true });
+    draw([board], { tasks, onTaskMove });
+    const note = board.el.querySelector("[data-column='todo'] .sf-note") as HTMLElement;
+    await act(async () => {
+      note.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true }));
+    });
+    // The server kept it in review, or someone moved it again: the page's tasks say so once it is saved.
+    const now = tasks.map((t) => (t.id === "t-1" ? { ...t, status: "blocked" } : t));
+    draw([board], { tasks: now, onTaskMove });
+    await act(async () => saved());
+    const column = (id: string) =>
+      [...board.el.querySelectorAll(`[data-column='${id}'] .sf-note-title`)].map((n) => n.textContent);
+    expect(column("doing")).not.toContain("Book the table");
+    expect(column("blocked")).toContain("Book the table");
   });
 
   it("puts a note back, and says why, when the move can't be saved", async () => {
@@ -174,6 +223,35 @@ describe("the board", () => {
     expect(onTaskMove).toHaveBeenCalledWith("t-1", { status: "done" });
     expect(onUse).not.toHaveBeenCalled();
     expect(face.querySelector(".sf-note-ghost")).toBeNull();
+  });
+
+  it("has a view from across the room: each column's count, big, and a bar for each note", () => {
+    const board = view("board");
+    draw([board], { tasks });
+    const far = [...board.el.querySelectorAll(".sf-far-col")].map((c) => [
+      c.querySelector(".sf-far-title")?.textContent,
+      c.querySelector(".sf-far-count")?.textContent,
+      c.querySelectorAll(".sf-far-bar").length,
+    ]);
+    expect(far).toEqual([
+      ["To do", "1", 1],
+      ["Doing", "1", 1],
+      ["Blocked", "1", 1],
+      ["Done", "0", 0],
+    ]);
+  });
+
+  it("says how many more there are under a full column as words, not a button nobody can press", () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({ id: `t-${i}`, title: `Task ${i}`, status: "backlog" }));
+    const board = view("board");
+    draw([board], { tasks: many });
+    const more = board.el.querySelector(".sf-col-more");
+    expect(more?.textContent).toBe("+3 more");
+    expect(more?.tagName).toBe("SPAN");
+    // Brought up, every note shows and there is nothing more to say.
+    draw([{ ...board, focused: true }], { tasks: many });
+    expect(board.el.querySelector(".sf-col-more")).toBeNull();
+    expect(board.el.querySelectorAll("[data-column='todo'] .sf-note")).toHaveLength(7);
   });
 
   it("leaves a note where it was when it is dropped back in its own column", async () => {
@@ -221,6 +299,15 @@ describe("the calendar", () => {
     expect(lines[0]).toContain("planner");
     expect(lines[0]).toContain("check ferry times");
     expect(lines.at(-1)).toContain("Draft the plan");
+  });
+
+  it("has a view from across the room: the next wake, whose and what", () => {
+    const cal = view("calendar");
+    draw([cal], { tasks: [], calendar });
+    const far = cal.el.querySelector(".sf-cal-far");
+    expect(far?.querySelector(".sf-cal-far-when")?.textContent).toBe("Next · Today · 1 more");
+    expect(far?.querySelector(".sf-cal-far-who")?.textContent).toBe("planner");
+    expect(far?.querySelector(".sf-cal-far-what")?.textContent).toBe("check ferry times");
   });
 
   it("opens an agent's list from a line about it, and a task's card from what got done", () => {
@@ -277,6 +364,62 @@ describe("the screen", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps every widget drawn while it turns, showing one page at a time", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 19, 9, 0, 1));
+      mounted.count = 0;
+      const widgets = [
+        { id: "health", type: "status", title: "System status" },
+        { id: "uptime", type: "status", title: "Uptime" },
+      ];
+      const screen = view("screen");
+      draw([screen], { tasks: [], widgets });
+      const shown = () => [...screen.el.querySelectorAll(".sf-screen-page")].map((p) => !p.hasAttribute("hidden"));
+      const first = shown();
+      expect(first.filter(Boolean)).toHaveLength(1);
+      act(() => vi.advanceTimersByTime(15_100));
+      expect(shown()).toEqual(first.map((up) => !up));
+      act(() => vi.advanceTimersByTime(15_100));
+      expect(shown()).toEqual(first);
+      // Two widgets, each drawn once however many times the pages turned.
+      expect(mounted.count).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("turns its page by the arrows beside the dots, and by a swipe, while it is read", () => {
+    const cards = [
+      { id: "now", title: "planner, now", big: { text: "working", tone: "ok" as const } },
+      { id: "tasks", title: "planner's tasks", rows: [], empty: "Nothing on its list." },
+    ];
+    const title = (v: SurfaceView) => v.el.querySelector(".sf-screen-title")?.textContent;
+    const screen = view("screen", { focused: true });
+    draw([screen], { tasks: [], cards });
+    const first = title(screen);
+    const [before, after] = screen.el.querySelectorAll(".sf-turn-by");
+    press(after, "click");
+    const second = title(screen);
+    expect(second).not.toBe(first);
+    press(before, "click");
+    expect(title(screen)).toBe(first);
+    // A finger across the page, right to left: the next page.
+    const body = screen.el.querySelector(".sf-screen-body") as HTMLElement;
+    const touch = (type: string, x: number) =>
+      act(() => {
+        const e = new MouseEvent(type, { bubbles: true, clientX: x, clientY: 300 });
+        Object.defineProperty(e, "pointerType", { value: "touch" });
+        body.dispatchEvent(e);
+      });
+    touch("pointerdown", 600);
+    touch("pointerup", 480);
+    expect(title(screen)).toBe(second);
+    // Not read, there are no arrows: the dots and the clock turn it.
+    draw([{ ...screen, focused: false }], { tasks: [], cards });
+    expect(screen.el.querySelectorAll(".sf-turn-by")).toHaveLength(0);
   });
 
   it("in a home, goes through its owner's pages, a dot for each", () => {

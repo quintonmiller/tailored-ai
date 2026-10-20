@@ -18,6 +18,7 @@ import {
   liveSurfaces,
   NEAR_PX,
   onScreenPx,
+  overWalls,
   type Placed,
   type Seen,
   SURFACE_PX,
@@ -135,6 +136,28 @@ describe("focusFraming", () => {
     expect(f.position).toEqual([1, 1.5, -3.75]);
     const side = focusFraming([-4, 1, 0], [1, 0, 0], 2);
     expect(side.position).toEqual([-2, 1, 0]);
+  });
+});
+
+describe("overWalls", () => {
+  // A 60 degree view through a stage 1000 pixels tall, its top 500 pixels over where the camera looks.
+  const view = { fov: 60, stageH: 1000, above: 500 };
+  const half = Math.tan(Math.PI / 6);
+
+  it("says how much of the dark over the room shows above a surface high on a wall", () => {
+    // Two metres out, looking level at 2.4 m: the stage sees up to 2.4 + 2·tan 30° ≈ 3.55 m on the wall.
+    expect(overWalls(2.4, 2, view, 3)).toBeCloseTo(2.4 + 2 * half - 3, 6);
+  });
+
+  it("is nothing when the wall goes on past the top of the stage", () => {
+    expect(overWalls(1.2, 1, view, 3)).toBe(0);
+  });
+
+  it("counts from where the camera looks, not the middle of the stage", () => {
+    // The box read in sits low on the stage: more of the stage is over where the camera looks, so more shows.
+    const low = overWalls(2.4, 2, { ...view, above: 800 }, 3);
+    expect(low).toBeGreaterThan(overWalls(2.4, 2, view, 3));
+    expect(low).toBeCloseTo(2.4 + 2 * half * 1.6 - 3, 6);
   });
 });
 

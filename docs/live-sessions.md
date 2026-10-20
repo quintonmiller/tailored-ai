@@ -996,19 +996,27 @@ place. **Escape**, **F** again, **← Step back** or a click anywhere off it
 puts it down and flies you back to where you were. Escape closes a panel
 open beside it first (a task's card, say), and puts the surface down the
 next time. A kiosk's button is the one thing you press without bringing it
-up first. With the pointer over something you can bring up, its edge lights
-and a label by the pointer says so ("Use the task board · click or F").
+up first, and F never brings one up; while you read something else, the
+kiosks don't take clicks, so a click off what you read only steps back.
+With the pointer over something you can bring up, its edge lights and a
+label by the pointer says so ("Use the task board · click or F"). Reading
+something high on a wall, the wall goes on up past the top of the stage
+rather than leaving the dark over the room showing above it.
 
 A surface is live only while it is big enough on the stage to read: about
 44 pixels tall, and up to eight at once, the biggest first. Further off,
 turned away, or on a wall faded to show someone behind it, it shows a
 picture drawn of it instead, which costs nothing to keep. Seen from across a
-room, a live one shows less and larger (a board's notes lose their names, a
-calendar its "done today"), and everything once you come close. In a photo
-nothing is live: screens are dark and calendars show only the date.
+room, a live one shows less, and larger: a board shows how many tasks each
+column has, in figures you can read from the door, with a bar of the
+column's colour for each note; a calendar shows the next wake, its time big,
+with whose it is and what for. Come close and everything is there. In a
+photo nothing is live: screens are dark and calendars show only the date.
 
 On a phone, reading a surface fills the part of the stage above the chat,
-and the tools over the stage step aside until you step back.
+and the tools over the stage step aside until you step back. Swipe up and
+down to scroll a long column; swipe a screen sideways, or tap the arrows by
+its dots, to turn its page.
 
 ##### How surfaces work, for work on the world
 
@@ -1047,8 +1055,15 @@ page larger. `stage.onSurfaces(views => ...)` hears which surfaces are live
 and `focusSurface(null)` puts it down, and `stage.surfacePoint(id, event)`
 says where a pointer is on one, in its own pixels, for dragging. A surface
 you add belongs to the place on the stage when you add it, and going to
-another place takes it down. Inside a face, `inert` holds until the surface
-is in use, so a click on it brings it up rather than pressing a button.
+another place takes it down. The function `addSurface` returns takes down
+only the surface that call laid: once the same id is laid again, an older
+remover does nothing. The room's furniture is built afresh each time the
+room changes (an agent moving a lamp, say), so a surface anchored to
+something in it goes with the old furniture; lay it again on the new one. An
+anchor at a place in the room (`{ at, elevation, facing }`) stays until you
+take it down or leave. Inside a face, `inert` holds until the surface is in
+use, so a click on it brings it up rather than pressing a button; while one
+surface is read, every other is inert, kiosks included.
 
 Two things bit while this was built. Chrome loses track of what is under the
 pointer in an element that is both turned in 3D and clipped, so a surface's
@@ -1091,8 +1106,8 @@ Every change shows on the board the moment it is saved, without waiting for
 the board's half-minute refresh. **Open on the Tasks page** at the bottom of
 the card is there for anything the card doesn't do.
 
-**Click a column's heading**, or the "+3 more" under a full one, to open the
-**task list** at that column; in a home it starts on the owner's tasks. The
+With the board up, **click a column's heading** to open the **task list** at
+that column; in a home it starts on the owner's tasks. The
 list filters by status (open, to do, doing, blocked, done, archived, all, with
 a count on each) and by whose tasks they are (anyone's, nobody's yet, or one
 agent's), newest first. Click a row for its card, and **← All tasks** on the
@@ -1149,7 +1164,8 @@ widgets made to be clicked and typed into, stay on the Board. Dots in the
 corner say which page is up, and a thin line fills as the next comes. Each
 page is drawn live by the Board page's own widget, in the screen's colours
 and large enough to read across the room. Bring the screen up to read it:
-the page holds still, and the dots or the arrow keys turn it. A task in a
+the page holds still, and the dots, the arrows beside them, the arrow keys
+or a sideways swipe turn it. A task in a
 widget opens its card in the world, not the Tasks page, and the page's
 title opens the whole dashboard in a panel, scrolled to that widget.
 **Open the Board page** at the bottom of the panel is there for changing the

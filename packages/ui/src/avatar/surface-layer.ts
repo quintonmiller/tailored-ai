@@ -77,6 +77,8 @@ export interface SurfaceView {
 
 interface Surface {
   spec: SurfaceSpec;
+  /** Which laying of it this is: a remover given out for an earlier one leaves a later one alone. */
+  laid: object;
   el: HTMLDivElement;
   object: CSS3DObject;
   /** What is drawn into the picture where it is: its face, or a plane of its own. */
@@ -154,15 +156,18 @@ export class SurfaceLayer {
   /**
    * Lay a surface in the room, or lay it again: a surface already there
    * under the same id keeps its element, and so what the page drew in it.
+   * Returns which laying this is, for `remove` to take away only this one.
    */
-  add(spec: SurfaceSpec): void {
+  add(spec: SurfaceSpec): object {
     const px = surfacePixels(spec.size);
+    const laid = {};
     let s = this.all.get(spec.id);
     if (s) {
       this.unhook(s);
       s.spec = spec;
       s.px = px;
       s.stale = false;
+      s.laid = laid;
     } else {
       const el = document.createElement("div");
       el.className = "world-surface";
@@ -173,6 +178,7 @@ export class SurfaceLayer {
       this.scene.add(object);
       s = {
         spec,
+        laid,
         el,
         object,
         mesh: spec.face ?? new THREE.Mesh(),
@@ -199,15 +205,20 @@ export class SurfaceLayer {
     }
     s.mesh.userData.surface = spec.id;
     this.byMesh.set(s.mesh, s);
-    // Live already (a room rebuilt round it): its new face is a hole at once, as the old one was.
-    if (this.live.has(spec.id) && s.ready) this.open(s);
+    // Live already (a room rebuilt round it): its new face is a hole at once, as the old one was, and the page
+    // draws it again for what may have changed on it (a board given a new heading).
+    if (this.live.has(spec.id)) {
+      if (s.ready) this.open(s);
+      this.tell();
+    }
     this.lookedAt = Number.NEGATIVE_INFINITY;
+    return laid;
   }
 
-  /** Take a surface away. */
-  remove(id: string): void {
+  /** Take a surface away; given which laying of it, only while that is still the one there. */
+  remove(id: string, laid?: object): void {
     const s = this.all.get(id);
-    if (!s) return;
+    if (!s || (laid && s.laid !== laid)) return;
     this.unhook(s);
     this.scene.remove(s.object);
     s.el.remove();
@@ -454,6 +465,11 @@ export class SurfaceLayer {
 
   /** Show the HTML through the picture: the plane becomes a hole. */
   private open(s: Surface) {
+    // Brought up while what it hangs on is faded, it wears a see-through copy (`fade.ts`), which is let go here:
+    // the fading leaves a hole alone, and the face goes back to its own picture, not the copy, when it closes.
+    const was = s.mesh.material;
+    if (was !== this.hole && was !== s.own)
+      for (const m of [was].flat()) if (m.userData.opacity !== undefined) m.dispose();
     s.mesh.material = this.hole;
     s.mesh.visible = true;
   }
@@ -466,13 +482,18 @@ export class SurfaceLayer {
     s.object.visible = false;
     s.ready = false;
     s.detail = undefined;
+    delete s.el.dataset.detail;
   }
 
-  /** Let go of a surface's plane: its face goes back to its own picture, a plane of its own goes. */
+  /**
+   * Let go of a surface's plane: a face goes back to its own picture, and
+   * stays where it is, as part of the thing it is on; a plane of its own goes.
+   */
   private unhook(s: Surface) {
     this.byMesh.delete(s.mesh);
-    if (s.own && s.mesh.material === this.hole) s.mesh.material = s.own;
-    else {
+    if (s.own) {
+      if (s.mesh.material === this.hole) s.mesh.material = s.own;
+    } else {
       s.mesh.removeFromParent();
       s.mesh.geometry.dispose();
     }

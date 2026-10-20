@@ -132,6 +132,24 @@ export function focusFraming(center: Vec3, normal: Vec3, distance: number): { po
 }
 
 /**
+ * How far past the top of the walls (`ceiling`, metres up) the stage sees
+ * while a surface is read: on a wall `distance` straight out from the
+ * camera, which looks level at `level` metres up, through a stage `stageH`
+ * pixels tall with a vertical field of view of `fov` degrees, whose top is
+ * `above` pixels over where the camera looks (the middle of the box it reads
+ * in). 0 when the wall reaches the top of the stage.
+ */
+export function overWalls(
+  level: number,
+  distance: number,
+  view: { fov: number; stageH: number; above: number },
+  ceiling: number,
+): number {
+  const perPx = (2 * distance * Math.tan((view.fov * Math.PI) / 360)) / Math.max(1, view.stageH);
+  return Math.max(0, level + view.above * perPx - ceiling);
+}
+
+/**
  * Whether a body standing at `at` is in the way of reading a surface from
  * `distance` in front of it: between the camera and the surface, and no
  * further to one side of the line between them than the surface's half
