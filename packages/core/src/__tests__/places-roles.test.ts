@@ -27,8 +27,8 @@ describe("reading what an agent is for", () => {
     expect(word("healthCoach")).toBe("coach");
     expect(word("designer")).toBe("artist");
     expect(word("verifier")).toBe("reviewer");
-    expect(word("judge-clarity")).toBe("reviewer");
-    expect(word("health-tracker")).toBe("coach");
+    expect(word("contest-judge")).toBe("reviewer");
+    expect(word("healthTracking")).toBe("coach");
   });
 
   it("gives a tie to the more particular role", () => {
@@ -101,9 +101,7 @@ describe("reading what an agent is for", () => {
     expect(
       word("overseer", { description: "Checks the health of the other agents and restarts any that stall." }),
     ).toBe(undefined);
-    expect(word("booking-tracker", { description: "Monitors restaurant bookings and alerts on changes." })).toBe(
-      undefined,
-    );
+    expect(word("tracker", { description: "Monitors restaurant bookings and alerts on changes." })).toBe(undefined);
     expect(word("wiki-keeper", { description: "Keeps the workspace design and UI tidy, and curates the wiki." })).toBe(
       undefined,
     );
