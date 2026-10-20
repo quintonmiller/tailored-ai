@@ -18,6 +18,7 @@ import {
   pinchReach,
   REACH,
   RUN_FACTOR,
+  reachAt,
   travelSpeed,
   WALK_SPEED,
   wheelPixels,
@@ -216,5 +217,17 @@ describe("the walking camera's reach", () => {
     expect(d).toBeGreaterThan(19.9);
     for (let i = 0; i < 60; i++) d = ease(d, 20, 1 / 60, 0.18);
     expect(d).toBe(20);
+  });
+});
+
+describe("reachAt", () => {
+  it("is followDistance the other way round, for any shape of what can be seen", () => {
+    for (const [aspect, tall] of [
+      [1.6, 1],
+      [0.5, 1],
+      [2.4, 0.4],
+    ])
+      for (const reach of [1.4, 4.5, 11])
+        expect(reachAt(followDistance(reach, aspect, 35, tall), aspect, 35, tall)).toBeCloseTo(reach, 6);
   });
 });

@@ -8868,6 +8868,43 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-trail button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; font: inherit; color: var(--text-dim); background: transparent; border: 0; cursor: pointer; }
 .world-trail button:hover, .world-trail button:focus-visible { color: var(--accent); text-decoration: underline; outline: none; }
 .world-trail [aria-current="location"] { color: var(--text); font-weight: 600; }
+/* On a narrow stage (a phone), the tools in one row across the top, under the page's own bar: the way you get around,
+   icons for what is used most and what wants you now, a menu for the rest, and where you are, in what room is left.
+   An icon says what it is under the pointer, or a finger held on it. */
+.talk-stage.fill .talk-tools.compact { top: calc(var(--stage-top, 48px) + 6px); left: 8px; right: 8px; max-width: none; flex-wrap: nowrap; }
+.world-bar { position: relative; display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; box-sizing: border-box; padding: 3px; font-family: var(--font); background: color-mix(in srgb, var(--bg-surface) 84%, transparent); border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); backdrop-filter: blur(8px); }
+.world-icon { width: 17px; height: 17px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.world-icon circle[r="1.4"] { fill: currentColor; stroke: none; }
+.world-bar-btn, .world-bar-switch button { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 34px; height: 30px; padding: 0 8px; box-sizing: border-box; font: 12px var(--font); color: var(--text); background: transparent; border: 1px solid transparent; border-radius: var(--radius); cursor: pointer; touch-action: manipulation; -webkit-touch-callout: none; user-select: none; }
+.world-bar-btn:hover, .world-bar-btn:focus-visible, .world-bar-switch button:hover, .world-bar-switch button:focus-visible { border-color: var(--border); background: var(--bg); outline: none; }
+.world-bar-btn:focus-visible, .world-bar-switch button:focus-visible { border-color: var(--accent); }
+.world-bar-btn[aria-expanded="true"], .world-bar-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.world-bar-btn.with-words { min-width: 0; max-width: 150px; }
+.world-bar-words { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.world-bar-btn.is-near { color: #fff; background: var(--accent); border-color: var(--accent); }
+.world-bar-btn.is-needs { color: var(--doing-waiting); border-color: color-mix(in srgb, var(--doing-waiting) 60%, transparent); background: color-mix(in srgb, var(--doing-waiting) 12%, transparent); }
+.world-bar-count { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px; font: 600 10px/16px var(--font); text-align: center; color: #fff; background: var(--doing-waiting); }
+.world-bar-switch { flex: none; display: flex; gap: 2px; margin: 0; padding: 0 4px 0 0; min-width: 0; border: 0; border-right: 1px solid var(--border); border-radius: 0; }
+.world-bar-switch button { color: var(--text-dim); }
+.world-bar-switch button[aria-pressed="true"] { color: var(--text); background: var(--bg); border-color: var(--border); }
+/* Where you are: the end of the row, as much of its name as fits; it opens the menu, with the way here in it. */
+.world-bar-here { flex: 1 1 auto; min-width: 0; height: 30px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font: 600 12px var(--font); color: var(--text); background: transparent; border: 0; border-radius: var(--radius); cursor: pointer; }
+.world-bar-here:hover, .world-bar-here:focus-visible { color: var(--accent); outline: none; }
+/* An icon's words: under it, by the pointer, or once a finger has been held on it a moment. */
+.world-bar-tip { position: absolute; top: calc(100% + 7px); left: 50%; z-index: 2; transform: translateX(-50%); padding: 3px 8px; font: 11px var(--font); white-space: nowrap; color: var(--text); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); pointer-events: none; opacity: 0; transition: opacity 0.12s; }
+.world-bar > :first-child .world-bar-tip, .world-bar-switch button:first-child .world-bar-tip { left: 0; transform: none; }
+[data-tip="on"] > .world-bar-tip { opacity: 1; }
+@media (hover: hover) { .world-bar-btn:hover > .world-bar-tip, .world-bar-switch button:hover > .world-bar-tip { opacity: 1; transition-delay: 0.35s; } }
+/* The menu: the rest of the tools in words, then the way to where you are. */
+.world-more-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 3; display: flex; flex-direction: column; gap: 2px; width: min(280px, 100%); max-height: 60vh; overflow-y: auto; box-sizing: border-box; padding: 6px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); }
+.world-more-menu > button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; padding: 6px 10px; box-sizing: border-box; font: 13px var(--font); text-align: left; color: var(--text); background: transparent; border: 0; border-radius: var(--radius); cursor: pointer; }
+.world-more-menu > button:hover, .world-more-menu > button:focus-visible { background: var(--bg); outline: none; color: var(--accent); }
+.world-more-menu > button[aria-checked="true"] { color: var(--accent); }
+.world-more-menu > button .world-icon { color: var(--text-dim); }
+.world-more-trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 4px; padding: 8px 10px 4px; font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border); }
+.world-more-trail button { padding: 2px 0; font: inherit; color: var(--text-dim); background: transparent; border: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, var(--text-dim) 50%, transparent); }
+.world-more-trail button:hover, .world-more-trail button:focus-visible { color: var(--accent); outline: none; }
+.world-more-trail [aria-current="location"] { color: var(--text); font-weight: 600; }
 
 /* Where the door under the pointer goes, beside the pointer: over the panels in the world too, as it is under the pointer. */
 .door-tip { position: absolute; z-index: 7; transform: translate(14px, 16px); padding: 4px 9px; font-family: var(--font); font-size: 12px; font-weight: 600; color: #1d1a12; background: #ffd98a; border-radius: var(--radius); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); pointer-events: none; white-space: nowrap; }
@@ -9104,6 +9141,8 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .chat-box-in-world > .chat-voice-error,
 .chat-box-in-world > .attachment-tray { visibility: hidden; }
 @media (max-width: 719px) {
+  /* The session's key is a line of its own over the scene, which a phone's little stage can't spare. */
+  .chat-with-stage > .chat-toolbar .chat-session-label { display: none; }
   .chat-with-stage > .chat-messages,
   .chat-with-stage > .chat-input-bar,
   .chat-with-stage > .chat-voice-error,

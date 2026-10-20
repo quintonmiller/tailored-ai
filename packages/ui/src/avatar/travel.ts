@@ -162,6 +162,12 @@ export function followDistance(reach: number, aspect: number, fov: number, tall 
   return reach / Math.min(tanV, tanV * aspect);
 }
 
+/** The reach that sits the camera `distance` back: `followDistance` the other way round. */
+export function reachAt(distance: number, aspect: number, fov: number, tall = 1): number {
+  const tanV = Math.tan((fov * Math.PI) / 360) * tall;
+  return distance * Math.min(tanV, tanV * aspect);
+}
+
 /** `from` moved toward `to` for a frame `dt` seconds long, closing the gap in about `seconds`; there once near enough. */
 export function ease(from: number, to: number, dt: number, seconds: number): number {
   if (Math.abs(to - from) < 1e-3) return to;

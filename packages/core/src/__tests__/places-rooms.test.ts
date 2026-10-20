@@ -8,6 +8,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DOORWAY,
+  type DoorSlot,
+  doorProblems,
   doorways,
   findPlacement,
   findSpot,
@@ -28,6 +30,7 @@ import {
   homePlace,
   lobby,
   meetingRoom,
+  officeFloor,
   PRESETS,
   ROLE_DRESSINGS,
   seeded,
@@ -275,6 +278,74 @@ describe("every room the world starts with", () => {
       if (window) expect(typeof findPlacement(p, { kind: "plant" }, { near: window.name })).not.toBe("string");
       expect(typeof findPlacement(p, { kind: "armchair" }, {})).not.toBe("string");
       expect(typeof findPlacement(p, { kind: "clock" }, { wall: "back" })).not.toBe("string");
+    }
+  });
+});
+
+describe("the town hall and the office, furnished to be used", () => {
+  /** The way something faces, in degrees, from `from` to `to`, as a facing is kept. */
+  const toward = (from: [number, number], to: [number, number]) =>
+    (Math.atan2(to[0] - from[0], to[1] - from[1]) * 180) / Math.PI;
+  const apart = (a: number, b: number) => Math.abs(((((a - b) % 360) + 540) % 360) - 180);
+
+  it("has a front desk in the town hall with a screen on it, and benches to wait on either side of the way out", () => {
+    const hall = lobby();
+    const desk = hall.props.find((p) => p.name === "the front desk");
+    expect(desk?.kind).toBe("desk");
+    expect(hall.props.find((p) => p.on === desk?.id && p.kind === "monitor")?.shows).toBe("status");
+    // Minded from the side away from the room, looking back over it at the middle.
+    const minded = hall.spots.find((s) => s.item === desk?.id);
+    expect(minded?.activity).toBe("type");
+    expect(apart(minded?.facing ?? 0, toward(minded?.at ?? [0, 0], [0, 0]))).toBeLessThan(30);
+    const benches = hall.props.filter((p) => p.kind === "bench");
+    expect(benches.map((b) => Math.sign(b.at[0])).sort()).toEqual([-1, 1]);
+    // Somewhere to sit on each, and the way in from the square to the kiosks left open between them.
+    for (const b of benches) expect(hall.spots.find((s) => s.item === b.id)?.activity).toBe("sit");
+    expect(benches.every((b) => Math.abs(b.at[0]) - footprintOf(b)[0] / 2 > 1)).toBe(true);
+    expect(unreachable(hall)).toEqual([]);
+  });
+
+  it("gives every office floor a front desk turned to the way in, a couch to wait on, and a notice board", () => {
+    const floors: [number, number, DoorSlot[]][] = [
+      [
+        12,
+        12,
+        [
+          { wall: "back", along: -3.85 },
+          { wall: "back", along: -1.95 },
+          { wall: "back", along: -0.05 },
+          { wall: "left", along: -3.85 },
+        ],
+      ],
+      [12, 12, [{ wall: "back", along: -3 }]],
+      [
+        14,
+        13,
+        [-5.6, -3.7, -1.8, 0.1, 2]
+          .map((along) => ({ wall: "back" as const, along }))
+          .concat([-4.5, -2.6, -0.7, 1.2].map((along) => ({ wall: "left" as const, along }))),
+      ],
+    ];
+    for (const [width, depth, doors] of floors) {
+      const floor = officeFloor("the ground floor", width, depth, doors);
+      const name = `${width}x${depth}, ${doors.length} doors`;
+      expect(placeProblems(floor), name).toEqual([]);
+      expect(doorProblems(floor, doors), name).toEqual([]);
+      expect(
+        unreachable(floor).map((s) => s.place),
+        name,
+      ).toEqual([]);
+      const desk = floor.props.find((p) => p.name === "the front desk");
+      const minded = floor.spots.find((s) => s.item === desk?.id);
+      // Whoever minds it looks over it to the way in, at the front on the left.
+      expect(apart(minded?.facing ?? 0, toward(minded?.at ?? [0, 0], [-width / 2 + 2, depth / 2])), name).toBeLessThan(
+        30,
+      );
+      expect(
+        floor.props.some((p) => p.kind === "couch"),
+        name,
+      ).toBe(true);
+      expect(floor.props.find((p) => p.id === "notices")?.kind, name).toBe("feed");
     }
   });
 });

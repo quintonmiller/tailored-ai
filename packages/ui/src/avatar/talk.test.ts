@@ -61,6 +61,28 @@ describe("standing with someone", () => {
     expect(Math.sign(taken[1][0])).toBe(-Math.sign(taken[2][0]));
   });
 
+  it("comes to stand beside you as the camera sees you, never behind you, the side it comes from first", () => {
+    const you: [number, number] = [0, 0];
+    // The camera south of you, looking north; the agent coming from the north, behind you.
+    const eye: [number, number] = [0, 6];
+    const plain = standBy(room, [], you, { from: [0, -3] });
+    // Without the camera to go by, it stands on the side it came from: right behind you, hidden by you.
+    expect(plain.at[1]).toBeLessThan(-0.9);
+    const { at, facing } = standBy(room, [], you, { from: [0, -3], eye });
+    expect(dist(at, you)).toBeCloseTo(STAND_OFF, 2);
+    // Beside you on the screen, a little further from the camera than you are: both in the picture, turned to it.
+    expect(Math.abs(at[0])).toBeGreaterThan(0.8);
+    expect(at[1]).toBeLessThan(0);
+    expect(at[1]).toBeGreaterThan(-0.5);
+    expect(facing).toBeCloseTo(toward(at, you), 5);
+    // Coming from the east, it stands on your east side; with that side blocked, on the other.
+    expect(standBy(room, [], you, { from: [3, -1], eye }).at[0]).toBeGreaterThan(0.8);
+    const shelf = { minX: 0.4, maxX: 1.6, minZ: -1.2, maxZ: 0.6 };
+    const other = standBy(room, [shelf], you, { from: [3, -1], eye });
+    expect(other.at[0]).toBeLessThan(-0.8);
+    expect(standsClear(room, [shelf], other.at)).toBe(true);
+  });
+
   it("finds somewhere even when nowhere is clear", () => {
     const host: [number, number] = [0, 0];
     const everything = { minX: -4, maxX: 4, minZ: -3, maxZ: 3 };

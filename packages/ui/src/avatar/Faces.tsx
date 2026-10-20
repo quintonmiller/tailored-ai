@@ -707,7 +707,7 @@ function ScreenFace({ pin }: { pin?: string }) {
         {pages.length
           ? pages.map((w, i) => (
               <div key={w.id} className="sf-screen-page" hidden={i !== page}>
-                <WidgetPage widget={w} />
+                <WidgetPage widget={w} seconds={surface.focused && i === page} />
               </div>
             ))
           : card && (
@@ -763,12 +763,20 @@ export function pinnedWidget(widgets: DashboardWidgetSpec[], pin: string): Dashb
   );
 }
 
-/** A dashboard widget on a screen, by the Board page's own renderer. */
-function WidgetPage({ widget }: { widget: DashboardWidgetSpec }) {
+/**
+ * A dashboard widget on a screen, by the Board page's own renderer. A clock
+ * on it keeps the minute, and the seconds only on the page up while the
+ * screen is brought up close (`seconds`): each tick draws the screen again.
+ */
+function WidgetPage({ widget, seconds }: { widget: DashboardWidgetSpec; seconds: boolean }) {
   const Renderer = widgetRenderers[widget.type];
   return (
     <div className="sf-widget" data-widget-type={widget.type}>
-      {Renderer ? <Renderer widget={widget} /> : <p className="widget-empty">This one is on the Board.</p>}
+      {Renderer ? (
+        <Renderer widget={widget} seconds={seconds} />
+      ) : (
+        <p className="widget-empty">This one is on the Board.</p>
+      )}
     </div>
   );
 }

@@ -81,6 +81,7 @@ import { NewTask } from "./NewTask";
 import { type EditablePlace, useRoomEditor } from "./RoomEditor";
 import { useVoice } from "./voice";
 import { type Said, WorldAgent } from "./WorldAgent";
+import { type BarItem, WorldBar } from "./WorldBar";
 import { WorldCalendar } from "./WorldCalendar";
 import { WorldDashboard } from "./WorldDashboard";
 import { comeOrGone, type MapPlace, useWorldMap, WorldMap } from "./WorldMap";
@@ -1398,6 +1399,8 @@ export function useChatStage({
   );
   const folded = useMemo(() => foldedSteps(trail, wide ? TRAIL_CHARS.wide : TRAIL_CHARS.narrow), [trail, wide]);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
+  // The menu of the row of tools over a phone's stage is open: the chat steps aside for it, as for a card.
+  const [barMenu, setBarMenu] = useState(false);
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
   const board = useBoardTasks(showStage);
   const allTasks = board.tasks;
@@ -2139,6 +2142,114 @@ export function useChatStage({
       )}
     </>
   );
+  // On a narrow stage (a phone), the same tools in one row of icons: the map, the tasks, and whatever wants you now in
+  // it, the rest in its menu with the way to where you are, so the scene keeps most of the little stage there is.
+  const barItems: BarItem[] = [
+    ...(needs.length > 0
+      ? [
+          {
+            id: "needs",
+            label: `Needs you · ${needs.length}`,
+            title: "What agents are waiting on you for",
+            icon: "needs",
+            rank: 4,
+            tone: "needs" as const,
+            count: needs.length,
+            expanded: panel?.kind === "needs",
+            onClick: () => setPanel(panel?.kind === "needs" ? null : { kind: "needs" }),
+          },
+        ]
+      : []),
+    {
+      id: "map",
+      label: "Map",
+      title: "Every place there is (M)",
+      icon: "map",
+      rank: 3,
+      expanded: mapOpen,
+      onClick: () => setPanel(mapOpen ? null : { kind: "map" }),
+    },
+    {
+      id: "tasks",
+      label: "Tasks",
+      title: "Every task, without leaving the world",
+      icon: "tasks",
+      rank: 2,
+      expanded: panel?.kind === "tasks",
+      onClick: () => {
+        if (panel?.kind === "tasks") return setPanel(null);
+        setListView({ filter: "open", who: undefined });
+        setPanel({ kind: "tasks" });
+      },
+    },
+    ...(visiting && near && near !== talking && onChatWith
+      ? [
+          {
+            id: "near",
+            label: `Talk to ${near}`,
+            icon: "talk",
+            rank: 5,
+            words: nameOf(near),
+            tone: "near" as const,
+            onClick: () => chatWith(near),
+          },
+        ]
+      : []),
+    ...(changeable
+      ? [
+          {
+            id: "place",
+            label: "This place",
+            title: "What this place is for, who can change it, and what they changed lately",
+            icon: "info",
+            expanded: panel?.kind === "place",
+            onClick: () => setPanel(panel?.kind === "place" ? null : { kind: "place" }),
+          },
+        ]
+      : []),
+    ...(editable
+      ? [
+          {
+            id: "edit",
+            label: "Edit room",
+            title: "Move, turn, add and take away things in this room yourself",
+            icon: "edit",
+            onClick: () => {
+              setPanel(null);
+              editor.start();
+            },
+          },
+        ]
+      : []),
+    ...(visiting
+      ? [{ id: "back", label: `Back to ${nameOf(shown)}`, icon: "back", onClick: () => setVisiting(null) }]
+      : []),
+    ...(visiting
+      ? [
+          {
+            id: "voices",
+            label: voicesOn ? "Voices on" : "Voices off",
+            title: "Hear what agents say when you're near them",
+            icon: voicesOn ? "voices" : "quiet",
+            pressed: voicesOn,
+            onClick: () => {
+              setVoicesOn(!voicesOn);
+              remember(VOICES_KEY, !voicesOn);
+            },
+          },
+        ]
+      : []),
+  ];
+  const bar = (lead: ReactNode) => (
+    <WorldBar
+      items={barItems}
+      lead={lead}
+      trail={trail}
+      here={placeId}
+      onStep={(step) => go(step.id, step.from)}
+      onOpen={setBarMenu}
+    />
+  );
   let overlay: ReactNode;
   if (panel?.kind === "map")
     overlay = (
@@ -2443,6 +2554,7 @@ export function useChatStage({
         visitor={!!showing.visiting}
         onNear={setNear}
         tools={editor.editing ? editor.tools : tools}
+        {...(!wide ? { bar } : {})}
         tasks={boardTasks}
         {...(screenCards ? { screen: screenCards } : {})}
         // Outside a home, a screen drawn live goes through the dashboard's widgets, by the Board page's renderers; one
@@ -2502,10 +2614,13 @@ export function useChatStage({
     activities: shownActivities,
     /** The name of the place on screen, when it has one. */
     placeName: room.name,
-    /** Something is open over the stage, or the room is being rearranged: on a phone it needs the chat's screen. */
-    worldPanel: !!panel || editor.editing,
+    /**
+     * Something is open over the stage (the menu of the row of tools too), or the room is being rearranged: on a
+     * phone it needs the chat's screen.
+     */
+    worldPanel: !!panel || editor.editing || barMenu,
     /** The chat is out of sight for what is open: on a phone, anything open is a sheet where the chat would be. */
-    chatCovered: showStage && !wide && (!!panel || editor.editing),
+    chatCovered: showStage && !wide && (!!panel || editor.editing || barMenu),
     /**
      * Your conversation is shown in the world, beside whoever you talk to, and
      * how: the page draws it into `TalkSlot`. On the phone when they are

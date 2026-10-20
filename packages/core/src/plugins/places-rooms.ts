@@ -1001,6 +1001,26 @@ function island(kind: Island, [x, z]: [number, number], look: Look, key: string)
 }
 
 /**
+ * A front desk at `at`, its working side turned to `facing`, where whoever
+ * minds it stands at its screen, looking back over it at whoever comes in: a
+ * screen on it of who is doing what, a plant, and a stool pulled out beside.
+ */
+function frontDesk(at: [number, number], facing: number, look: Look, key: string): Placed[] {
+  const f = (facing * Math.PI) / 180;
+  // A point `u` along the desk and `v` toward its working side, as `offset` has it.
+  const by = (u: number, v: number): [number, number] => [
+    round(at[0] + u * Math.cos(f) + v * Math.sin(f)),
+    round(at[1] - u * Math.sin(f) + v * Math.cos(f)),
+  ];
+  return [
+    { key: `${key}:desk`, kind: "desk", name: "the front desk", at, facing, color: look.wood },
+    { kind: "monitor", name: "the front desk screen", on: `${key}:desk`, at, facing, shows: "status" },
+    { kind: "small_plant", name: "the front desk plant", on: `${key}:desk`, at, facing },
+    { kind: "stool", name: "the front desk stool", at: by(0.95, 0.55), facing: facing + 160 },
+  ];
+}
+
+/**
  * Where a home's two islands stand, as fractions of its width and depth from
  * the middle, the seed picking one: side by side in front, one out to the
  * right and one in front, one in the front middle and one at the right. All
@@ -1654,8 +1674,9 @@ export const LOBBY_DOORS: DoorSlot[] = [{ wall: "front", along: 0 }];
  * The town hall's lobby, and the biggest room there is, its way out in the
  * middle of its open front: kiosks to make a new agent, a new task or a new
  * room, a big screen over them showing the dashboard, a board of every open
- * task, a calendar of everyone's next wakes, a lounge by the windows, and
- * tables to sit at, either side of the way out.
+ * task, a calendar of everyone's next wakes, a lounge by the windows, tables
+ * to sit at, a front desk on the open side, and benches either side of the
+ * way out.
  */
 export function lobby(): Place {
   const width = 14;
@@ -1757,6 +1778,13 @@ export function lobby(): Place {
     // Either side of the way out, clear of it, turned to the middle of the room.
     { id: "feed", name: "the activity stand", kind: "display", shows: "feed", at: [-4.4, 3.9], facing: 25 },
     { id: "chart", name: "the chart stand", kind: "display", shows: "chart", at: [5.6, 3.9], facing: -25 },
+    // A front desk on the open side, between the reading corner and the tables, minded from the side away from the
+    // room, with a plant at its end; and benches to wait on either side of the way out, facing in. The corners stay
+    // clear for doors an agent puts in.
+    ...frontDesk([5.9, 0.75], 90, look, "front"),
+    { kind: "plant", name: "the plant by the front desk", at: [5.9, -0.45], facing: 0 },
+    { kind: "bench", name: "the bench by the way out", at: [-2.75, 4.45], facing: 180, color: look.wood },
+    { kind: "bench", name: "the other bench by the way out", at: [2.6, 4.45], facing: 180, color: look.wood },
   ];
   const built = build({
     name: "the lobby",
@@ -1790,8 +1818,9 @@ export function lobby(): Place {
  * and standing along its open right side past what the walls hold, with the
  * way in at the front on the left and the stairs on at the front on the right.
  * In the middle, kept as far from every side as a door's approach: a directory
- * by the way in with a stand of every room's latest lines beside it, a
- * lounge, a table to work at, and plants.
+ * by the way in with a stand of every room's latest lines beside it, a front
+ * desk minded toward the way in, a couch to wait on, a lounge, a table to
+ * work at, and plants; on the back wall past the doors, a notice board.
  */
 export function officeFloor(name: string, width: number, depth: number, doors: DoorSlot[]): Place {
   const look: Look = {
@@ -1819,7 +1848,44 @@ export function officeFloor(name: string, width: number, depth: number, doors: D
     ...island("worktable", [round((inner.left + inner.right) / 2 + 1), round((inner.back + front) / 2)], look, "work"),
     ...island("reading", [round(inner.right - 1), round(inner.back + 1)], look, "reading"),
   ];
+  // The way in, at the front on the left, which the front desk is minded toward.
+  const wayIn: [number, number] = [round(-width / 2 + 2), round(depth / 2)];
+  const desk: [number, number] = [round(inner.right - 0.4), round(front - 0.5)];
+  const towardIn = (Math.atan2(wayIn[0] - desk[0], wayIn[1] - desk[1]) * 180) / Math.PI;
   const after: Placed[] = [
+    // Minded from the side away from the way in, looking over the desk at whoever comes in.
+    ...frontDesk(desk, round(towardIn + 180), look, "front"),
+    // Somewhere to wait, between the directory and the lounge, turned to the middle of the floor.
+    {
+      kind: "couch",
+      name: "the waiting couch",
+      at: [round(inner.left + 0.5), round((inner.back + front) / 2 + 1)],
+      facing: 90,
+      color: look.fabric,
+    },
+    {
+      key: "wait:table",
+      kind: "coffee_table",
+      at: [round(inner.left + 1.55), round((inner.back + front) / 2 + 1)],
+      facing: 90,
+      color: look.wood,
+    },
+    { kind: "books", name: "the magazines", on: "wait:table", at: [0, 0], facing: 0 },
+    // The notices: what got done lately, on the back wall past the doors, with a plant beside it.
+    {
+      id: "notices",
+      name: "the notice board",
+      kind: "feed",
+      at: [0, 0],
+      facing: 0,
+      wall: { side: "back", along: round(width / 2 - 2.4) },
+    },
+    {
+      kind: "tall_plant",
+      name: "the plant by the notices",
+      at: [round(width / 2 - 3.5), round(-depth / 2 + 0.45)],
+      facing: 0,
+    },
     { kind: "tall_plant", at: [round(-width / 2 + 0.45), round(-depth / 2 + 0.45)], facing: 0 },
     { kind: "plant", at: [round(width / 2 - 0.5), round(-depth / 2 + 0.5)], facing: 0 },
     // In the corner beside the way in, the latest lines from every room, for whoever comes in: a stand, turned to the

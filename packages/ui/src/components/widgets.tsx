@@ -16,6 +16,12 @@ import { asArray, getPath } from "../lib/widget-data";
 
 export interface WidgetProps {
   widget: DashboardWidgetSpec;
+  /**
+   * Whether a clock shows the seconds, ticking each one: on the Board it
+   * does. On a wall in the 3D world it does only brought up close, since each
+   * tick draws the surface it is on again, and that costs the world a frame.
+   */
+  seconds?: boolean;
 }
 export type WidgetRenderer = (props: WidgetProps) => ReactNode;
 
@@ -493,16 +499,22 @@ function CollectionsWidget({ widget }: WidgetProps) {
   );
 }
 
-/** Live clock: current time (updating every second) + today's date. No endpoint needed. */
-function ClockWidget() {
+/** Live clock: current time (updating every second, or every minute without them) + today's date. No endpoint needed. */
+function ClockWidget({ seconds = true }: WidgetProps) {
   const [now, setNow] = useState(new Date());
 
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000);
+    setNow(new Date());
+    // To the minute, it looks again a few times a minute, so it turns over within moments of the minute.
+    const id = setInterval(() => setNow(new Date()), seconds ? 1000 : 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [seconds]);
 
-  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const timeStr = now.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(seconds ? { second: "2-digit" } : {}),
+  });
   const dateStr = now.toLocaleDateString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
   return (
