@@ -20,9 +20,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { DashboardWidgetSpec } from "../api";
+import { InterfaceComponents } from "../components/InterfaceComponents";
 import { taskLink } from "../components/WorldDashboard";
 import { widgetRenderers } from "../components/widgets";
 import { useAgentColor } from "../lib/body-colors";
+import type { ComponentSpec } from "../lib/content.js";
 import { nameOf } from "../lib/conversations";
 import { clockTime } from "../lib/did";
 import { GROUPS, type Group } from "../lib/tasks";
@@ -105,14 +107,33 @@ function SurfaceFrame({ view, stage, reading }: { view: SurfaceView; stage: Surf
     <SurfaceContext.Provider value={api}>
       <section
         ref={root}
-        className={`sf sf-${view.prop?.kind ?? "own"}`}
+        className={`sf sf-${view.component ? "face" : (view.prop?.kind ?? "own")}`}
         inert={!active}
         tabIndex={-1}
         aria-label={view.label}
       >
-        {view.render ? view.render() : view.prop ? <PropFace prop={view.prop} /> : null}
+        {view.render ? (
+          view.render()
+        ) : view.component ? (
+          <ModelFace spec={view.component} />
+        ) : view.prop ? (
+          <PropFace prop={view.prop} />
+        ) : null}
       </section>
     </SurfaceContext.Provider>
+  );
+}
+
+/**
+ * A face on a model an agent made: the agent interface it shows, drawn by the
+ * chat's own renderer, so a tick or a button does here exactly what it does
+ * under a reply, writing the record as you, with the interface's own checks.
+ */
+function ModelFace({ spec }: { spec: ComponentSpec }) {
+  return (
+    <div className="sf-face-page">
+      <InterfaceComponents specs={[spec]} />
+    </div>
   );
 }
 

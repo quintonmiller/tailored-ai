@@ -503,6 +503,28 @@ describe("what a change did to a room's things", () => {
     expect(roomChanges(before, before)).toEqual({ fresh: new Set(), moved: new Map() });
   });
 
+  it("grows in again a model made over since, wherever it stands", () => {
+    const shelf = {
+      id: "shelf",
+      name: "the bookcase",
+      kind: "model" as const,
+      model: "planner:bookcase",
+      at: [0, 0] as [number, number],
+      facing: 0,
+    };
+    const def = {
+      name: "bookcase",
+      owner: "planner",
+      mount: "floor" as const,
+      size: [1, 2, 0.3] as [number, number, number],
+      parts: [],
+    };
+    const before: Room = { ...DEFAULT_ROOM, props: [shelf], models: { "planner:bookcase": def } };
+    const after: Room = { ...before, models: { "planner:bookcase": { ...def, size: [1, 2.2, 0.3] } } };
+    expect([...roomChanges(before, after).fresh]).toEqual(["shelf"]);
+    expect(roomChanges(before, { ...before }).fresh.size).toBe(0);
+  });
+
   it("shows nothing changing on going to another place, or on the first room after the stand-in", () => {
     // Two homes drawn from the same kit: a plant and a lamp in each, in different spots.
     const home = (x: number): Room => ({

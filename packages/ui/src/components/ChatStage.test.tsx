@@ -13,12 +13,15 @@ import type { StageInput } from "../avatar/stage";
 import {
   type ChatStageOptions,
   companyOf,
+  drawsModel,
   lastExchange,
   newest,
+  roomOf,
   TalkButton,
   tasksFor,
   useChatStage,
   wakesFor,
+  withModels,
 } from "./ChatStage";
 
 const stage = vi.hoisted(() => ({
@@ -2506,6 +2509,44 @@ describe("talking on the chat page", () => {
     });
     await settle();
     expect(posts.some((p) => p.url.endsWith("/turn"))).toBe(true);
+  });
+});
+
+describe("models agents made, in the room the page draws", () => {
+  const def = {
+    name: "bookcase",
+    owner: "planner",
+    mount: "floor" as const,
+    size: [0.9, 1.8, 0.34] as [number, number, number],
+    parts: [],
+  };
+  const item = (id: string, model?: string) => ({
+    id,
+    name: id,
+    kind: "model" as const,
+    at: [0, 0] as [number, number],
+    facing: 0,
+    ...(model ? { model } : {}),
+  });
+  const place = { width: 4, depth: 4, height: 2.5, props: [item("model", "planner:bookcase")], spots: [], start: "" };
+
+  it("draws a place with the models it was sent, and none when it was sent none", () => {
+    expect(roomOf({ place, models: { "planner:bookcase": def } }).models).toEqual({ "planner:bookcase": def });
+    expect(roomOf({ place, models: {} })).not.toHaveProperty("models");
+  });
+
+  it("keeps the models it has as the place's record changes, and asks again for one it hasn't been sent", () => {
+    const shown = roomOf({ place, models: { "planner:bookcase": def } });
+    const moved = { ...place, props: [{ ...item("model", "planner:bookcase"), at: [1, 1] as [number, number] }] };
+    expect(withModels(moved, shown)).toEqual({ room: { ...moved, models: shown.models }, missing: false });
+    const more = { ...place, props: [...place.props, item("model-2", "writer:lamp_post")] };
+    expect(withModels(more, shown).missing).toBe(true);
+  });
+
+  it("asks again for a model that changed only when the room draws it", () => {
+    const shown = roomOf({ place, models: { "planner:bookcase": def } });
+    expect(drawsModel(shown, "planner:bookcase")).toBe(true);
+    expect(drawsModel(shown, "writer:lamp_post")).toBe(false);
   });
 });
 

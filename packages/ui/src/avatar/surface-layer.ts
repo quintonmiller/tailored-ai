@@ -17,6 +17,7 @@
 import type { ReactNode } from "react";
 import * as THREE from "three";
 import { CSS3DObject, CSS3DRenderer } from "three/examples/jsm/renderers/CSS3DRenderer.js";
+import type { ComponentSpec } from "../lib/content.js";
 import type { Prop } from "./scene";
 import {
   type Detail,
@@ -52,6 +53,8 @@ export interface SurfaceSpec {
   render?: () => ReactNode;
   /** The prop whose face it is. */
   prop?: Prop;
+  /** An agent interface it shows: a face on a model an agent made (`models.ts`). */
+  component?: ComponentSpec;
   /**
    * The mesh it covers, which shows a picture of it while it isn't live (a
    * board drawn on a canvas). Without one, it gets a plane of its own, there
@@ -73,6 +76,7 @@ export interface SurfaceView {
   focused: boolean;
   render?: () => ReactNode;
   prop?: Prop;
+  component?: ComponentSpec;
 }
 
 interface Surface {
@@ -377,6 +381,7 @@ export class SurfaceLayer {
           focused: this.focusedId === id,
           ...(spec.render ? { render: spec.render } : {}),
           ...(spec.prop ? { prop: spec.prop } : {}),
+          ...(spec.component ? { component: spec.component } : {}),
         },
       ];
     });

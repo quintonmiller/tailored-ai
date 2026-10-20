@@ -42,6 +42,8 @@ export interface PlaceItem {
   label?: string;
   /** What clicking it does on the page, for things made to be used: a kiosk, a task board. */
   action?: PlaceAction;
+  /** A model an agent made (`places-models.ts`), by its record's id: what a thing of a model kind is drawn as. */
+  model?: string;
 }
 
 /** What a thing in a place does when someone clicks it on the page. */
@@ -143,6 +145,8 @@ export interface Kind {
   shaped?: boolean;
   /** Round, so turning it takes no more room: pots, lamps, balls. */
   round?: boolean;
+  /** A model an agent made: added by the model's name, never by this kind's (see `places-models.ts`). */
+  model?: boolean;
 }
 
 const sit = (offset: number, seatOffset: number, height: number) => ({
@@ -305,6 +309,19 @@ export const KINDS: Record<string, Kind> = {
   },
   ledger: { noun: "ledger", mount: "on", footprint: [0.34, 0.25], height: 0.05 },
   chessboard: { noun: "chessboard", mount: "on", footprint: [0.4, 0.4], height: 0.09 },
+  // Models agents make from parts, one kind for each place one goes (`MOUNT_KIND` in `places-models.ts`). Sized by
+  // `size`, the box the model fills, so the room lays one out the way it lays out a block.
+  model: { noun: "model", mount: "floor", footprint: [0.5, 0.5], height: 0.5, shaped: true, model: true },
+  wall_model: {
+    noun: "model",
+    mount: "wall",
+    footprint: [0.5, 0.05],
+    height: 0.5,
+    elevation: 1.2,
+    shaped: true,
+    model: true,
+  },
+  small_model: { noun: "model", mount: "on", footprint: [0.2, 0.2], height: 0.2, shaped: true, model: true },
 };
 
 export const LIMITS = {
@@ -1635,6 +1652,7 @@ export function whereWords(place: Place, item: PlaceItem): string {
 }
 
 function sizeWords(item: PlaceItem): string {
+  if (item.model && item.size) return ` ${item.model.slice(item.model.indexOf(":") + 1)}, ${item.size.join(" × ")} m`;
   if (KINDS[item.kind]?.shaped && item.size) return `, ${item.size.join(" × ")} m`;
   return item.scale && item.scale !== 1 ? `, ${item.scale}× size` : "";
 }
@@ -1673,7 +1691,7 @@ export function describe(place: Place): string {
 
 function kindsBy(test: (k: Kind) => boolean): string {
   return Object.entries(KINDS)
-    .filter(([, k]) => test(k))
+    .filter(([, k]) => test(k) && !k.model)
     .map(([id]) => id)
     .join(", ");
 }
@@ -1747,6 +1765,7 @@ export const PLACE_SCHEMA = {
           size: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
           label: { type: "string", maxLength: 40 },
           action: { type: "string", enum: PLACE_ACTIONS },
+          model: { type: "string", maxLength: 128 },
         },
       },
     },

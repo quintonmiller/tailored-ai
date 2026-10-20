@@ -17,6 +17,7 @@
  */
 
 import { OUTDOOR_FAR, type TownPlan } from "./town";
+import type { ModelDef } from "./models";
 
 export type PropKind =
   | "rug"
@@ -72,7 +73,11 @@ export type PropKind =
   | "mic_stand"
   | "server_rack"
   | "ledger"
-  | "chessboard";
+  | "chessboard"
+  // Models agents make from parts, by where they go (`models.ts`).
+  | "model"
+  | "wall_model"
+  | "small_model";
 
 export interface Prop {
   id: string;
@@ -101,6 +106,8 @@ export interface Prop {
    * the tasks. A screen and a calendar open what they show without being told.
    */
   action?: string;
+  /** For a model an agent made, its record's id: `room.models` has what it is made of. */
+  model?: string;
 }
 
 /** What the avatar does once it gets to a spot. */
@@ -152,6 +159,11 @@ export interface Room {
   changes?: RoomChange[];
   /** The town outdoors, when this is it: its buildings, roads, water and trees, which the stage builds instead of walls. */
   town?: TownPlan;
+  /**
+   * The models agents made that things here are, by record id, as the server sends them with the place. Not part
+   * of the place's record: a write leaves it out (`recordOf`).
+   */
+  models?: Record<string, ModelDef>;
 }
 
 /** One change to a room: "planner added the bookshelf", and when. */
@@ -172,6 +184,9 @@ export interface RoomChange {
  */
 export function roomChanges(before: Room, after: Room): { fresh: Set<string>; moved: Map<string, Prop> } {
   const was = new Map(before.props.map((p) => [p.id, p]));
+  // A model made over since grows in again, wherever it stands.
+  const madeOver = (id: string | undefined) =>
+    !!id && JSON.stringify(before.models?.[id]) !== JSON.stringify(after.models?.[id]);
   const fresh = new Set<string>();
   const moved = new Map<string, Prop>();
   for (const prop of after.props) {
@@ -182,7 +197,9 @@ export function roomChanges(before: Room, after: Room): { fresh: Set<string>; mo
       old.color !== prop.color ||
       old.scale !== prop.scale ||
       old.label !== prop.label ||
-      String(old.size) !== String(prop.size)
+      String(old.size) !== String(prop.size) ||
+      old.model !== prop.model ||
+      madeOver(prop.model)
     )
       fresh.add(prop.id);
     else if (

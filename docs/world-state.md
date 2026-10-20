@@ -103,6 +103,24 @@ active?" from the block with no tool call, before and after the records
 changed mid-conversation, where the same agent unpinned queried every time.
 Both answered correctly.
 
+## Types that come with the 3D world
+
+With an avatar configured, the built-in places plugin declares the types the
+[3D world](./live-sessions.md#an-avatar) keeps: `place` (each room),
+`whereabouts`, `wear`, `visit` and `talk`, and for the things agents make
+there, these. A type of the same name in your config wins, as with any type a
+plugin declares.
+
+| type | scope | holds |
+|---|---|---|
+| `model` | agent | a model an agent made from parts, `<agent>:<name>`: `name`, `owner`, `mount` (`floor`, `wall` or `on`), `size`, `parts` (each a `shape`, `size`, `at`, `turn?`, `color`, `finish?` and `face?`), `about?`, and `from`, the ready-made model it was copied from. Written by the `build` tool, and by `place` when it makes a ready-made model an agent's own; a face carries the id of the interface component that shows it. See [Things agents make](./live-sessions.md#things-agents-make) |
+| `todo` | agent | `title`, `done?`, `due?`: what a to-do board shows and you tick |
+| `habit` | agent | `name`, `today?`, `streak?`: what a habit tracker shows and you tick |
+| `note` | agent | `title`, `note?`, `seen?`: what a notes card shows; **Got it** sets `seen` |
+
+Ticks and buttons on a model's face write these as you, so an agent that wants
+to know subscribes to their changes or pins them to its prompt.
+
 ## Scopes
 
 Each record has one scope: `global`, `agent:<name>`, `room:<ref>` or

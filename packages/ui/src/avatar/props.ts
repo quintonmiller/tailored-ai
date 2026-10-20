@@ -7,6 +7,7 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { fitPlate } from "./doors";
+import { forgetModels } from "./models";
 import type { PropKind, Room, RoomDoor } from "./scene";
 
 const materials = new Map<string, THREE.MeshStandardMaterial>();
@@ -971,6 +972,11 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       g.add(plate);
       return { group: g };
     }
+    case "model":
+    case "wall_model":
+    case "small_model":
+      // A model an agent made is drawn from its parts (`buildModel` in `models.ts`), which the stage asks for.
+      return { group: g };
   }
 }
 
@@ -1284,4 +1290,6 @@ export function disposeTree(root: THREE.Object3D) {
   });
   materials.clear();
   glass = undefined;
+  // Models agents made share their materials the same way.
+  forgetModels();
 }

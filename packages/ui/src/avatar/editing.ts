@@ -222,9 +222,10 @@ export const GROUPS: { id: string; label: string; kinds: string[] }[] = [
 /**
  * Kinds the catalogue leaves out: a kiosk does something only as one of the
  * lobby's, which the building gives what it is for, so one from the
- * catalogue would be a blank that does nothing.
+ * catalogue would be a blank that does nothing. A model is offered by its
+ * own name, under "Made by agents" (`madeByAgents`), never as a blank model.
  */
-export const LEFT_OUT = new Set(["kiosk"]);
+export const LEFT_OUT = new Set(["kiosk", "model", "wall_model", "small_model"]);
 
 /** One kind as the catalogue lists it: what it is called, and where it goes when it isn't the floor. */
 export interface Offered {
@@ -252,6 +253,44 @@ export function catalogue(kinds: Kinds): { id: string; label: string; kinds: Off
       ),
     ].map(offer),
   })).filter((g) => g.kinds.length);
+}
+
+/** A model an agent made, as the server lists it for the catalogue. */
+export interface MadeModel {
+  /** Its record's id, `planner:bookcase`: what adding it sends. */
+  id: string;
+  name: string;
+  owner: string;
+  /** The kind of thing it is in a room, by where it goes. */
+  kind: string;
+  size: [number, number, number];
+  /** How many faces it has: things to use on it, a list to tick or a card. */
+  faces?: number;
+  about?: string;
+}
+
+/** One model as the catalogue offers it: its name in words, whose it is, and where it goes when it isn't the floor. */
+export interface OfferedModel {
+  id: string;
+  label: string;
+  by: string;
+  goes?: "on a wall" | "on something";
+  about?: string;
+}
+
+/** The catalogue's "Made by agents": every model, by its name and whose it is, in the order they were made. */
+export function madeByAgents(models: MadeModel[], kinds: Kinds): OfferedModel[] {
+  return models.map((m) => {
+    const mount = kinds[m.kind]?.mount;
+    const goes = mount === "wall" ? "on a wall" : mount === "on" ? "on something" : undefined;
+    return {
+      id: m.id,
+      label: m.name.replace(/_/g, " "),
+      by: m.owner,
+      ...(goes ? { goes } : {}),
+      ...(m.about ? { about: m.about } : {}),
+    };
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -307,7 +346,7 @@ export function palette(room: Pick<Room, "walls" | "floorColor" | "props">, more
 /** A change you made, as the page tells the server. */
 export type Edit =
   | ({ op: "move" } & Move)
-  | { op: "add"; kind: string; like?: string }
+  | { op: "add"; kind: string; like?: string; model?: string }
   | { op: "remove"; item: string }
   | { op: "color"; item: string; color: string };
 

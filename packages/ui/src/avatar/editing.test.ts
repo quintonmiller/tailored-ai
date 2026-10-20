@@ -6,6 +6,7 @@ import {
   footprint,
   GROUPS,
   type Kinds,
+  madeByAgents,
   noSteps,
   onFloor,
   onTop,
@@ -156,6 +157,36 @@ describe("the catalogue", () => {
         .sort(),
     );
     expect(new Set(GROUPS.flatMap((g) => g.kinds)).size).toBe(GROUPS.flatMap((g) => g.kinds).length);
+  });
+
+  it("offers agents' models by their own names and whose they are, never a blank model among the decor", () => {
+    const withModels: Kinds = {
+      ...kinds,
+      model: { noun: "model", mount: "floor", footprint: [0.5, 0.5], height: 0.5, shaped: true },
+      wall_model: { noun: "model", mount: "wall", footprint: [0.5, 0.05], height: 0.5, shaped: true },
+    };
+    expect(catalogue(withModels).flatMap((g) => g.kinds.map((k) => k.kind))).not.toContain("model");
+    expect(catalogue(withModels).flatMap((g) => g.kinds.map((k) => k.kind))).not.toContain("wall_model");
+    expect(
+      madeByAgents(
+        [
+          { id: "planner:reading_nook", name: "reading_nook", owner: "planner", kind: "model", size: [1, 1, 1] },
+          {
+            id: "planner:todo_board",
+            name: "todo_board",
+            owner: "planner",
+            kind: "wall_model",
+            size: [1.1, 0.8, 0.1],
+            faces: 1,
+            about: "A to-do list",
+          },
+        ],
+        withModels,
+      ),
+    ).toEqual([
+      { id: "planner:reading_nook", label: "reading nook", by: "planner" },
+      { id: "planner:todo_board", label: "todo board", by: "planner", goes: "on a wall", about: "A to-do list" },
+    ]);
   });
 });
 

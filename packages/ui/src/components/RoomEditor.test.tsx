@@ -19,6 +19,17 @@ const kinds = {
   couch: { noun: "couch", mount: "floor", footprint: [1.6, 0.8], height: 0.8 },
   plant: { noun: "plant", mount: "floor", footprint: [0.34, 0.34], height: 1 },
   picture: { noun: "picture", mount: "wall", footprint: [0.9, 0.04], height: 0.6, elevation: 1.55 },
+  model: { noun: "model", mount: "floor", footprint: [0.5, 0.5], height: 0.5, shaped: true },
+};
+
+/** A model an agent made, as the catalogue lists it and as a place is sent it. */
+const bookcase = { id: "planner:bookcase", name: "bookcase", owner: "planner", kind: "model", size: [0.9, 1.8, 0.34] };
+const bookcaseDef = {
+  name: "bookcase",
+  owner: "planner",
+  mount: "floor",
+  size: [0.9, 1.8, 0.34],
+  parts: [{ shape: "box", size: [0.9, 1.8, 0.34], at: [0, 0.9, 0], color: "#6b4a33" }],
 };
 
 /** The fake server: what each write was sent, and how the next ones answer. */
@@ -34,14 +45,17 @@ interface Server {
   /** Held until it settles: the server thinking about a change, while the page may hear of another. */
   hold?: Promise<void>;
   /** What the server says of a change: the room it makes, or why not. */
-  answer: (edit: Record<string, unknown>, place: Room) => { place?: Room; item?: string; why?: string };
+  answer: (
+    edit: Record<string, unknown>,
+    place: Room,
+  ) => { place?: Room; item?: string; why?: string; models?: Record<string, unknown> };
 }
 let server: Server;
 
 function fakeFetch(url: string, init?: RequestInit): Promise<Response> {
   const json = (body: unknown, status = 200) =>
     Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
-  if (url.endsWith("/edit/kinds")) return json({ kinds, person: "sam" });
+  if (url.endsWith("/edit/kinds")) return json({ kinds, models: [bookcase], person: "sam" });
   if (url.endsWith("/builtin:places/edit")) {
     const body = JSON.parse(String(init?.body));
     server.edits.push(body);
@@ -153,6 +167,17 @@ describe("rearranging a room", () => {
     // Shown as saved, ahead of the page hearing of it.
     expect(editor.room?.props.find((p) => p.id === "couch")?.at).toEqual([0.3, 0.6]);
     expect(button("Undo").disabled).toBe(false);
+  });
+
+  it("keeps the models a room is drawn with out of its record, and still draws them once saved", async () => {
+    const models = { "planner:bookcase": bookcaseDef } as unknown as Room["models"];
+    await render(home(3, { ...DEFAULT_ROOM, models }));
+    await act(async () => editor.stage?.onSelect("couch"));
+    await act(async () => editor.stage?.onDrop(move([0.3, 0.6])));
+    await settle();
+    expect(server.edits[0].place).not.toHaveProperty("models");
+    expect(server.writes[0].data).not.toHaveProperty("models");
+    expect(editor.room?.models).toEqual(models);
   });
 
   it("puts a thing back where it was and says why, when the server says it doesn't fit", async () => {
@@ -387,5 +412,44 @@ describe("rearranging a room", () => {
     expect(server.edits[0].edit).toEqual({ op: "add", kind: "plant" });
     expect(server.writes[0].data.changes?.[0].what).toBe("added the plant 2");
     expect(editor.stage?.selected).toBe("plant-2");
+  });
+
+  it("offers what agents made first, adds one by its record, and draws it at once without writing its parts", async () => {
+    server.answer = (_edit, place) => ({
+      place: {
+        ...place,
+        props: [
+          ...place.props,
+          {
+            id: "model",
+            name: "the bookcase",
+            kind: "model",
+            model: "planner:bookcase",
+            size: [0.9, 1.8, 0.34],
+            at: [0, 0],
+            facing: 0,
+          },
+        ],
+      },
+      item: "model",
+      models: { "planner:bookcase": bookcaseDef },
+    });
+    await render(home());
+    await act(async () => button("Add things").click());
+    const groups = [...document.querySelectorAll(".room-edit-group")].map((g) => g.getAttribute("aria-label"));
+    expect(groups[0]).toBe("Made by agents");
+    expect(text()).toMatch(/Bookcaseby planner/);
+    // A model is offered by its own name, never as a blank one among the decor.
+    expect(groups).not.toContain("Model");
+    await act(async () => (document.querySelector(".room-edit-group button") as HTMLButtonElement).click());
+    await settle();
+    expect(server.edits[0].edit).toEqual({ op: "add", kind: "model", model: "planner:bookcase" });
+    // Its parts are a record of their own: the room's record keeps only where it stands.
+    expect(server.writes[0].data).not.toHaveProperty("models");
+    expect(server.writes[0].data.props.at(-1)).toMatchObject({ model: "planner:bookcase" });
+    expect(editor.room?.models?.["planner:bookcase"]).toEqual(bookcaseDef);
+    expect(editor.stage?.selected).toBe("model");
+    // Its colours are its parts': nothing to repaint.
+    expect((document.querySelector(".room-edit-swatches") as HTMLFieldSetElement).disabled).toBe(true);
   });
 });

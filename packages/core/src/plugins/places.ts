@@ -30,6 +30,13 @@
  * a spot and stay there; a person chooses the same on its card. The place
  * tool's `room` action still takes what to wear, as before.
  *
+ * Agents can make things of their own for the world too (`places-models.ts`,
+ * `places-build.ts`): models from simple parts, some with a face people use
+ * in the room, kept as `model` records. The `build` tool that makes them is
+ * opt-in (`build: true`); the `place` tool adds any model to a room by name,
+ * and makes a ready-made one (a to-do board, a habit tracker, a notes card)
+ * the agent's own the first time.
+ *
  * Free when unused: with no avatar configured, it registers nothing. An agent
  * with its own `tools:` list needs `place` (and `body`) named in it, like any
  * tool.
@@ -43,6 +50,7 @@ import { mediaPart, textPart } from "../content/types.js";
 import { getExploratoryState } from "../db/exploratory-queries.js";
 import type { EventBus, Subscription } from "../events.js";
 import type { TaiHttpRequest, TaiHttpResponse } from "../http/registry.js";
+import { interfaceStoreFor } from "../interfaces/index.js";
 import { avatarModelNamed, avatarModels, resolveAvatar } from "../live/avatar.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import { enrichRoomMessage, IdentityResolver } from "../rooms/identities.js";
@@ -70,6 +78,7 @@ import {
   WEAR_TYPE,
   wornBy,
 } from "./places-body.js";
+import { BuildTool, ModelShelf, modelsIn } from "./places-build.js";
 import { PlaceCamera, type Shot } from "./places-camera.js";
 import { applyEdit, editFrom } from "./places-edit.js";
 import {
@@ -109,6 +118,17 @@ import {
   withDoorwayHeld,
   withSpots,
 } from "./places-layout.js";
+import {
+  FACE_TYPES,
+  isModelKind,
+  MODEL_SCHEMA,
+  MODEL_TYPE,
+  MOUNT_KIND,
+  type Model,
+  modelId,
+  modelName,
+  READY,
+} from "./places-models.js";
 import { type AgentAbout, aOrAn, homeFor, parseWear, type Role, readRole, WEAR, wearWords } from "./places-roles.js";
 import {
   homePlace,
@@ -148,8 +168,13 @@ export const meta: PluginMeta = {
     { kind: "stateType", id: "body" },
     { kind: "stateType", id: "emote" },
     { kind: "stateType", id: "wear" },
+    { kind: "stateType", id: "model" },
+    { kind: "stateType", id: "todo" },
+    { kind: "stateType", id: "habit" },
+    { kind: "stateType", id: "note" },
     { kind: "tool", id: "place" },
     { kind: "tool", id: "body" },
+    { kind: "tool", id: "build" },
     { kind: "httpRoutes", id: "places" },
     { kind: "httpRoutes", id: "map" },
   ],
@@ -1410,11 +1435,13 @@ function kindFrom(v: unknown): string | undefined {
     ?.toLowerCase()
     .replace(/[\s-]+/g, "_");
   if (!t) return undefined;
-  if (KINDS[t]) return t;
-  const byNoun = Object.entries(KINDS).find(([, k]) => k.noun.toLowerCase().replace(/\s+/g, "_") === t);
+  // A model is added by its own name, never as "model".
+  const known = (k: string) => !!KINDS[k] && !KINDS[k].model;
+  if (known(t)) return t;
+  const byNoun = Object.entries(KINDS).find(([, k]) => !k.model && k.noun.toLowerCase().replace(/\s+/g, "_") === t);
   if (byNoun) return byNoun[0];
   const singular = t.replace(/s$/, "");
-  return KINDS[singular] ? singular : undefined;
+  return known(singular) ? singular : undefined;
 }
 
 function sizeFrom(v: unknown): [number, number, number] | string | undefined {
@@ -1526,7 +1553,16 @@ export interface ApplyOptions {
    * through, rather than repainting what is there.
    */
   redraw?: (theme: string) => Place;
+  /** The model an `add` names, found by the tool among the agent's own and the ready-made ones. */
+  model?: Model;
 }
+
+/** Why a model can't be repainted from the room. */
+const MODEL_COLORS = "A model keeps its parts' own colours: change them with the build tool.";
+
+/** The box a model fills at a scale, to the centimetre. */
+const scaledSize = (size: [number, number, number], scale = 1) =>
+  size.map((s) => Math.round(s * scale * 100) / 100) as [number, number, number];
 
 /** One tool call against a room, without the store: what it becomes, and what to tell the agent. */
 export function applyAction(place: Place, args: Record<string, unknown>, opts: ApplyOptions = {}): Outcome {
@@ -1652,12 +1688,19 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
   if (typeof where === "string") return no(where);
 
   if (action === "add") {
-    const kind = kindFrom(args.kind);
-    if (!kind) return no(`Say what to add with \`kind\`: ${Object.keys(KINDS).join(", ")}.`);
+    const model = opts.model;
+    const kind = kindFrom(args.kind) ?? (model ? MOUNT_KIND[model.mount] : undefined);
+    if (!kind)
+      return no(
+        `Say what to add with \`kind\`: ${Object.keys(KINDS)
+          .filter((k) => !KINDS[k].model)
+          .join(", ")}; or a model by its name: ${READY.map((r) => r.name).join(", ")}, or one you made.`,
+      );
     if (place.props.length >= LIMITS.items)
       return no(`The room holds at most ${LIMITS.items} things. Remove one first.`);
     const item: Omit<PlaceItem, "at" | "facing"> = { id: newId(place, kind), name: "", kind };
     const colorText = text(args.color);
+    if (colorText && isModelKind(kind)) return no(MODEL_COLORS);
     if (colorText) {
       const color = parseColor(colorText);
       if (!color)
@@ -1670,7 +1713,11 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
         return no(`\`scale\` is ${LIMITS.scale[0]} to ${LIMITS.scale[1]}.`);
       if (scale !== 1) item.scale = scale;
     }
-    if (KINDS[kind].shaped) {
+    if (model) {
+      // A model is laid out by the box it fills, as big as it was asked to be.
+      item.model = modelId(model.owner, model.name);
+      item.size = scaledSize(model.size, item.scale);
+    } else if (KINDS[kind].shaped) {
       const size = sizeFrom(args.size);
       if (typeof size === "string") return no(size);
       item.size = size ?? [0.5, 0.5, 0.5];
@@ -1683,7 +1730,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     // Never in front of the door, or over it.
     const spot = findPlacement(withDoorwayHeld(place), placing, where);
     if (typeof spot === "string") return no(spot);
-    item.name = newName(place, kind, colorWord(colorText), text(args.name));
+    item.name = newName(place, kind, colorWord(colorText), text(args.name) ?? model?.name.replace(/_/g, " "));
     if (kind === "sign") item.label = signWords(text(args.name));
     const added: PlaceItem = { ...item, at: spot.at, facing: spot.facing };
     if (spot.elevation !== undefined) added.elevation = spot.elevation;
@@ -1765,6 +1812,7 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
     did.push(`renamed ${item.name} ${changed.name}`);
   }
   const colorText = text(args.color);
+  if (colorText && item.model) return no(MODEL_COLORS);
   if (colorText) {
     const color = parseColor(colorText);
     if (!color) return no(`"${colorText}" isn't a colour I know. Use a name like "navy" or "pale green", or #rrggbb.`);
@@ -1778,10 +1826,15 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       return no(`\`scale\` is ${LIMITS.scale[0]} to ${LIMITS.scale[1]}.`);
     changed.scale = scale;
     if (scale === 1) delete changed.scale;
+    // A model is laid out by the box it fills: as much bigger as it is drawn.
+    if (item.model && item.size)
+      changed.size = scaledSize(item.size.map((s) => s / (item.scale ?? 1)) as [number, number, number], changed.scale);
     changes.push(`it is ${scale}× its normal size`);
     did.push(`resized ${changed.name}`);
   }
-  const size = KINDS[item.kind]?.shaped ? sizeFrom(args.size) : undefined;
+  if (item.model && args.size !== undefined && args.size !== null && args.size !== "")
+    return no("A model is as big as its parts make it: change it with `scale`, or its parts with the build tool.");
+  const size = KINDS[item.kind]?.shaped && !item.model ? sizeFrom(args.size) : undefined;
   if (typeof size === "string") return no(size);
   if (size) {
     changed.size = size;
@@ -1904,7 +1957,11 @@ export class PlaceTool implements Tool {
           "look: the room, its things, who is here, what you can add. add / move / change / remove a thing. room: size, walls, floor, name, theme, purpose, area, wear. undo: the last change. photo: a picture to send. places: where you can go. go: to a place. new: make a shared place, and go there.",
       },
       item: { type: "string", description: "move, change, remove: the thing, by name or id." },
-      kind: { type: "string", description: "add: what to add, e.g. armchair, rug, bookshelf, lamp, vase, block." },
+      kind: {
+        type: "string",
+        description:
+          "add: what to add, e.g. armchair, rug, bookshelf, lamp, vase, block, or a model by name (todo_board).",
+      },
       name: { type: "string", description: 'What to call it, e.g. "the reading chair"; for room, the room\'s name.' },
       near: { type: "string", description: "Put it by this thing or spot." },
       side: {
@@ -1965,6 +2022,8 @@ export class PlaceTool implements Tool {
     private readonly now: () => Date = () => new Date(),
     /** What each agent is for (see `places-roles.ts`): the kind of home it starts with, and what it wears. */
     private readonly roles: (agent: string) => Role | undefined = () => undefined,
+    /** The models agents make (`places-build.ts`): what an `add` by a model's name adds. */
+    private readonly models?: ModelShelf,
   ) {}
 
   private meetings(): Meetings {
@@ -1983,6 +2042,14 @@ export class PlaceTool implements Tool {
     const worn = wearWords(wornBy(own, old?.data.wear, role));
     const chose = own?.wear !== undefined || !!old;
     return chose || !role ? `You wear ${worn}.` : `You wear ${worn}, as suits ${aOrAn(role.word)}.`;
+  }
+
+  /** The models the agent can add, for `look`. */
+  private async modelWords(caller: StateCaller, agent: string): Promise<string> {
+    if (!this.models) return "";
+    const mine = (await this.models.mine(caller, agent)).map((m) => m.name);
+    const ready = READY.map((r) => r.name).filter((n) => !mine.includes(n));
+    return `\n- models, by name: ${[...mine, ...ready].join(", ")}${mine.length ? "" : " (ready-made)"}`;
   }
 
   /**
@@ -2029,7 +2096,7 @@ export class PlaceTool implements Tool {
             : "";
         return {
           success: true,
-          output: `${where}${company} ${whereaboutsWords(place)} ${wear}\n\n${shown}${calendar}`,
+          output: `${where}${company} ${whereaboutsWords(place)} ${wear}\n\n${shown}${await this.modelWords(caller, agent)}${calendar}`,
         };
       }
       if (action === "undo") {
@@ -2080,6 +2147,12 @@ export class PlaceTool implements Tool {
         if (!ROOM_FIELDS.some((k) => roomArgs[k] !== undefined && roomArgs[k] !== null && roomArgs[k] !== ""))
           return { success: true, output: await this.dress(service, caller, agent, wearAsked) };
       }
+      // A model by its name: the agent's own, or a ready-made one, made its own first.
+      let model: Model | undefined;
+      if (action === "add" && this.models && !kindFrom(args.kind)) {
+        const name = modelName(args.kind);
+        model = name ? await this.models.forPlacing(context, agent, name) : undefined;
+      }
       for (let attempt = 0; ; attempt++) {
         const { id, place, version, scope } = await readCurrent(service, caller, agent, meetings, this.homes);
         const talk = talkRoomOf(meetings.rooms, id);
@@ -2092,7 +2165,7 @@ export class PlaceTool implements Tool {
           talk && version === 0
             ? (theme: string) => ({ ...drawMeeting(talk, this.hasBody, theme).place, name: place.name })
             : undefined;
-        const outcome = applyAction(place, roomArgs, redraw ? { redraw } : {});
+        const outcome = applyAction(place, roomArgs, { ...(redraw ? { redraw } : {}), ...(model ? { model } : {}) });
         if (!outcome.place) return outcome.ok ? { success: true, output: outcome.text } : fail(outcome.text);
         const data = outcome.did
           ? withChange(outcome.place, { who: agent, what: outcome.did, at: this.now().toISOString() })
@@ -2331,6 +2404,21 @@ const plugin: Plugin = (ctx) => {
     access: { write: ["user"] },
   });
 
+  ctx.stateTypes.register({
+    name: MODEL_TYPE,
+    description:
+      "A model an agent made for the 3D world out of simple parts, some with a face people use there: `<agent>:<name>`, in its maker's scope. Agents make them with the build tool and add them to rooms with the place tool.",
+    scope: "agent",
+    title: "name",
+    schema: MODEL_SCHEMA as never,
+  });
+  // What the ready-made models' faces show: to-dos, habits and a note. A type of the same name in config wins.
+  for (const type of FACE_TYPES) ctx.stateTypes.register({ ...type, schema: type.schema as never });
+
+  // The models agents make, shared by the build tool and the place tool, which adds them to rooms by name.
+  const components = () => (runtime.db ? interfaceStoreFor(runtime.db) : undefined);
+  const shelf = new ModelShelf(() => runtime.getStateService(), components);
+
   // The rooms agents talk in, with their members: each has a meeting room, which its members can change.
   const talkRooms = (): TalkRoom[] => {
     const store = runtime.getRoomStore();
@@ -2369,12 +2457,13 @@ const plugin: Plugin = (ctx) => {
         talkRooms,
         () => new Date(),
         roleOf,
+        shelf,
       ),
     ];
   });
 
   // Every model a body can be drawn in: those the config names, and every VRM in `<TAI_HOME>/avatars/`.
-  const models = () => {
+  const bodyModels = () => {
     const config = runtime.getConfig();
     return avatarModels(
       config.live,
@@ -2386,7 +2475,7 @@ const plugin: Plugin = (ctx) => {
       runtime.getConfig().live,
       runtime.avatarFor(agent === "default" ? undefined : agent),
     ).model;
-    return models().find((m) => m.path === path)?.name;
+    return bodyModels().find((m) => m.path === path)?.name;
   };
 
   ctx.tools.register("body", (config, tctx) => {
@@ -2400,11 +2489,17 @@ const plugin: Plugin = (ctx) => {
           return { id, place, words: hereWords(id, agent, place, talkRoomOf(meetings.rooms, id)) };
         },
         go: (service, caller, agent, to) => goTo(service, caller, agent, to, { rooms: talkRooms(), hasBody }),
-        models: (agent) => ({ names: models().map((m) => m.name), own: ownModel(agent) }),
+        models: (agent) => ({ names: bodyModels().map((m) => m.name), own: ownModel(agent) }),
         role: roleOf,
       }),
     ];
   });
+
+  // Making models is opt-in: only a deployment that asks for it (`build: true`) pays for the tool's schema.
+  if ((ctx.config as { build?: unknown } | undefined)?.build === true)
+    ctx.tools.register("build", (config, tctx) =>
+      anyAvatar(config) && tctx.getStateService ? [new BuildTool(shelf)] : [],
+    );
 
   // Plugin routes are namespaced by module: these are under /api/ext/builtin:places/.
   // `map`, `scene/:id` and `transcript/:id` go first, so they aren't read as an agent's name.
@@ -2430,12 +2525,12 @@ const plugin: Plugin = (ctx) => {
    * it from when it chose one of the deployment's models: one that has gone
    * since is its own again.
    */
-  const looksFor = (name: string, chosen: Chosen, known = models()) => {
+  const looksFor = (name: string, chosen: Chosen, known = bodyModels()) => {
     const { model, ...looks } = looksOf(name, roleOf(name), chosen);
     const drawn = avatarModelNamed(known, model);
     return drawn ? { ...looks, model: drawn.name, avatar: modelUrl(drawn.name) } : looks;
   };
-  const bodyOf = (name: string, chosen: Chosen, known = models()) => {
+  const bodyOf = (name: string, chosen: Chosen, known = bodyModels()) => {
     const own = runtime.avatarFor(name === "default" ? undefined : name);
     const files = resolveAvatar(runtime.getConfig().live, own);
     const q = name === "default" ? "" : `?agent=${encodeURIComponent(name)}`;
@@ -2477,7 +2572,7 @@ const plugin: Plugin = (ctx) => {
       const found = await scene(service, PLUGIN_CALLER, id, rooms, hasBody, world, homes);
       if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
       const chosen = await chosenBodies(service, PLUGIN_CALLER);
-      const known = models();
+      const known = bodyModels();
       // The town's houses say what their owners do, so what stands by each can show it.
       const town = (found.place as Place & { town?: Town }).town;
       const place = town
@@ -2489,11 +2584,13 @@ const plugin: Plugin = (ctx) => {
             },
           }
         : found.place;
+      const models = await modelsIn(service, PLUGIN_CALLER, components(), found.place.props);
       return {
         json: {
           type: PLACE_TYPE,
           id: found.id,
           place,
+          models,
           company: found.agents.map((a) => bodyOf(a, chosen, known)),
           doors: found.doors,
           area: world.areaOf.get(found.id) ?? MAIN,
@@ -2513,9 +2610,26 @@ const plugin: Plugin = (ctx) => {
   ctx.http.register({
     method: "GET",
     path: "edit/kinds",
-    handler: (): TaiHttpResponse => ({
-      json: { kinds: KINDS, person: runtime.getConfig().rooms?.ownerLabel ?? "owner" },
-    }),
+    handler: async (): Promise<TaiHttpResponse> => {
+      // And every model an agent has made, for the catalogue's "Made by agents".
+      const made = await runtime
+        .getStateService()
+        .query(PLUGIN_CALLER, { type: MODEL_TYPE, orderBy: { field: "createdAt", direction: "asc" }, limit: 200 })
+        .catch(() => []);
+      const models = made.map((r) => {
+        const m = r.data as unknown as Model;
+        return {
+          id: r.id,
+          name: m.name,
+          owner: m.owner,
+          kind: MOUNT_KIND[m.mount],
+          size: m.size,
+          faces: m.parts.filter((p) => p.face).length,
+          ...(m.about ? { about: m.about } : {}),
+        };
+      });
+      return { json: { kinds: KINDS, models, person: runtime.getConfig().rooms?.ownerLabel ?? "owner" } };
+    },
   });
 
   // What a place becomes with a person's change, checked as the place tool checks its own (see `places-edit.ts`).
@@ -2528,11 +2642,27 @@ const plugin: Plugin = (ctx) => {
       const place = body?.place as Place | undefined;
       if (typeof body?.id !== "string" || !place || typeof place !== "object" || !Array.isArray(place.props))
         return { status: 400, json: { error: "Send `id`, `place` and `edit`." } };
-      const edit = editFrom(body.edit);
+      let edit = editFrom(body.edit);
       if (typeof edit === "string") return { status: 400, json: { error: edit } };
+      // A model added from the catalogue: the box it fills and what it is called, from its record.
+      if (edit.op === "add" && edit.model) {
+        const found = await runtime
+          .getStateService()
+          .get(PLUGIN_CALLER, { type: MODEL_TYPE, id: edit.model })
+          .catch(() => null);
+        const m = found?.data as unknown as Model | undefined;
+        if (!m) return { json: { why: "That model isn't there any more: its agent may have just deleted it." } };
+        edit = { ...edit, kind: MOUNT_KIND[m.mount], size: m.size, name: m.name.replace(/_/g, " ") };
+      }
       // A change that can't be made is an answer, not a failure: the page shows why, in the tool's own words.
       const done = applyEdit(body.id, place, edit);
-      return { json: typeof done === "string" ? { why: done } : done };
+      if (typeof done === "string") return { json: { why: done } };
+      // A model added comes with what it is made of, so the page draws it at once.
+      const added =
+        edit.op === "add" && edit.model
+          ? await modelsIn(runtime.getStateService(), PLUGIN_CALLER, components(), [{ model: edit.model }])
+          : undefined;
+      return { json: added ? { ...done, models: added } : done };
     },
   });
 
@@ -2564,10 +2694,11 @@ const plugin: Plugin = (ctx) => {
       // Everyone else whose body is here, with what the page needs to draw them.
       const others = await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent, rooms);
       const chosen = await chosenBodies(service, PLUGIN_CALLER);
-      const known = models();
+      const known = bodyModels();
       const company = others.map((a) => bodyOf(a, chosen, known));
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const doors = doorsIn(id, place, world);
+      const models = await modelsIn(service, PLUGIN_CALLER, components(), place.props);
       return {
         json: {
           type: PLACE_TYPE,
@@ -2576,6 +2707,7 @@ const plugin: Plugin = (ctx) => {
           scope,
           editable: true,
           place,
+          models,
           company,
           doors,
           area: world.areaOf.get(id) ?? MAIN,

@@ -497,7 +497,7 @@ The agent changes it with the `place` tool:
 | action | does |
 |---|---|
 | `look` | the room in words: its size and colours, each thing and where it is, the spots to go to, and what can be added |
-| `add` | a new thing: `kind`, and optionally `name`, `color`, `scale` (0.5 to 2), or `size` for a shape |
+| `add` | a new thing: `kind`, and optionally `name`, `color`, `scale` (0.5 to 2), or `size` for a shape. A model an agent made, or a ready-made one, by its name (see [Things agents make](#things-agents-make)) |
 | `move` | a thing to somewhere new, or turned where it stands with only `facing` |
 | `change` | a thing's `name`, `color`, `scale` or `size` |
 | `remove` | a thing, and whatever stands on it |
@@ -1128,7 +1128,11 @@ where you were.
   only does something as one of the lobby's. Pick one and it goes somewhere
   free near the middle, picked, ready to drag where you want it. A task
   board you add shows the tasks and opens them, like the ones rooms come
-  with.
+  with. Above them all, **Made by agents** lists every model an agent has
+  made, by its name and whose it is (see
+  [Things agents make](#things-agents-make)); one you add is the agent's, faces
+  and all, and keeps its parts' own colours, so the swatches rest while it is
+  picked.
 
 Whether a thing fits is the server's to say, by the checks the agents'
 `place` tool uses for its own changes: inside the room, clear of the rest,
@@ -1234,7 +1238,11 @@ const remove = stage.addSurface({
 
 Lay a face out at 640 CSS pixels a metre (`SURFACE_PX`): a 0.8 by 0.5 metre
 surface is a 512 by 320 pixel page, and a surface made bigger shows the same
-page larger. `stage.onSurfaces(views => ...)` hears which surfaces are live
+page larger. To lay a small one out denser, anchor it to an object scaled down
+and give it the size in that object's units, as a model's faces do
+(`faceDensity` in `avatar/models.ts`). In place of `render`, a surface can take
+`component`, an agent interface's spec, and the page draws it with the chat's
+own interface renderer: that is all a model's face is. `stage.onSurfaces(views => ...)` hears which surfaces are live
 (the page draws into each `view.el`), `stage.focusSurface(id)` brings one up
 and `focusSurface(null)` puts it down, and `stage.surfacePoint(id, event)`
 says where a pointer is on one, in its own pixels, for dragging. A surface
@@ -1255,6 +1263,115 @@ own element is never `overflow: hidden` (the face inside it is). And laid out
 in metres, everything sits so near the browser's eye that its sums for what
 is under the pointer come apart, so the layer's copy of the room is scaled up
 to pixels, camera and all.
+
+#### Things agents make
+
+An agent can make things for the world out of simple parts, and give a part a
+face you use in the room: a to-do list you tick, a card with a button, a
+table. Turn it on in the places plugin:
+
+```yaml
+plugins:
+  - module: builtin:places
+    config:
+      build: true
+```
+
+That offers agents the `build` tool. Leave it off and no agent pays for its
+schema; the ready-made models below still work through `place`. An agent with
+its own `tools:` list needs `build` named in it, like any tool.
+
+| action | does |
+|---|---|
+| `list` | your models, and the ready-made ones |
+| `show` | one model, part by part, numbered |
+| `make` | a model from `parts`, with a `name`, a `mount` and an `about` line; a model that exists is made again whole |
+| `add` | more `parts` to one |
+| `remove` | parts by number: `part: [3, 4]` |
+| `copy` | a model, yours or a ready-made one, `as` a new name |
+| `delete` | a model |
+
+A part is a `shape` (box, cylinder, sphere, cone, torus, capsule or plane), a
+`size` (width, height and depth in metres: the box it fills), where its middle
+is (`at`: x to its right, y up, z toward its front), an optional `turn` in
+degrees about x, y and z, a `color` (a name like "sage" or "dark blue", or
+#rrggbb) and a `finish` (matte, glossy, metal, glass or glowing). `mount` says
+where the model goes: `floor`, `wall`, or `on` a desk, table or shelf.
+
+```
+build(action: "make", name: "plant_stand", mount: "floor", parts: [
+  { shape: "cylinder", size: [0.4, 0.04, 0.4], at: [0, 0.62, 0], color: "walnut" },
+  { shape: "cylinder", size: [0.05, 0.6, 0.05], at: [0, 0.3, 0], color: "gold", finish: "metal" },
+  { shape: "sphere", size: [0.4, 0.35, 0.4], at: [0, 0.82, 0], color: "sage" } ])
+```
+
+The tool checks everything and says what is wrong in a sentence naming the
+part ("Part 2: each side is 0.01 to 3 m."). A model has at most 40 parts and 4
+faces; each side of a part is 1 cm to 3 m; and a whole model is at most
+4 × 3.5 × 4 m on the floor, 3 × 2.4 × 0.6 m on a wall, and 1.2 × 1 × 1.2 m on
+a desk. It is moved to stand where a room expects it, foot on the floor and
+middle at its origin (back against the wall, for one that hangs), and the tool
+says how big it came out.
+
+Then `place` adds it like anything else: `place(action: "add", kind:
+"plant_stand", near: "the window")`. The room lays it out by the box it fills,
+so it never overlaps the rest, blocks a door or goes through a wall. `scale`
+makes it bigger or smaller; its colours are its parts', changed with `build`,
+not `place`. Made again, it shows as it is now wherever it stands, fitted to
+the box it was placed in with its shape kept. Deleted, it leaves an empty frame
+until someone takes it away. The page draws each model cheaply: every part of
+one colour and finish is one mesh in one shared material, so a bookcase of
+thirty parts is a handful of draw calls.
+
+**Faces.** A box or a plate can carry a `face`, laid on its front: an
+[agent interface](./agent-interfaces.md) bound to world state. A `list` shows
+the records a query matches, with ticks; a `card` shows one record, with
+buttons; a `table` shows records as rows.
+
+```
+{ shape: "box", size: [0.9, 0.6, 0.02], at: [0, 1.4, 0.05], color: "ivory",
+  face: { kind: "list", title: "Chores", bind: { type: "chore", where: { room: "kitchen" } },
+          check: { field: "done" } } }
+```
+
+When the model is saved, each face is made a real interface component, as the
+agent, exactly as its own `interface` call would make it. So the interfaces'
+rules hold: the query runs as the agent and keeps the scopes it could see then,
+a card shows only a record the agent can read, and a tick or a button writes
+the record as you, through the type's schema, with no model turn. The agent
+hears about it the way it hears any change, through a
+[subscription](./world-state.md#waking-agents-on-a-change) or pinned state. A
+face's buttons write their record (`patch`) or announce an event; they can't
+reply, since a face is used by whoever is in the room rather than answered in a
+conversation, and the tool says so. Making a model again keeps each face's
+component when the face is the same, changes it in place when it isn't, and
+closes the faces the model no longer has.
+
+In the room a face is a [surface](#surfaces-using-what-hangs-on-the-walls):
+click it, or face it and press **F**, and tick, press and scroll it there.
+From across a room it shows a picture of its title and lines as they last
+were. A small face, such as a card on a desk, is laid out denser and scaled
+down to its size, so it reads as sharp close up as a board on a wall.
+
+**Ready-made.** Three come with it, which any agent can place by name, with
+or without `build`:
+
+- `todo_board`, on a wall: the agent's `todo` records, ticked when `done`.
+- `habit_tracker`, on a wall: its `habit` records, ticked when done `today`.
+- `notes_card`, on a desk: a card showing its note for visitors
+  (`note/<agent>-notes`, made with "Nothing yet." the first time), with a
+  **Got it** button that sets `seen`.
+
+The first time an agent places one, it becomes the agent's own model, its face
+made live as the agent; `build` can then show, copy or change it. The places
+plugin declares the `todo`, `habit` and `note` types they show (a type of the
+same name in your config wins), and the agent fills them with its `state` tool:
+`state(action: "put", type: "todo", data: { title: "Book the ferry" })`.
+
+A model is a [world-state](./world-state.md#types-that-come-with-the-3d-world)
+record of type `model`, `<agent>:<name>` in the agent's own scope: every
+change has an author and a history, and the **State** page shows it. Doors
+between places aren't made this way yet.
 
 #### Task boards and the lobby
 
@@ -1700,12 +1817,12 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name; beside them, whatever its `body` record chose (`color`, `colorName`, `model`, `size`, `idle`, `posture`, `walk`, `errands`, `spot`, `away`), and `avatar`, where to load the model it chose. `company` is everyone else there with a body: `{agent, name, avatar, animations, role?, wear, …}`, with the same, `avatar` the model it chose when it chose one. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `body` change that someone chose how a body looks or carries itself |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, scope, editable, place, models, company, doors, area, role?, wear}`, its home drawn from its name on first use. `version` and `scope` are what a write to its record needs (0 for a meeting room nobody has changed, so the first write makes it). `doors` and `area` are as for `scene/:id`. `role` is what the agent is for, in a word, and `wear` what its body wears, by name; beside them, whatever its `body` record chose (`color`, `colorName`, `model`, `size`, `idle`, `posture`, `walk`, `errands`, `spot`, `away`), and `avatar`, where to load the model it chose. `company` is everyone else there with a body: `{agent, name, avatar, animations, role?, wear, …}`, with the same, `avatar` the model it chose when it chose one. `models` is what each model agents made that stands there is made of, by record id (`planner:bookcase`), each face with the interface component that shows it as `face.spec`; a thing whose model is gone has none. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's: a `whereabouts` or `visit` change means someone came or went, and a `body` change that someone chose how a body looks or carries itself |
 | `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, street?, role?, wear?, wearChosen?}], areas: [{id, name, places}], town}`. `kind` is `town` (the outdoors), `lobby` (the town hall's), `office` (a floor of the office), `home` (one per agent with a body, `owner` its agent, with `role`, `wear` and what its `body` record chose as for `:agent`, and `wearChosen` when someone chose what it wears rather than its role), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. Who is talking with whom isn't here: it is the `talk` records, which change too often to ask the map again for each. `area` is the area's id, `main` for the town; `areas` lists the town first, then each plot, each area's places its way in first. `via` is the place its way in is through: the town for a building, the floor of the office for a room on one, the floor below for a floor; there is none for the town. `street` is the street a building's door is on ("Maple Lane", "The square"). The page's "where you are" trail is read from them. `town` is the town's plan, for drawing it from above: `{width, depth, square, shore, stream, park, roads: [{id, name?, kind, width, points}], buildings: [{id, kind, at, facing, size, label, owner?, style, street}], plots: [{id, name, at, size, gate}], trees, lamps}`, in metres with +X east and +Z south. A building's `id` is the place its door opens on |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; the town (`town`) and the office's floors (`office`, `office:2`, ...) are laid out from what there is, always drawn fresh. The town's `place` carries `town`, its plan (as for `map`, each house with its owner's `role`), which the page builds the town from. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, at?, facing?, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), or, for a door in the front of a building in the town, where it stands (`at`) and the way out of it (`facing`, degrees, 0 facing south); the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for the town and the office's floors; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
-| `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for, and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
-| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "remove", item}` or `{op: "color", item, color}`. A `remove` of one of the lobby's kiosks or its task board is a `why`; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, models, company, doors, area, version, scope, editable, lent?}`, with everyone in it as `company` (each with `role` and `wear` as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; the town (`town`) and the office's floors (`office`, `office:2`, ...) are laid out from what there is, always drawn fresh. The town's `place` carries `town`, its plan (as for `map`, each house with its owner's `role`), which the page builds the town from. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, at?, facing?, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), or, for a door in the front of a building in the town, where it stands (`at`) and the way out of it (`facing`, degrees, 0 facing south); the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `version` is its record's version, 0 while it is drawn fresh (a meeting room or the lobby nobody has changed), and `scope` the scope a write goes in; `editable` is false for the town and the office's floors; `lent` names fields shown that aren't the record's own, a meeting room's `purpose` from its room, to leave out of a write. `models` is as for `:agent`, and never part of a write either. Each of `changes` may carry `person: true`, made on the page rather than by an agent. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/edit/kinds` | what rearranging a room needs: `{kinds, models, person}`, every kind of thing with its size, where it goes (`floor`, `wall` or `on`) and what it is for; every model agents made, `{id, name, owner, kind, size, faces, about?}`, oldest first; and `person`, what agents call the person in rooms (`rooms.ownerLabel`, else `owner`) |
+| `POST /api/ext/builtin:places/edit` | what a place becomes with a person's change, checked as the `place` tool checks its own: `{id, place, edit}` → `{place, item?, removed?}`, or `{why}` with the reason when it can't be made. `edit` is `{op: "move", item, at, facing, on?}` (on the floor, along the back or left wall, or on top of `on`), `{op: "add", kind, like?}` (somewhere free near the middle; `like`, a copy of that thing beside it), `{op: "add", model}` (a model an agent made, by its record id; the answer carries it in `models`, to draw at once), `{op: "remove", item}` or `{op: "color", item, color}`. A `remove` of one of the lobby's kiosks or its task board is a `why`, and so is a `color` for a model; a new `board` comes with what makes it a task board (`label: "Tasks"`, `action: "tasks"`). Nothing is written: the page writes the place with `PUT /api/state/place/:id` and the `version` it was made to, and undoes the change that first kept a meeting room or the lobby with `DELETE /api/state/place/:id?expectedVersion=`. `400` for an edit it can't read |
 | `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
 | `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/exploratory/agents` | the agents that run on their own: `{enabled, activity, agents: [{name, enabled_in_state, paused_until, last_tick_at, current_interval_ms, cadence, budgets, next_turn_at, …}]}`. `next_turn_at` is when the worker next takes its turn, as it decides: its last turn plus the interval it is on, within its `cadence.window` in the runtime's timezone, and once `stop_after_runs_per_day` lifts. An ISO instant, which may have passed when the turn is due and the worker hasn't looked yet; null while the agent is switched off or paused, or when its hours never come. `enabled` false means none runs at all |
