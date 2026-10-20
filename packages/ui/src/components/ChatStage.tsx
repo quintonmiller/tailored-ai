@@ -26,10 +26,13 @@ import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene";
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
 import type { Companion, UseSpot } from "../avatar/stage";
+import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
 import { WEAR_TYPE } from "../avatar/wear";
+import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { clockTime, wakeWords } from "../lib/did";
 import { type Need, needsFrom, requestsOf, withQuestions } from "../lib/needs";
+import { lineVolume, phoneLine } from "../lib/phone";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
 import { trailTo } from "../lib/wayfinding";
@@ -252,19 +255,65 @@ export function useRecords<T>(type: string, enabled: boolean): Record<string, T>
   return records;
 }
 
+/** A way to sound, for lines down the phone: made the first time one is said; none where the browser has none. */
+function soundOut(held: { current: AudioContext | null | undefined }): AudioContext | null {
+  if (held.current === undefined) {
+    try {
+      held.current = typeof AudioContext === "undefined" ? null : new AudioContext();
+    } catch {
+      held.current = null;
+    }
+  }
+  return held.current;
+}
+
+/** How long a line down the phone waits for the browser to let the page's sound out, before it plays plainly instead. */
+const SOUND_WAIT_MS = 500;
+
+/**
+ * Whether `ctx` is letting sound out, having asked once more if it was held
+ * back: waiting no longer than `ms`, as a browser may hold it back for good
+ * (some want a fresh tap, not just one made earlier on the page).
+ */
+async function soundsOut(ctx: AudioContext, ms: number): Promise<boolean> {
+  if (ctx.state === "suspended") {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      ctx.resume().catch(() => {}),
+      new Promise<void>((done) => {
+        timer = setTimeout(done, ms);
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+  return ctx.state === "running";
+}
+
 /**
  * What agents say, out loud, when you are near them on a visit: each line
  * spoken in the agent's own voice, quieter the further away you stand, one at
- * a time. Off until switched on, because the voice may be made on a GPU.
+ * a time. The far side of a call, heard out of the phone of an agent you
+ * stand by, sounds as it would down a telephone line (`phone.ts`). Off until
+ * switched on, because the voice may be made on a GPU.
  */
 export function useVoicesNearby(on: boolean) {
-  const queue = useRef<{ agent: string; text: string; nearness: number }[]>([]);
+  const queue = useRef<{ agent: string; text: string; nearness: number; phone: boolean }[]>([]);
   const playing = useRef(false);
+  // The phone line's sound, made when first needed and closed with the page.
+  const sound = useRef<AudioContext | null | undefined>(undefined);
+  useEffect(
+    () => () => {
+      void sound.current?.close?.().catch(() => {});
+      sound.current = undefined;
+    },
+    [],
+  );
   const next = useCallback(async () => {
     if (playing.current) return;
     const line = queue.current.shift();
     if (!line) return;
     playing.current = true;
+    let chain: AudioNode[] = [];
     try {
       const res = await fetch("/api/live/say", {
         method: "POST",
@@ -274,7 +323,13 @@ export function useVoicesNearby(on: boolean) {
       if (!res.ok) throw new Error(String(res.status));
       const url = URL.createObjectURL(await res.blob());
       const audio = new Audio(url);
-      audio.volume = Math.max(0.15, Math.min(1, line.nearness));
+      const ctx = line.phone ? soundOut(sound) : null;
+      if (ctx && (await soundsOut(ctx, SOUND_WAIT_MS))) {
+        // Down the line: through the phone's filters, at the phone's volume, rather than the element's own. The
+        // element's own way in is let go with the rest once the line is said.
+        const source = ctx.createMediaElementSource(audio);
+        chain = [source, ...phoneLine(ctx, source, ctx.destination, lineVolume(line.nearness, true))];
+      } else audio.volume = lineVolume(line.nearness, line.phone);
       await new Promise<void>((done) => {
         audio.onended = () => done();
         audio.play().catch(() => done());
@@ -283,6 +338,7 @@ export function useVoicesNearby(on: boolean) {
     } catch {
       // A line that can't be voiced is still in its bubble.
     } finally {
+      for (const node of chain) node.disconnect();
       playing.current = false;
       void next();
     }
@@ -291,9 +347,9 @@ export function useVoicesNearby(on: boolean) {
     if (!on) queue.current = [];
   }, [on]);
   return useCallback(
-    (agent: string, text: string, nearness: number) => {
+    (agent: string, text: string, nearness: number, phone = false) => {
       if (!on) return;
-      queue.current.push({ agent, text, nearness });
+      queue.current.push({ agent, text, nearness, phone });
       if (queue.current.length > VOICE_QUEUE) queue.current.splice(0, queue.current.length - VOICE_QUEUE);
       void next();
     },
@@ -612,6 +668,204 @@ async function must(res: Promise<Response>, what: string): Promise<void> {
   }
 }
 
+/** The time, every few seconds while `enabled`: what talks that have run out are let go by. */
+function useNow(enabled: boolean, everyMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), everyMs);
+    return () => clearInterval(timer);
+  }, [enabled, everyMs]);
+  return now;
+}
+
+/** Each speaker's latest line, of two sets of them: what the server keeps, and what only this page heard. */
+export function newest(a: Record<string, Said>, b: Record<string, Said>): Record<string, Said> {
+  let out = a;
+  for (const [who, line] of Object.entries(b)) {
+    const was = a[who];
+    if (was && Date.parse(was.at) >= Date.parse(line.at)) continue;
+    if (out === a) out = { ...a };
+    out[who] = line;
+  }
+  return out;
+}
+
+/** How often a talk with you is written again while a reply is still on its way, so it never runs out under it. */
+const TALK_AGAIN_MS = 15_000;
+/** How often the page looks again at which talks have run out. */
+const TALK_TICK_MS = 5_000;
+
+/**
+ * Your last exchange in a conversation, as the page holds it: what you last
+ * said, and the answer to it once there is one. An answer from before what
+ * you last said is no answer to it.
+ */
+export function lastExchange(messages: { role: string; content: unknown }[]): { said?: string; reply?: string } {
+  const text = (m: { content: unknown } | undefined) =>
+    m ? contentText(m.content as Parameters<typeof contentText>[0]).trim() : "";
+  let reply = "";
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "user") {
+      const said = text(m);
+      return { ...(said ? { said } : {}), ...(reply ? { reply } : {}) };
+    }
+    if (!reply && m.role === "assistant") reply = text(m);
+  }
+  return {};
+}
+
+/**
+ * The agent's `talk` record while you talk to it on a visit: with `you`,
+ * face to face when its body is in the place you are in, on the phone when
+ * not. The page is the only one that knows where you are, so it writes it,
+ * for every page to show. The page takes it away as you leave (`hangUp`); one
+ * closed in the middle of a talk leaves it to run out by itself.
+ */
+async function talkWithYou(agent: string, near: boolean): Promise<void> {
+  await fetch(`/api/state/talk/${encodeURIComponent(agent)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      scope: "global",
+      data: { with: YOU, ...(near ? {} : { phone: true }), until: new Date(Date.now() + TALK_AFTER_MS).toISOString() },
+    }),
+  }).catch(() => {});
+}
+
+/**
+ * Your talk with an agent over, for every page: its `talk` record taken away,
+ * while it is still the one with you. A talk the places plugin wrote since,
+ * with another agent, is left alone, and so is one changed in between.
+ */
+async function hangUp(agent: string): Promise<void> {
+  const url = `/api/state/talk/${encodeURIComponent(agent)}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const record = (await res.json()) as { version?: unknown; data?: { with?: unknown } };
+    if (record.data?.with !== YOU || typeof record.version !== "number") return;
+    await fetch(`${url}?expectedVersion=${record.version}`, { method: "DELETE" });
+  } catch {
+    // Left where it is, it runs out by itself.
+  }
+}
+
+/**
+ * Your talk with the agent the chat is with, while you visit somewhere in your
+ * own body (`on`): face to face when its body is here (`near`), on the phone
+ * when it isn't. While you talk, and for a little after, the agent's `talk`
+ * record says so (`talkWithYou`), and your own body shows it too: what this
+ * returns as `talk`, which only this page knows. What you say and what it
+ * answers show in bubbles, as `lines`: yours over your head, its over its own
+ * when it is here and out of your phone when it isn't.
+ */
+function useTalkWithYou(opts: {
+  on: boolean;
+  agent: string;
+  near: boolean;
+  /** A typed message is on its way, until its answer is in. */
+  sending: boolean;
+  /** A reply is on its way: typed, or spoken. */
+  busy: boolean;
+  /** What you last said and its answer, typed. */
+  exchange: { said?: string; reply?: string };
+  now: number;
+}): {
+  talk: Talk | undefined;
+  lines: Record<string, Said>;
+  /** Something said out loud: by you (`heard`), or the agent's answer; `voiced`, already played as it was said. */
+  spoke: (who: "you" | "agent", text: string, voiced?: boolean) => void;
+} {
+  const { on, agent, near, sending, busy, exchange, now } = opts;
+  const [lines, setLines] = useState<Record<string, Said>>({});
+  const [lastAt, setLastAt] = useState(0);
+  const onRef = useRef(on);
+  onRef.current = on;
+  const agentRef = useRef(agent);
+  agentRef.current = agent;
+  const spoke = useCallback((who: "you" | "agent", text: string, voiced = false) => {
+    if (!onRef.current || !text.trim()) return;
+    const at = new Date().toISOString();
+    const speaker = who === "you" ? YOU : agentRef.current;
+    const to = who === "you" ? agentRef.current : YOU;
+    setLines((was) => ({ ...was, [speaker]: { text: text.trim(), at, to: [to], ...(voiced ? { voiced } : {}) } }));
+    setLastAt(Date.now());
+  }, []);
+  // Talking to someone else now: nothing has been said to it yet.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new agent is what starts the count again.
+  useEffect(() => setLastAt(0), [agent]);
+  // Back from the visit, what was said on it goes with it: the agent's own view shows nothing of your talk.
+  useEffect(() => {
+    if (!on) setLines({});
+  }, [on]);
+  // A typed message going out is what you said; the answer arriving after it, what the agent said back.
+  const waiting = useRef(false);
+  const said = exchange.said;
+  const reply = exchange.reply;
+  useEffect(() => {
+    if (!sending) return;
+    if (said) spoke("you", said);
+    waiting.current = true;
+  }, [sending, said, spoke]);
+  useEffect(() => {
+    if (!waiting.current || !reply) return;
+    waiting.current = false;
+    spoke("agent", reply);
+  }, [reply, spoke]);
+  // The agent's record: written as you start, again while a reply takes its time, and once more as it comes, so the
+  // talk goes on a little after.
+  const talking = on && (busy || now - lastAt < TALK_AFTER_MS);
+  // The last write of the record, and whose: what hanging up waits for, so a write still on its way can't land after.
+  const wrote = useRef<{ agent: string; done: Promise<void> } | undefined>(undefined);
+  const write = useCallback((who: string, isNear: boolean) => {
+    const prior = wrote.current?.agent === who ? wrote.current.done : Promise.resolve();
+    wrote.current = { agent: who, done: prior.then(() => talkWithYou(who, isNear)) };
+  }, []);
+  const wasBusy = useRef(false);
+  useEffect(() => {
+    if (!on) {
+      wasBusy.current = false;
+      return;
+    }
+    if (busy) {
+      wasBusy.current = true;
+      write(agent, near);
+      const timer = setInterval(() => write(agent, near), TALK_AGAIN_MS);
+      return () => clearInterval(timer);
+    }
+    if (!wasBusy.current) return;
+    wasBusy.current = false;
+    write(agent, near);
+  }, [on, agent, near, busy, write]);
+  // Leaving the visit, or talking to someone else now: the talk is over, on every page at once, rather than the agent
+  // staying on the line with nobody for a while.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new agent is what ends the talk with the last one.
+  useEffect(() => {
+    if (!on) return;
+    return () => {
+      const last = wrote.current;
+      wrote.current = undefined;
+      if (last) void last.done.then(() => hangUp(last.agent));
+    };
+  }, [on, agent]);
+  const talk = useMemo(
+    (): Talk | undefined =>
+      talking
+        ? {
+            with: agent,
+            ...(near ? {} : { phone: true }),
+            started: true,
+            until: new Date((busy ? now : lastAt) + TALK_AFTER_MS).toISOString(),
+          }
+        : undefined,
+    [talking, agent, near, busy, now, lastAt],
+  );
+  return { talk, lines, spoke };
+}
+
 /** An agent's body home: out of any meeting room it is visiting, and back from any shared place it went to. */
 async function sendHome(who: string): Promise<void> {
   for (const type of ["visit", "whereabouts"]) {
@@ -713,13 +967,12 @@ export function useScene(id: string | null): SceneInfo | null {
 export interface PlaceInfo {
   id?: string;
   place?: Room;
-  /** Everyone else in it; `with`, the one here an agent came to see, having messaged it directly. */
+  /** Everyone else in it. */
   company?: {
     agent: string;
     name?: string;
     avatar?: string;
     animations?: string[];
-    with?: string;
     role?: string;
     wear?: string[];
   }[];
@@ -747,7 +1000,6 @@ export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
             name: c.name ?? c.agent,
             url: c.avatar,
             animations: c.animations ?? [],
-            ...(c.with ? { with: c.with } : {}),
             ...(c.wear?.length ? { wear: c.wear } : {}),
           },
         ]
@@ -811,6 +1063,8 @@ export interface ChatStageOptions {
   chatApprovals?: string[];
   /** Put the chat on screen. */
   onShowChat?: () => void;
+  /** What you last said in the conversation on the page, and its answer once there is one (`lastExchange`). */
+  exchange?: { said?: string; reply?: string };
 }
 
 export function useChatStage({
@@ -827,6 +1081,7 @@ export function useChatStage({
   onReply,
   chatApprovals,
   onShowChat,
+  exchange,
 }: ChatStageOptions) {
   // Visiting a place in your own body, walking or flying; null is the agent's own view.
   const [visiting, setVisitingTo] = useState<string | null>(null);
@@ -1075,6 +1330,8 @@ export function useChatStage({
     return key;
   };
 
+  // What you and the agent say out loud, for the bubbles on a visit: filled in below, once your talk with it is known.
+  const spokeRef = useRef<(who: "you" | "agent", text: string, voiced?: boolean) => void>(() => {});
   const voice = useVoice({
     agent: agent || undefined,
     sessionKey: keyFor,
@@ -1084,6 +1341,7 @@ export function useChatStage({
     onHeard: (text) => {
       setHeard(text || null);
       setReplying("");
+      spokeRef.current("you", text);
     },
     onText: (delta) => setReplying((r) => r + delta),
     onDone: (turn) => {
@@ -1092,6 +1350,8 @@ export function useChatStage({
       const key = inUse.current;
       setHeard(null);
       setReplying("");
+      // Played already, sentence by sentence: a bubble, but not to be voiced again by voices nearby.
+      spokeRef.current("agent", turn.reply, true);
       if (turn.transcript && key) onSpoken(turn.conversation, key);
     },
   });
@@ -1180,6 +1440,26 @@ export function useChatStage({
     return () => clearTimeout(quiet);
   }, [busy]);
 
+  // Who is talking with whom, face to face or on the phone: the places plugin's records, and your own talk with the
+  // agent the chat is with while you visit, which only this page knows. Talks that have run out are let go as time
+  // goes by.
+  const talkRecords = useRecords<Talk>("talk", showStage);
+  const now = useNow(showStage && (busy || conversing || Object.keys(talkRecords).length > 0), TALK_TICK_MS);
+  const you = useTalkWithYou({
+    on: showStage && !!showing.visiting,
+    agent: talking,
+    near: !!showing.visiting && company.some((c) => c.agent === talking),
+    sending,
+    busy,
+    exchange: exchange ?? {},
+    now,
+  });
+  spokeRef.current = you.spoke;
+  const talks = useMemo(() => (you.talk ? { ...talkRecords, [YOU]: you.talk } : talkRecords), [talkRecords, you.talk]);
+  // What every agent is doing as the world shows it, talks and all: on bodies, on the map, on a card.
+  const shownActivities = useMemo(() => withTalks(activities, talks, now), [activities, talks, now]);
+  const saidAll = useMemo(() => newest(said, you.lines), [said, you.lines]);
+
   // A quiet moment, while the page is in view: the agent chooses what it does.
   const chooseIdle = useCallback(
     async (here: string | undefined, hour: number): Promise<Cue[]> => {
@@ -1220,7 +1500,7 @@ export function useChatStage({
     if (!hasScreen) return undefined;
     if (owner)
       return homeCards(owner, {
-        activity: activities[owner],
+        activity: shownActivities[owner],
         tasks: allTasks,
         coming: (wakes ?? [])
           .filter((w) => w.agent === owner)
@@ -1229,7 +1509,7 @@ export function useChatStage({
         now: minute,
       });
     return dashboardCards(dashboard, minute);
-  }, [hasScreen, owner, activities, allTasks, wakes, minute, dashboard]);
+  }, [hasScreen, owner, shownActivities, allTasks, wakes, minute, dashboard]);
   // Whose wakes a calendar shows outside a home and the lobby: whoever is there. Its full list opens on them too.
   const among = useMemo(() => (owner || placeId === "lobby" ? undefined : here), [owner, placeId, here]);
   // A calendar in a home is its owner's day; in the lobby, everyone's next wakes; elsewhere, those of whoever is there.
@@ -1448,7 +1728,7 @@ export function useChatStage({
         areas={map.areas}
         problem={map.problem}
         here={placeId}
-        activities={activities}
+        activities={shownActivities}
         onGo={go}
         onNeed={(who) => seeTo(who)}
         onClose={closePanel}
@@ -1610,7 +1890,7 @@ export function useChatStage({
               onWear: (wear: string[] | null) => dressAgent(who, wear),
             }
           : {})}
-        activity={activities[who]}
+        activity={shownActivities[who]}
         said={speech[who]}
         roomName={(ref) => map.places.find((p) => p.id === `room:${ref}`)?.name}
         where={where}
@@ -1657,8 +1937,8 @@ export function useChatStage({
         agent={showing.visiting ? "you" : shown}
         // Your own body wears nothing of the agent's.
         {...(!showing.visiting && own.wear ? { wear: own.wear } : {})}
-        activities={activities}
-        speech={said}
+        activities={shownActivities}
+        speech={saidAll}
         menuFor={menuFor}
         visitor={!!showing.visiting}
         onNear={setNear}
@@ -1714,8 +1994,8 @@ export function useChatStage({
     visiting: showing.visiting,
     /** Whose own view the scene shows, and where "Back to" goes. */
     home: shown,
-    /** What every agent is doing, while the scene is on. */
-    activities,
+    /** What every agent is doing, talks and all, while the scene is on. */
+    activities: shownActivities,
     /** The name of the place on screen, when it has one. */
     placeName: room.name,
     /** Something is open over the stage, or the room is being rearranged: on a phone it needs the chat's screen. */

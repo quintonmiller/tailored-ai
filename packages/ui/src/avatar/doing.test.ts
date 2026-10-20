@@ -77,6 +77,37 @@ describe("behaviorFor", () => {
     });
   });
 
+  it("talks face to face or on the phone as its talk says, whoever happens to be in sight", () => {
+    const near = behaviorFor(
+      act({ doing: "talking", what: "talking with writer", with: "writer", talk: { with: "writer" } }),
+    );
+    expect(near).toMatchObject({ sign: "talk", face: "writer", stays: true });
+    expect(near.prop).toBeUndefined();
+    const far = behaviorFor(
+      act({
+        doing: "talking",
+        what: "on the phone with writer",
+        with: "writer",
+        talk: { with: "writer", phone: true },
+      }),
+    );
+    expect(far).toMatchObject({ sign: "phone", prop: "phone", hold: "ear", phone: true });
+    expect(heldFor(far, { partnerHere: true })).toEqual({ prop: "phone", hold: "ear" });
+  });
+
+  it("thinks on the phone with the phone at its ear, and face to face stays with the other instead of going to its desk", () => {
+    const onPhone = behaviorFor(act({ doing: "thinking", what: "thinking", talk: { with: "you", phone: true } }));
+    expect(onPhone).toMatchObject({ sign: "think", prop: "phone", hold: "ear", station: "desk" });
+    const faceToFace = behaviorFor(act({ doing: "thinking", what: "thinking", talk: { with: "you" } }));
+    expect(faceToFace).toMatchObject({ sign: "think", face: "you" });
+    expect(faceToFace.station).toBeUndefined();
+    // Working with something in hand, it holds that rather than the phone.
+    const searching = behaviorFor(
+      act({ doing: "working", what: "searching", look: "magnifier", talk: { with: "writer", phone: true } }),
+    );
+    expect(searching.prop).toBe("magnifier");
+  });
+
   it("waves for you when it is waiting, and shrugs when it is stuck", () => {
     expect(behaviorFor(act({ doing: "waiting", what: "has a question for you" }))).toMatchObject({
       sign: "wait",

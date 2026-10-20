@@ -9,8 +9,10 @@
  * passing their own time. Every body shows what its agent is doing: a thing
  * in its hand, a sign over its head, its desk or the task board while it
  * works, a seat when it reads or sleeps. In a meeting room they sit at the
- * table and turn to whoever speaks. An agent that came to see one it
- * messaged stands with it, the two facing each other (`visits.ts`).
+ * table and turn to whoever speaks. Two agents talking in the same place
+ * face each other, the one who spoke first stepping over when they are far
+ * apart; one talking to an agent somewhere else holds a phone to its ear, and
+ * the far side's words come out of it (`talk.ts`).
  * Imported only when an avatar is configured, so three.js stays out of the
  * main bundle.
  *
@@ -74,6 +76,7 @@ import {
 } from "./scene";
 import { drawScreen, pageAt, type ScreenCard } from "./screens";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
+import { byPhone, GET_UP_AT, heardThrough, standBy, TALK_APART, talkingHere } from "./talk";
 import {
   clampReach,
   ease,
@@ -94,15 +97,19 @@ import {
   widestReach,
   ZOOM_SECONDS,
 } from "./travel";
-import { FOLLOW_AT, keeping, standBy } from "./visits";
+import { inOrder } from "./turns";
 
 export type { Travel } from "./travel";
 
-/** Something an agent said, when it said it (an ISO time; a reply can be timed to follow), and to whom. */
+/** Something an agent said, when it said it (an ISO time; a reply can be timed to follow), to whom, and in which room. */
 export interface Line {
   text: string;
   at: string;
   to?: string[];
+  /** The room it was said in; none for a direct message, which may be said down the phone. */
+  room?: string;
+  /** Already heard out loud where it was said (the reply to a spoken turn): only a bubble here, never voiced again. */
+  voiced?: boolean;
 }
 
 /** Where on something made to be used a click landed: a note or a column on a board, or the page a screen is on. */
@@ -127,8 +134,6 @@ export interface Companion {
   name: string;
   url: string;
   animations: string[];
-  /** The agent here it came to see, having messaged it directly: it stands with that one, facing it. */
-  with?: string;
   /** What it wears, by name (see `wear.ts`). */
   wear?: string[];
 }
@@ -392,8 +397,12 @@ export async function createStage(
      * calendar. Its action; on a board, what was hit; on a screen, the page up.
      */
     onUse?: (action: string, on?: UseSpot) => void;
-    /** A visitor is within earshot of an agent as it starts saying something: who, what, and how near (0–1, 1 beside it). */
-    onLine?: (agent: string, text: string, nearness: number) => void;
+    /**
+     * A visitor is within earshot as an agent starts saying something: who,
+     * what, and how near (0–1, 1 beside it); `phone`, it is the far side of a
+     * call, heard out of the phone of someone here.
+     */
+    onLine?: (agent: string, text: string, nearness: number, phone?: boolean) => void;
     /** Someone went through a door (walked into it, or clicked it): the page brings the place behind it. */
     onDoor?: (door: RoomDoor) => void;
     /** The place come from, through a door: you start just inside the door back to it. */
@@ -747,14 +756,14 @@ export async function createStage(
   if (arrival) me.placeAt(arrival.at, arrival.facing);
   host.dataset.motion = "code";
 
-  // Other agents in the room, by agent, with who each came to see here, if anyone; and those still loading.
-  const companions = new Map<string, Figure & { name?: string; with?: string }>();
+  // Other agents in the room, by agent; and those still loading.
+  const companions = new Map<string, Figure & { name?: string }>();
   // What each body is showing of what its agent is doing.
   const shows = new Map<Figure, { behavior: Behavior; doing?: string; checked: number; faced: number }>();
   // The last line of each agent's that has been shown, by its time, so a line shows once.
   const heard = new Map<string, string>();
-  // Lines about to be said, for a visitor to hear when they start.
-  let voices: { agent: string; text: string; at: number }[] = [];
+  // Lines about to be said, for a visitor to hear when they start; `via`, the one here whose phone a far line comes out of.
+  let voices: { agent: string; text: string; at: number; via?: string }[] = [];
   const arriving = new Set<string>();
   // Bodies on their way out through the door, until they get there.
   const departing: { fig: Figure; from: number }[] = [];
@@ -789,19 +798,16 @@ export async function createStage(
     const seats = isMeeting(room) ? room.spots.filter((s) => /^seat-\d+$/.test(s.id) && !busy.has(s.id)) : [];
     return seats.length ? seats[Math.floor(Math.random() * seats.length)] : freeSpot();
   };
-  // Who keeps whom company here, by agent (see `keeping`); where each visitor stands, or is walking to stand;
-  // and when each body last looked to its company.
-  let kept = new Map<string, string>();
+  // Who faces whom here, talking face to face, and whether each is the one to walk over (see `talkingHere`); where
+  // each that walked over stands, or is walking to stand; and when each body last looked to its company.
+  let kept = new Map<string, { partner: string; goes: boolean }>();
   const standing = new Map<Figure, [number, number]>();
   const facedAt = new Map<Figure, number>();
   const rekeep = () => {
     const was = kept;
-    kept = keeping(
-      [...companions].map(([agent, c]): [string, string | undefined] => [agent, c.with]),
-      new Set([self, ...companions.keys()]),
-    );
-    // Company gone: nowhere it stands for them, and, standing at a spot, back to what it faces there. One that got
-    // up to meet its visitor is at no spot, and goes on to one once it has stopped (see `drift`).
+    kept = talkingHere(activities, new Set([self, ...companions.keys()]));
+    // A talk over: nowhere it stands for it, and, standing at a spot, back to what it faces there. One that got up
+    // to talk is at no spot, and goes on to one once it has stopped (see `drift`).
     for (const agent of was.keys()) {
       const f = kept.has(agent) ? undefined : figureOf(agent);
       if (!f || (f === me && opts.visitor)) continue;
@@ -823,40 +829,49 @@ export async function createStage(
     if (f === me) go(spot.id);
     else f.go(room, spot.id, ways());
   };
-  /** Where `f` stands to talk to `partner`, coming from `from` (where it is, when not given): clear of everyone else. */
-  const standFor = (f: Figure | undefined, partner: Figure, from?: [number, number]) => {
+  /** Where `f` stands to talk to `partner`, on the side it comes from: clear of everyone else. */
+  const standFor = (f: Figure, partner: Figure) => {
     const others: [number, number][] = [];
     for (const g of [me, ...companions.values()])
       if (g !== f && g !== partner) others.push(standing.get(g) ?? [g.walker.place.x, g.walker.place.z]);
     return standBy(room, obstacles, [partner.walker.place.x, partner.walker.place.z], {
-      from: from ?? (f ? [f.walker.place.x, f.walker.place.z] : undefined),
+      from: [f.walker.place.x, f.walker.place.z],
       others,
     });
   };
-  /** A visitor goes over to stand with the one it came to see. */
+  /** One goes over to stand and talk with another. */
   const joinUp = (f: Figure, partner: Figure) => {
     const spot = standFor(f, partner);
     standing.set(f, spot.at);
     f.goTo(room, spot.at, waysFor(f));
   };
   /**
-   * Every few seconds, a body keeping someone company turns to them; a
-   * visitor whose company has moved off walks over to it again. One sitting
-   * about when its visitor comes up gets up to stand with it, face to face,
-   * unless it is at a meeting table, where everyone keeps their seat.
+   * Every few seconds, a body talking face to face turns to the other; the
+   * one who goes (see `talkingHere`) walks over first when they are too far
+   * apart to talk, and again if the other moves off. One sitting about when
+   * the other has walked over to it gets up to stand with it, unless it is at
+   * a meeting table, where everyone keeps their seat; near enough to talk
+   * already, it stays sat and turns.
    */
-  const keepCompany = (f: Figure, partnerAgent: string, visitor: boolean, t: number) => {
+  const keepCompany = (f: Figure, partnerAgent: string, goes: boolean, t: number) => {
     const partner = figureOf(partnerAgent);
     if (!partner || t - (facedAt.get(f) ?? Number.NEGATIVE_INFINITY) < 2 || f.moving) return;
     facedAt.set(f, t);
     const apart = Math.hypot(partner.walker.place.x - f.walker.place.x, partner.walker.place.z - f.walker.place.z);
-    if (visitor && apart > FOLLOW_AT && !partner.moving) joinUp(f, partner);
-    else if (!visitor && f.seated > 0.05 && !partner.moving && apart <= FOLLOW_AT && !isMeeting(room)) {
-      // Idle, or talking with its visitor: up it gets. Asleep it sleeps on, and busy with something else it carries on.
+    if (goes && apart > TALK_APART && !partner.moving && !isMeeting(room)) joinUp(f, partner);
+    else if (
+      !goes &&
+      f.seated > 0.05 &&
+      standing.has(partner) &&
+      !partner.moving &&
+      apart <= GET_UP_AT &&
+      !isMeeting(room)
+    ) {
+      // Idle, or talking with the one who came over: up it gets. Asleep it sleeps on, and busy it carries on.
       const b = shows.get(f)?.behavior;
       if (!b?.stays || b.face === partnerAgent) joinUp(f, partner);
       else f.face(partner.head(), t);
-    } else f.face(partner.head(), t, !visitor && !!shows.get(f)?.behavior.stays && busyAt(f));
+    } else f.face(partner.head(), t, !goes && !!shows.get(f)?.behavior.stays && busyAt(f));
   };
 
   /** The agent you talk to goes somewhere; anyone already there makes room. */
@@ -1681,17 +1696,31 @@ export async function createStage(
   /** A mouth moving as if to words, with no voice to follow: syllables and the gaps between them. */
   const chatter = (t: number) => Math.max(0, Math.sin(t * 11) * Math.sin(t * 3.3 + 1) + 0.15);
 
-  /** Show what an agent said, once, over its head: now, or when a reply is timed to follow. */
+  /**
+   * Show what an agent said, once, over its head: now, or when a reply is
+   * timed to follow. Said down the phone, its bubble shows a phone. Said by
+   * someone who isn't here, down the phone to someone here on a call with
+   * it, it comes out of that one's phone: over its head, edged apart, in the
+   * speaker's name. What it says anywhere else isn't heard here at all.
+   */
   const hear = (agent: string, line: Line | undefined) => {
-    const f = figureOf(agent);
-    if (!f || !line || heard.get(agent) === line.at) return;
+    if (!line) return;
+    const own = figureOf(agent);
+    const through = own ? undefined : heardThrough(agent, line, activities, [self, ...companions.keys()]);
+    const f = own ?? (through ? figureOf(through) : undefined);
+    if (!f || heard.get(agent) === line.at) return;
     heard.set(agent, line.at);
     const delay = Date.parse(line.at) - Date.now();
     if (!Number.isFinite(delay) || delay < -STALE_LINE_MS) return;
     const at = clock + Math.max(0, delay) / 1000;
     // A body with a tag has its name in the bubble: the tag is put away while it speaks.
-    f.say(line.text, at, f === me ? undefined : companions.get(agent)?.name);
-    if (opts.visitor && opts.onLine && f !== me) voices.push({ agent, text: line.text, at });
+    if (!own) f.say(line.text, at, nameOf(agent), { far: true });
+    else
+      f.say(line.text, at, f === me ? undefined : companions.get(agent)?.name, {
+        phone: byPhone(line, activities[agent]?.talk),
+      });
+    if (opts.visitor && opts.onLine && (f !== me || !own) && !line.voiced)
+      voices.push({ agent, text: line.text, at, ...(through ? { via: through } : {}) });
     // Said to someone here: the two turn to each other.
     for (const name of line.to ?? []) {
       const g = figureOf(name) ?? companionNamed(name);
@@ -1710,10 +1739,11 @@ export async function createStage(
     const due = voices.filter((v) => v.at <= t);
     voices = voices.filter((v) => v.at > t);
     for (const v of due) {
-      const f = companions.get(v.agent);
+      // The far side of a call is heard from the phone it comes out of, down the line.
+      const f = v.via ? figureOf(v.via) : companions.get(v.agent);
       if (!f) continue;
       const d = Math.hypot(f.walker.place.x - me.walker.place.x, f.walker.place.z - me.walker.place.z);
-      if (travel === "walk" && d <= HEAR_AT) opts.onLine?.(v.agent, v.text, 1 - d / HEAR_AT);
+      if (travel === "walk" && d <= HEAR_AT) opts.onLine?.(v.agent, v.text, 1 - d / HEAR_AT, !!v.via);
     }
   };
   let speech: Record<string, Line> = {};
@@ -1737,22 +1767,25 @@ export async function createStage(
     const behavior = behaviorFor(activity);
     const was = shows.get(f);
     const close = closeTo(agent) && !(f === me && opts.visitor);
-    // Come to see someone here, and with nothing else to say: talking with them, as the map has it.
-    const visiting = f === me ? undefined : companions.get(agent)?.with;
     const status = behavior.label
       ? close && activity?.doing === "asleep"
         ? `asleep · ${asleepWords(activity)}`
         : behavior.detail
           ? `${behavior.label} · ${behavior.detail}`
           : behavior.label
-      : visiting
-        ? `talking with ${nameOf(visiting)}`
-        : close
-          ? (errands.get(f)?.errand.label ?? "idle")
-          : undefined;
+      : close
+        ? (errands.get(f)?.errand.label ?? "idle")
+        : undefined;
     // The agent you talk to needs no name; the others always show theirs.
-    f.label(f === me ? (opts.visitor ? "you" : undefined) : f.name, status, close ? aboutLines(activity) : []);
+    f.label(
+      f === me ? (opts.visitor ? "you" : undefined) : f.name,
+      status,
+      close ? aboutLines(activity) : [],
+      !!behavior.phone,
+    );
     if (was && sameBehavior(was.behavior, behavior)) return;
+    // Your own body does nothing by itself but hold the phone, while you talk to someone somewhere else.
+    if (f === me && opts.visitor) f.hold(behavior.prop, behavior.hold);
     shows.set(f, {
       behavior,
       doing: activity?.doing,
@@ -1859,13 +1892,6 @@ export async function createStage(
         fig.name = c.name;
         // Dressed again only when what it wears changed: the same list is nothing to do.
         fig.dress(c.wear);
-        // Here already, and now come to see someone here: over to them.
-        if (fig.with !== c.with) {
-          fig.with = c.with;
-          standing.delete(fig);
-          const partner = c.with ? figureOf(c.with) : undefined;
-          if (partner && !opts.still) joinUp(fig, partner);
-        }
         show(c.agent, fig);
         continue;
       }
@@ -1880,34 +1906,26 @@ export async function createStage(
             return;
           }
           const entrance = coming && gen === placeGen ? doorway() : undefined;
-          // Come to see someone here: it stands with them, from the side it comes in; anyone else takes a seat.
-          const partner = still.with ? figureOf(still.with) : undefined;
-          const stand = partner ? standFor(undefined, partner, entrance?.at) : undefined;
-          const seat = stand ? undefined : arrivalSpot();
+          const seat = arrivalSpot();
           const start = entrance
             ? { id: "", name: "", place: "", at: entrance.at, facing: (entrance.facing * 180) / Math.PI }
-            : stand
-              ? { id: "", name: "", place: "", at: stand.at, facing: (stand.facing * 180) / Math.PI }
-              : seat;
+            : seat;
           const figure = new Figure(model, room, start, {
             reducedMotion: opts.reducedMotion,
             animations: still.animations,
             hue: hueFor(c.agent),
             wear: still.wear,
             ...(opts.still ? {} : { pick: pickFor(c.agent, () => companions.get(c.agent)) }),
-          }) as Figure & { name?: string; with?: string };
+          }) as Figure & { name?: string };
           figure.name = still.name;
-          figure.with = still.with;
           scene.add(figure.body, figure.gaze);
           companions.set(c.agent, figure);
           rekeep();
           show(c.agent, figure);
           // The agent you came to see: you stand in front of it now that it is here.
           if (greeting === c.agent) standBefore(c.agent);
-          // In through the door, and on to whoever it came to see, or somewhere free.
-          if (stand) standing.set(figure, stand.at);
-          if (entrance && stand) figure.goTo(room, stand.at, ways());
-          else if (entrance && seat) figure.go(room, seat.id, ways());
+          // In through the door, and on to somewhere free.
+          if (entrance && seat) figure.go(room, seat.id, ways());
           // What brought it here may be what it just said, in the room it came to say it in: that shows. Anything
           // older than a moment is old news, which `hear` leaves out.
           hear(c.agent, speech[c.agent]);
@@ -2196,7 +2214,7 @@ export async function createStage(
     const poseAt = shoot && gestureAt !== undefined ? gestureAt + peak : t;
     const here = me.here;
     const mine = shows.get(me)?.behavior;
-    // Someone came to see the agent: it stays with them rather than wandering off.
+    // Talking with someone here: it stays with them rather than wandering off.
     const myCompany = opts.visitor || opts.still ? undefined : kept.get(self);
     const next =
       asking || opts.still || opts.visitor || mine?.stays || myCompany
@@ -2225,8 +2243,8 @@ export async function createStage(
     }
     if (!opts.still && !opts.visitor) attend(me, self, t, !engaged && !myCompany);
     if (!opts.still && !opts.visitor && !myCompany && !engaged && !asking && !mine?.stays) drift(me);
-    // Talking with you comes first; otherwise it turns to whoever came to see it.
-    if (myCompany && !engaged) keepCompany(me, myCompany, false, t);
+    // Talking with you comes first; otherwise it turns to whoever it is talking with here.
+    if (myCompany && !engaged) keepCompany(me, myCompany.partner, myCompany.goes, t);
     if (opts.visitor) {
       if (!editing) visit(dt);
       giveWay(t);
@@ -2301,12 +2319,12 @@ export async function createStage(
     for (const [agent, c] of companions) {
       const theirs = shows.get(c)?.behavior;
       if (!opts.still) {
-        // Keeping someone company, a body stays with them: no wandering, no going off to a desk.
+        // Talking with someone here, a body stays with them: no wandering, no going off to a desk.
         const company = kept.get(agent);
         const move = theirs?.stays || company ? undefined : c.director.decide(t, c.here, false, taken(c));
         if (typeof move === "string") c.go(room, move, ways());
         attend(c, agent, t, !company);
-        if (company) keepCompany(c, company, c.with === company, t);
+        if (company) keepCompany(c, company.partner, company.goes, t);
         else if (!theirs?.stays) drift(c);
       }
       const talking = c.speaking(t);
@@ -2508,9 +2526,12 @@ export async function createStage(
     standBefore,
     setActivities(next) {
       activities = next;
+      rekeep();
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
       lightDoors();
+      // A call heard of after what was said on it: the far side's words, waiting for a phone here to come out of.
+      for (const [agent, line] of inOrder(speech)) hear(agent, line);
     },
     setTasks(next) {
       tasks = next;
@@ -2554,7 +2575,9 @@ export async function createStage(
     },
     setSpeech(next) {
       speech = next;
-      for (const [agent, line] of Object.entries(next)) hear(agent, line);
+      // In the order said, which isn't the order the lines came in: an answer timed to follow its question can
+      // come first, and a body shows each in its turn.
+      for (const [agent, line] of inOrder(next)) hear(agent, line);
     },
     setEditing(next) {
       const was = editing;

@@ -3,7 +3,7 @@ import { fetchMessages, fetchSessions, type SessionRow, setStoredChatSessionId }
 import { groupTurns } from "../chat-grouping";
 import { ApprovalArgs } from "../components/ApprovalArgs";
 import { useChatStore } from "../components/ChatContext";
-import { TalkButton, useChatStage } from "../components/ChatStage";
+import { lastExchange, TalkButton, useChatStage } from "../components/ChatStage";
 import { ChatWith, RoomLines, RoomWith, useRoomTalk } from "../components/ChatWith";
 import { AttachmentTray, filesFromDrop, filesFromPaste, useAttachments } from "../components/Composer.js";
 import { MessageBubble, ThinkingDisclosure, ToolLogPanel } from "../components/MessageBubble";
@@ -88,6 +88,8 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   );
 
   const agentNames = Object.keys(store.agents).filter((name) => name !== "default");
+  // What you last said and its answer, for the bubbles over you and the agent when you talk to it on a visit.
+  const exchange = useMemo(() => lastExchange(displayMessages), [displayMessages]);
 
   // The agent's body behind the conversation, when it has one, and talking
   // out loud into the same conversation.
@@ -145,6 +147,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       setReading(false);
       setPanelOpen(true);
     },
+    exchange,
     onSpoken: (conversation, key) => {
       if (!conversation) return;
       // Loading the conversation shows the spoken turn with the rest, and

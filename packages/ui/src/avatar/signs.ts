@@ -1,7 +1,8 @@
 /**
  * What floats over a body: a tag with its name and what it is doing, and a
- * sign for its state — thinking dots, a speech bubble, an exclamation when it
- * is waiting on you, a question when it is stuck, and Zs while it sleeps.
+ * sign for its state — thinking dots, a speech bubble, a phone while it talks
+ * to someone somewhere else, an exclamation when it is waiting on you, a
+ * question when it is stuck, and Zs while it sleeps.
  * Drawn on canvases into sprites, so they always face the camera and stay
  * readable from any angle. Each stands on the top of the head; how big it is
  * drawn and how far up it goes are the screen's to say (`overhead.ts`).
@@ -57,6 +58,36 @@ function disposeSprite(s: THREE.Sprite) {
   s.removeFromParent();
 }
 
+/** The blue a phone is drawn in, on a sign, a bubble or a tag: the talking colour. */
+const PHONE_BLUE = "#3d7bd9";
+
+/**
+ * A telephone handset, `size` pixels square with its top left at `x`, `y`:
+ * the earpiece up at the left, the mouthpiece down at the right, the grip
+ * curving between them.
+ */
+function drawHandset(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(size / 24, size / 24);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(5, 3);
+  ctx.lineTo(8.5, 3);
+  ctx.lineTo(10.1, 7.4);
+  ctx.lineTo(7.8, 9.1);
+  ctx.quadraticCurveTo(10, 13.9, 14.9, 16.2);
+  ctx.lineTo(16.6, 13.9);
+  ctx.lineTo(21, 15.5);
+  ctx.lineTo(21, 19);
+  ctx.quadraticCurveTo(21, 21, 19, 21);
+  ctx.quadraticCurveTo(3, 21, 3, 5);
+  ctx.quadraticCurveTo(3, 3, 5, 3);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 /** At most this many characters on a line, so a long status doesn't stretch across the room. */
 const LINE_CHARS = 34;
 
@@ -67,15 +98,27 @@ function clip(text: string, chars = LINE_CHARS): string {
 /** The smaller lines under a tag fit a few more characters in the same width. */
 const MORE_CHARS = TAG_LINE_CHARS;
 
+/** A handset drawn before a line of a tag: its size, and the gap after it. */
+const TAG_PHONE = 30;
+const TAG_PHONE_GAP = 10;
+
 /**
  * A tag over the head: a name, a status, or both — the name on top, what it
  * is doing beneath in a lighter face — and any lines `more` adds below, in a
- * smaller one: what it did last, when it wakes.
+ * smaller one: what it did last, when it wakes. On the phone, a handset
+ * stands before the status.
  */
-export function tag(lines: { name?: string; status?: string; more?: string[] }): THREE.Sprite | undefined {
+export function tag(lines: {
+  name?: string;
+  status?: string;
+  more?: string[];
+  phone?: boolean;
+}): THREE.Sprite | undefined {
   const rows = [
     ...(lines.name ? [{ text: clip(lines.name), font: "600 44px system-ui, sans-serif", color: "#f2f4fa" }] : []),
-    ...(lines.status ? [{ text: clip(lines.status), font: "400 36px system-ui, sans-serif", color: "#cfd6ea" }] : []),
+    ...(lines.status
+      ? [{ text: clip(lines.status), font: "400 36px system-ui, sans-serif", color: "#cfd6ea", phone: !!lines.phone }]
+      : []),
     ...(lines.more ?? []).map((text) => ({
       text: clip(text, MORE_CHARS),
       font: "400 33px system-ui, sans-serif",
@@ -86,10 +129,11 @@ export function tag(lines: { name?: string; status?: string; more?: string[] }):
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const lineHeight = (font: string) => (font.includes("44px") ? 54 : font.includes("36px") ? 46 : 42);
+  const mark = (r: { phone?: boolean }) => (r.phone ? TAG_PHONE + TAG_PHONE_GAP : 0);
   let width = 0;
   for (const r of rows) {
     if (ctx) ctx.font = r.font;
-    width = Math.max(width, ctx?.measureText(r.text).width ?? r.text.length * 22);
+    width = Math.max(width, (ctx?.measureText(r.text).width ?? r.text.length * 22) + mark(r));
   }
   canvas.width = Math.ceil(width + 52);
   canvas.height = rows.reduce((h, r) => h + lineHeight(r.font), 18);
@@ -105,7 +149,13 @@ export function tag(lines: { name?: string; status?: string; more?: string[] }):
       const h = lineHeight(r.font);
       ctx.font = r.font;
       ctx.fillStyle = r.color;
-      ctx.fillText(r.text, canvas.width / 2, y + h / 2 + 2);
+      // The handset and the words are centred together, the handset first.
+      const shift = mark(r) / 2;
+      if (shift) {
+        const left = (canvas.width - ctx.measureText(r.text).width) / 2 - shift;
+        drawHandset(ctx, left, y + (h - TAG_PHONE) / 2 + 1, TAG_PHONE, "#8fb8ff");
+      }
+      ctx.fillText(r.text, canvas.width / 2 + shift, y + h / 2 + 2);
       y += h;
     }
   }
@@ -144,41 +194,68 @@ export function wrap(text: string, width = BUBBLE_CHARS, lines = BUBBLE_LINES): 
 
 /** The white of a bubble, and of its tail. */
 const BUBBLE_FILL = "rgba(252, 252, 255, 0.96)";
+/** A bubble for the far side of a call, heard out of a phone here: a cooler white, edged in dashes. */
+const FAR_FILL = "rgba(236, 242, 255, 0.96)";
+
+/** A handset drawn in a bubble's top line: its size, and the gap after it. */
+const BUBBLE_PHONE = 30;
+const BUBBLE_PHONE_GAP = 8;
 
 /**
  * A speech bubble with what was said in it, and the speaker's name over the
  * words when it has one: its tag is put away while it speaks, so the bubble
  * says who is talking. Its tail is drawn apart (`bubbleTail`), so it can
- * reach down to the speaker however far up the bubble has had to go.
+ * reach down to the speaker however far up the bubble has had to go. Said
+ * down the phone, a handset stands before the name; heard out of a phone
+ * here, from someone somewhere else (`far`), the bubble is edged in dashes.
  */
-export function speechBubble(text: string, who?: string): THREE.Sprite {
+export function speechBubble(text: string, who?: string, how: { phone?: boolean; far?: boolean } = {}): THREE.Sprite {
   const lines = wrap(text);
   const canvas = document.createElement("canvas");
   const ctx = canvas.getContext("2d");
   const font = "500 38px system-ui, sans-serif";
   const nameFont = "700 30px system-ui, sans-serif";
   const name = who ? clip(who, BUBBLE_CHARS) : undefined;
+  const phone = !!how.phone || !!how.far;
+  const mark = phone ? BUBBLE_PHONE + (name ? BUBBLE_PHONE_GAP : 0) : 0;
   let width = 0;
   if (ctx) ctx.font = font;
   for (const l of lines) width = Math.max(width, ctx?.measureText(l).width ?? l.length * 20);
   if (ctx && name) ctx.font = nameFont;
-  if (name) width = Math.max(width, ctx?.measureText(name).width ?? name.length * 17);
+  const nameWidth = name ? (ctx?.measureText(name).width ?? name.length * 17) : 0;
+  width = Math.max(width, nameWidth + mark);
   const lineHeight = 48;
-  const nameHeight = name ? 40 : 0;
+  const nameHeight = name || phone ? 40 : 0;
   const pad = 26;
   canvas.width = Math.ceil(width + pad * 2);
   canvas.height = nameHeight + lines.length * lineHeight + pad * 2;
   if (ctx) {
-    ctx.fillStyle = BUBBLE_FILL;
+    ctx.fillStyle = how.far ? FAR_FILL : BUBBLE_FILL;
     ctx.beginPath();
-    ctx.roundRect(0, 0, canvas.width, canvas.height, 30);
+    ctx.roundRect(
+      how.far ? 3 : 0,
+      how.far ? 3 : 0,
+      canvas.width - (how.far ? 6 : 0),
+      canvas.height - (how.far ? 6 : 0),
+      30,
+    );
     ctx.fill();
+    if (how.far) {
+      ctx.strokeStyle = PHONE_BLUE;
+      ctx.lineWidth = 5;
+      ctx.setLineDash([14, 10]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    // The handset and the name are centred together on the top line, the handset first.
+    const left = (canvas.width - nameWidth - mark) / 2;
+    if (phone) drawHandset(ctx, left, pad + (nameHeight - BUBBLE_PHONE) / 2 - 2, BUBBLE_PHONE, PHONE_BLUE);
     if (name) {
       ctx.font = nameFont;
       ctx.fillStyle = "#4a5470";
-      ctx.fillText(name, canvas.width / 2, pad + nameHeight / 2 - 2);
+      ctx.fillText(name, canvas.width / 2 + mark / 2, pad + nameHeight / 2 - 2);
     }
     ctx.font = font;
     ctx.fillStyle = "#1d2230";
@@ -262,6 +339,7 @@ function drawSign(sign: Sign): HTMLCanvasElement {
       dots(56, "#4b5263");
       break;
     case "talk":
+    case "phone":
       ctx.fillStyle = "rgba(250, 250, 255, 0.95)";
       ctx.beginPath();
       ctx.roundRect(8, 18, 112, 72, 30);
@@ -271,7 +349,9 @@ function drawSign(sign: Sign): HTMLCanvasElement {
       ctx.lineTo(26, 114);
       ctx.lineTo(58, 88);
       ctx.fill();
-      dots(54, "#3d7bd9");
+      // Face to face, the dots of talk; to someone somewhere else, a handset.
+      if (sign === "phone") drawHandset(ctx, 40, 30, 48, PHONE_BLUE);
+      else dots(54, PHONE_BLUE);
       break;
     case "wait":
       disc(doingCss("waiting"), "!");

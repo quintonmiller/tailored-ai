@@ -14,8 +14,7 @@ import {
   applyAction,
   bodyAt,
   buildWorld,
-  followMessages,
-  goingToSee,
+  followTalk,
   homeId,
   looksOf,
   mayChange,
@@ -28,13 +27,17 @@ import {
   readHome,
   roomPlaceId,
   scene,
+  TALK_AFTER_MS,
+  TALK_SCHEMA,
+  TALK_TYPE,
+  Talks,
   TRANSCRIPT_LINES,
-  together,
+  talkNow,
+  talkOf,
   transcript,
   VISIT_SCHEMA,
   VISIT_TYPE,
   visitOf,
-  visitWith,
   WEAR_TYPE,
   WHEREABOUTS_TYPE,
   whereIs,
@@ -741,11 +744,12 @@ describe("bodies going where the talk is", () => {
   });
 });
 
-describe("going to see an agent you message", () => {
+describe("talking where the bodies are", () => {
   const types = [
     { name: PLACE_TYPE, scope: "agent" as const },
     { name: WHEREABOUTS_TYPE, scope: "global" as const },
     { name: VISIT_TYPE, scope: "global" as const, provider: "memory", schema: VISIT_SCHEMA as never },
+    { name: TALK_TYPE, scope: "global" as const, provider: "memory", schema: TALK_SCHEMA as never },
   ];
   const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
   const bodies = new Set(["host", "guest", "other", "third"]);
@@ -753,11 +757,10 @@ describe("going to see an agent you message", () => {
   const rooms = [{ ref: "local:trip", name: "trip", members: ["host", "guest"] }];
   const trip = roomPlaceId("local:trip");
   const QUIET = 10 * 60_000;
-  const DM_QUIET = 5 * 60_000;
   let state: StateService;
   let presence: Presence;
-  let sleeping: Set<string>;
-  const visit = async (agent: string) => state.get(owner, { type: VISIT_TYPE, id: agent });
+  let talks: Talks;
+  const talk = async (agent: string) => state.get(owner, { type: TALK_TYPE, id: agent });
   const at = (agent: string) => bodyAt(state, owner, agent, rooms);
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -766,55 +769,40 @@ describe("going to see an agent you message", () => {
       getConfig: () => ({ state: { backend: "sqlite", types } }),
       db: new Database(":memory:"),
     });
-    sleeping = new Set();
-    presence = new Presence({
-      state: () => state,
-      hasBody,
-      quietMs: QUIET,
-      dmQuietMs: DM_QUIET,
-      livesIn: (agent) => whereIs(state, owner, agent, rooms),
-      asleep: (agent) => sleeping.has(agent),
-    });
+    presence = new Presence({ state: () => state, hasBody, quietMs: QUIET });
+    talks = new Talks({ state: () => state, hasBody, bodyAt: at });
   });
   afterEach(() => vi.useRealTimers());
 
-  describe("who goes where", () => {
-    const home = (agent: string) => ({ at: homeId(agent) });
-    const rule = (from: string, to: string, where: Record<string, ReturnType<typeof home>>, asleep = false) =>
-      goingToSee(from, to, { from: where[from] ?? home(from), to: where[to] ?? home(to), hasBody, asleep });
-
-    it("sends the sender to where the other's body is, to stand with it", () => {
-      expect(rule("host", "guest", {})).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
-      // Wherever its own visit has taken it: a meeting it is talking in, or someone it went to see.
-      const atTable = { guest: { at: trip, visit: { place: trip } } };
-      expect(rule("host", "guest", atTable)).toEqual({ agent: "host", place: trip, with: "guest" });
-      const calling = { guest: { at: homeId("other"), visit: { place: homeId("other"), with: "other" } } };
-      expect(rule("host", "guest", calling)).toEqual({ agent: "host", place: homeId("other"), with: "guest" });
-      // Gone to see one agent, it goes on to the next one it messages.
-      const out = { host: { at: homeId("other"), visit: { place: homeId("other"), with: "other" } } };
-      expect(rule("host", "guest", out)).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
+  describe("near or far", () => {
+    it("puts two in the same place face to face, and two in different places on the phone", () => {
+      expect(talkOf("host", "guest", { from: trip, to: trip })).toEqual({
+        host: { with: "guest", started: true },
+        guest: { with: "host" },
+      });
+      expect(talkOf("host", "guest", { from: homeId("host"), to: homeId("guest") })).toEqual({
+        host: { with: "guest", phone: true, started: true },
+        guest: { with: "host", phone: true },
+      });
     });
 
-    it("keeps two already together where they are, whoever writes next", () => {
-      const visiting = { host: { at: homeId("guest"), visit: { place: homeId("guest"), with: "guest" } } };
-      // The visitor writes again: it stays a while longer.
-      expect(rule("host", "guest", visiting)).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
-      // The one it came to see writes back: the visitor stays a while longer, and nobody walks anywhere.
-      expect(rule("guest", "host", visiting)).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
-      // In the same meeting already: nobody moves.
-      const meeting = { host: { at: trip, visit: { place: trip } }, guest: { at: trip, visit: { place: trip } } };
-      expect(rule("host", "guest", meeting)).toBeUndefined();
+    it("gives a side only to an agent with a body, on the phone to one without, and nothing to itself", () => {
+      expect(talkOf("host", "bodiless", { from: homeId("host") })).toEqual({
+        host: { with: "bodiless", phone: true, started: true },
+      });
+      expect(talkOf("bodiless", "host", { to: homeId("host") })).toEqual({ host: { with: "bodiless", phone: true } });
+      expect(talkOf("host", "host", { from: homeId("host"), to: homeId("host") })).toEqual({});
+      expect(talkOf("a", "b", {})).toEqual({});
     });
 
-    it("moves nobody for a message to itself, or between agents without both a body", () => {
-      expect(rule("host", "host", {})).toBeUndefined();
-      expect(rule("host", "bodiless", {})).toBeUndefined();
-      expect(rule("bodiless", "host", {})).toBeUndefined();
-    });
-
-    it("leaves a paused sender asleep at home, and one talking at a meeting in its seat", () => {
-      expect(rule("host", "guest", {}, true)).toBeUndefined();
-      expect(rule("host", "guest", { host: { at: trip, visit: { place: trip } } })).toBeUndefined();
+    it("reads a talk from its record while it lasts, and nothing after", () => {
+      const now = Date.parse("2026-10-19T02:00:00Z");
+      const record = { with: "guest", phone: true, until: "2026-10-19T02:00:40Z" };
+      expect(talkNow(record, now)).toEqual({ with: "guest", phone: true });
+      expect(talkNow(record, now + TALK_AFTER_MS)).toBeUndefined();
+      expect(talkNow({ with: "guest" }, now)).toBeUndefined();
+      expect(talkNow({ until: "2026-10-19T02:00:40Z" }, now)).toBeUndefined();
+      expect(talkNow(undefined, now)).toBeUndefined();
     });
   });
 
@@ -826,7 +814,7 @@ describe("going to see an agent you message", () => {
     expect(messageTo("room", { action: "dm", agent: "guest", body: "hi" }, "host", known)).toBe("guest");
     expect(messageTo("room", { action: "dm", to: ["Guesty"], body: "hi" }, "host", known)).toBe("guest");
     expect(messageTo("room", { action: "DM", agent: "guest", body: "hi" }, "host", known)).toBe("guest");
-    // Arguments of a kind the loop turns back before the tool runs: nothing is sent, so nobody sets off.
+    // Arguments of a kind the loop turns back before the tool runs: nothing is sent, so nobody picks up.
     expect(messageTo("room", { action: "dm", to: "guest", body: "hi" }, "host", known)).toBeUndefined();
     expect(messageTo("room", { action: "dm", agent: ["guest"], body: "hi" }, "host", known)).toBeUndefined();
     expect(messageTo("room", { action: "dm", agent: "guest", body: 42 }, "host", known)).toBeUndefined();
@@ -842,130 +830,84 @@ describe("going to see an agent you message", () => {
     expect(messageTo("room", { action: "dm", agent: "other", body: "hi" }, "host", desk)).toBeUndefined();
   });
 
-  it("stands the sender in the other's home, out of its own, and says who it is with", async () => {
-    expect(await presence.meet("host", "guest")).toBe(true);
-    expect(await visit("host")).toMatchObject({ data: { place: homeId("guest"), with: "guest" } });
-    expect(visitWith((await visit("host"))?.data)).toBe("guest");
-    expect(await at("host")).toBe(homeId("guest"));
-    // Where it lives is untouched.
-    expect(await whereIs(state, owner, "host", rooms)).toBe(homeId("host"));
-    expect(await whoIsIn(state, owner, homeId("guest"), hasBody, undefined, rooms)).toEqual(["guest", "host"]);
-    expect(await whoIsIn(state, owner, homeId("host"), hasBody, undefined, rooms)).toEqual([]);
-    expect(await scene(state, owner, homeId("guest"), rooms, hasBody)).toMatchObject({
-      agents: ["guest", "host"],
-      with: { host: "guest" },
-    });
-    const map = await worldMap(state, owner, ["host", "guest", "other"], rooms, hasBody);
-    expect(map.find((p) => p.id === homeId("guest"))).toMatchObject({
-      agents: ["guest", "host"],
-      with: { host: "guest" },
-    });
-    expect(map.find((p) => p.id === homeId("host"))).toMatchObject({ agents: [] });
-    expect(map.find((p) => p.id === homeId("host"))?.with).toBeUndefined();
-  });
-
-  it("walks back after its own, shorter quiet spell, and the sweep clears the visit", async () => {
-    await presence.meet("host", "guest");
-    vi.setSystemTime(Date.now() + DM_QUIET - 1000);
-    expect(await at("host")).toBe(homeId("guest"));
-    vi.setSystemTime(Date.now() + 2000);
+  it("puts two agents at home on the phone, and moves neither", async () => {
+    await talks.answered("host", "guest");
+    expect(await talk("host")).toMatchObject({ data: { with: "guest", phone: true, started: true } });
+    expect(await talk("guest")).toMatchObject({ data: { with: "host", phone: true } });
+    expect((await talk("guest"))?.data.started).toBeUndefined();
+    // Nobody went anywhere: each is still at home, and the map and the scene say so.
     expect(await at("host")).toBe(homeId("host"));
-    await presence.sweep();
-    expect(await visit("host")).toBeNull();
-  });
-
-  it("keeps two talking back and forth together, without walking either to and fro", async () => {
-    await presence.meet("host", "guest");
-    const first = await visit("host");
-    // The answer comes, and the one it came to see writes back a while later: the visitor stays on.
-    await presence.meet("host", "guest");
-    vi.setSystemTime(Date.now() + 3 * 60_000);
-    expect(await presence.meet("guest", "host")).toBe(false);
-    await presence.settled();
-    expect(await visit("guest")).toBeNull();
-    const later = await visit("host");
-    expect(later?.version).toBeGreaterThan(first?.version ?? 0);
-    expect(Date.parse(String(later?.data.until))).toBe(Date.now() + DM_QUIET);
-    // Long after the first message, not long after the last: still together.
-    vi.setSystemTime(Date.now() + DM_QUIET - 1000);
-    await presence.sweep();
-    expect(await at("host")).toBe(homeId("guest"));
     expect(await at("guest")).toBe(homeId("guest"));
+    const map = await worldMap(state, owner, ["host", "guest"], rooms, hasBody);
+    expect(map.find((p) => p.id === homeId("host"))?.agents).toEqual(["host"]);
+    expect(map.find((p) => p.id === homeId("guest"))?.agents).toEqual(["guest"]);
   });
 
-  it("stands several who message the same agent round it, each with it", async () => {
-    await presence.meet("host", "guest");
-    await presence.meet("other", "guest");
-    await presence.meet("third", "guest");
-    expect(await whoIsIn(state, owner, homeId("guest"), hasBody, undefined, rooms)).toEqual([
-      "guest",
-      "host",
-      "other",
-      "third",
-    ]);
-    expect((await scene(state, owner, homeId("guest"), rooms, hasBody))?.with).toEqual({
-      host: "guest",
-      other: "guest",
-      third: "guest",
-    });
-  });
-
-  it("follows the other to the meeting it is talking in, and goes home once the other leaves", async () => {
+  it("puts two at the same meeting face to face", async () => {
+    await presence.visit("host", "local:trip");
     await presence.visit("guest", "local:trip");
-    await presence.meet("host", "guest");
-    expect(await visit("host")).toMatchObject({ data: { place: trip, with: "guest" } });
-    // The guest goes home after its meeting: the visit ends at the next sweep, as nobody it came to see is there.
-    vi.setSystemTime(Date.now() + DM_QUIET - 60_000);
-    await state.delete(owner, { type: VISIT_TYPE, id: "guest" });
-    await presence.sweep();
-    expect(await visit("host")).toBeNull();
-    expect(await at("host")).toBe(homeId("host"));
+    await talks.answered("guest", "host");
+    expect(await talk("guest")).toMatchObject({ data: { with: "host", started: true } });
+    expect((await talk("guest"))?.data.phone).toBeUndefined();
+    expect((await talk("host"))?.data).toMatchObject({ with: "guest" });
+    expect((await talk("host"))?.data.phone).toBeUndefined();
   });
 
-  it("goes home to sleep once paused", async () => {
-    await presence.meet("host", "guest");
-    await presence.sweep();
-    expect(await at("host")).toBe(homeId("guest"));
-    sleeping.add("host");
-    await presence.sweep();
-    expect(await visit("host")).toBeNull();
-    // Paused, it doesn't set off again.
-    expect(await presence.meet("host", "guest")).toBe(false);
-    expect(await visit("host")).toBeNull();
+  it("hangs up a short while after the last exchange, and keeps a conversation that goes back and forth on", async () => {
+    await talks.answered("host", "guest");
+    const first = await talk("host");
+    // Answered again a moment later: nothing is written for it.
+    vi.setSystemTime(Date.now() + 5_000);
+    await talks.answered("host", "guest");
+    expect((await talk("host"))?.version).toBe(first?.version);
+    // Later on, the other writes back: it started this exchange, and both stay on the line from now.
+    vi.setSystemTime(Date.now() + 25_000);
+    await talks.answered("guest", "host");
+    expect(await talk("guest")).toMatchObject({ data: { with: "host", phone: true, started: true } });
+    expect((await talk("host"))?.data.started).toBeUndefined();
+    expect(Date.parse(String((await talk("host"))?.data.until))).toBe(Date.now() + TALK_AFTER_MS);
+    vi.setSystemTime(Date.now() + TALK_AFTER_MS - 1000);
+    await talks.sweep();
+    expect(await talk("host")).not.toBeNull();
+    vi.setSystemTime(Date.now() + 2000);
+    await talks.sweep();
+    expect(await talk("host")).toBeNull();
+    expect(await talk("guest")).toBeNull();
   });
 
-  it("isn't pulled out of a meeting it is talking in, and a meeting it speaks at ends a visit to someone", async () => {
+  it("puts two face to face once they are in the same place, as the next exchange finds them", async () => {
+    await talks.answered("host", "guest");
+    expect((await talk("host"))?.data.phone).toBe(true);
     await presence.visit("host", "local:trip");
-    expect(await presence.meet("host", "guest")).toBe(false);
-    expect(await visit("host")).toMatchObject({ data: { place: trip } });
-    expect(visitWith((await visit("host"))?.data)).toBeUndefined();
-    // Gone to see someone, it says something in a room: it goes to that room's table, with nobody in particular.
-    await state.delete(owner, { type: VISIT_TYPE, id: "host" });
-    await presence.meet("host", "guest");
-    await presence.visit("host", "local:trip");
-    expect(await visit("host")).toMatchObject({ data: { place: trip } });
-    expect(visitWith((await visit("host"))?.data)).toBeUndefined();
+    await presence.visit("guest", "local:trip");
+    await talks.answered("host", "guest");
+    expect((await talk("host"))?.data.phone).toBeUndefined();
+    expect((await talk("guest"))?.data.phone).toBeUndefined();
   });
 
-  it("calls off a visit for a message that didn't go through, and only that one", async () => {
-    await presence.meet("host", "guest");
-    await presence.part("host", "other");
-    expect(await at("host")).toBe(homeId("guest"));
-    await presence.part("host", "guest");
-    expect(await visit("host")).toBeNull();
-    // A room visit is never called off for a message.
-    await presence.visit("host", "local:trip");
-    await presence.part("host", "guest");
-    expect(await at("host")).toBe(trip);
+  it("never ends a talk that went on while the sweep was looking", async () => {
+    await talks.answered("host", "guest");
+    vi.setSystemTime(Date.now() + TALK_AFTER_MS + 1000);
+    const swept = talks.sweep();
+    const spoke = talks.answered("host", "guest");
+    await Promise.all([swept, spoke]);
+    expect(await talk("host")).toMatchObject({ data: { with: "guest" } });
   });
 
-  it("names only pairs who are both there", () => {
-    const seen = new Map([
-      ["host", "guest"],
-      ["other", "third"],
-    ]);
-    expect(together(seen, ["guest", "host", "other"])).toEqual({ host: "guest" });
-    expect(together(seen, ["host"])).toBeUndefined();
+  it("leaves a person's own talk with an agent to the page, and ends it once it has run out", async () => {
+    // The page writes it while you talk to an agent that is somewhere else.
+    const until = new Date(Date.now() + TALK_AFTER_MS).toISOString();
+    await state.put(owner, {
+      type: TALK_TYPE,
+      id: "guest",
+      scope: "global",
+      data: { with: "you", phone: true, until },
+    });
+    await talks.sweep();
+    expect(await talk("guest")).toMatchObject({ data: { with: "you" } });
+    vi.setSystemTime(Date.now() + TALK_AFTER_MS + 1000);
+    await talks.sweep();
+    expect(await talk("guest")).toBeNull();
   });
 
   describe("following the messages a turn sends", () => {
@@ -983,7 +925,7 @@ describe("going to see an agent you message", () => {
     ) {
       const call = { ...turn(sessionId, from), tool: "room", toolUseId: `call_${++ids}`, cwd: "/", args };
       await events.waterfall("agent.pre_tool_use", call);
-      await presence.settled();
+      await talks.settled();
       return () => {
         if (outcome !== "refused")
           events.emit("agent.post_tool_use", { ...call, output: "", success: outcome === "ran", durationMs: 1 });
@@ -994,42 +936,45 @@ describe("going to see an agent you message", () => {
     const say = (to: string) => ({ action: "dm", agent: to, body: "hi" });
     beforeEach(() => {
       events = new TypedEventBus();
-      subs = followMessages(events, presence, (tool, args, from) => messageTo(tool, args, from, known));
+      subs = followTalk(events, talks, (tool, args, from) => messageTo(tool, args, from, known));
     });
     afterEach(() => {
       for (const s of subs) s.dispose();
     });
 
-    it("sets the sender off as the message is sent, and keeps it there once answered", async () => {
+    it("puts both on the line as the message is sent, and keeps them there once answered", async () => {
       events.emit("agent.turn_started", turn("s-host", "host"));
       const through = await dm("host", say("guest"), "ran");
-      expect(await at("host")).toBe(homeId("guest"));
+      expect(await talk("host")).toMatchObject({ data: { with: "guest", phone: true, started: true } });
+      expect(await talk("guest")).toMatchObject({ data: { with: "host", phone: true } });
       answered("host", "guest");
       through();
       events.emit("agent.turn_ended", turn("s-host", "host"));
-      await presence.settled();
-      expect(await visit("host")).toMatchObject({ data: { place: homeId("guest"), with: "guest" } });
+      await talks.settled();
+      expect(await talk("host")).toMatchObject({ data: { with: "guest" } });
+      expect(await at("host")).toBe(homeId("host"));
     });
 
-    it("calls the walk off for a message that failed", async () => {
+    it("hangs up for a message that failed", async () => {
       const through = await dm("host", say("guest"), "failed");
-      expect(await at("host")).toBe(homeId("guest"));
+      expect(await talk("host")).not.toBeNull();
       through();
-      await presence.settled();
-      expect(await visit("host")).toBeNull();
+      await talks.settled();
+      expect(await talk("host")).toBeNull();
+      expect(await talk("guest")).toBeNull();
     });
 
-    it("calls the walk off once the turn ends, for a call turned back before it ran", async () => {
+    it("hangs up once the turn ends, for a call turned back before it ran", async () => {
       events.emit("agent.turn_started", turn("s-host", "host"));
       const through = await dm("host", say("guest"), "refused");
       through();
-      expect(await at("host")).toBe(homeId("guest"));
+      expect(await talk("host")).not.toBeNull();
       events.emit("agent.turn_ended", turn("s-host", "host"));
-      await presence.settled();
-      expect(await visit("host")).toBeNull();
-      // And a call the loop would turn back for its arguments never sets anyone off.
+      await talks.settled();
+      expect(await talk("host")).toBeNull();
+      // And a call the loop would turn back for its arguments never puts anyone on the line.
       await dm("host", { action: "dm", to: "guest", body: "hi" }, "refused");
-      expect(await visit("host")).toBeNull();
+      expect(await talk("host")).toBeNull();
     });
 
     it("waits for every turn in the session to end, as an answer can run in the sender's own", async () => {
@@ -1038,61 +983,52 @@ describe("going to see an agent you message", () => {
       // The guest answers by messaging the host, whose answer runs in the host's session.
       events.emit("agent.turn_started", turn("s-host", "host"));
       events.emit("agent.turn_ended", turn("s-host", "host"));
-      await presence.settled();
-      expect(await at("host")).toBe(homeId("guest"));
+      await talks.settled();
+      expect(await talk("host")).not.toBeNull();
       answered("host", "guest");
       through();
       events.emit("agent.turn_ended", turn("s-host", "host"));
-      await presence.settled();
-      expect(await at("host")).toBe(homeId("guest"));
+      await talks.settled();
+      expect(await talk("host")).not.toBeNull();
     });
 
-    it("stays while an answer takes longer than the quiet spell", async () => {
+    it("stays on the line while an answer takes longer than the quiet spell", async () => {
       const through = await dm("host", say("guest"), "ran");
       for (let i = 0; i < 12; i++) {
-        vi.setSystemTime(Date.now() + 60_000);
-        await presence.sweep();
-        await presence.settled();
+        vi.setSystemTime(Date.now() + 20_000);
+        await talks.sweep();
       }
-      expect(await at("host")).toBe(homeId("guest"));
+      expect(await talk("host")).toMatchObject({ data: { with: "guest" } });
       answered("host", "guest");
       through();
-      await presence.settled();
-      vi.setSystemTime(Date.now() + DM_QUIET + 1000);
-      await presence.sweep();
-      expect(await visit("host")).toBeNull();
+      await talks.settled();
+      vi.setSystemTime(Date.now() + TALK_AFTER_MS + 1000);
+      await talks.sweep();
+      expect(await talk("host")).toBeNull();
     });
 
-    it("doesn't send the sender off again for an answer that comes after its visit ended", async () => {
-      const through = await dm("host", say("guest"), "ran");
-      // While answering, the guest goes to say something in a meeting: the host's visit ends.
-      await presence.visit("guest", "local:trip");
-      await presence.sweep();
-      expect(await at("host")).toBe(homeId("host"));
-      answered("host", "guest");
-      through();
-      await presence.settled();
-      expect(await visit("host")).toBeNull();
-    });
-
-    it("leaves the sender with the last it messaged when it sends two at once, without going back and forth", async () => {
+    it("talks with the last one it messaged when it sends two at once", async () => {
       const first = await dm("host", say("guest"), "ran");
       const second = await dm("host", say("other"), "ran");
-      expect(await at("host")).toBe(homeId("other"));
+      expect(await talk("host")).toMatchObject({ data: { with: "other" } });
       answered("host", "guest");
       first();
-      await presence.settled();
-      expect(await at("host")).toBe(homeId("other"));
       answered("host", "other");
       second();
-      await presence.settled();
-      expect(await visit("host")).toMatchObject({ data: { place: homeId("other"), with: "other" } });
+      await talks.settled();
+      expect(await talk("host")).toMatchObject({ data: { with: "other" } });
+      // The first one's side is its own, still on the line with the host until it runs out.
+      expect(await talk("guest")).toMatchObject({ data: { with: "host" } });
     });
 
-    it("goes to see the other when a message sent some other way is answered", async () => {
+    it("puts two on the line when a message sent some other way is answered", async () => {
       answered("host", "guest");
-      await presence.settled();
-      expect(await at("host")).toBe(homeId("guest"));
+      await talks.settled();
+      expect(await talk("host")).toMatchObject({ data: { with: "guest", phone: true } });
+      // A message the machinery hands back, not an agent choosing to speak, is nobody talking.
+      events.emit("agent.messaged", { from: "other", to: "third", body: "done", reply: "ok", via: "delegate" });
+      await talks.settled();
+      expect(await talk("other")).toBeNull();
     });
   });
 });

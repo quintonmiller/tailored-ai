@@ -223,6 +223,34 @@ describe("Motion", () => {
     expect(pose.owned?.bones.rightUpperArm?.[2]).toBeCloseTo(-0.9, 1);
   });
 
+  it("holds a phone to the ear in the pose measured for its own body, with files playing or not", () => {
+    const ear = {
+      upper: [-2.1, 0, 0.6] as [number, number, number],
+      lower: [0.3, 1.9, -0.2] as [number, number, number],
+    };
+    const coded = new Motion({ random: steady, reducedMotion: true });
+    coded.armClearance = 0.3;
+    coded.ear = ear;
+    coded.hold("ear");
+    let pose = coded.step(0, "idle", 0);
+    for (let t = 0; t <= 2; t += 1 / 60) pose = coded.step(t, "idle", 0);
+    // The arm ends turned as measured: the swing out for a wide body taken back off it, as the pose adds it.
+    for (let i = 0; i < 3; i++) {
+      expect(pose.bones.rightUpperArm[i]).toBeCloseTo(ear.upper[i], 1);
+      expect(pose.bones.rightLowerArm[i]).toBeCloseTo(ear.lower[i], 1);
+    }
+    const filed = new Motion({ random: steady });
+    filed.armClearance = 0.3;
+    filed.ear = ear;
+    filed.hold("ear");
+    const clips = { walk: true, activities: [] };
+    for (let t = 0; t <= 2; t += 1 / 60) pose = filed.step(t, "idle", 0, { walked: 0, stride: 0.45, clips });
+    for (let i = 0; i < 3; i++) {
+      expect(pose.owned?.bones.rightUpperArm?.[i]).toBeCloseTo(ear.upper[i], 5);
+      expect(pose.owned?.bones.rightLowerArm?.[i]).toBeCloseTo(ear.lower[i], 5);
+    }
+  });
+
   it("dozes: eyes shut, chin down; and wakes", () => {
     const motion = new Motion({ random: steady, reducedMotion: true });
     const awake = motion.step(0, "idle", 0);

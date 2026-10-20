@@ -265,6 +265,13 @@ export class Motion {
    * body wider than the arms were posed for. Measured per model by the stage.
    */
   armClearance = 0;
+  /**
+   * The arm holding a phone to this body's own ear, measured by the stage
+   * (`reach` in fit.ts): the upper and lower arm turned in full, from the arm
+   * as made. A big head on short arms needs a pose of its own; without one,
+   * the pose drawn for a grown-up.
+   */
+  ear: { upper: Rotation; lower: Rotation } | undefined;
   private gazeAt: { yaw: number; pitch: number; at: number } | undefined;
   private readonly drift: number;
   private readonly random: () => number;
@@ -398,8 +405,9 @@ export class Motion {
     // What it holds, unless a gesture has the arm: posed in full over the files, as an offset over code.
     const hold = this.held && this.holdWeight > 0.001 ? HOLDS[this.held] : undefined;
     if (hold) {
+      const arm = this.held === "ear" && this.ear ? this.fromRest(this.ear) : hold.arm;
       for (const bone of HOLD_BONES) {
-        const o = hold.arm[bone];
+        const o = arm[bone];
         if (!o || owned[bone]) continue;
         if (clips) {
           owned[bone] = [REST[bone][0] + o[0], REST[bone][1] + o[1], REST[bone][2] + o[2]];
@@ -437,6 +445,18 @@ export class Motion {
       lift: 0.012 * Math.abs(c) * w,
       ...(ownWeight > 0 ? { owned: { bones: owned, weight: ownWeight } } : {}),
     };
+  }
+
+  /**
+   * An arm turned in full, as offsets from rest: what a hold adds, given that
+   * the upper arm's outward swing for a wide body (`armClearance`) is taken
+   * off it after, held or not.
+   */
+  private fromRest(turn: { upper: Rotation; lower: Rotation }): Offsets {
+    const off = (to: Rotation, rest: Rotation): Rotation => [to[0] - rest[0], to[1] - rest[1], to[2] - rest[2]];
+    const upper = off(turn.upper, REST.rightUpperArm);
+    upper[2] += this.armClearance;
+    return { rightUpperArm: upper, rightLowerArm: off(turn.lower, REST.rightLowerArm) };
   }
 
   /** Every two to six seconds, a quick close and open. */
