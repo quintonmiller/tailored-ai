@@ -6,6 +6,7 @@
  */
 import * as THREE from "three";
 import { BASE_HUE, type Tint } from "./body";
+import { share } from "./shared";
 import type { Piece, Tone, V3 } from "./wear";
 
 /**
@@ -33,7 +34,10 @@ const FIXED: Record<Exclude<Tone, "main" | "dark" | "light" | "muted">, number> 
 // Building it
 // --------------------------------------------------------------------------
 
-/** One geometry per shape for every body there is, never let go: a few dozen vertices each. */
+/**
+ * One geometry per shape for every body there is, kept for the page: a few dozen vertices each. Every stage draws them,
+ * so each one disposes them as it goes (`shared.ts`), or its renderer, and the stage with it, would stay in memory.
+ */
 const shapes = new Map<Piece["shape"], THREE.BufferGeometry>();
 function shapeOf(shape: Piece["shape"]): THREE.BufferGeometry {
   let g = shapes.get(shape);
@@ -71,7 +75,7 @@ function shapeOf(shape: Piece["shape"]): THREE.BufferGeometry {
       g = new THREE.TorusGeometry(0.5, 0.08, 6, 16, Math.PI);
       break;
   }
-  shapes.set(shape, g);
+  shapes.set(shape, share(g));
   return g;
 }
 
@@ -94,12 +98,14 @@ function scaleFor(p: Piece): V3 {
   }
 }
 
-/** One material per colour, shared by every body, never let go. */
+/** One material per colour, shared by every body and kept for the page: disposed as each stage goes, as the shapes are. */
 const paints = new Map<number, THREE.MeshStandardMaterial>();
 let glass: THREE.MeshStandardMaterial | undefined;
 function paintOf(tone: Tone, colors: ReturnType<typeof wearColors>): THREE.Material {
   if (tone === "glass") {
-    glass ??= new THREE.MeshStandardMaterial({ color: FIXED.glass, transparent: true, opacity: 0.35, roughness: 0.1 });
+    glass ??= share(
+      new THREE.MeshStandardMaterial({ color: FIXED.glass, transparent: true, opacity: 0.35, roughness: 0.1 }),
+    );
     return glass;
   }
   const color = tone in FIXED ? FIXED[tone as keyof typeof FIXED] : colors[tone as keyof typeof colors];
@@ -111,7 +117,7 @@ function paintOf(tone: Tone, colors: ReturnType<typeof wearColors>): THREE.Mater
       metalness: tone === "metal" ? 0.4 : 0,
       flatShading: true,
     });
-    paints.set(color, m);
+    paints.set(color, share(m));
   }
   return m;
 }

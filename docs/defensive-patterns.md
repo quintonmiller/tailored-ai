@@ -289,6 +289,37 @@ once" is an assumption about someone else's lifecycle, not a fact about your
 own — anything you initialise in a constructor runs again every time that
 collaborator is rebuilt.
 
+## Something kept for the page holds everything that used it
+
+Three.js renderers hang a `dispose` listener on every geometry, material and
+texture they draw, and that listener holds the renderer, its WebGL context, its
+canvas, and through the canvas's own listeners the whole 3D stage. An object
+made once and kept at module scope (a cache of shapes, or one of three.js's own
+singletons, like the square every sprite shares) outlives every renderer that
+drew it, so it kept every stage the page ever took down: seven of them, and
+over two hundred canvases, after thirty trips round the world that went back to
+the agent's own view three times, for as long as the tab was open.
+`renderer.dispose()` does not remove those listeners; disposing the object does.
+
+**Rule:** a long-lived object that short-lived owners draw with must be
+disposed as each owner goes, not just dropped. In the UI's 3D world that is
+`share()` in `packages/ui/src/avatar/shared.ts`, with `takeDown` beside it
+keeping the order a stage goes in. More generally, before keeping
+anything at module scope, ask what it holds a reference *back* to.
+
+## A probe can hold what it measures
+
+The first measurement of that leak counted the measuring script too. It kept a
+puppeteer element handle from every query, and DevTools keeps whatever a handle
+points at alive, with the DOM tree round it, so detached nodes and listeners
+grew with every trip whether or not the page kept anything: thirty trips that
+built the stage only once showed 19,000 DOM nodes, of which the page held 464.
+
+**Rule:** a measurement of what is retained must not retain anything itself.
+Release handles (or click by coordinates), release object groups, and when a
+heap snapshot shows a path through `DevTools console` or a WeakMap's key alone,
+it is not the page's retainer: look for the next one.
+
 ## A fake collaborator cannot falsify an agreement about a third party
 
 A wrapper around the model provider passed 24 unit tests against a fake upstream
