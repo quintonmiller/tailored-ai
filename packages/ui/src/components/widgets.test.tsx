@@ -53,3 +53,40 @@ describe("the activity widget", () => {
     expect(run?.querySelector(".widget-run-when")?.textContent).toBe(noon);
   });
 });
+
+describe("a widget drawn again", () => {
+  it("starts from what its endpoint sent last, rather than loading from nothing", async () => {
+    let answer: (r: Response) => void = () => {};
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((done) => {
+          answer = done;
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const health = { id: "health", type: "status", title: "System status", options: { endpoint: "/api/health?seen" } };
+    await act(async () => {
+      root.render(<WidgetCard widget={health} />);
+    });
+    expect(container.textContent).toContain("Starting");
+    await act(async () => {
+      answer(
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(container.textContent).toContain("Online");
+    // Drawn again from nothing (a screen in the 3D world coming near enough to read): online at once, while it asks.
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => {
+      root.render(<WidgetCard widget={health} />);
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("Online");
+    expect(container.textContent).not.toContain("Starting");
+  });
+});

@@ -9070,3 +9070,264 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   .chat-talk-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   .chat-input-bar { gap: 6px; }
 }
+
+/* --- Surfaces: live HTML on the room's screens, boards, calendars and kiosks (avatar/Faces.tsx) ---
+   Laid out at 640 px a metre and scaled into the room, so sizes here are on the thing itself: a 40 px title
+   on a board is about six centimetres tall. Their own colours, the same by day and night: a screen lights
+   itself, and paper takes on a home's lamplight after dark (--surface-paper, a filter the stage sets). */
+/* The picture over the surfaces under it, in a stacking context of the stage's own: the tools, Walk and Fly and the
+   keys line over the stage come after it, so they stay over the picture. */
+.talk-avatar { position: relative; isolation: isolate; }
+.talk-avatar canvas { position: relative; z-index: 1; }
+.talk-avatar[data-reading] { cursor: zoom-out; }
+/* Reading a surface, the tools over the stage tidy up out of its way: no walking, so no Walk and Fly, and no trail.
+   Keyed off the stage's own mark, so they are out of the way the moment it frames the surface round them. */
+.talk-stage:has(> .talk-avatar[data-reading]) > .talk-view,
+.talk-stage:has(> .talk-avatar[data-reading]) .world-trail,
+.talk-stage:has(> .talk-avatar[data-reading]) .talk-tools-break { display: none; }
+/* Where Walk and Fly were, the way back out of reading; on a phone, alone, so what is read has the stage. */
+.talk-back {
+  position: absolute; top: 10px; left: 10px; z-index: 3; padding: 6px 12px; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--bg-surface); color: var(--text); font: 12px var(--font); cursor: pointer;
+}
+.talk-back:hover { border-color: var(--accent); color: var(--accent); }
+.talk-stage.fill .talk-back { top: 56px; left: 16px; }
+@media (max-width: 719px) {
+  .talk-stage:has(> .talk-avatar[data-reading]) .talk-tools { display: none; }
+}
+.world-surfaces { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.world-surface {
+  --sf-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --sf-glass-top: #141d2f;
+  --sf-glass-bottom: #0a0f19;
+  --sf-ink: #eef2fa;
+  --sf-dim: #97a3ba;
+  --sf-faint: #5a6680;
+  --sf-rule: rgba(255, 255, 255, 0.09);
+  --sf-tile: rgba(255, 255, 255, 0.05);
+  --sf-accent: #8ab4ff;
+  --sf-ok: #5ee08f;
+  --sf-warn: #ffb35c;
+  --sf-bad: #ff7f7f;
+  --sf-paper: #fbfaf6;
+  --sf-paper-ink: #1f2430;
+  --sf-paper-dim: #667085;
+  --sf-paper-rule: #e6e0d4;
+  --sf-band: #c8473a;
+  font-family: var(--sf-font);
+  -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
+}
+.world-surface button { font-family: inherit; }
+.world-surface :focus-visible { outline: 4px solid var(--sf-accent); outline-offset: 3px; }
+/* Clipped inside, not on the surface itself: Chrome loses track of what is under the pointer in an element that is
+   both turned in 3D and clipped. */
+.sf { position: relative; width: 100%; height: 100%; overflow: hidden; outline: none; }
+/* Under the pointer, a surface a click brings up lights its edge. */
+.sf::after { content: ""; position: absolute; inset: 0; z-index: 6; pointer-events: none; box-shadow: inset 0 0 0 0 rgba(138, 180, 255, 0); transition: box-shadow 0.15s ease; }
+.world-surface[data-hover] > .sf::after { box-shadow: inset 0 0 0 10px rgba(138, 180, 255, 0.6); }
+.sf-foot { flex: none; margin: 0; padding-top: 10px; font: 500 18px/1.3 var(--sf-font); color: var(--sf-paper-dim); }
+.sf-foot[role="alert"] { color: #b4321f; font-weight: 600; }
+.sf-who { display: inline-flex; align-items: center; gap: 7px; min-width: 0; font: 650 17px/1.2 var(--sf-font); color: rgba(31, 36, 48, 0.7); }
+.sf-who::before { content: ""; flex: none; width: 12px; height: 12px; border-radius: 50%; background: hsl(var(--who, 222) 52% 48%); }
+
+/* The screen: dark glass with a sheen, a page at a time. */
+.sf-screen {
+  position: absolute; inset: 0; display: flex; flex-direction: column; padding: 28px 36px 22px; color: var(--sf-ink);
+  background:
+    radial-gradient(120% 90% at 12% 0%, rgba(64, 102, 178, 0.28), transparent 58%),
+    linear-gradient(180deg, var(--sf-glass-top), var(--sf-glass-bottom));
+}
+.sf-screen::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(116deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.025) 30%, transparent 30.5%);
+}
+.sf-screen-head { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 24px; padding-bottom: 14px; border-bottom: 1px solid var(--sf-rule); }
+.sf-screen-title {
+  min-width: 0; padding: 0; border: 0; background: none; color: var(--sf-ink); text-align: left; cursor: pointer;
+  font: 680 42px/1.1 var(--sf-font); letter-spacing: -0.015em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sf-screen-title:hover { color: #fff; text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; }
+.sf-screen-clock { flex: none; font: 560 28px var(--sf-font); color: var(--sf-dim); font-variant-numeric: tabular-nums; }
+/* A sideways swipe turns the page of a screen being read; up and down scroll it. */
+.sf-screen-body { position: relative; flex: 1; min-height: 0; overflow: hidden; padding-top: 18px; touch-action: pan-y; }
+.sf-screen-page { animation: sf-page-in 0.35s ease both; }
+.world-surface[data-focused="true"] .sf-screen-body { overflow-y: auto; }
+@keyframes sf-page-in { from { opacity: 0; transform: translateY(10px); } }
+.sf-screen-foot { flex: none; display: flex; align-items: center; gap: 22px; padding-top: 14px; }
+.sf-dots { display: flex; align-items: center; gap: 10px; }
+.sf-dot { width: 14px; height: 14px; padding: 0; border: 0; border-radius: 7px; background: #36435e; cursor: pointer; transition: width 0.2s ease, background 0.2s ease; }
+.sf-dot[aria-selected="true"] { width: 36px; background: var(--sf-ink); }
+/* Read close up, each dot takes a press well round it, and arrows either side turn the page: a phone has no keys. */
+.world-surface[data-focused="true"] .sf-dots { gap: 30px; }
+.world-surface[data-focused="true"] .sf-dot { position: relative; width: 20px; height: 20px; border-radius: 10px; }
+.world-surface[data-focused="true"] .sf-dot[aria-selected="true"] { width: 48px; }
+.world-surface[data-focused="true"] .sf-dot::before { content: ""; position: absolute; inset: -26px -15px; }
+.sf-turn-by {
+  flex: none; display: grid; place-items: center; width: 76px; height: 64px; padding: 0 0 6px; border: 2px solid var(--sf-rule);
+  border-radius: 18px; background: var(--sf-tile); color: var(--sf-ink); cursor: pointer; font: 400 54px/1 var(--sf-font);
+}
+.sf-turn-by:hover { border-color: var(--sf-accent); color: #fff; }
+.sf-turn { flex: 1; height: 4px; border-radius: 2px; background: var(--sf-accent); opacity: 0.45; transform-origin: left center; animation: sf-turn linear both; }
+@keyframes sf-turn { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+/* The Board page's renderers, in the screen's colours and large enough to read across a room. */
+.sf-widget {
+  zoom: 1.8; color: var(--sf-ink);
+  --text: var(--sf-ink); --text-dim: var(--sf-dim); --accent: var(--sf-accent); --border: var(--sf-rule);
+  --bg: transparent; --green: var(--sf-ok); --amber: var(--sf-warn); --red: var(--sf-bad); --font: var(--sf-font);
+  font-family: var(--sf-font);
+}
+.sf-widget .widget-list { gap: 0.4rem; }
+.sf-widget .widget-task, .sf-widget .widget-run, .sf-widget .widget-list-row { padding: 0.35rem 0.6rem; border-radius: 0.4rem; background: var(--sf-tile); }
+.sf-widget .widget-task { flex-direction: row; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.sf-widget .widget-task-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.sf-widget .widget-chip { background: transparent; }
+.sf-widget[data-widget-type="clock"] { display: flex; align-items: center; justify-content: center; min-height: 100%; }
+.sf-widget .widget-clock-time { font-size: 3.4rem; }
+.sf-widget .widget-status-head { font-size: 1.4rem; font-weight: 700; }
+.sf-widget .widget-dot { width: 0.8rem; height: 0.8rem; }
+.sf-widget .widget-metric-value { font-size: 2.8rem; }
+.sf-widget a { color: var(--sf-accent); }
+/* A page about an agent, in a home. */
+.sf-card { display: flex; flex-direction: column; gap: 14px; }
+.sf-card-clock { display: flex; flex-direction: column; gap: 8px; }
+.sf-big { font: 740 66px/1.05 var(--sf-font); letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.sf-sub { display: block; margin-top: 6px; font: 500 27px/1.3 var(--sf-font); letter-spacing: 0; color: var(--sf-dim); }
+.sf-line { margin: 0; font: 500 28px/1.3 var(--sf-font); color: #c9d1de; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-rows { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.sf-row { display: flex; align-items: center; gap: 16px; padding: 14px 18px; border-radius: 12px; background: var(--sf-tile); font: 620 28px/1.2 var(--sf-font); }
+.sf-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-row-meta { flex: none; font-weight: 500; color: var(--sf-dim); }
+.sf-tag { flex: none; padding: 4px 14px; border-radius: 999px; font: 720 20px/1.3 var(--sf-font); color: #0b1020; background: var(--sf-faint); }
+.sf-empty { margin: 0; font: 500 30px/1.3 var(--sf-font); color: var(--sf-dim); }
+.is-ok { --tone: var(--sf-ok); } .is-warn { --tone: var(--sf-warn); } .is-bad { --tone: var(--sf-bad); }
+.is-info { --tone: var(--sf-accent); } .is-dim { --tone: var(--sf-dim); }
+.sf-big[class*="is-"] { color: var(--tone); }
+.sf-tag[class*="is-"] { background: var(--tone); }
+
+/* The task board: a whiteboard with a column for each stage and a sticky note for each task. */
+.sf-board {
+  position: absolute; inset: 0; display: flex; flex-direction: column; padding: 22px 22px 16px; color: var(--sf-paper-ink);
+  background-color: #f5f6f8;
+  background-image:
+    linear-gradient(rgba(30, 40, 60, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 40, 60, 0.035) 1px, transparent 1px);
+  background-size: 32px 32px;
+  filter: var(--surface-paper, none);
+}
+.sf-board-head { flex: none; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin: 0 4px 14px; }
+.sf-board-title { font: 760 38px/1 var(--sf-font); letter-spacing: -0.015em; }
+.sf-board-sum { font: 620 22px var(--sf-font); color: var(--sf-paper-dim); white-space: nowrap; }
+.sf-board-cols { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.sf-col { position: relative; display: flex; flex-direction: column; min-height: 0; padding: 6px 7px 7px; border-radius: 12px; background: rgba(30, 40, 60, 0.035); transition: background 0.15s ease, box-shadow 0.15s ease; }
+.sf-col.is-over { background: color-mix(in srgb, var(--note) 32%, transparent); box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--note) 80%, #000); }
+.sf-col-head { flex: none; display: flex; align-items: center; gap: 9px; padding: 4px 4px 9px; border: 0; background: none; color: var(--sf-paper-ink); text-align: left; cursor: pointer; font: 720 23px/1.1 var(--sf-font); }
+.sf-col-dot { flex: none; width: 14px; height: 14px; border-radius: 4px; background: var(--note); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.14); }
+.sf-col-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-col-count { flex: none; min-width: 34px; padding: 2px 9px; border-radius: 999px; background: rgba(30, 40, 60, 0.08); color: var(--sf-paper-dim); text-align: center; font: 720 19px/1.3 var(--sf-font); }
+.sf-col-notes { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 2px 2px 4px; overflow: hidden; }
+.world-surface[data-focused="true"] .sf-col-notes { overflow-y: auto; scrollbar-width: thin; }
+.sf-note {
+  position: relative; flex: none; display: flex; flex-direction: column; gap: 5px; padding: 9px 11px 8px; border: 0;
+  border-radius: 3px 3px 12px 3px; background: var(--note); color: #1d2230; text-align: left; cursor: grab;
+  /* A finger moving up or down scrolls the column, and cancels the drag; sideways, it carries the note. */
+  touch-action: pan-y;
+  font: 620 20px/1.2 var(--sf-font);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.07), 0 7px 10px -7px rgba(0, 0, 0, 0.4);
+  transform: rotate(var(--tilt, 0deg)); transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+.sf-note:hover { transform: rotate(0deg) translateY(-2px); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.07), 0 12px 16px -8px rgba(0, 0, 0, 0.42); }
+.sf-note:active { cursor: grabbing; }
+.sf-note:focus-visible { outline-color: #2563eb; }
+.sf-note-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+/* Up close there is room for the whole of most titles. */
+.world-surface[data-focused="true"] .sf-note-title { -webkit-line-clamp: 5; }
+.sf-note .sf-who { font-size: 16px; }
+.sf-note.is-lifted { opacity: 0.3; }
+.sf-note-ghost { position: absolute; z-index: 5; pointer-events: none; cursor: grabbing; transform: rotate(-2.5deg) scale(1.05); box-shadow: 0 22px 32px -12px rgba(0, 0, 0, 0.5); }
+.sf-col-empty { padding: 10px 6px; border: 2px dashed rgba(30, 40, 60, 0.13); border-radius: 8px; color: #9aa1af; text-align: center; font: italic 500 18px/1.2 var(--sf-font); }
+.sf-col-more { flex: none; align-self: flex-start; padding: 3px 6px; color: var(--sf-paper-dim); font: 650 18px/1.2 var(--sf-font); }
+/* From across a room, where a note's words would be a few pixels high: how many tasks each column has, big, under
+   the board's name, and a bar of the column's colour for each note. */
+.sf-board-far { display: none; }
+.world-surface[data-detail="far"] .sf-board-cols,
+.world-surface[data-detail="far"] .sf-board-sum { display: none; }
+.world-surface[data-detail="far"] .sf-board-far { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.world-surface[data-detail="far"] .sf-board-title { font-size: 62px; }
+.sf-far-col { display: flex; flex-direction: column; min-width: 0; padding: 12px 10px 10px; border-radius: 14px; border-top: 12px solid var(--note); background: rgba(30, 40, 60, 0.05); }
+.sf-far-count { font: 820 128px/0.95 var(--sf-font); letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.sf-far-title { margin: 6px 0 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 760 36px/1.1 var(--sf-font); letter-spacing: -0.02em; color: #3b4252; }
+.sf-far-bars { display: flex; flex-direction: column; gap: 10px; }
+.sf-far-bar { height: 26px; border-radius: 4px 4px 9px 4px; background: var(--note); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1); }
+
+/* The calendar: paper, with today's date on a coloured band. */
+.sf-calendar { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--sf-paper); color: var(--sf-paper-ink); filter: var(--surface-paper, none); }
+.sf-cal-band {
+  flex: none; display: flex; align-items: center; gap: 22px; padding: 18px 30px 16px; border: 0; cursor: pointer; text-align: left; color: #fff;
+  background: linear-gradient(180deg, #d4503f, #b83d31); box-shadow: inset 0 -3px 0 rgba(0, 0, 0, 0.12);
+}
+.sf-cal-day { font: 820 86px/0.9 var(--sf-font); letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.sf-cal-date { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sf-cal-weekday { font: 720 32px/1.1 var(--sf-font); }
+.sf-cal-month { font: 520 22px/1.2 var(--sf-font); opacity: 0.88; }
+.sf-cal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 2px; padding: 16px 28px 8px; overflow: hidden; }
+.world-surface[data-focused="true"] .sf-cal-body { overflow-y: auto; scrollbar-width: thin; }
+.sf-cal-title { margin: 0 0 4px; font: 720 27px/1.2 var(--sf-font); }
+.sf-cal-note { margin: 0 0 4px; font: 620 19px/1.3 var(--sf-font); color: #b5552a; }
+.sf-cal-dayblock { display: flex; flex-direction: column; }
+.sf-cal-head { display: flex; align-items: center; gap: 12px; margin: 10px 0 2px; font: 760 17px/1.2 var(--sf-font); letter-spacing: 0.08em; text-transform: uppercase; color: var(--sf-paper-dim); }
+.sf-cal-head::after { content: ""; flex: 1; height: 2px; background: var(--sf-paper-rule); }
+.sf-cal-wake {
+  display: flex; align-items: center; gap: 12px; width: calc(100% + 16px); margin: 0 -8px; padding: 6px 8px; border: 0; border-radius: 8px;
+  background: none; color: inherit; text-align: left; cursor: pointer; font: 520 23px/1.25 var(--sf-font);
+}
+.sf-cal-wake:hover:not(:disabled) { background: rgba(30, 40, 60, 0.06); }
+.sf-cal-wake:disabled { cursor: default; }
+.sf-cal-time { flex: none; min-width: 3.3em; font-weight: 740; font-variant-numeric: tabular-nums; }
+.sf-cal-kind { flex: none; width: 12px; height: 12px; border-radius: 50%; background: #7a8394; }
+.sf-cal-wake.is-booked .sf-cal-kind { background: #3d7be0; }
+.sf-cal-wake.is-cron .sf-cal-kind { background: #8a5cc7; }
+.sf-cal-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-cal-every { margin-left: 12px; font: 520 17px var(--sf-font); color: var(--sf-paper-dim); }
+/* In the lobby, where each line says whose it is, how often it comes round waits until the calendar is read. */
+.sf-calendar.has-names .sf-cal-every { display: none; }
+.world-surface[data-focused="true"] .sf-cal-text { white-space: normal; }
+.world-surface[data-focused="true"] .sf-cal-every { display: block; margin: 2px 0 0; }
+.world-surface[data-focused="true"] .sf-cal-wake { align-items: flex-start; }
+.world-surface[data-focused="true"] .sf-cal-kind { margin-top: 0.4em; }
+/* Whose wake it is, in the band's red: the dot before the line already says what kind of wake it is. */
+.sf-calendar .sf-who { display: inline; margin-right: 10px; font-size: 21px; color: var(--sf-band); }
+.sf-calendar .sf-who::before { display: none; }
+.sf-cal-check { flex: none; color: #3f8f4e; font-weight: 820; }
+.sf-cal-empty { margin: 8px 0; font: italic 500 22px var(--sf-font); color: var(--sf-paper-dim); }
+.sf-cal-more { align-self: flex-start; margin-top: 2px; padding: 3px 0; color: var(--sf-paper-dim); font: 650 19px var(--sf-font); }
+.sf-calendar .sf-foot { padding: 6px 28px 14px; }
+/* From across a room: the next wake, its time big, whose it is in the lobby, and what it is for. */
+.sf-cal-far { display: none; }
+.world-surface[data-detail="far"] .sf-cal-body { display: none; }
+.world-surface[data-detail="far"] .sf-cal-far { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 22px 30px 18px; }
+.sf-cal-far-when { font: 760 30px/1.2 var(--sf-font); letter-spacing: 0.06em; text-transform: uppercase; color: var(--sf-paper-dim); }
+.sf-cal-far-time { white-space: nowrap; font: 820 92px/1 var(--sf-font); letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
+.sf-cal-far-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 760 50px/1.15 var(--sf-font); color: var(--sf-band); }
+.sf-cal-far-what { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font: 600 40px/1.2 var(--sf-font); }
+.sf-cal-far-none { margin-top: 20px; font: italic 600 52px/1.2 var(--sf-font); color: var(--sf-paper-dim); }
+.sf-cal-far-note { margin-top: auto; font: 680 30px/1.25 var(--sf-font); color: #b5552a; }
+
+/* A kiosk: one big lit button. */
+.sf-kiosk-button {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  padding: 0; border: 0; color: var(--sf-ink); cursor: pointer;
+  background:
+    radial-gradient(90% 70% at 50% 30%, rgba(98, 140, 230, 0.32), transparent 70%),
+    linear-gradient(180deg, #1b2540, #0e1426);
+}
+.sf-kiosk-plus {
+  display: grid; place-items: center; width: 84px; height: 84px; margin-bottom: 8px; border-radius: 50%;
+  background: var(--sf-accent); color: #0c1324; font: 300 70px/1 var(--sf-font);
+  box-shadow: 0 0 0 10px rgba(138, 180, 255, 0.14), 0 0 46px rgba(138, 180, 255, 0.4);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.sf-kiosk-button:hover .sf-kiosk-plus { transform: scale(1.07); box-shadow: 0 0 0 14px rgba(138, 180, 255, 0.18), 0 0 60px rgba(138, 180, 255, 0.55); }
+.sf-kiosk-button:active .sf-kiosk-plus { transform: scale(0.95); }
+.sf-kiosk-label { font: 720 36px/1.1 var(--sf-font); letter-spacing: -0.01em; }
+.sf-kiosk-sub { font: 520 20px/1.2 var(--sf-font); color: var(--sf-dim); }

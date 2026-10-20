@@ -169,7 +169,23 @@ export function fetchWidgetData<T = unknown>(endpoint: string): Promise<T> {
   if (!endpoint.startsWith("/api/")) {
     return Promise.reject(new Error(`widget endpoint must be a /api/ path, got "${endpoint}"`));
   }
-  return jsonFetch<T>(endpoint);
+  return jsonFetch<T>(endpoint).then((data) => {
+    lastWidgetData.set(endpoint, data);
+    return data;
+  });
+}
+
+/**
+ * What each widget endpoint sent last, by endpoint: a widget drawn again (a
+ * screen in the 3D world coming near enough to read, or a page of it turning)
+ * starts from this rather than from nothing, and asks again from there. One
+ * entry per endpoint the dashboard names, so it stays small.
+ */
+const lastWidgetData = new Map<string, unknown>();
+
+/** What a widget endpoint sent last, if it has been asked this visit to the page. */
+export function widgetDataSeen<T = unknown>(endpoint: string): { data: T } | undefined {
+  return lastWidgetData.has(endpoint) ? { data: lastWidgetData.get(endpoint) as T } : undefined;
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {

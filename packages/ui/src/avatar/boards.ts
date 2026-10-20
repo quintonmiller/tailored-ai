@@ -5,7 +5,7 @@
  * click on the board is matched against the same rectangles.
  */
 import { GROUPS, type Group } from "../lib/tasks";
-import { wrap } from "./signs";
+import { wrap } from "./wrap";
 
 /** A task, as far as a board needs one. */
 export interface BoardTask {
@@ -27,12 +27,51 @@ export interface Column {
 /** Notes a column has room for. */
 const PER_COLUMN = 4;
 
-/** The board's columns, in order, each with the notes that fit. Tasks come newest first, as the API sends them. */
-export function columnsFor(tasks: BoardTask[]): Column[] {
+/**
+ * The board's columns, in order, each with the notes that fit: `per` of
+ * them, or every one. Tasks come newest first, as the API sends them.
+ */
+export function columnsFor(tasks: BoardTask[], per = PER_COLUMN): Column[] {
   return GROUPS.map(({ id, title, color, statuses }) => {
     const all = tasks.filter((t) => statuses.includes(t.status));
-    return { id, title, color, notes: all.slice(0, PER_COLUMN), more: Math.max(0, all.length - PER_COLUMN) };
+    return { id, title, color, notes: all.slice(0, per), more: Math.max(0, all.length - per) };
   });
+}
+
+/** A column where the HTML board laid it out: from its left edge, how wide, in the board's own pixels. */
+export interface ColumnSpan {
+  id: Group["id"];
+  left: number;
+  width: number;
+}
+
+/**
+ * The column a note dragged to `x` (in the board's own pixels) lands in: the
+ * one under it, or past either end, the one at that end; between two, the
+ * nearer. None when the board has no columns.
+ */
+export function columnAt(x: number, columns: ColumnSpan[]): Group["id"] | undefined {
+  let best: { id: Group["id"]; off: number } | undefined;
+  for (const c of columns) {
+    const off = x < c.left ? c.left - x : x > c.left + c.width ? x - c.left - c.width : 0;
+    if (!best || off < best.off) best = { id: c.id, off };
+  }
+  return best?.id;
+}
+
+/**
+ * What moving a task to a column changes: the first status the column
+ * gathers, and, coming out of Blocked, no reason for being blocked, as a
+ * task's card does. Nothing when it is in that column already.
+ */
+export function moveTo(
+  task: { status: string },
+  column: Group["id"],
+): { status: string; blocked_reason?: null } | undefined {
+  const group = GROUPS.find((g) => g.id === column);
+  if (!group || group.statuses.includes(task.status)) return undefined;
+  const status = group.statuses[0];
+  return task.status === "blocked" ? { status, blocked_reason: null } : { status };
 }
 
 /** A rectangle on the board, in the canvas's pixels. */

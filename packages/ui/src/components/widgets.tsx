@@ -9,7 +9,7 @@
  */
 
 import { type ReactNode, useEffect, useState } from "react";
-import { type DashboardWidgetSpec, fetchWidgetData } from "../api";
+import { type DashboardWidgetSpec, fetchWidgetData, widgetDataSeen } from "../api";
 import { renderMarkdown } from "../lib/markdown.js";
 import { whenMs } from "../lib/tasks";
 import { asArray, getPath } from "../lib/widget-data";
@@ -28,9 +28,10 @@ function opt<T>(w: DashboardWidgetSpec, key: string, fallback: T): T {
 
 /** Fetch + poll a widget's endpoint. Returns data, loading, and error state. */
 function useWidgetData<T = unknown>(endpoint?: string, pollMs = 30000) {
-  const [data, setData] = useState<T | null>(null);
+  // What the endpoint sent last, from anywhere on the page, until it answers again: no "Loading…" in between.
+  const [data, setData] = useState<T | null>(() => (endpoint ? (widgetDataSeen<T>(endpoint)?.data ?? null) : null));
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(!!endpoint);
+  const [loading, setLoading] = useState(!!endpoint && !widgetDataSeen(endpoint));
 
   useEffect(() => {
     if (!endpoint) return;

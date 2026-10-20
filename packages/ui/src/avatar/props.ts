@@ -5,6 +5,7 @@
  * own origin, front toward +Z; the stage places and turns it.
  */
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { fitPlate } from "./doors";
 import type { PropKind, Room, RoomDoor } from "./scene";
 
@@ -19,6 +20,31 @@ function paint(color: number): THREE.MeshStandardMaterial {
     materials.set(key, m);
   }
   return m;
+}
+
+/** One shared smooth, faintly shiny material per colour: a screen's bezel, a board's aluminium. */
+function satin(color: number): THREE.MeshStandardMaterial {
+  const key = `satin:${color.toString(16)}`;
+  let m = materials.get(key);
+  if (!m) {
+    m = new THREE.MeshStandardMaterial({ color, roughness: 0.42, metalness: 0.35 });
+    materials.set(key, m);
+  }
+  return m;
+}
+
+/** A box with its edges and corners rounded off, by size and centre, in a material given. */
+function rounded(
+  group: THREE.Group,
+  size: [number, number, number],
+  radius: number,
+  material: THREE.Material,
+  at: [number, number, number],
+): THREE.Mesh {
+  const mesh = solid(new RoundedBoxGeometry(size[0], size[1], size[2], 2, radius), material, ...at);
+  mesh.castShadow = false;
+  group.add(mesh);
+  return mesh;
 }
 
 /** A material of its own that can glow: lamp shades, screens, window glass. */
@@ -149,9 +175,10 @@ export function buildShell(room: Room): THREE.Group {
   const backSkirting = box(shell, w, 0.09, 0.02, skirting, 0, 0.065, -d / 2 + 0.01);
   const leftSkirting = box(shell, 0.02, 0.09, d, skirting, -w / 2 + 0.01, 0.065, 0);
   for (const board of [backSkirting, leftSkirting]) board.castShadow = false;
-  // Which wall each is, so it can fade when the camera goes round behind it.
+  // Which wall each is, so it can fade when the camera goes round behind it; and which are the walls themselves.
   for (const part of [back, backSkirting]) part.userData.wall = "back";
   for (const part of [left, leftSkirting]) part.userData.wall = "left";
+  for (const panel of [back, left]) panel.userData.panel = true;
   return shell;
 }
 
@@ -161,9 +188,11 @@ export interface BuiltProp {
   glow?: THREE.MeshStandardMaterial;
   /**
    * A face the stage draws on (a task board's tasks, a screen's page, a
-   * calendar's day), and the mesh showing it, to tell where a click lands.
+   * calendar's day, a kiosk's button), the mesh showing it, to tell where a
+   * click lands, and how big that is in metres: where live HTML is laid
+   * over it once it is near enough to read (`surface-layer.ts`).
    */
-  screen?: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; face: THREE.Mesh };
+  screen?: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; face: THREE.Mesh; size: [number, number] };
 }
 
 /** How a prop looks beyond its kind: the colour of its main part, and the basic shapes' size. */
@@ -450,26 +479,36 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       return { group: g };
     }
     case "board": {
-      // A whiteboard in an aluminium frame; the stage writes the tasks on it.
-      box(g, 1.4, 0.9, 0.04, 0x9aa1ab, 0, 0.45, 0).castShadow = false;
+      // A whiteboard in a brushed aluminium frame, a tray of markers along its foot; the stage writes the tasks on it.
+      rounded(g, [1.4, 0.9, 0.04], 0.012, satin(0xc3c8cf), [0, 0.45, 0]);
       const face = canvasFace(1.32, 0.82, 640);
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.32, 0.82), face.material);
-      mesh.position.set(0, 0.45, 0.022);
+      mesh.position.set(0, 0.45, 0.0215);
       g.add(mesh);
-      box(g, 1.2, 0.03, 0.06, 0x9aa1ab, 0, 0.0, 0.03).castShadow = false;
-      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh } };
+      rounded(g, [1.2, 0.03, 0.07], 0.01, satin(0xb3b9c1), [0, 0.0, 0.035]);
+      for (const [i, color] of [0xd64545, 0x2f6fd6, 0x2e9e5b].entries()) {
+        const marker = cylinder(g, 0.009, 0.009, 0.13, color, -0.42 + i * 0.16, 0.024, 0.04, 8);
+        marker.rotation.z = Math.PI / 2;
+        marker.castShadow = false;
+      }
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh, size: [1.32, 0.82] } };
     }
     case "screen": {
-      // A flat screen in a thin black bezel, a hand's width off the wall: the stage draws pages on it.
+      // A flat screen in a slim bezel, a hand's width off the wall, its light lit at the foot: the stage draws pages
+      // on it.
       const sharp = Math.min(SHARPEST, Math.max(1, look.scale ?? 1));
-      box(g, 1.6, 0.92, 0.05, main(0x16181d), 0, 0.46, 0.025).castShadow = false;
+      rounded(g, [1.6, 0.92, 0.05], 0.018, satin(main(0x16181d)), [0, 0.46, 0.025]);
+      const lit = solid(new THREE.CircleGeometry(0.006, 10), glowing(0x7cf2a8), 0.74, 0.022, 0.0505);
+      (lit.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2;
+      lit.castShadow = false;
+      g.add(lit);
       const face = canvasFace(1.52, 0.84, FACE_PX * sharp);
       // Lit from within more than paper is, as a screen is.
       face.material.emissiveIntensity = 0.85;
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.52, 0.84), face.material);
       mesh.position.set(0, 0.46, 0.051);
       g.add(mesh);
-      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh } };
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh, size: [1.52, 0.84] } };
     }
     case "calendar": {
       // A paper calendar on a stiff backing, its pages bound along the top with a row of rings.
@@ -485,7 +524,7 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
         ring.rotation.x = Math.PI / 2;
         ring.castShadow = false;
       }
-      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh } };
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh, size: [0.94, 0.9] } };
     }
     case "kiosk": {
       box(g, 0.56, 0.06, 0.46, 0x3a3f4b, 0, 0.03, 0);
@@ -496,12 +535,12 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       const screen = new THREE.Group();
       screen.position.set(0, 1.05, 0);
       screen.rotation.x = -0.55;
-      const back = solid(new THREE.BoxGeometry(0.6, 0.42, 0.05), paint(0x2a2e38), 0, 0, -0.03);
+      const back = solid(new RoundedBoxGeometry(0.6, 0.42, 0.05, 2, 0.014), satin(0x22262f), 0, 0, -0.025);
       const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.38), face.material);
-      glass.position.z = 0.0;
+      glass.position.z = 0.0015;
       screen.add(back, glass);
       g.add(screen);
-      return { group: g };
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: glass, size: [0.56, 0.38] } };
     }
     case "palm": {
       // A trunk of rings leaning a little, and fronds fanning out from the top.

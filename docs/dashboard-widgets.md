@@ -66,7 +66,12 @@ and a drag-edited one are the same shape — you can keep editing either way.
 
 The lobby's big screen shows the first five widgets a screen can draw
 (`status`, `clock`, `tasks`, `activity`, `metric`, `list`, `markdown`,
-`links`), a page every 15 seconds, and clicking it opens the whole Board in a
+`links`), a page every 15 seconds. Up close each page is drawn live by the
+renderer below, in the screen's colours and larger (the screen is a
+[surface](./live-sessions.md#surfaces-using-what-hangs-on-the-walls)), so a
+new renderer shows on the screen with nothing more to write; from across the
+room a picture drawn from what the widget's endpoint sent stands in. Bringing
+the screen up holds its page still; a page's title opens the whole Board in a
 panel without leaving the world. A widget's place on the screen is its place
 on the Board, so reorder the Board to change what the lobby shows. See
 [screens and calendars](./live-sessions.md#screens-and-calendars).

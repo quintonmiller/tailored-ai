@@ -76,6 +76,8 @@ import {
 } from "./scene";
 import { drawScreen, pageAt, type ScreenCard } from "./screens";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
+import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
+import { blocksView, facingSurface, focusDistance, focusFraming, overWalls } from "./surfaces";
 import { byPhone, GET_UP_AT, heardThrough, standBy, TALK_APART, talkingHere } from "./talk";
 import {
   clampReach,
@@ -99,7 +101,17 @@ import {
 } from "./travel";
 import { inOrder } from "./turns";
 
+export type { SurfaceUse, SurfaceView } from "./surface-layer";
 export type { Travel } from "./travel";
+
+/**
+ * A surface the page lays in the room itself (see `surface-layer.ts`): on
+ * something in the room, or at a place on the floor plan, at a height,
+ * facing a way (degrees, as a prop's `facing`).
+ */
+export type StageSurface = Omit<SurfaceSpec, "anchor" | "face" | "prop"> & {
+  anchor: THREE.Object3D | { at: [number, number]; elevation: number; facing: number };
+};
 
 /** Something an agent said, when it said it (an ISO time; a reply can be timed to follow), to whom, and in which room. */
 export interface Line {
@@ -112,8 +124,11 @@ export interface Line {
   voiced?: boolean;
 }
 
-/** Where on something made to be used a click landed: a note or a column on a board, or the page a screen is on. */
-export type UseSpot = BoardSpot | { card: string };
+/**
+ * Where on something made to be used a click landed: a note or a column on a
+ * board, the page a screen is on, or a line on a calendar about an agent.
+ */
+export type UseSpot = BoardSpot | { card: string } | { agent: string };
 
 /** A line older than this when it arrives was said before anyone was looking: no bubble. */
 const STALE_LINE_MS = 15_000;
@@ -198,6 +213,21 @@ export interface Stage {
    * to. Called again as what is picked, or where it is being put, changes.
    */
   setEditing(edit: StageEdit | null): void;
+  /**
+   * Lay a surface of the page's own in the room: live HTML on a plane, on
+   * something in the room or at a place in it. It belongs to the place on
+   * the stage now, and going somewhere else takes it down; the function
+   * returned takes it down sooner.
+   */
+  addSurface(surface: StageSurface): () => void;
+  /** Hear which surfaces are live, each time that changes: the page draws into each one's element. */
+  onSurfaces(listener: (views: SurfaceView[]) => void): () => void;
+  /** The page has drawn into a live surface: from now on it shows through the picture. */
+  surfaceReady(id: string): void;
+  /** Bring a surface up to read and use, head-on, or put it down (null) and go back to where you were. */
+  focusSurface(id: string | null): void;
+  /** Where a pointer is on a surface, in the surface's own pixels from its top left; none when it is off it. */
+  surfacePoint(id: string, at: { clientX: number; clientY: number }): [number, number] | undefined;
   dispose(): void;
 }
 
@@ -345,6 +375,15 @@ const HOVER_AGAIN_MS = 120;
 const REROUTE_SECONDS = 0.4;
 /** Seconds something in the way takes to fade, or to come back once the view is clear. */
 const SEE_THROUGH_SECONDS = 0.15;
+/** How far off a surface can be and still be brought up with F from the camera's own view, not a body's: metres. */
+const FAR_FACE = 30;
+/** Pixels kept clear round a surface being read, and at the stage's foot for the chat's bar when nothing covers it. */
+const READ_GAP = 14;
+const READ_FOOT = 70;
+/** How paper on a wall looks by a home's lamps after dark: a little dimmer and warmer than by day. */
+const LAMPLIT = "brightness(0.92) sepia(0.14)";
+/** The least height in pixels a surface being read is fitted into, however much is over the stage. */
+const READ_LEAST = 160;
 
 /** The box round something, as one that can hide a body. */
 const solidOf = (box: THREE.Box3): Solid => ({ min: box.min.toArray(), max: box.max.toArray() });
@@ -413,6 +452,10 @@ export async function createStage(
     onDoorHover?: (door: RoomDoor | undefined, at?: { x: number; y: number }) => void;
     /** The controls laid over the top of the stage: what is said is kept out from under them. */
     overlays?: () => Element[];
+    /** A surface was brought up to read close up, or put down (undefined). */
+    onFocus?: (surface: string | undefined) => void;
+    /** The pointer came over a surface a click brings up (what it is, and where on the page), or left it. */
+    onSurfaceHover?: (label: string | undefined, at?: { x: number; y: number }) => void;
   } = {},
 ): Promise<Stage> {
   // The room as the page gave it, and as drawn: with spots added by things that bring none (see `idleSpots`).
@@ -434,6 +477,22 @@ export async function createStage(
   }
 
   const scene = new THREE.Scene();
+  // Live HTML on the room's screens, boards, calendars and kiosks, under the picture (`surface-layer.ts`). None in
+  // a photo, which is never told what is on them.
+  const layer = new SurfaceLayer(!opts.still);
+  // Surfaces the page laid at a place in the room rather than on something in it: what each lies on.
+  const pinned = new THREE.Group();
+  scene.add(pinned);
+  /** Whether something is in the room on the stage, not left behind with furniture taken down. */
+  const inScene = (o: THREE.Object3D) => {
+    let p: THREE.Object3D | null = o;
+    while (p?.parent) p = p.parent;
+    return p === scene;
+  };
+  // Which place the surfaces belong to: a prop's surface is the same one in the same place, and another in the next.
+  let surfacePlace = 0;
+  // The surface being read close up, if any; the layer is told, and the camera, the keys and the pointer follow.
+  let reading: string | undefined;
   // Everything a close-up camera must not sit inside or look through.
   const scenery: THREE.Object3D[] = [];
   // Furniture that leads somewhere when clicked.
@@ -578,12 +637,25 @@ export async function createStage(
         const photo = prop.kind === kind ? photos.shift() : undefined;
         if (photo) hung.set(prop.id, photo.media);
       }
+    // The surfaces on the things here are laid again, each keeping what it shows if its thing is still here. One the
+    // page laid on something that went with the old furniture goes with it: the page lays it again on the new.
+    layer.markStale((s) => !!s.prop || !inScene(s.anchor));
     for (const prop of room.props) {
       const built = buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label, scale: prop.scale });
       if (built.screen) {
         if (prop.kind === "screen") screens.push(built.screen);
         else if (prop.kind === "calendar") calendars.push(built.screen);
-        else boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
+        else if (prop.kind === "board") boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
+        layer.add({
+          id: `${surfacePlace}:${prop.id}`,
+          anchor: built.screen.face,
+          size: built.screen.size,
+          face: built.screen.face,
+          prop,
+          label: prop.name ?? prop.label ?? prop.kind,
+          // A kiosk's button is pressed there and then; anything with more on it is brought up to read first.
+          use: prop.kind === "kiosk" ? "direct" : "focus",
+        });
       }
       const photo = hung.get(prop.id);
       if (photo) hangPhoto(built.group, prop.kind, photo);
@@ -664,6 +736,7 @@ export async function createStage(
       doorHighlights.set(door, built.highlight);
     }
     lightDoors();
+    layer.sweep();
     scene.add(furniture);
     // Somewhere to stand by a plant, the task board, a sideboard: worked out once what is in the way is known.
     room = { ...given, spots: [...given.spots, ...idleSpots(given, obstacles)] };
@@ -903,6 +976,8 @@ export async function createStage(
   let lit: Lighting | undefined;
   const light = (l: Lighting) => {
     lit = l;
+    // Paper on the walls (a board, a calendar) takes on a home's lamplight after dark; a screen lights itself.
+    layer.dom.style.setProperty("--surface-paper", lights === "home" && l.lamp.on ? LAMPLIT : "none");
     sky.color.setHex(l.sky.color);
     sky.groundColor.setHex(l.sky.ground);
     sky.intensity = l.sky.intensity;
@@ -1054,24 +1129,32 @@ export async function createStage(
     controls.target.copy(f.target);
     [controls.minAzimuthAngle, controls.maxAzimuthAngle] = f.azimuth;
     [controls.minPolarAngle, controls.maxPolarAngle] = f.polar;
-    // A visitor can look all the way round, and from nearly overhead to the floor.
-    if (opts.visitor) {
+    // A visitor can look all the way round, and from nearly overhead to the floor; reading a surface, straight at it.
+    if (opts.visitor && !reading) {
       [controls.minAzimuthAngle, controls.maxAzimuthAngle] = [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY];
       [controls.minPolarAngle, controls.maxPolarAngle] = [0.15, 1.5];
     }
-    controls.enabled = true;
+    // Reading a surface, the view holds still on it: dragging doesn't turn it away.
+    controls.enabled = !reading;
     controls.update();
   };
 
+  // The surfaces under the picture, which shows them through holes; the picture over them takes the pointer.
+  host.appendChild(layer.dom);
   host.appendChild(renderer.domElement);
+  renderer.domElement.setAttribute("aria-hidden", "true");
   // How far the picture is shifted left and up, in pixels, so the scene is centred in the part of the stage it is
   // framed in (`part`). A panel opening or closing eases it there, rather than jumping.
   let shift: [number, number] = [0, 0];
   let framed = false;
-  const wantShift = (): [number, number] => [
-    part.right > part.left ? (stageW - part.right - part.left) / 2 : 0,
-    part.bottom > part.top ? (stageH - part.bottom - part.top) / 2 : 0,
-  ];
+  const wantShift = (): [number, number] => {
+    // Reading a surface, it is centred in the box it is read in instead (`readingBox`).
+    const p = reading ? readingBox() : part;
+    return [
+      p.right > p.left ? (stageW - p.right - p.left) / 2 : 0,
+      p.bottom > p.top ? (stageH - p.bottom - p.top) / 2 : 0,
+    ];
+  };
   const project = () => {
     if (Math.abs(shift[0]) > 0.5 || Math.abs(shift[1]) > 0.5)
       camera.setViewOffset(stageW, stageH, shift[0], shift[1], stageW, stageH);
@@ -1082,6 +1165,7 @@ export async function createStage(
     stageW = Math.max(1, host.clientWidth);
     stageH = Math.max(1, host.clientHeight);
     renderer.setSize(stageW, stageH, false);
+    layer.setSize(stageW, stageH);
     camera.aspect = stageW / stageH;
     measureOverlays();
     refit();
@@ -1090,6 +1174,13 @@ export async function createStage(
   const refit = () => {
     if (!framed || opts.reducedMotion) shift = wantShift();
     project();
+    // Reading a surface, it is framed again in what can be seen now: a panel opened beside it, say.
+    if (reading) {
+      const f = readingFraming(reading);
+      if (f) moveCamera(f);
+      raiseWall(reading, f);
+      return;
+    }
     // A visitor's camera eases to its distance each frame (`frameUp`); flying, it stays where it was flown.
     if (tween || opts.visitor) return;
     // Keep the angle the person dragged to; only the distance follows the frame's shape.
@@ -1117,7 +1208,7 @@ export async function createStage(
         : [ease(shift[0], want[0], dt, ZOOM_SECONDS), ease(shift[1], want[1], dt, ZOOM_SECONDS)];
       project();
     }
-    if (!opts.visitor || travel !== "walk" || tween || editing) return;
+    if (!opts.visitor || travel !== "walk" || tween || editing || reading) return;
     const offset = camera.position.clone().sub(controls.target);
     const now = offset.length();
     if (now < 1e-6) return;
@@ -1208,7 +1299,7 @@ export async function createStage(
    * door, a use (a kiosk, a board) or a spot to go to. On a board's face, the
    * note or column the pointer is on as well.
    */
-  const pick = (e: At): (Use & { on?: UseSpot }) | undefined => {
+  const pick = (e: At): (Use & { on?: UseSpot; object: THREE.Object3D }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
@@ -1216,7 +1307,8 @@ export async function createStage(
     );
     const found = nearestUse(ray.intersectObjects(clickable, true));
     if (!found) return undefined;
-    const { hit, use } = found;
+    const { hit } = found;
+    const use = { ...found.use, object: hit.object };
     // On a screen, the page that is up: a click opens what it shows.
     const card = cards[shownPage];
     if (use.action && card && screens.some((s) => s.face === hit.object)) return { ...use, on: { card: card.id } };
@@ -1281,6 +1373,17 @@ export async function createStage(
       opts.onPick?.(who, { x: e.clientX, y: e.clientY });
       return;
     }
+    // A surface: one with more on it is brought up to read; a kiosk's live button is pressed. A kiosk too far off to
+    // be live does what it is for, as anything made to be used does.
+    const surface = surfaceUnder(e);
+    if (surface && layer.howUsed(surface) === "focus") {
+      bringUp(surface);
+      return;
+    }
+    if (surface && layer.interactive(surface)) {
+      passOn(e);
+      return;
+    }
     const it = pick(e);
     if (it?.action && opts.onUse) {
       opts.onUse(it.action, it.on);
@@ -1301,6 +1404,8 @@ export async function createStage(
   };
   // Where the mouse is over the stage, so what is under it is looked at again as the view moves under a still pointer.
   let pointer: At | undefined;
+  // The surface under the pointer that a click brings up, whose name the page is showing by the pointer.
+  let hoveredSurface: string | undefined;
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
     pointer = { clientX: e.clientX, clientY: e.clientY };
@@ -1317,6 +1422,16 @@ export async function createStage(
     const door = !who && !leaving && opts.onDoor ? it?.door : undefined;
     const box = canvas.getBoundingClientRect();
     hoverDoor(door, { x: e.clientX - box.left, y: e.clientY - box.top });
+    // A surface brought up to read when clicked says so while the pointer is on it.
+    const surface = !who && it ? layer.surfaceAt(it.object) : undefined;
+    const reads = surface && !reading && layer.howUsed(surface) === "focus" ? surface : undefined;
+    layer.hover(reads);
+    if (reads || hoveredSurface)
+      opts.onSurfaceHover?.(reads ? layer.labelOf(reads) : undefined, {
+        x: e.clientX - box.left,
+        y: e.clientY - box.top,
+      });
+    hoveredSurface = reads;
     canvas.style.cursor = (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || door ? "pointer" : "";
   };
   /** The pointer is over a body now, or none: its tag says more, and the last one's goes back. */
@@ -1334,6 +1449,9 @@ export async function createStage(
     pointer = undefined;
     hover(undefined);
     hoverDoor(undefined);
+    layer.hover(undefined);
+    if (hoveredSurface) opts.onSurfaceHover?.(undefined);
+    hoveredSurface = undefined;
   };
   // Walking, the camera easing or zooming, or someone stepping in front of a door all change what is under a pointer
   // that hasn't moved: it is looked at again, a few times a second, while the view moves or something is lit.
@@ -1350,18 +1468,24 @@ export async function createStage(
 
   // Going through a door: the picture fades, the page brings the place behind it, and `enter` fades it back in.
   canvas.style.transition = opts.reducedMotion ? "" : `opacity ${FADE_MS}ms ease`;
+  layer.dom.style.transition = canvas.style.transition;
+  /** The picture, and the surfaces under it, which would otherwise show through as it fades. */
+  const fadeTo = (opacity: number) => {
+    canvas.style.opacity = String(opacity);
+    layer.dom.style.opacity = String(opacity);
+  };
   let leaving: { door: RoomDoor; giveUp: ReturnType<typeof setTimeout> } | undefined;
   const fadeIn = () => {
     if (leaving) clearTimeout(leaving.giveUp);
     leaving = undefined;
-    canvas.style.opacity = "1";
+    fadeTo(1);
   };
   function leave(door: RoomDoor) {
     if (leaving || !opts.onDoor) return;
     hoverDoor(undefined);
     // Nothing came back in time: you are still here, and can try again.
     leaving = { door, giveUp: setTimeout(fadeIn, DOOR_PATIENCE_MS) };
-    canvas.style.opacity = "0";
+    fadeTo(0);
     setTimeout(
       () => {
         if (!disposed) opts.onDoor?.(door);
@@ -1371,7 +1495,7 @@ export async function createStage(
   }
   // Come in through a door: from dark.
   if (arrival) {
-    canvas.style.opacity = "0";
+    fadeTo(0);
     requestAnimationFrame(() => requestAnimationFrame(fadeIn));
   }
   // A visitor's keys: held keys move them every frame, unless they are typing or working in a panel over the stage.
@@ -1382,8 +1506,9 @@ export async function createStage(
   // into a door at the back would otherwise walk you straight back out of the one you came in by.
   const waiting = new Set<string>();
   const onKeyDown = (e: KeyboardEvent) => {
-    // Rearranging, the keys turn and remove things (the page's), and you stay where you are.
-    if (editing) return;
+    // Rearranging, the keys turn and remove things (the page's), and you stay where you are; reading a surface, they
+    // are the surface's.
+    if (editing || reading) return;
     const run = RUN_KEYS.has(e.code);
     if (!opts.visitor || !(run || e.code in MOVE_KEYS) || typing(e) || e.metaKey || e.ctrlKey || e.altKey) return;
     // Shift alone does nothing in the page to keep from it, so it is only listened to.
@@ -1650,6 +1775,285 @@ export async function createStage(
   canvas.addEventListener("pointermove", onTouch);
   canvas.addEventListener("pointerleave", onLeave);
   canvas.addEventListener("wheel", onWheel, { passive: false });
+
+  // --- Surfaces: reading one close up, and the pointer going to the HTML of one in use (see `surface-layer.ts`) ---
+
+  /** Whether something is drawn: it, and everything it is in, is shown. */
+  const drawn = (o: THREE.Object3D) => {
+    for (let p: THREE.Object3D | null = o; p; p = p.parent) if (!p.visible) return false;
+    return true;
+  };
+  /**
+   * The surface under a pointer, with nothing nearer in front of it: a body,
+   * a chair. A wall or a plant faded to see past doesn't count, as it doesn't
+   * for what the pointer says a click does (`pick`).
+   */
+  const surfaceUnder = (e: At): string | undefined => {
+    aim(e);
+    const bodies = [me.body, ...[...companions.values()].map((c) => c.body)];
+    const hit = ray
+      .intersectObjects([furniture, pinned, ...bodies], true)
+      .find(
+        (h) =>
+          !(h.object as THREE.Sprite).isSprite &&
+          drawn(h.object) &&
+          (layer.surfaceAt(h.object) !== undefined || !fadedNow(h.object)),
+      );
+    return layer.surfaceAt(hit?.object);
+  };
+  /**
+   * The pointer goes to the HTML of a surface in use (a kiosk's button, the
+   * surface being read) while it is over it, and back to the picture once it
+   * is off it. Pressed, it stays where it went down, so a drag isn't cut off.
+   */
+  const route = (e: PointerEvent) => {
+    if (e.pointerType !== "mouse" || editing || e.buttons) return;
+    const take = !!reading || (layer.anyDirect() && layer.interactive(surfaceUnder(e)));
+    canvas.style.pointerEvents = take ? "none" : "";
+  };
+  /** Whether a pointer event came from inside a surface's HTML. */
+  const onSurface = (target: EventTarget | null) =>
+    target instanceof Node && target !== layer.dom && layer.dom.contains(target);
+  /**
+   * A tap on a surface that takes it, which went to the picture (a finger
+   * has no pointer moving over it first): on to what is under it in the
+   * HTML, as a click.
+   */
+  const passOn = (e: At) => {
+    canvas.style.pointerEvents = "none";
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    canvas.style.pointerEvents = reading ? "none" : "";
+    if (!(under instanceof HTMLElement) || !onSurface(under)) return;
+    const el = under.closest<HTMLElement>("button, a, input, select, textarea, [tabindex]") ?? under;
+    el.focus({ preventScroll: true });
+    el.click();
+  };
+  /** Whether a pointer event came from inside the surface being read. */
+  const onReading = (target: EventTarget | null) =>
+    !!reading && target instanceof Node && !!layer.elementOf(reading)?.contains(target);
+  // Pressing anywhere off the surface being read (another surface included), and letting go without dragging: it is
+  // put down.
+  let awayFrom: [number, number] | undefined;
+  const onAwayDown = (e: PointerEvent) => {
+    awayFrom = reading && !onReading(e.target) && e.target !== canvas ? [e.clientX, e.clientY] : undefined;
+  };
+  const onAwayUp = (e: PointerEvent) => {
+    const from = awayFrom;
+    awayFrom = undefined;
+    if (!reading || !from || onReading(e.target)) return;
+    if (Math.hypot(e.clientX - from[0], e.clientY - from[1]) <= 6) putDown();
+  };
+  host.addEventListener("pointermove", route);
+  host.addEventListener("pointerdown", onAwayDown);
+  host.addEventListener("pointerup", onAwayUp);
+  // Keys move the keyboard focus through a surface's HTML, and the browser scrolls what is focused into view: the
+  // layer is laid out by the stage, never scrolled.
+  const unscroll = () => {
+    if (layer.dom.scrollTop || layer.dom.scrollLeft) layer.dom.scrollTo(0, 0);
+  };
+  layer.dom.addEventListener("scroll", unscroll);
+
+  /** Where the camera was before a surface was brought up: where putting it down goes back to. */
+  let readFrom: { position: THREE.Vector3; target: THREE.Vector3 } | undefined;
+  // Bodies put out of sight while a surface is read, for standing in the way of it.
+  const hidden = new Set<THREE.Object3D>();
+
+  /**
+   * The part of the stage a surface being read is fitted into: all of it the
+   * page doesn't cover (a chat panel, a phone's chat), below the tools over
+   * the top, and clear of the foot, where the chat's bar and the keys line
+   * sit when nothing covers it. Across the whole width, tools or no tools: a
+   * phone's tools reach far down one side, and the camera would otherwise
+   * frame the surface into the narrow strip beside them.
+   */
+  function readingBox(): Part {
+    const top = insetTop;
+    const bottom = stageH - insetBottom;
+    const middle = (top + bottom) / 2;
+    const below = covered.filter((c) => c.top < middle).reduce((low, c) => Math.max(low, c.bottom), top);
+    const low = bottom - Math.max(READ_GAP, READ_FOOT - insetBottom);
+    return {
+      left: READ_GAP,
+      right: Math.max(READ_GAP + 1, stageW - insetRight - READ_GAP),
+      top: Math.max(top, Math.min(below + READ_GAP, low - READ_LEAST)),
+      bottom: low,
+    };
+  }
+
+  /** The camera reading a surface: head-on, as near as lets all of it fit in what can be seen of the stage. */
+  function readingFraming(id: string): Framing | undefined {
+    const at = layer.placeOf(id);
+    if (!at) return undefined;
+    const box = readingBox();
+    const high = Math.max(1, box.bottom - box.top);
+    const distance = focusDistance(at.size, {
+      fov: camera.fov,
+      aspect: (box.right - box.left) / high,
+      tall: high / stageH,
+    });
+    const f = focusFraming(at.center.toArray() as Vec3, at.normal.toArray() as Vec3, distance);
+    return {
+      target: new THREE.Vector3(...f.target),
+      position: new THREE.Vector3(...f.position),
+      azimuth: [Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY],
+      polar: [0, Math.PI],
+    };
+  }
+
+  // While a surface high on a wall is read, the wall goes on up past the top of the stage: otherwise the dark over
+  // the room shows in a band above it, cutting through the tools.
+  let raised: THREE.Mesh | undefined;
+  function raiseWall(id: string | undefined, f?: Framing) {
+    raised?.removeFromParent();
+    raised?.geometry.dispose();
+    raised = undefined;
+    const at = id ? layer.placeOf(id) : undefined;
+    if (!at || !f) return;
+    // Only a surface on, or square to, one of the two walls: one turned another way has the room round it.
+    const which: Wall | undefined = at.normal.z > 0.98 ? "back" : at.normal.x > 0.98 ? "left" : undefined;
+    if (!which) return;
+    let wall: THREE.Mesh | undefined;
+    furniture.traverse((o) => {
+      if (o.userData.panel && o.userData.wall === which) wall = o as THREE.Mesh;
+    });
+    if (!wall) return;
+    const box = readingBox();
+    const distance = which === "back" ? f.position.z + room.depth / 2 : f.position.x + room.width / 2;
+    const over = overWalls(
+      f.target.y,
+      distance,
+      { fov: camera.fov, stageH, above: (box.top + box.bottom) / 2 },
+      room.height,
+    );
+    if (over <= 0) return;
+    const wide = which === "back" ? room.width + 0.1 : room.depth;
+    const tall = over + 0.5;
+    // In the wall's own colour, even while it is faded for being in the way.
+    const material = fadeable.find((x) => x.group === wall)?.own?.get(wall) ?? wall.material;
+    raised = new THREE.Mesh(new THREE.PlaneGeometry(wide, tall), material);
+    if (which === "back") raised.position.set(-0.05, room.height + tall / 2, -room.depth / 2);
+    else {
+      raised.position.set(-room.width / 2, room.height + tall / 2, 0);
+      raised.rotation.y = Math.PI / 2;
+    }
+    // Part of the room, taken down with it; nothing to bump into or click.
+    furniture.add(raised);
+  }
+
+  /** Bring a surface up to read: the camera flies to it, head-on, and the keys and the pointer are its. */
+  function bringUp(id: string) {
+    // A kiosk is pressed where it stands, never brought up.
+    if (editing || opts.still || layer.howUsed(id) !== "focus") return;
+    if (!layer.placeOf(id)) return;
+    if (!reading) readFrom = { position: camera.position.clone(), target: controls.target.clone() };
+    reading = id;
+    // Said first: the page's styles tidy the tools over the stage away for reading, and the surface is framed round
+    // what is left of them.
+    host.dataset.reading = id;
+    measureOverlays();
+    const f = readingFraming(id);
+    if (!f) return;
+    readBox = boxKey();
+    layer.focus(id);
+    held.clear();
+    greeting = undefined;
+    hover(undefined);
+    hoverDoor(undefined);
+    canvas.style.pointerEvents = "none";
+    canvas.style.cursor = "";
+    moveCamera(f);
+    raiseWall(id, f);
+    opts.onFocus?.(id);
+  }
+
+  /** What the box a surface is read in was, as a key: when the tools over the stage change it, it is framed again. */
+  let readBox = "";
+  const boxKey = () => {
+    const b = readingBox();
+    return [b.left, b.right, b.top, b.bottom].map(Math.round).join(" ");
+  };
+
+  /** Put the surface being read down, and go back to where you were; at once when the place is changing anyway. */
+  function putDown(instant = false) {
+    if (!reading) return;
+    reading = undefined;
+    raiseWall(undefined);
+    layer.focus(undefined);
+    canvas.style.pointerEvents = "";
+    delete host.dataset.reading;
+    for (const o of hidden) o.visible = true;
+    hidden.clear();
+    // The keyboard comes back out of the surface with you.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && layer.dom.contains(active)) active.blur();
+    const back = readFrom;
+    readFrom = undefined;
+    if (back && !instant) moveCamera({ ...framing(view), position: back.position, target: back.target });
+    else if (!tween) controls.enabled = true;
+    opts.onFocus?.(undefined);
+  }
+
+  /** While a surface is read, anyone standing between it and the camera is put out of sight. */
+  function clearView() {
+    const at = reading ? layer.placeOf(reading) : undefined;
+    if (!at) return;
+    const center = at.center.toArray() as Vec3;
+    const normal = at.normal.toArray() as Vec3;
+    const distance = at.center.distanceTo(camera.position);
+    for (const f of [me, ...companions.values(), ...departing.map((d) => d.fig)]) {
+      const p = f.walker.place;
+      const inWay = blocksView([p.x, 0, p.z], center, normal, at.size[0] / 2, distance);
+      if (inWay && f.body.visible) {
+        f.body.visible = false;
+        hidden.add(f.body);
+      } else if (!inWay && hidden.delete(f.body)) f.body.visible = true;
+    }
+  }
+
+  /**
+   * The surface you face that F brings up: in front of your body as you
+   * walk, otherwise where the camera looks. Never a kiosk, which is pressed.
+   */
+  const facedSurface = (): string | undefined => {
+    const readable = layer.placed().filter((s) => layer.howUsed(s.id) === "focus");
+    if (opts.visitor && travel === "walk") {
+      const p = me.walker.place;
+      return facingSurface([p.x, me.head().y, p.z], [Math.sin(p.facing), 0, Math.cos(p.facing)], readable);
+    }
+    const look = controls.target.clone().sub(camera.position);
+    return facingSurface(camera.position.toArray() as Vec3, look.toArray() as Vec3, readable, FAR_FACE);
+  };
+  /** F brings up the surface you face, and puts it down again; Escape puts it down. */
+  const onSurfaceKey = (e: KeyboardEvent) => {
+    if (editing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "Escape" && reading) {
+      // Something open over the stage (a task's card, say) is closed by this Escape, not the surface under it.
+      if (host.parentElement?.querySelector("[role='dialog']")) return;
+      e.preventDefault();
+      putDown();
+      return;
+    }
+    if (e.code !== "KeyF" || e.repeat || typing(e)) return;
+    const id = reading ? undefined : facedSurface();
+    if (!reading && !id) return;
+    e.preventDefault();
+    if (reading) putDown();
+    else if (id) bringUp(id);
+  };
+  if (!opts.still) window.addEventListener("keydown", onSurfaceKey);
+
+  /**
+   * Whether something, or what it is part of, is faded for a body to be seen
+   * past it: a surface on it isn't live while it is, and a click goes past it.
+   */
+  const fadedNow = (thing: THREE.Object3D) => {
+    for (let o: THREE.Object3D | null = thing; o; o = o.parent) {
+      const f = fadeable.find((x) => x.group === o);
+      // Faded until it wears its own materials again, not just until it is nearly opaque.
+      if (f) return f.level < 0.995 || f.own !== undefined;
+    }
+    return false;
+  };
 
   let disposed = false;
   let asking = false;
@@ -2008,6 +2412,7 @@ export async function createStage(
   /** Face to face with an agent, at once, clear of the furniture: see `Stage.standBefore`. */
   function standBefore(agent: string) {
     if (!opts.visitor) return;
+    putDown(true);
     const f = companions.get(agent);
     if (!f) {
       // Not here and not coming (it left before you got here, or the map was behind): nobody to wait for.
@@ -2041,7 +2446,7 @@ export async function createStage(
     const through =
       travel === "walk" && !leaving ? doorReached(room, [p.x, p.z], [moved[0], moved[2]], pushing) : undefined;
     if (through) leave(through);
-    if (tween || travel !== "walk" || editing) return;
+    if (tween || travel !== "walk" || editing || reading) return;
     const head = me.head();
     const t = controls.target;
     const step = new THREE.Vector3(...keepUp([t.x, t.y, t.z], [head.x, head.y, head.z], moved, dt));
@@ -2194,7 +2599,7 @@ export async function createStage(
         settle(tween.to);
         tween = null;
       }
-    } else {
+    } else if (!reading) {
       controls.update();
     }
     if (opts.hour === undefined && hourNow() !== hour) {
@@ -2265,12 +2670,12 @@ export async function createStage(
     frameUp(dt);
     // Arrived somewhere: the close-up finds its best angle again, unless the
     // person turned the view themselves a moment ago.
-    if (wasBusy && !me.walker.busy && view === "close" && !tween && !editing && t - lastDragAt > 8)
+    if (wasBusy && !me.walker.busy && view === "close" && !tween && !editing && !reading && t - lastDragAt > 8)
       moveCamera(framing("close"));
     wasBusy = me.walker.busy;
     // The close-up keeps the torso in frame wherever the avatar goes, from
     // the angle the person last left the view at.
-    if (view === "close" && !tween && !editing) {
+    if (view === "close" && !tween && !editing && !reading) {
       const follow = me
         .head()
         .sub(controls.target)
@@ -2280,7 +2685,7 @@ export async function createStage(
     }
     // The chat page's view keeps the agent in frame as it moves round a room too big to see whole from near
     // enough, slowly; and comes in or backs off to the zoom quickly, from whatever angle it was turned to.
-    if (view === "room" && !tween && !opts.visitor && !opts.still && !editing) {
+    if (view === "room" && !tween && !opts.visitor && !opts.still && !editing && !reading) {
       const focus = roomFocus(room, visibleAspect(), me.walker.place, zoomKept, visibleTall());
       const follow = new THREE.Vector3(...focus.target).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.8));
       controls.target.add(follow);
@@ -2358,6 +2763,11 @@ export async function createStage(
       // Where that moves the part the agent is framed in, a close-up is fitted to it again; the other views ease
       // there by themselves, frame by frame.
       if (measureOverlays() && view === "close") refit();
+      // Reading a surface, a tool coming or going over the stage (someone to talk to, say) frames it again round them.
+      if (reading && boxKey() !== readBox) {
+        readBox = boxKey();
+        refit();
+      }
       // What the renderer holds, for anyone inspecting the page, like `data-motion`: shapes and pictures on the
       // GPU. A count that keeps growing place after place is something not let go.
       const { geometries, textures } = renderer.info.memory;
@@ -2406,9 +2816,19 @@ export async function createStage(
     }
     floatOver(dt);
     seeThrough(dt);
+    if (reading) clearView();
     renderer.render(scene, camera);
+    layer.update(camera, stageH, fadedNow, now);
     lookAgain(now);
   });
+
+  /** Leaving the place shown for another: its surfaces stay there, the one being read with them. */
+  const leaveSurfaces = () => {
+    putDown(true);
+    surfacePlace++;
+    layer.markStale(() => true);
+    pinned.clear();
+  };
 
   /** Leaving the place shown for another: everyone in it stays there, and whoever is in the next one was there already. */
   const leavePlace = () => {
@@ -2435,7 +2855,8 @@ export async function createStage(
 
   return {
     setView(next) {
-      if (next === view && !tween) return;
+      if (next === view && !tween && !reading) return;
+      putDown(true);
       view = next;
       moveCamera(framing(next));
     },
@@ -2450,11 +2871,15 @@ export async function createStage(
     cue: handleCue,
     setRoom(next, moved = false) {
       if (next === given && !moved) return;
-      if (moved) leavePlace();
+      if (moved) {
+        leavePlace();
+        leaveSurfaces();
+      }
       // The same place changing shows what changed: new things pop in, moved ones glide over. Another place is simply there.
       const changed = changesShown(given, next, !moved);
       const resized = next.width !== room.width || next.depth !== room.depth || next.height !== room.height;
       unfade();
+      layer.release();
       scene.remove(furniture);
       disposeTree(furniture);
       appearing.length = 0;
@@ -2465,6 +2890,15 @@ export async function createStage(
       camera.updateProjectionMatrix();
       // Rearranging, what you moved is where you put it already: it doesn't glide over from where it was.
       furnish(changed?.fresh, editing ? undefined : changed?.moved);
+      // A surface being read that is still here is framed again where it is now; one taken away is put down.
+      if (reading && !layer.howUsed(reading)) putDown();
+      else if (reading) {
+        // The wall raised over it went with the old furniture.
+        raised = undefined;
+        const f = readingFraming(reading);
+        if (f) moveCamera(f);
+        raiseWall(reading, f);
+      }
       if (lit) light(lit);
       fitShadows();
       dropped = undefined;
@@ -2477,9 +2911,11 @@ export async function createStage(
       if (moved) meet(wanted);
     },
     enter(next, from) {
-      // Everyone in the place you left stays there.
+      // Everyone in the place you left stays there, and so does everything on its walls.
       leavePlace();
+      leaveSurfaces();
       unfade();
+      layer.release();
       scene.remove(furniture);
       disposeTree(furniture);
       appearing.length = 0;
@@ -2520,6 +2956,35 @@ export async function createStage(
       requestAnimationFrame(fadeIn);
     },
     setCompany: meet,
+    addSurface(surface) {
+      const { anchor: given, ...rest } = surface;
+      let anchor: THREE.Object3D;
+      if (given instanceof THREE.Object3D) anchor = given;
+      else {
+        // A place in the room: something of its own to lie on, there, kept until the surface goes.
+        anchor = new THREE.Object3D();
+        anchor.position.set(given.at[0], given.elevation, given.at[1]);
+        anchor.rotation.y = rad(given.facing);
+        pinned.add(anchor);
+        anchor.updateWorldMatrix(true, false);
+      }
+      const laid = layer.add({ ...rest, anchor });
+      // Only this laying of it: a surface laid again under the same id since, by the page, stays.
+      return () => {
+        layer.remove(rest.id, laid);
+        if (anchor.parent === pinned) pinned.remove(anchor);
+      };
+    },
+    onSurfaces: (listener) => layer.subscribe(listener),
+    surfaceReady: (id) => layer.ready(id),
+    focusSurface(id) {
+      if (id) bringUp(id);
+      else putDown();
+    },
+    surfacePoint(id, at) {
+      aim(at);
+      return layer.pointOn(id, ray.ray);
+    },
     setWear(wear) {
       me.dress(wear);
     },
@@ -2558,6 +3023,7 @@ export async function createStage(
     },
     setTravel(next) {
       if (!opts.visitor || next === travel) return;
+      putDown(true);
       travel = next;
       held.clear();
       // Flying, the wheel moves you along the way you look; walking, it zooms the camera following you.
@@ -2585,7 +3051,10 @@ export async function createStage(
       // What the page says now is where anything let go is shown.
       dropped = undefined;
       if (!was && next) {
-        // The keys held to walk are let go, and the view takes in the whole room, panned with the right button.
+        // The keys held to walk are let go, and the view takes in the whole room, panned with the right button. The
+        // pointer is the picture's, for picking things up, even if it was a kiosk's a moment ago.
+        putDown(true);
+        canvas.style.pointerEvents = "";
         held.clear();
         hover(undefined);
         hoverDoor(undefined);
@@ -2621,6 +3090,12 @@ export async function createStage(
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("keydown", onSurfaceKey);
+      host.removeEventListener("pointermove", route);
+      host.removeEventListener("pointerdown", onAwayDown);
+      host.removeEventListener("pointerup", onAwayUp);
+      layer.dom.removeEventListener("scroll", unscroll);
+      layer.dispose();
       controls.dispose();
       me.dispose();
       for (const c of companions.values()) c.dispose();

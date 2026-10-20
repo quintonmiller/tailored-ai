@@ -37,6 +37,8 @@ const stage = vi.hoisted(() => ({
   onLine: undefined as ((agent: string, text: string, nearness: number, phone?: boolean) => void) | undefined,
   /** The last stage's way to say a kiosk or a board was clicked. */
   onUse: undefined as ((action: string, on?: Record<string, string>) => void) | undefined,
+  /** The last stage's listener for which surfaces are live: a test hands it surfaces to draw faces into. */
+  surfaces: undefined as ((views: unknown[]) => void) | undefined,
   /** What the boards were told to show, each time. */
   tasks: [] as { id: string }[][],
   /** The pages the screens were told to go through, each time. */
@@ -138,6 +140,15 @@ vi.mock("../avatar/stage", () => ({
         stage.calendars.push(view),
       setLights: (l: string) => stage.lights.push(l),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
+      onSurfaces: (listener: (views: unknown[]) => void) => {
+        stage.surfaces = listener;
+        listener([]);
+        return () => {};
+      },
+      surfaceReady: () => {},
+      focusSurface: () => {},
+      surfacePoint: () => undefined,
+      addSurface: () => () => {},
     };
   },
 }));
@@ -1447,6 +1458,39 @@ describe("the chat page's scene", () => {
     await act(async () => window.dispatchEvent(esc));
     expect(container.querySelector(".world-task")).toBeNull();
     expect(esc.defaultPrevented).toBe(true);
+  });
+
+  it("moves a note to another column on a board's live face: saved as its card saves it, and on every board at once", async () => {
+    await render();
+    await settle(60);
+    expect(shownOnBoard()).toEqual(["t1:backlog"]);
+    // The board on the wall is live and being read: its face is drawn into the surface the stage made for it.
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    const board = { id: "board", name: "the task board", kind: "board", at: [0, -3], facing: 0, label: "Tasks" };
+    await act(async () =>
+      stage.surfaces?.([
+        { id: "0:board", el, px: [845, 525], label: "the task board", use: "focus", focused: true, prop: board },
+      ]),
+    );
+    const note = el.querySelector("[data-column='todo'] .sf-note") as HTMLElement;
+    expect(note.textContent).toContain("Book flights");
+    await act(async () =>
+      note.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true })),
+    );
+    await settle();
+    expect(patches.at(-1)).toEqual({ id: "t1", body: { status: "in_progress" } });
+    expect(shownOnBoard()).toEqual(["t1:in_progress"]);
+    expect(el.querySelector("[data-column='doing'] .sf-note")?.textContent).toContain("Book flights");
+    el.remove();
+  });
+
+  it("opens an agent's list of wakes from a line about it on a calendar", async () => {
+    await render();
+    await settle(60);
+    await act(async () => stage.onUse?.("calendar", { agent: "planner" }));
+    await settle();
+    expect(container.querySelector(".world-panel")?.textContent).toMatch(/planner/);
   });
 
   it("gives a task to an agent, saying first whether that wakes it", async () => {
