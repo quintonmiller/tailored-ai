@@ -74,11 +74,12 @@ import {
   meetingRoom,
   NO_THEME,
   retheme,
-  sharedPlace,
   THEMES,
   themeFor,
   themeNamed,
 } from "../plugins/places-rooms.js";
+import type { Town } from "../plugins/places-town.js";
+import { layWorld, type WorldPlace } from "../plugins/places-world.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { RoomStore } from "../rooms/store.js";
@@ -357,7 +358,7 @@ describe("the place tool", () => {
   it("says which area the room is in and where its door is, and keeps the doorway clear of what is added", async () => {
     const t = tool();
     const look = await t.execute({ action: "look" }, context("assistant"));
-    expect(String(look.output)).toMatch(/It is in the main building\. Its door is on the (back|left) wall, toward the/);
+    expect(String(look.output)).toMatch(/It is in the town\. Its door is on the (back|left) wall, toward the/);
     const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
     const before = (await readHome(state, owner, "assistant")).place;
     const door = doorOf(before);
@@ -369,18 +370,11 @@ describe("the place tool", () => {
     expect(doorProblems(after, [door as never])).toEqual([]);
   });
 
-  it("mentions a door only when the building gives the room one: alone in an area of its own, it has none", async () => {
+  it("says a place in an area of its own is on a plot at the edge of town, its door out to it", async () => {
     const t = tool();
     await t.execute({ action: "room", area: "the attic" }, context("assistant"));
     const alone = String((await t.execute({ action: "look" }, context("assistant"))).output);
-    expect(alone).toMatch(/It is in the attic, the only place there, so it has no door yet: the map is the way in\./);
-    expect(alone).not.toMatch(/Its door is/);
-    // A shared place in the same area, however it is written: now there is a door between them.
-    const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
-    const loft = { ...sharedPlace("shared:loft", "the loft"), area: "The Attic" };
-    await state.put(owner, { type: PLACE_TYPE, id: "shared:loft", scope: "global", data: loft as never });
-    const joined = String((await t.execute({ action: "look" }, context("assistant"))).output);
-    expect(joined).toMatch(/You are at home\..* It is in the attic\. Its door is /);
+    expect(alone).toMatch(/It is in the attic, a plot of its own at the edge of the town\. Its door is /);
   });
 
   it("moves the room to an area and back, and signs say what they're called", () => {
@@ -1058,9 +1052,9 @@ describe("the map, and any place on it", () => {
     await tool.execute({ action: "go", to: "lounge" }, as("guest"));
     const map = await worldMap(state, owner, ["host", "guest", "other", "bodiless"], rooms, hasBody);
     expect(map.map((p) => [p.id, p.kind, p.agents])).toEqual([
-      // Where everyone starts, and the hall off it with a door to each home.
+      // The town everything is in, and the town hall on its square. A beach room is a hut on the sand: no office.
+      ["town", "town", []],
       ["lobby", "lobby", []],
-      ["hall:main:homes-1", "hall", []],
       ["home:host", "home", []],
       ["home:guest", "home", []],
       ["home:other", "home", ["other"]],
@@ -1081,7 +1075,7 @@ describe("the map, and any place on it", () => {
     await tool.execute({ action: "new", name: "lounge" }, as("host"));
     await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
     const map = await worldMap(state, owner, ["host"], [], hasBody);
-    expect(map.filter((p) => p.kind !== "lobby")).toEqual([
+    expect(map.filter((p) => p.kind !== "lobby" && p.kind !== "town")).toEqual([
       {
         id: "home:host",
         name: "host's room",
@@ -1089,36 +1083,35 @@ describe("the map, and any place on it", () => {
         owner: "host",
         agents: ["host"],
         area: "main",
-        via: "lobby",
+        via: "town",
+        street: "Maple Lane",
       },
     ]);
   });
 
-  it("says what each place is reached through, so the page can say where you are", async () => {
+  it("says what each place is reached through and the street it is on, so the page can say where you are", async () => {
     await tool.execute({ action: "new", name: "lounge" }, as("host"));
     await tool.execute({ action: "new", name: "porch", area: "the summer house" }, as("host"));
     await tool.execute({ action: "room", area: "the summer house" }, as("other"));
-    // Enough homes for the residences to need a foyer in front of their halls.
-    const many = Array.from({ length: 20 }, (_, i) => `agent-${String.fromCharCode(97 + i)}`);
-    const everyone = new Set(["host", "guest", "other", ...many]);
-    const map = await worldMap(state, owner, [...everyone], rooms, (a) => everyone.has(a ?? "default"));
+    const talk = [...rooms, { ref: "local:standup", name: "standup", members: ["host"] }];
+    const map = await worldMap(state, owner, ["host", "guest", "other"], talk, hasBody);
     const via = Object.fromEntries(map.map((p) => [p.id, p.via]));
-    // The way in has nothing before it.
-    expect(via.lobby).toBeUndefined();
-    // Off the lobby: the residences' foyer, and a wing of one place, straight off it.
-    expect(via["hall:main:homes-foyer"]).toBe("lobby");
-    expect(via["shared:lounge"]).toBe("lobby");
-    expect(via["room:local:trip"]).toBe("lobby");
-    // A hall behind the foyer, and a home behind its hall.
-    expect(via["hall:main:homes-1"]).toBe("hall:main:homes-foyer");
-    expect(via["home:host"]).toMatch(/^hall:main:homes-\d$/);
-    expect(via["home:agent-t"]).toMatch(/^hall:main:homes-\d$/);
-    // Another area's two places are each other's way in.
-    expect(via["shared:porch"]).toBe("home:other");
-    expect(via["home:other"]).toBe("shared:porch");
+    const street = Object.fromEntries(map.map((p) => [p.id, p.street]));
+    // The town is where everything is reached from, and it has nothing before it.
+    expect(via.town).toBeUndefined();
+    for (const id of ["lobby", "office", "home:host", "shared:lounge", "room:local:trip", "shared:porch", "home:other"])
+      expect(via[id], id).toBe("town");
+    // A plain meeting room is behind a door in the office; a beach room is a hut on the sand.
+    expect(via["room:local:standup"]).toBe("office");
+    expect(street["room:local:trip"]).toBe("The beach");
+    expect(street["shared:lounge"]).toBe("Main Street");
+    expect(street["home:host"]).toBe("Maple Lane");
+    expect(street.lobby).toBe("The square");
+    // On a plot of their own at the edge of town.
+    expect(street["shared:porch"]).toBe("Summer house");
   });
 
-  it("puts a place in an area of its own, joined to the others there by doors and to the main building by the map", async () => {
+  it("puts a place in an area of its own on a plot at the edge of town, its door out to it", async () => {
     await tool.execute({ action: "new", name: "porch", area: "the summer house" }, as("host"));
     const moved = await tool.execute({ action: "room", area: "the summer house" }, as("guest"));
     expect(moved.success, moved.error).toBe(true);
@@ -1126,35 +1119,40 @@ describe("the map, and any place on it", () => {
     const map = await worldMap(state, owner, ["host", "guest", "other"], rooms, hasBody);
     expect(map.filter((p) => p.area === "summer-house").map((p) => p.id)).toEqual(["home:guest", "shared:porch"]);
     const world = await buildWorld(state, owner, ["host", "guest", "other"], rooms, hasBody);
-    expect(world.areas.map((a) => a.name)).toEqual(["the main building", "the summer house"]);
-    // Door to door: the porch and the guest's home.
+    expect(world.areas.map((a) => a.name)).toEqual(["the town", "the summer house"]);
+    expect(world.town.plots.map((p) => p.name)).toEqual(["the summer house"]);
+    // Out on to the plot.
     const porch = await scene(state, owner, "shared:porch", rooms, hasBody, world);
-    expect(porch?.doors.map((d) => [d.to, d.label])).toEqual([["home:guest", "guest"]]);
+    expect(porch?.doors.map((d) => [d.to, d.label])).toEqual([["town", "Summer house"]]);
     const guest = await scene(state, owner, homeId("guest"), rooms, hasBody, world);
-    expect(guest?.doors.map((d) => d.to)).toEqual(["shared:porch"]);
-    // Back in the main building, the guest's home is off the residences again.
+    expect(guest?.doors.map((d) => d.to)).toEqual(["town"]);
+    // Back on the streets, the guest's home is on a lane again; the porch keeps the plot.
     await tool.execute({ action: "room", area: "main" }, as("guest"));
     const again = await buildWorld(state, owner, ["host", "guest", "other"], rooms, hasBody);
-    expect(again.doors.get(homeId("guest"))?.to).toBe("hall:main:homes-1");
-    expect(again.doors.has("shared:porch")).toBe(false);
+    expect(again.doors.get(homeId("guest"))).toMatchObject({ to: "town", label: "Maple Lane" });
+    expect(again.doors.get("shared:porch")).toMatchObject({ to: "town", label: "Summer house" });
   });
 
   it("gives every place doors that match the doors on the other side, wherever they are in the room", async () => {
     await tool.execute({ action: "new", name: "lounge" }, as("host"));
     const agents = ["host", "guest", "other"];
-    const world = await buildWorld(state, owner, agents, rooms, hasBody);
+    const talk = [...rooms, { ref: "local:standup", name: "standup", members: ["host"] }];
+    const world = await buildWorld(state, owner, agents, talk, hasBody);
     const ids = [
+      "town",
       LOBBY,
-      ...world.halls.map((h) => h.id),
+      ...world.floors.map((f) => f.id),
       ...agents.map(homeId),
       "shared:lounge",
       roomPlaceId("local:trip"),
+      roomPlaceId("local:standup"),
     ];
     const seen = new Map<string, { to: string }[]>();
     for (const id of ids) {
-      const found = await scene(state, owner, id, rooms, hasBody, world);
+      const found = await scene(state, owner, id, talk, hasBody, world);
       expect(found, id).not.toBeNull();
-      expect(doorProblems(found?.place as Place, found?.doors ?? []), id).toEqual([]);
+      // The town's doors stand on the fronts of its buildings, not in a room's walls.
+      if (id !== "town") expect(doorProblems(found?.place as Place, found?.doors ?? []), id).toEqual([]);
       seen.set(id, found?.doors ?? []);
     }
     for (const [id, doors] of seen) {
@@ -1165,17 +1163,28 @@ describe("the map, and any place on it", () => {
           `${id} -> ${d.to}`,
         ).toBe(true);
     }
-    // A home's door is where its room keeps its doorway, and its plate names the hall.
-    const home = await scene(state, owner, homeId("other"), rooms, hasBody, world);
-    expect(home?.doors[0]).toMatchObject({
-      ...doorOf(home?.place as Place),
-      to: "hall:main:homes-1",
-      label: "Residences",
-    });
-    const hall = await scene(state, owner, "hall:main:homes-1", rooms, hasBody, world);
-    expect(hall?.doors.find((d) => d.to === homeId("other"))).toMatchObject({ label: "other", occupant: "other" });
-    // A hall is only there while the building has it.
-    expect(await scene(state, owner, "hall:main:homes-9", rooms, hasBody, world)).toBeNull();
+    // A home's door is where its room keeps its doorway, and its plate names its street.
+    const home = await scene(state, owner, homeId("other"), talk, hasBody, world);
+    expect(home?.doors[0]).toMatchObject({ ...doorOf(home?.place as Place), to: "town", label: "Maple Lane" });
+    const town = await scene(state, owner, "town", talk, hasBody, world);
+    expect(town?.doors.find((d) => d.to === homeId("other"))).toMatchObject({ label: "other", occupant: "other" });
+    expect(town?.place).toMatchObject({ name: "the town" });
+    // A floor of the office is only there while the office has it.
+    expect(await scene(state, owner, "office:9", talk, hasBody, world)).toBeNull();
+  });
+
+  it("draws the town as it is now, after a meeting room changes to a look of the same size", async () => {
+    // A tavern, a workshop and a library are each a building as deep as the others: only its kind says which.
+    const kindOf = async (theme: string) => {
+      const places: WorldPlace[] = [{ id: roomPlaceId("local:trip"), name: "trip", kind: "room", theme }];
+      const town = await scene(state, owner, "town", rooms, hasBody, layWorld(places));
+      return (town?.place as Place & { town: Town }).town.buildings.find((b) => b.id === roomPlaceId("local:trip"))
+        ?.kind;
+    };
+    expect(await kindOf("tavern")).toBe("tavern");
+    expect(await kindOf("workshop")).toBe("workshop");
+    expect(await kindOf("library")).toBe("library");
+    expect(await kindOf("tavern")).toBe("tavern");
   });
 
   it("shows a room of conversation as a meeting room, a seat for each member with a body", async () => {
@@ -1534,7 +1543,8 @@ describe("meeting rooms its members can change", () => {
     expect(mayChange(roomPlaceId("local:gone"), "host", rooms)).toBe(false);
     expect(mayChange("shared:lounge", "other", rooms)).toBe(true);
     expect(mayChange(LOBBY, "host", rooms)).toBe(false);
-    expect(mayChange("hall:main:homes-1", "host", rooms)).toBe(false);
+    expect(mayChange("town", "host", rooms)).toBe(false);
+    expect(mayChange("office", "host", rooms)).toBe(false);
   });
 
   it("turns a non-member away, saying who can go in", async () => {
@@ -1618,11 +1628,11 @@ describe("meeting rooms its members can change", () => {
     );
   });
 
-  it("sends a member who has left the room home, and keeps the meeting room in its wing", async () => {
+  it("sends a member who has left the room home, and keeps the meeting room in town", async () => {
     await tool.execute({ action: "go", to: "trip" }, as("guest"));
     const moved = await tool.execute({ action: "room", area: "the summer house" }, as("guest"));
     expect(moved.success).toBe(false);
-    expect(moved.error).toMatch(/meeting rooms' wing/);
+    expect(moved.error).toMatch(/stays in the town: in the office, or in a building of its own/);
     rooms[0].members = ["host"];
     expect(await whereIs(state, owner, "guest", rooms)).toBe(homeId("guest"));
     expect((await readCurrent(state, owner, "guest", { rooms, hasBody })).id).toBe(homeId("guest"));

@@ -75,6 +75,8 @@ const stage = vi.hoisted(() => ({
   moves: [] as boolean[],
   /** How each stage was told to light its place, at the start and each time after. */
   lights: [] as string[],
+  /** Bodies the stage was told to show going by in the town: who, from where, to where. */
+  walks: [] as { agent: string; from: [number, number]; to: [number, number] }[],
   /** The last stage's way to say the pointer is over a door, or left it. */
   onDoorHover: undefined as ((door: { to: string } | undefined, at?: { x: number; y: number }) => void) | undefined,
 }));
@@ -149,6 +151,9 @@ vi.mock("../avatar/stage", () => ({
       focusSurface: () => {},
       surfacePoint: () => undefined,
       addSurface: () => () => {},
+      where: () => [-4, 9] as [number, number],
+      walkBy: (w: { agent: string; from: [number, number]; to: [number, number] }) =>
+        stage.walks.push({ agent: w.agent, from: w.from, to: w.to }),
     };
   },
 }));
@@ -205,8 +210,69 @@ let watcherInfo = { enabled: true, triggers: ["created", "updated"] };
 let ownAgents: Record<string, unknown>[] = [];
 /** Places on the map besides the usual ones: an agent made since the page opened. */
 let mapExtra: Record<string, unknown>[] = [];
+/** Where planner's body is on the map: at home, or gone to the trip's meeting room. */
+let plannerAt = "home:planner";
+/** The town's plan, as small as it can be: the town hall, two houses, and the office. */
+const townPlan = {
+  width: 100,
+  depth: 100,
+  square: { at: [0, 0], radius: 11 },
+  shore: { sand: 40, sea: 50 },
+  stream: { points: [], width: 2.6, bridges: [] },
+  park: { at: [20, -20], size: [20, 14], pond: { at: [20, -20], size: [8, 5] } },
+  roads: [],
+  buildings: [
+    {
+      id: "lobby",
+      kind: "hall",
+      at: [0, -20],
+      facing: 0,
+      size: [18, 9, 6.5],
+      label: "Town hall",
+      style: 0.5,
+      street: "The square",
+    },
+    {
+      id: "office",
+      kind: "office",
+      at: [24, -10],
+      facing: 0,
+      size: [14, 10, 9],
+      label: "Office",
+      style: 0.5,
+      street: "The Avenue",
+    },
+    {
+      id: "home:planner",
+      kind: "house",
+      at: [-36, -10],
+      facing: 90,
+      size: [5.2, 4.6, 3],
+      label: "planner",
+      owner: "planner",
+      style: 0.3,
+      street: "Maple Lane",
+    },
+    {
+      id: "home:talker",
+      kind: "house",
+      at: [-24, -10],
+      facing: -90,
+      size: [5.2, 4.6, 3],
+      label: "talker",
+      owner: "talker",
+      style: 0.6,
+      street: "Maple Lane",
+    },
+  ],
+  plots: [],
+  trees: [],
+  lamps: [],
+};
 /** Things on the agent's own walls besides the usual: a screen, a calendar. */
 let homeExtra: Record<string, unknown>[] = [];
+/** Things out on the square: the town hall's board and calendar. */
+let townExtra: Record<string, unknown>[] = [];
 /** The wakes agents booked, as `GET /api/schedules` lists them. */
 let bookedRows: Record<string, unknown>[] = [];
 /** The dashboard's widgets, as `GET /api/dashboard` resolves them. */
@@ -307,6 +373,7 @@ beforeEach(() => {
   stage.rooms.length = 0;
   stage.arrivals.length = 0;
   stage.entered.length = 0;
+  stage.walks.length = 0;
   stage.moves.length = 0;
   stage.company.length = 0;
   stage.activities.length = 0;
@@ -317,6 +384,7 @@ beforeEach(() => {
   stage.screens.length = 0;
   stage.calendars.length = 0;
   homeExtra = [];
+  townExtra = [];
   bookedRows = [];
   dashboardWidgets = [];
   dashboardDown = false;
@@ -326,6 +394,7 @@ beforeEach(() => {
   agentsInfo = {};
   speechRecords = [];
   mapExtra = [];
+  plannerAt = "home:planner";
   stage.agents.length = 0;
   activityRecords = [];
   taskRows = [
@@ -410,29 +479,38 @@ beforeEach(() => {
         return new Response(
           JSON.stringify({
             places: [
-              { id: "hall:main:homes-1", name: "Residences", kind: "hall", agents: [], via: "lobby" },
+              { id: "town", name: "the town", kind: "town", agents: [] },
               {
                 id: "home:talker",
                 name: "talker's room",
                 kind: "home",
                 owner: "talker",
                 agents: ["talker"],
-                via: "hall:main:homes-1",
+                via: "town",
+                street: "Maple Lane",
               },
               {
                 id: "home:planner",
                 name: "planner's room",
                 kind: "home",
                 owner: "planner",
-                agents: ["planner"],
-                via: "hall:main:homes-1",
+                agents: plannerAt === "home:planner" ? ["planner"] : [],
+                via: "town",
+                street: "Maple Lane",
                 role: "travel agent",
                 wear: ["adventurer hat"],
               },
-              { id: "room:local:trip", name: "trip", kind: "room", agents: ["planner", "writer"] },
+              {
+                id: "room:local:trip",
+                name: "trip",
+                kind: "room",
+                agents: plannerAt === "room:local:trip" ? ["planner", "writer"] : ["writer"],
+                via: "office",
+              },
               ...mapExtra,
             ],
-            areas: [{ id: "main", name: "the main building", places: ["lobby", "hall:main:homes-1"] }],
+            areas: [{ id: "main", name: "the town", places: ["town", "lobby"] }],
+            town: townPlan,
           }),
         );
       if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("home:planner")}`)
@@ -441,19 +519,37 @@ beforeEach(() => {
             id: "home:planner",
             place: { ...home, name: "planner's room" },
             company: [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner" }],
-            doors: [{ wall: "back", along: 1, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
+            doors: [{ wall: "back", along: 1, to: "town", label: "Maple Lane", kind: "town" }],
           }),
         );
-      if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("hall:main:homes-1")}`)
+      if (url === `/api/ext/builtin:places/scene/${encodeURIComponent("town")}`)
         return new Response(
           JSON.stringify({
-            id: "hall:main:homes-1",
-            place: { ...home, name: "Residences", props: [] },
+            id: "town",
+            place: { ...home, name: "the town", props: townExtra, town: townPlan },
             company: [],
             doors: [
-              { wall: "left", along: 0, to: "lobby", label: "Lobby", kind: "lobby" },
-              { wall: "back", along: -2, to: "home:planner", label: "planner", kind: "home", occupant: "planner" },
-              { wall: "front", along: -2, to: "home:talker", label: "talker", kind: "home", occupant: "talker" },
+              { wall: "front", along: 0, at: [0, -15.5], facing: 0, to: "lobby", label: "Town hall", kind: "lobby" },
+              {
+                wall: "front",
+                along: 0,
+                at: [-33.7, -10],
+                facing: 90,
+                to: "home:planner",
+                label: "planner",
+                kind: "home",
+                occupant: "planner",
+              },
+              {
+                wall: "front",
+                along: 0,
+                at: [-26.3, -10],
+                facing: -90,
+                to: "home:talker",
+                label: "talker",
+                kind: "home",
+                occupant: "talker",
+              },
             ],
           }),
         );
@@ -507,7 +603,7 @@ beforeEach(() => {
             version: 1,
             place: homeExtra.length ? { ...home, props: [...home.props, ...homeExtra] } : home,
             company,
-            doors: [{ wall: "back", along: homeDoorAlong, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
+            doors: [{ wall: "back", along: homeDoorAlong, to: "town", label: "Maple Lane", kind: "town" }],
             ...(ownWear ? { wear: ownWear } : {}),
           }),
         );
@@ -835,7 +931,8 @@ describe("the chat page's scene", () => {
     await act(async () => tool("Map").click());
     await settle();
     const rooms = [...container.querySelectorAll(".world-map-place")] as HTMLButtonElement[];
-    expect(rooms.map((r) => r.querySelector(".world-map-name")?.textContent)).toEqual(["#trip"]);
+    // The meeting room, and the town last, where you arrive by the map.
+    expect(rooms.map((r) => r.querySelector(".world-map-name")?.textContent)).toEqual(["#trip", "the town"]);
     // Agents by name, the one whose home you are in marked.
     const people = [...container.querySelectorAll(".world-map-who")];
     expect(people.map((p) => p.querySelector(".world-map-who-name")?.textContent)).toEqual(["planner", "talker"]);
@@ -858,23 +955,23 @@ describe("the chat page's scene", () => {
     expect(extras.at(-1)?.body).toBeDefined();
   });
 
-  it("goes through doors in your own body: out of the agent's room into the hall, and on into another home", async () => {
+  it("goes through doors in your own body: out of the agent's room on to the street, and on into another home", async () => {
     await render({ following: true });
-    expect(stage.rooms.at(-1)?.doors?.map((d) => d.to)).toEqual(["hall:main:homes-1"]);
+    expect(stage.rooms.at(-1)?.doors?.map((d) => d.to)).toEqual(["town"]);
     // From the agent's own view, a door starts a visit: your body, come out of the door on the other side.
-    await act(async () => stage.onDoor?.({ to: "hall:main:homes-1" }));
+    await act(async () => stage.onDoor?.({ to: "town" }));
     await settle(60);
     expect(stage.visitors.at(-1)).toBe(true);
     expect(stage.arrivals.at(-1)).toBe("home:talker");
-    expect(stage.rooms.at(-1)?.name).toBe("Residences");
-    // A hall is nobody's home: the conversation goes on.
+    expect(stage.rooms.at(-1)?.name).toBe("the town");
+    // The street is nobody's home: the conversation goes on.
     expect(chattedWith).toEqual([]);
     const made = stage.calls.length;
-    // On through the next door: the same stage, the same body, into planner's home from the hall, talking to planner.
+    // On through the next door: the same stage, the same body, into planner's home from the street, talking to planner.
     await act(async () => stage.onDoor?.({ to: "home:planner" }));
     await settle(60);
     expect(stage.calls.length).toBe(made);
-    expect(stage.entered.at(-1)).toBe("hall:main:homes-1");
+    expect(stage.entered.at(-1)).toBe("town");
     expect(stage.rooms.at(-1)?.name).toBe("planner's room");
     expect(stage.company.at(-1)).toEqual(["planner"]);
     expect(chattedWith).toEqual(["planner"]);
@@ -1153,13 +1250,11 @@ describe("the chat page's scene", () => {
       [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
     await act(async () => tool("Map").click());
     await settle();
-    // Into the residences' hall, where talker's body isn't.
-    const hall = [...container.querySelectorAll(".world-map-fold")][0] as HTMLButtonElement;
-    await act(async () => hall.click());
+    // Out into the town, where talker's body isn't.
     await act(async () =>
       (
         [...container.querySelectorAll(".world-map-place")].find((b) =>
-          b.textContent?.includes("Residences"),
+          b.textContent?.startsWith("the town"),
         ) as HTMLButtonElement
       ).click(),
     );
@@ -1191,12 +1286,10 @@ describe("the chat page's scene", () => {
       [...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === label) as HTMLButtonElement;
     await act(async () => tool("Map").click());
     await settle();
-    const hall = [...container.querySelectorAll(".world-map-fold")][0] as HTMLButtonElement;
-    await act(async () => hall.click());
     await act(async () =>
       (
         [...container.querySelectorAll(".world-map-place")].find((b) =>
-          b.textContent?.includes("Residences"),
+          b.textContent?.startsWith("the town"),
         ) as HTMLButtonElement
       ).click(),
     );
@@ -1215,12 +1308,10 @@ describe("the chat page's scene", () => {
     const visitHall = async () => {
       await act(async () => tool("Map").click());
       await settle();
-      const hall = [...container.querySelectorAll(".world-map-fold")][0] as HTMLButtonElement;
-      await act(async () => hall.click());
       await act(async () =>
         (
           [...container.querySelectorAll(".world-map-place")].find((b) =>
-            b.textContent?.includes("Residences"),
+            b.textContent?.startsWith("the town"),
           ) as HTMLButtonElement
         ).click(),
       );
@@ -1314,31 +1405,59 @@ describe("the chat page's scene", () => {
     expect(people()).toEqual(["newcomer", "planner"]);
   });
 
-  it("says where you are over the stage, from the area down, and each step goes there", async () => {
+  it("says where you are over the stage, from the town down, and each step goes there", async () => {
     await render({ following: true });
     await settle(60);
     const trail = () => container.querySelector(".world-trail");
-    expect(trail()?.textContent).toBe("Main building›Residences›talker's home");
+    const step = (label: string) =>
+      [...(trail()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === label);
+    expect(trail()?.textContent).toBe("Town›Maple Lane›talker's home");
     expect(trail()?.querySelector("[aria-current]")?.textContent).toBe("talker's home");
-    // Through a door into the hall: the trail follows, and the hall is where you are.
-    await act(async () => stage.onDoor?.({ to: "hall:main:homes-1" }));
-    await settle(60);
-    expect(trail()?.textContent).toBe("Main building›Residences");
-    // The area's step goes to its way in: the lobby, in your own body.
-    const step = [...(trail()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Main building");
-    await act(async () => step?.click());
+    // The street's step takes you out of the door on to it, in your own body.
+    await act(async () => step("Maple Lane")?.click());
     await settle(60);
     expect(stage.visitors.at(-1)).toBe(true);
+    expect(stage.arrivals.at(-1)).toBe("home:talker");
+    expect(trail()?.textContent).toBe("Town");
+    // Into planner's home and back out by the town's step: on the square this time, not by any door.
+    await act(async () => stage.onDoor?.({ to: "home:planner" }));
+    await settle(60);
+    expect(trail()?.textContent).toBe("Town›Maple Lane›planner's home");
+    await act(async () => step("Town")?.click());
+    await settle(60);
     expect(stage.entered.at(-1)).toBeUndefined();
+    expect(stage.rooms.at(-1)?.name).toBe("the town");
   });
 
-  it("lights a home as a home, and the halls and the lobby as public places, bright after dark", async () => {
+  it("shows bodies going by in the town, from the door of where they were to the door of where they went", async () => {
+    await render();
+    await act(async () => stage.onDoor?.({ to: "town" }));
+    await settle(60);
+    expect(stage.walks).toEqual([]);
+    // Planner goes to talk in the trip's room, which is in the office: out of its front door, and to the office's.
+    plannerAt = "room:local:trip";
+    await act(async () => FakeEventSource.last?.emit("change", { type: "visit", id: "planner", op: "create" }));
+    await settle(60);
+    expect(stage.walks.map((w) => w.agent)).toEqual(["planner"]);
+    const [walk] = stage.walks;
+    expect(walk.from[0]).toBeGreaterThan(-36 + 2.3);
+    expect(walk.from[1]).toBeCloseTo(-10);
+    expect(walk.to[0]).toBeCloseTo(24);
+    expect(walk.to[1]).toBeGreaterThan(-10 + 5);
+    // Back home again, the same way back.
+    plannerAt = "home:planner";
+    await act(async () => FakeEventSource.last?.emit("change", { type: "visit", id: "planner", op: "delete" }));
+    await settle(60);
+    expect(stage.walks.at(-1)).toEqual({ agent: "planner", from: walk.to, to: walk.from });
+  });
+
+  it("lights a home as a home, and the town by the sky and its street lamps", async () => {
     await render({ following: true });
     await settle(60);
     expect(stage.lights.at(-1)).toBe("home");
-    await act(async () => stage.onDoor?.({ to: "hall:main:homes-1" }));
+    await act(async () => stage.onDoor?.({ to: "town" }));
     await settle(60);
-    expect(stage.lights.at(-1)).toBe("public");
+    expect(stage.lights.at(-1)).toBe("outdoor");
     await act(async () => stage.onDoor?.({ to: "home:planner" }));
     await settle(60);
     expect(stage.lights.at(-1)).toBe("home");
@@ -1348,10 +1467,10 @@ describe("the chat page's scene", () => {
     await render();
     await settle(60);
     await act(async () =>
-      stage.onDoorHover?.({ to: "hall:main:homes-1", kind: "hall", label: "Residences" } as never, { x: 40, y: 60 }),
+      stage.onDoorHover?.({ to: "town", kind: "town", label: "Maple Lane" } as never, { x: 40, y: 60 }),
     );
     const tip = container.querySelector(".door-tip") as HTMLElement;
-    expect(tip.textContent).toBe("to Residences");
+    expect(tip.textContent).toBe("out to Maple Lane");
     expect([tip.style.left, tip.style.top]).toEqual(["40px", "60px"]);
     await act(async () => stage.onDoorHover?.(undefined));
     expect(container.querySelector(".door-tip")).toBeNull();
@@ -2004,6 +2123,38 @@ describe("the chat page's scene", () => {
     expect(container.querySelector(".world-dashboard-panel")?.textContent).toMatch(/Couldn't load the dashboard: 500/);
   });
 
+  it("shows everyone's open tasks and wakes on the square, where nobody stays", async () => {
+    townExtra = [wall("board"), wall("calendar")];
+    bookedRows = [booking("b1", "planner", 2, "plan the route"), booking("b2", "writer", 3, "send the draft")];
+    await render({ following: true });
+    await act(async () => stage.onDoor?.({ to: "town" }));
+    await settle(60);
+    expect(stage.rooms.at(-1)?.name).toBe("the town");
+    // No agent is ever on the square, so what it shows is everyone's, as the lobby's does.
+    expect(stage.tasks.at(-1)?.map((t) => t.id)).toEqual(["t1", "t2"]);
+    const shown = stage.calendars.at(-1);
+    expect(shown?.title).toBe("Everyone's next wakes");
+    expect(shown?.wakes.map((w) => w.key)).toEqual(["booked:b1", "booked:b2"]);
+    await act(async () => stage.onUse?.("calendar"));
+    await settle();
+    const panel = container.querySelector(".world-calendar-panel") as HTMLElement;
+    expect(panel.querySelector(".world-panel-title")?.textContent).toBe("Everyone's next wakes");
+    expect(panel.textContent).toMatch(/plan the route/);
+    expect(panel.textContent).toMatch(/send the draft/);
+    // The office's directory opens the map, as the Map button does.
+    await act(async () => stage.onUse?.("map"));
+    await settle();
+    expect(container.querySelector(".world-map")).not.toBeNull();
+    await act(async () => stage.onUse?.("calendar"));
+    await settle();
+    // And the map, opened out here, marks where you stand on the town's plan.
+    await act(async () =>
+      ([...container.querySelectorAll(".talk-tool")].find((b) => b.textContent === "Map") as HTMLElement).click(),
+    );
+    await settle();
+    expect(container.querySelector(".world-plan-you")?.getAttribute("aria-label")).toBe("You are here");
+  });
+
   it("shows the wakes of whoever is in a shared place on its calendar, and opens the list on them", async () => {
     placeId = "shared:lounge";
     homeExtra = [wall("calendar")];
@@ -2163,8 +2314,9 @@ describe("talking on the chat page", () => {
 describe("wakesFor", () => {
   const wake = (key: string, agent: string) => ({ key, agent, at: 0, kind: "booked" as const, what: key });
   const wakes = [wake("a", "planner"), wake("b", "writer"), wake("c", "default")];
-  it("shows everyone's in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
+  it("shows everyone's on the square and in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
     expect(wakesFor("lobby", [], wakes).map((w) => w.key)).toEqual(["a", "b", "c"]);
+    expect(wakesFor("town", [], wakes).map((w) => w.key)).toEqual(["a", "b", "c"]);
     expect(wakesFor("home:writer", ["planner"], wakes).map((w) => w.key)).toEqual(["b"]);
     expect(wakesFor("shared:lounge", ["planner", "default"], wakes).map((w) => w.key)).toEqual(["a", "c"]);
     expect(wakesFor(undefined, ["planner"], wakes)).toEqual([]);
@@ -2177,8 +2329,9 @@ describe("tasksFor", () => {
     { id: "b", title: "b", status: "backlog", assignee: "writer" },
     { id: "c", title: "c", status: "backlog", assignee: null },
   ];
-  it("shows everyone's in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
+  it("shows everyone's on the square and in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
     expect(tasksFor("lobby", [], tasks).map((t) => t.id)).toEqual(["a", "b", "c"]);
+    expect(tasksFor("town", [], tasks).map((t) => t.id)).toEqual(["a", "b", "c"]);
     expect(tasksFor("home:writer", ["planner"], tasks).map((t) => t.id)).toEqual(["b"]);
     expect(tasksFor("room:local:trip", ["planner", "writer"], tasks).map((t) => t.id)).toEqual(["a", "b"]);
     expect(tasksFor(undefined, ["planner"], tasks)).toEqual([]);

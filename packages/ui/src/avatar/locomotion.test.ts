@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ASK,
+  cellFor,
   Director,
   findPath,
   inTheWay,
@@ -88,6 +89,51 @@ describe("findPath", () => {
     for (const o of row) expect(crosses(from, way, o, 0.2)).toBe(false);
     // Round the end of the row, not through it.
     expect(way.some(([x]) => x > 2.9 || x < -4.9)).toBe(true);
+  });
+
+  it("finds its way across the town, round houses, trees and over the one bridge, on a coarser grid", () => {
+    const town = { ...room, width: 180, depth: 160 };
+    expect(cellFor(town)).toBeGreaterThan(0.5);
+    expect(cellFor(room)).toBe(0.1);
+    // However big the town, the grid searched has no more cells than a big room's: that is what keeps a walk quick.
+    for (const size of [180, 400, 900]) {
+      const cell = cellFor({ width: size, depth: size });
+      expect(Math.ceil(size / cell) ** 2).toBeLessThanOrEqual(220 ** 2);
+    }
+    // A stream all the way down the town but for a bridge, and a row of houses across the way beyond it.
+    const stream: Obstacle[] = [
+      { minX: -20, maxX: -17, minZ: -80, maxZ: -2 },
+      { minX: -20, maxX: -17, minZ: 2, maxZ: 80 },
+    ];
+    const houses: Obstacle[] = [-30, -24, -18, -12].map((z) => ({
+      minX: -40,
+      maxX: -35,
+      minZ: z - 2.3,
+      maxZ: z + 2.3,
+    }));
+    // And trees all over, as many as a real town has, on a loose grid, none where the walk starts or ends.
+    const trees: Obstacle[] = [];
+    for (let x = -86; x <= 86; x += 7)
+      for (let z = -76; z <= 76; z += 7) {
+        const [tx, tz] = [x + ((z * 13) % 3), z + ((x * 7) % 3)];
+        if (Math.hypot(tx + 60, tz + 20) < 3 || Math.hypot(tx - 20, tz - 10) < 3 || (tx > -24 && tx < -13)) continue;
+        trees.push({ minX: tx - 0.3, maxX: tx + 0.3, minZ: tz - 0.3, maxZ: tz + 0.3 });
+      }
+    expect(trees.length).toBeGreaterThan(400);
+    const from: [number, number] = [-60, -20];
+    const to: [number, number] = [20, 10];
+    const all = [...stream, ...houses, ...trees];
+    const way = findPath(town, from, to, all, 0.3);
+    expect(way.at(-1)).toEqual(to);
+    for (const o of all) expect(crosses(from, way, o, 0.3)).toBe(false);
+    // Over the bridge, where the stream lets you.
+    let a = from;
+    const crossing = way.map((b) => {
+      const at = a;
+      a = b;
+      return { at, b };
+    });
+    expect(crossing.some(({ at, b }) => (at[0] < -20 && b[0] > -17) || (at[0] < -17 && b[0] > -20))).toBe(true);
   });
 
   it("can start and end close to furniture, as a spot by a desk is", () => {

@@ -33,6 +33,8 @@ import {
   withSpots,
 } from "./places-layout.js";
 import { LOBBY, LOBBY_DOORS } from "./places-rooms.js";
+import { TOWN } from "./places-town.js";
+import { OFFICE } from "./places-world.js";
 
 /** One change a person makes on the page. */
 export type Edit =
@@ -60,12 +62,13 @@ const DOES: Record<PlaceAction, string> = {
   "new-task": "make a task",
   "new-room": "make a room",
   tasks: "see the open tasks",
+  map: "find a place on the map",
 };
 
 /**
- * The doors to keep clear while a person changes a place: the lobby's own
- * doorways, whether or not a hall uses each yet; anywhere else, the door the
- * place has, or would have, as the tool keeps it (`withDoorwayHeld`).
+ * The doors to keep clear while a person changes a place: the lobby's way out
+ * on to the square; anywhere else, the door the place has, or would have, as
+ * the tool keeps it (`withDoorwayHeld`).
  */
 export function doorsFor(id: string, place: Place): DoorSlot[] {
   if (id === LOBBY) return LOBBY_DOORS;
@@ -143,10 +146,13 @@ function placed(place: Place, held: Place, item: PlaceItem, edit: Extract<Edit, 
 /**
  * What a place becomes with a person's change, or why it can't have it, in
  * a sentence for the page to show. `id` says which place it is: the lobby
- * keeps all its doorways clear, and a hall can't be changed at all.
+ * keeps its way out clear, and the town and the office's floors, which are
+ * laid out from what there is, can't be changed at all.
  */
 export function applyEdit(id: string, place: Place, edit: Edit): Edited | string {
-  if (id.startsWith("hall:")) return "A hall is laid out by the building, so it can't be changed.";
+  if (id === TOWN) return "The town is laid out from who and what is in it, so it can't be changed.";
+  if (id === OFFICE || id.startsWith(`${OFFICE}:`))
+    return "The office is laid out from the meeting rooms in it, so it can't be changed.";
   const held = withDoorsHeld(place, doorsFor(id, place));
   const sound = (next: Place) => {
     const problems = placeProblems(next);

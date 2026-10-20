@@ -29,6 +29,7 @@ import { bodyFor, DEFAULT_ROOM, type Room, type RoomDoor } from "../avatar/scene
 import { dashboardCards, endpointOf, type Fetched, homeCards, type ScreenCard, screenWidgets } from "../avatar/screens";
 import type { Companion, UseSpot } from "../avatar/stage";
 import { TALK_AFTER_MS, type Talk, withTalks, YOU } from "../avatar/talk";
+import { isOutdoors, tripsBetween } from "../avatar/town";
 import { WEAR_TYPE } from "../avatar/wear";
 import { contentText } from "../lib/content";
 import { nameOf, newChatKey } from "../lib/conversations";
@@ -166,7 +167,7 @@ export interface SceneInfo {
   /** What a person rearranging it writes with: the record's version (0 while drawn fresh) and scope. */
   version?: number;
   scope?: string;
-  /** A person may rearrange it: anywhere but a hall, which the building lays out. */
+  /** A person may rearrange it: anywhere but the town and the office's floors, which are laid out from what there is. */
   editable?: boolean;
   /** Fields shown that aren't the record's own: a meeting room's purpose, from its room. */
   lent?: string[];
@@ -598,18 +599,26 @@ export function whereWords(agent: string, places: MapPlace[], here: string | und
   return spot.kind === "home" && spot.owner === agent ? "at home" : `in ${spot.name}`;
 }
 
-/** Which tasks a place's boards show: everyone's in the lobby, otherwise those of whoever is there. */
+/**
+ * Whether a place is everyone's: the town square and the lobby inside its town hall. Their boards and calendars show
+ * every agent's, since nobody lives there and agents only pass through.
+ */
+export function isCommon(place: string | undefined): boolean {
+  return place === "lobby" || place === "town";
+}
+
+/** Which tasks a place's boards show: everyone's on the square and in the lobby, otherwise those of whoever is there. */
 export function tasksFor(place: string | undefined, agents: string[], tasks: BoardTask[]): BoardTask[] {
   if (!place) return [];
-  if (place === "lobby") return tasks;
+  if (isCommon(place)) return tasks;
   const who = place.startsWith("home:") ? [place.slice("home:".length)] : agents;
   return tasks.filter((t) => !!t.assignee && who.includes(t.assignee));
 }
 
-/** Whose wakes a place's calendars show, as its boards show tasks: everyone's in the lobby, otherwise whoever is there. */
+/** Whose wakes a place's calendars show, as its boards show tasks: everyone's in common places, otherwise whoever is there. */
 export function wakesFor(place: string | undefined, agents: string[], wakes: Wake[]): Wake[] {
   if (!place) return [];
-  if (place === "lobby") return wakes;
+  if (isCommon(place)) return wakes;
   const who = place.startsWith("home:") ? [place.slice("home:".length)] : agents;
   return wakes.filter((w) => who.includes(w.agent));
 }
@@ -1327,6 +1336,34 @@ export function useChatStage({
   );
 
   const controls = useRef<AvatarControls | null>(null);
+  // Out in the town, bodies going from one place to another walk the streets: each time the map hears that someone
+  // went somewhere, from the door of where they were to the door of where they went.
+  const whereWas = useRef<Map<string, string> | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new map is what says someone moved; the rest is read as it is then.
+  useEffect(() => {
+    const now = new Map(map.places.flatMap((p) => p.agents.map((a): [string, string] => [a, p.id])));
+    const was = whereWas.current;
+    whereWas.current = now;
+    if (!was || placeId !== "town" || !isOutdoors(room)) return;
+    for (const trip of tripsBetween(was, now, room.town)) {
+      const wear = map.places.find((p) => p.kind === "home" && p.owner === trip.agent)?.wear;
+      fetch(`/api/live${trip.agent === "default" ? "" : `?agent=${encodeURIComponent(trip.agent)}`}`)
+        .then((res) => (res.ok ? (res.json() as Promise<LiveInfo>) : null))
+        .then((body) => {
+          if (!body?.avatar) return;
+          controls.current?.walkBy({
+            agent: trip.agent,
+            name: nameOf(trip.agent),
+            url: body.avatar,
+            animations: body.animations ?? [],
+            ...(wear ? { wear } : {}),
+            from: trip.from,
+            to: trip.to,
+          });
+        })
+        .catch(() => {});
+    }
+  }, [map.places]);
   // The conversation a voice session talks in. A new chat gets a key on its
   // first spoken turn; the chat adopts it, so what is typed next joins it.
   const minted = useRef<{ agent: string; key: string } | null>(null);
@@ -1524,12 +1561,13 @@ export function useChatStage({
       });
     return dashboardCards(dashboard, minute);
   }, [hasScreen, owner, shownActivities, allTasks, wakes, minute, dashboard]);
-  // Whose wakes a calendar shows outside a home and the lobby: whoever is there. Its full list opens on them too.
-  const among = useMemo(() => (owner || placeId === "lobby" ? undefined : here), [owner, placeId, here]);
-  // A calendar in a home is its owner's day; in the lobby, everyone's next wakes; elsewhere, those of whoever is there.
+  // Whose wakes a calendar shows outside a home and the common places: whoever is there. Its full list opens on them too.
+  const among = useMemo(() => (owner || isCommon(placeId) ? undefined : here), [owner, placeId, here]);
+  // A calendar in a home is its owner's day; on the square and in the lobby, everyone's next wakes; elsewhere, those of
+  // whoever is there.
   const calendarView = useMemo((): CalendarView | undefined => {
     if (!hasCalendar) return undefined;
-    const lobby = placeId === "lobby";
+    const lobby = isCommon(placeId);
     const whose = owner ? [owner] : here;
     return {
       title: owner ? `${nameOf(owner)}'s day` : lobby ? "Everyone's next wakes" : "Next wakes for who's here",
@@ -1540,9 +1578,10 @@ export function useChatStage({
       ...(paused ? { note: PAUSED_NOTE } : {}),
     };
   }, [hasCalendar, placeId, owner, here, minute, wakes, done, paused]);
-  // What the lobby's kiosks, the boards, the screens and the calendars do when clicked. A note on a board opens its
-  // task; anywhere else on a board opens the list, at that column when it was one, and at the owner's tasks in a
-  // home. A screen opens what its page is about; a calendar, its full list.
+  // What the kiosks (the lobby's, and the office's directory, which opens the map), the boards, the screens and the
+  // calendars do when clicked. A note on a board opens its task; anywhere else on a board opens the list, at that
+  // column when it was one, and at the owner's tasks in a home. A screen opens what its page is about; a calendar, its
+  // full list.
   const onUse = useCallback(
     (action: string, on?: UseSpot) => {
       if (action === "screen") {
@@ -1558,7 +1597,7 @@ export function useChatStage({
       if (action === "calendar") {
         // A line about an agent opens that agent's list; anywhere else on it, the list the calendar shows.
         const who = on && "agent" in on ? on.agent : owner;
-        setPanel({ kind: "calendar", ...(who ? { who } : placeId !== "lobby" ? { here: true } : {}) });
+        setPanel({ kind: "calendar", ...(who ? { who } : !isCommon(placeId) ? { here: true } : {}) });
         return;
       }
       if (action === "tasks") {
@@ -1578,6 +1617,7 @@ export function useChatStage({
           "I'd like a new agent. Ask me what it should do and how it should come across, then set it up.",
         );
       else if (action === "new-room") setPanel({ kind: "new-room" });
+      else if (action === "map") setPanel({ kind: "map" });
     },
     [onDraft, placeId, owner],
   );
@@ -1591,11 +1631,13 @@ export function useChatStage({
     },
     [placeId, setVisiting],
   );
-  // Homes, shared places and meeting rooms are agents' to change, and the lobby a person's; the halls are the building's.
+  // Homes, shared places and meeting rooms are agents' to change, and the lobby a person's; the town and the office
+  // are laid out from what there is.
   const changeable = !!placeId && (/^(home|shared|room):/.test(placeId) || placeId === "lobby");
-  // Going somewhere: to the agent you came from is back with it.
-  const go = (id: string) => {
-    setVisiting(id === own.id ? null : id);
+  // Going somewhere: to the agent you came from is back with it. Out on to the street by a building's door (`from`),
+  // you stand outside it.
+  const go = (id: string, from?: string) => {
+    setVisiting(id === own.id ? null : id, from);
     setPanel(null);
   };
   // An agent to stand in front of once in its place, asked for by number so asking again is a new ask. Done with
@@ -1726,7 +1768,7 @@ export function useChatStage({
               {step.id === placeId ? (
                 <span aria-current={i === trail.length - 1 ? "location" : undefined}>{step.label}</span>
               ) : (
-                <button type="button" title={`Go to ${step.label}`} onClick={() => go(step.id)}>
+                <button type="button" title={`Go to ${step.label}`} onClick={() => go(step.id, step.from)}>
                   {step.label}
                 </button>
               )}
@@ -1742,8 +1784,10 @@ export function useChatStage({
       <WorldMap
         places={map.places}
         areas={map.areas}
+        {...(map.town ? { town: map.town } : {})}
         problem={map.problem}
         here={placeId}
+        {...(placeId === "town" && controls.current ? { you: controls.current.where() } : {})}
         activities={shownActivities}
         onGo={go}
         onNeed={(who) => seeTo(who)}

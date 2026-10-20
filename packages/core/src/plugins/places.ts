@@ -110,14 +110,16 @@ import {
   retheme,
   sharedPlace,
   THEMES,
+  themeFor,
   themeNamed,
 } from "./places-rooms.js";
 import { everyWords, gatherDone, parseTend, quiet, Tender, tendMessage } from "./places-tend.js";
+import { TOWN, type Town, townPlace } from "./places-town.js";
 import {
   type Area,
   areaId,
   doorsIn,
-  hallPlace,
+  floorPlace,
   layWorld,
   MAIN,
   MAIN_NAME,
@@ -585,10 +587,12 @@ async function purposes(service: StateService, caller: StateCaller): Promise<Map
 }
 
 /**
- * The building every place is in (see `places-world.ts`): the homes of the
- * agents with bodies, the shared places, and the rooms agents talk in, each
- * in the area its record says. Only records that name an area are read for
- * it, so a building of fifty homes costs two queries, not fifty reads.
+ * The town every place is in (see `places-world.ts`): the homes of the agents
+ * with bodies, the shared places, and the rooms agents talk in, each in the
+ * area its record says, and each meeting room in the look its members chose
+ * or its words call for, which may give it a building of its own. Only
+ * records that name an area or a look are read, so a town of fifty homes costs
+ * three queries, not fifty reads.
  */
 export async function buildWorld(
   service: StateService,
@@ -602,6 +606,16 @@ export async function buildWorld(
     .query(caller, { type: PLACE_TYPE, where: { area: { ne: null } }, limit: 500 })
     .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
   const areaOf = new Map(elsewhere.map((r) => [r.id, String((r.data as unknown as Place).area ?? "")]));
+  const looks = await service
+    .query(caller, { type: PLACE_TYPE, where: { theme: { ne: null } }, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  const themeOf = new Map(looks.map((r) => [r.id, String((r.data as unknown as Place).theme ?? "")]));
+  // A look chosen beats the one the words call for, and "none" is a choice: a plain room in the office.
+  const look = (r: TalkRoom) => {
+    const chosen = themeOf.get(roomPlaceId(r.ref));
+    const theme = chosen ? (chosen === NO_THEME ? undefined : chosen) : themeFor(`${r.name} ${r.purpose ?? ""}`)?.id;
+    return theme ? { theme } : {};
+  };
   const places: WorldPlace[] = [
     ...agents
       .filter((a) => hasBody(a))
@@ -613,7 +627,7 @@ export async function buildWorld(
         ...(areaOf.get(homeId(a)) ? { area: areaOf.get(homeId(a)) } : {}),
       })),
     ...shared.map((p) => ({ id: p.id, name: p.name, kind: "shared" as const, ...(p.area ? { area: p.area } : {}) })),
-    ...rooms.map((r) => ({ id: roomPlaceId(r.ref), name: r.name, kind: "room" as const })),
+    ...rooms.map((r) => ({ id: roomPlaceId(r.ref), name: r.name, kind: "room" as const, ...look(r) })),
   ];
   return layWorld(places);
 }
@@ -627,23 +641,22 @@ export interface TalkRoom {
   members: string[];
 }
 
-/** One place on the map: the lobby, a hall, a home, a shared place, or a room of conversation, and who is in it. */
+/** One place on the map: the town, the town hall's lobby, a floor of the office, a home, a shared place, or a room of conversation, and who is in it. */
 export interface MapPlace {
   id: string;
   name: string;
-  kind: "lobby" | "hall" | "home" | "shared" | "room";
+  kind: "town" | "lobby" | "office" | "home" | "shared" | "room";
   agents: string[];
-  /** The area it is in, by id: `main` for the main building. */
+  /** The area it is in, by id: `main` for the town. */
   area: string;
   /** The agent whose home it is. */
   owner?: string;
+  /** The street its building's door is on: "Maple Lane". */
+  street?: string;
   purpose?: string;
   /** A room of conversation's members with a body, wherever their bodies are. */
   members?: string[];
-  /**
-   * The place its way in is through: the hall its door opens off, or the lobby; in an area of two places, which
-   * open on each other, the other one. None for the lobby, another area's first hall, or a place alone in its area.
-   */
+  /** The place its way in is through: the town for a building, the floor of the office for a room in it. None for the town. */
   via?: string;
   /** A home's owner, in a word, when what it is for can be read (see `places-roles.ts`). */
   role?: string;
@@ -726,8 +739,9 @@ export async function transcript(
 }
 
 /**
- * Every place there is: the lobby and the halls, each agent's home, the
- * shared places, and the rooms agents talk in, each with the area it is in.
+ * Every place there is: the town, the town hall's lobby, the floors of the
+ * office, each agent's home, the shared places, and the rooms agents talk in,
+ * each with the area it is in and the street its building is on.
  * A body is in one place at a time: its home, a shared place, or the meeting
  * room of a room it is talking in. A room also lists all its members, since
  * an agent can belong to several.
@@ -761,21 +775,24 @@ export async function worldMap(
   };
   const inside = new Map<string, string[]>();
   for (const a of bodies) inside.set(where(a), [...(inside.get(where(a)) ?? []), a]);
-  // Where each place is reached from, for "where am I": a hall from the one before it, anything else from its door.
+  // Where each place is reached from, for "where am I": a floor from the one below, anything else from its door;
+  // and the street a building's door is on.
   const via = (id: string) => {
-    const from = world.halls.find((h) => h.id === id)?.entrance?.to ?? world.doors.get(id)?.to;
-    return from ? { via: from } : {};
+    const from = world.floors.find((f) => f.id === id)?.entrance.to ?? world.doors.get(id)?.to;
+    const street = world.town.buildings.find((b) => b.id === id)?.street;
+    return { ...(from ? { via: from } : {}), ...(street ? { street } : {}) };
   };
   const inIt = (id: string) => ({ agents: (inside.get(id) ?? []).sort() });
   return [
-    { id: LOBBY, name: "the lobby", kind: "lobby" as const, agents: [], area: MAIN },
-    ...world.halls.map((h) => ({
-      id: h.id,
-      name: h.name,
-      kind: "hall" as const,
+    { id: TOWN, name: "the town", kind: "town" as const, agents: [], area: MAIN },
+    { id: LOBBY, name: "the town hall", kind: "lobby" as const, agents: [], area: MAIN, ...via(LOBBY) },
+    ...world.floors.map((f) => ({
+      id: f.id,
+      name: f.name,
+      kind: "office" as const,
       agents: [],
-      area: h.area,
-      ...via(h.id),
+      area: MAIN,
+      ...via(f.id),
     })),
     ...bodies.map((a) => ({
       id: homeId(a),
@@ -814,8 +831,8 @@ export async function worldMap(
  * Any place, to look at: what it looks like, who is in it, and, given the
  * building, its doors. A room of conversation is a meeting room with a seat
  * for each member, and in it the members there now, drawn fresh until one of
- * them changes it and kept from then on; a hall is a corridor with a door for
- * each place off it, always drawn fresh; the lobby is drawn fresh until a
+ * them changes it and kept from then on; the town and the office's floors
+ * are laid out from what there is, always drawn fresh; the lobby is drawn fresh until a
  * person changes it. What a write to it needs comes too: its record's version
  * (0 while it is drawn fresh, so the first change makes the record), the
  * scope it is in, and `lent`, the fields shown that aren't the record's own.
@@ -832,6 +849,20 @@ export async function scene(
   const found = await sceneOf(service, caller, id, rooms, hasBody, world, homes);
   if (!found) return null;
   return { ...found, doors: world ? doorsIn(id, found.place, world) : [] };
+}
+
+/**
+ * The town as a place, made once for each town laid out. {@link layWorld} hands out the same town while nothing in it
+ * changes, so the town itself is the key: any change to it, down to a building's kind or a plot's name, is a new one.
+ */
+const towns = new WeakMap<Town, Place>();
+function townOf(town: Town): Place {
+  let place = towns.get(town);
+  if (!place) {
+    place = townPlace(town);
+    towns.set(town, place);
+  }
+  return place;
 }
 
 /** A place as {@link scene} finds it, before its doors. */
@@ -861,12 +892,15 @@ async function sceneOf(
       ? { id, place: kept.data as unknown as Place, agents: [], version: kept.version, scope: kept.scope }
       : { id, place: drawOnce(LOBBY, lobby), agents: [], version: 0, scope: "global" };
   }
-  if (id.startsWith("hall:")) {
-    const hall = world?.halls.find((h) => h.id === id);
-    if (!hall) return null;
+  if (id === TOWN) {
+    if (!world) return null;
+    return { id, place: townOf(world.town), agents: [], version: 0, scope: "global" };
+  }
+  const floor = world?.floors.find((f) => f.id === id);
+  if (floor) {
     return {
       id,
-      place: drawOnce(`hall\n${id}\n${hall.name}\n${hall.rooms.length}`, () => hallPlace(hall)),
+      place: drawOnce(`floor\n${id}\n${floor.name}\n${floor.rooms.length}`, () => floorPlace(floor)),
       agents: [],
       version: 0,
       scope: "global",
@@ -1409,38 +1443,13 @@ const say = (item: PlaceItem, place: Place) => `${item.name}, ${whereWords(place
 /** What a sign says: the name it was given, without "the". */
 const signWords = (name: string | undefined) => (name ?? "Welcome").replace(/^(the|a|an)\s+/i, "").slice(0, 40);
 
-/**
- * Whether the building gives a place a door (see `layWorld`): everything in
- * the main building has one; a place in an area of its own only once
- * something else is in that area with it. Asked as the plugin, which lays
- * out the building: an agent can't see other agents' homes, only whether one
- * is next door.
- */
-async function hasDoor(
-  service: StateService,
-  id: string,
-  place: Place,
-  hasBody: (agent: string | undefined) => boolean,
-): Promise<boolean> {
-  const area = areaId(place.area);
-  if (area === MAIN) return true;
-  const elsewhere = await service
-    .query(PLUGIN_CALLER, { type: PLACE_TYPE, where: { area: { ne: null } }, limit: 500 })
-    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
-  return elsewhere.some(
-    (r) =>
-      r.id !== id &&
-      (r.id.startsWith(SHARED) || (r.id.startsWith("home:") && hasBody(r.id.slice("home:".length)))) &&
-      areaId(String((r.data as unknown as Place).area ?? "")) === area,
-  );
-}
-
-/** Which area a place is in, and where its door is, for the agent looking round it. */
-function whereaboutsWords(place: Place, door: boolean): string {
-  const area = place.area && areaId(place.area) !== MAIN ? place.area : MAIN_NAME;
+/** Where a place is in the world, and where its door is, for the agent looking round it. */
+function whereaboutsWords(place: Place): string {
+  const area =
+    place.area && areaId(place.area) !== MAIN
+      ? `${place.area}, a plot of its own at the edge of ${MAIN_NAME}`
+      : MAIN_NAME;
   const slot = doorOf(place);
-  if (!door)
-    return `It is in ${area}, the only place there, so it has no door yet: the map is the way in.${slot ? ` The floor ${doorWords(place, slot)} is kept clear for one.` : ""}`;
   return `It is in ${area}.${slot ? ` Its door is ${doorWords(place, slot)}; nothing can stand in front of it.` : ""}`;
 }
 
@@ -1592,11 +1601,11 @@ export function applyAction(place: Place, args: Record<string, unknown>, opts: A
       if (areaId(area) === MAIN) {
         const { area: _left, ...rest } = next;
         next = rest;
-        changes.push(`it is in ${MAIN_NAME}, with a door off its hall`);
+        changes.push(`it is in ${MAIN_NAME}, with its door on a street`);
         did.push(`moved it to ${MAIN_NAME}`);
       } else {
         next = { ...next, area: area.slice(0, 60) };
-        changes.push(`it is in ${area}: doors join it to the other places there, and the map to everywhere else`);
+        changes.push(`it is in ${area}: a plot of its own at the edge of ${MAIN_NAME}, with the other places there`);
         did.push(`moved it to ${area}`);
       }
     }
@@ -1846,7 +1855,7 @@ export class PlaceTool implements Tool {
       area: {
         type: "string",
         description:
-          'room or new: the area the place is in, e.g. "the summer house". Places in one area are joined by doors; "main" is the main building.',
+          'room or new: the area the place is in, e.g. "the summer house": a plot of its own at the edge of town, with the other places in it. "main" puts it back on the streets.',
       },
     },
     required: ["action"],
@@ -1916,7 +1925,6 @@ export class PlaceTool implements Tool {
               : `You are in ${place.name}, a shared place.`;
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
         const wear = await this.wearing(service, caller, agent);
-        const door = await hasDoor(service, id, place, this.hasBody);
         const shown = describe(shownPurpose(place, talk));
         // A home someone changed keeps what it has, so one changed before homes had calendars has none: the agent
         // is told how to hang one rather than having it hung for it.
@@ -1926,7 +1934,7 @@ export class PlaceTool implements Tool {
             : "";
         return {
           success: true,
-          output: `${where}${company} ${whereaboutsWords(place, door)} ${wear}\n\n${shown}${calendar}`,
+          output: `${where}${company} ${whereaboutsWords(place)} ${wear}\n\n${shown}${calendar}`,
         };
       }
       if (action === "undo") {
@@ -1982,7 +1990,7 @@ export class PlaceTool implements Tool {
         const talk = talkRoomOf(meetings.rooms, id);
         if (talk && text(args.action)?.toLowerCase() === "room" && text(args.area))
           return fail(
-            `A meeting room stays in the meeting rooms' wing of ${MAIN_NAME}, by the other rooms people talk in.`,
+            `A meeting room stays in ${MAIN_NAME}: in the office, or in a building of its own if its theme has one.`,
           );
         // A meeting room nobody has changed is drawn afresh in a theme, through and through.
         const redraw =
@@ -2335,7 +2343,7 @@ const plugin: Plugin = (ctx) => {
         chosen,
       );
       const areas: Area[] = world.areas;
-      return { json: { places, areas } };
+      return { json: { places, areas, town: world.town } };
     },
   });
 
@@ -2350,18 +2358,30 @@ const plugin: Plugin = (ctx) => {
       const found = await scene(service, PLUGIN_CALLER, id, rooms, hasBody, world, homes);
       if (!found) return { status: 404, json: { error: `There's no place "${id}".` } };
       const chosen = await chosenWear(service, PLUGIN_CALLER);
+      // The town's houses say what their owners do, so what stands by each can show it.
+      const town = (found.place as Place & { town?: Town }).town;
+      const place = town
+        ? {
+            ...found.place,
+            town: {
+              ...town,
+              buildings: town.buildings.map((b) => (b.owner ? { ...b, role: roleOf(b.owner)?.id } : b)),
+            },
+          }
+        : found.place;
       return {
         json: {
           type: PLACE_TYPE,
           id: found.id,
-          place: found.place,
+          place,
           company: found.agents.map((a) => bodyOf(a, chosen)),
           doors: found.doors,
           area: world.areaOf.get(found.id) ?? MAIN,
-          // What a person changing it on the page writes with: halls are the building's, drawn fresh every time.
+          // What a person changing it on the page writes with: the town and the office's floors are laid out from what
+          // there is, drawn fresh every time.
           version: found.version,
           scope: found.scope,
-          editable: !found.id.startsWith("hall:"),
+          editable: found.id !== TOWN && !world.floors.some((f) => f.id === found.id),
           ...(found.lent ? { lent: found.lent } : {}),
         },
       };

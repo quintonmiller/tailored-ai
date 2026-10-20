@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 38 | 121 |
+| `agents` | object | {} | 38 | 122 |
 
 ### `autopilot`
 
@@ -68,7 +68,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `context.directory` | string | `./data/context` | 4 | 1 |
+| `context.directory` | string | `./data/context` | 5 | 1 |
 | `context.kbDirectory` | string | `./data/kb` | 1 | 1 |
 | `context.warnTokens` | number | `4000` | 2 | 2 |
 
@@ -89,7 +89,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `database.path` | string | `./agent.db` | 43 | 2 |
+| `database.path` | string | `./agent.db` | 45 | 2 |
 
 ### `live`
 
@@ -155,7 +155,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `suggestions.count` | number | `4` | 15 | 1 |
+| `suggestions.count` | number | `4` | 16 | 1 |
 | `suggestions.enabled` | boolean | `false` | 45 | 1 |
 | `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 26 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |
@@ -196,7 +196,7 @@ Fields: **79** · with no read site found: **0**
 | `tools.facts.enabled` | boolean | `true` | 45 | 1 |
 | `tools.interface.enabled` | boolean | `true` | 45 | 1 |
 | `tools.memory.enabled` | boolean | `true` | 45 | 1 |
-| `tools.projects.directory` | string | `./data/projects` | 4 | 2 |
+| `tools.projects.directory` | string | `./data/projects` | 5 | 2 |
 | `tools.projects.enabled` | boolean | `true` | 45 | 1 |
 | `tools.read.enabled` | boolean | `true` | 45 | 1 |
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |

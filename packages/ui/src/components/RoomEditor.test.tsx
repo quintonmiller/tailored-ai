@@ -344,7 +344,7 @@ describe("rearranging a room", () => {
     await hear(
       home(4, {
         ...server.writes[0].data,
-        doors: [{ wall: "left", along: 0, to: "hall:main:homes-1", label: "Homes", kind: "hall" }],
+        doors: [{ wall: "left", along: 0, to: "town", label: "Maple Lane", kind: "town" }],
       }),
     );
     // The page's own room, the same record with its fresh doors, is the one shown now.

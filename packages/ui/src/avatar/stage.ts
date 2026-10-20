@@ -45,7 +45,7 @@ import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, seeded } fro
 import { inTheWay, type Obstacle, type Pick, standingIn } from "./locomotion";
 import type { BodyState } from "./motion";
 import { type Box, type Column, metresPerPixel, stack } from "./overhead";
-import { nearestUse, type Use } from "./pick";
+import { nearestUse, shown, type Use } from "./pick";
 import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
 import {
   changesShown,
@@ -79,6 +79,8 @@ import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wa
 import { SurfaceLayer, type SurfaceSpec, type SurfaceView } from "./surface-layer";
 import { blocksView, facingSurface, focusDistance, focusFraming, overWalls } from "./surfaces";
 import { byPhone, GET_UP_AT, heardThrough, standBy, TALK_APART, talkingHere } from "./talk";
+import { ashore, DOOR_SHOWN, isOutdoors, lightFrom, nearestLamps, skyFor } from "./town";
+import { type BuiltTown, buildTown } from "./townscape";
 import {
   clampReach,
   ease,
@@ -86,6 +88,7 @@ import {
   heldMove,
   keepUp,
   MOVE_KEYS,
+  OUTDOOR_PACE,
   pinchReach,
   REACH,
   REACH_PER_NOTCH,
@@ -228,8 +231,20 @@ export interface Stage {
   focusSurface(id: string | null): void;
   /** Where a pointer is on a surface, in the surface's own pixels from its top left; none when it is off it. */
   surfacePoint(id: string, at: { clientX: number; clientY: number }): [number, number] | undefined;
+  /**
+   * An agent's body on its way from one place to another, seen going by in
+   * the town: it comes out at `from` (the door it left by), walks the streets
+   * to `to` (the door it is going in by), and is gone once there. Only
+   * outdoors, and only for a body not already here.
+   */
+  walkBy(walker: Companion & { from: [number, number]; to: [number, number] }): void;
+  /** Where you are on the floor: your body, walking; what the camera turns about, flying. */
+  where(): [number, number];
   dispose(): void;
 }
+
+/** Metres a second a body walks going by in the town: briskly, somewhere to be. */
+const PASSING_PACE = 2.2;
 
 /**
  * Rearranging the room on the stage (see `editing.ts`): the kinds of thing
@@ -359,6 +374,8 @@ const LEAVING_SECONDS = 15;
  * own view, so you set it once.
  */
 let reachKept = REACH.start;
+/** The same outdoors, kept apart: a town is seen from further back than a room, and each keeps how you left it. */
+let outdoorReachKept = REACH.outdoorStart;
 /**
  * How far the chat page's view of the agent is zoomed, as last set (1 as it
  * starts, more further back): kept while the page is open, from agent to
@@ -512,6 +529,19 @@ export async function createStage(
     return light;
   });
   let furniture = new THREE.Group();
+  // The town, when the place is outdoors: built in place of a room's floor and walls, its sky round the camera.
+  let town: BuiltTown | undefined;
+  // Its doors, each drawn only while near enough to matter.
+  let townDoors: THREE.Group[] = [];
+  /** Let the town go, its sky too: the rest of it is in the furniture, freed with that. */
+  const clearTown = () => {
+    if (!town) return;
+    scene.remove(town.sky);
+    town.dispose();
+    town = undefined;
+    townDoors = [];
+    scene.fog = null;
+  };
   // Each thing in the room as built, by its id: what is picked and dragged while the room is rearranged.
   let things = new Map<string, THREE.Group>();
   // Rearranging the room (see `setEditing`): what the page says, and how far back the camera sits for it, as a share
@@ -620,7 +650,11 @@ export async function createStage(
     boards = [];
     screens = [];
     calendars = [];
-    const shell = buildShell(room);
+    // Outdoors, the town in place of a floor and walls: its buildings fade when they hide you, and a click on one
+    // walks you up to its door.
+    clearTown();
+    if (isOutdoors(room)) town = buildTown(room.town);
+    const shell = town ? town.group : buildShell(room);
     furniture.add(shell);
     scenery.push(shell);
     fadeable = [];
@@ -628,7 +662,15 @@ export async function createStage(
       if (o.userData.wall) fadeable.push({ group: o, wall: o.userData.wall as Wall, level: 1 });
     });
     const lights: { at: THREE.Vector3; fire: boolean }[] = [];
-    obstacles = [];
+    obstacles = town ? [...town.obstacles] : [];
+    if (town) {
+      for (const b of town.buildings) {
+        fadeable.push({ group: b.group, solid: b.solid, level: 1 });
+        b.group.userData.approach = b.approach;
+        clickable.push(b.group);
+      }
+      scene.add(town.sky);
+    }
     // The photos taken here go in the pictures, newest in the first, then in the paintings.
     const photos = [...(room.photos ?? [])];
     const hung = new Map<string, string>();
@@ -716,10 +758,12 @@ export async function createStage(
     // The door the pointer was over is gone with the room it was in.
     if (overDoor) hoverDoor(undefined);
     for (const door of room.doors ?? []) {
+      // Outdoors, a door is in the front of a building, framed in its trim, as tall as a ground floor.
+      const outside = !!door.at;
       const built = buildDoor(door, {
-        freestanding: door.wall === "front" || door.wall === "right",
-        trim: room.walls,
-        height: room.height,
+        freestanding: !outside && (door.wall === "front" || door.wall === "right"),
+        trim: outside ? "#f2efe8" : room.walls,
+        height: outside ? 3.2 : room.height,
       });
       const { at, facing } = doorFrame(room, door);
       built.group.position.set(at[0], 0, at[1]);
@@ -728,8 +772,18 @@ export async function createStage(
       furniture.add(built.group);
       scenery.push(built.group);
       clickable.push(built.group);
-      // A door in a wall fades with it; one standing at an open side is a tall thing like any other.
-      if (door.wall === "back" || door.wall === "left")
+      // A door in a wall fades with it; one standing at an open side is a tall thing like any other; one in the
+      // front of a building, with the building.
+      const house = outside ? town?.buildings.find((b) => b.building.id === door.to) : undefined;
+      if (outside) {
+        townDoors.push(built.group);
+        // Its building's shadow is shadow enough: a door's dozen parts aren't drawn again for it.
+        built.group.traverse((o) => {
+          o.castShadow = false;
+        });
+      }
+      if (house) fadeable.push({ group: built.group, solid: house.solid, level: 1 });
+      else if (door.wall === "back" || door.wall === "left")
         fadeable.push({ group: built.group, wall: door.wall, level: 1 });
       else fadeable.push({ group: built.group, solid: solidOf(new THREE.Box3().setFromObject(built.group)), level: 1 });
       if (built.light && door.occupant) doorLights.push({ occupant: door.occupant, light: built.light });
@@ -744,9 +798,10 @@ export async function createStage(
     drawScreens();
     drawCalendars();
     warm.length = 0;
-    // A big room's lamps reach further, so the light still meets in the middle.
-    lampReach = Math.max(5, Math.hypot(room.width, room.depth) / 2.2);
-    const kept = spreadLights(lights, LIT_LAMPS);
+    // A big room's lamps reach further, so the light still meets in the middle; outdoors, a street lamp's pool.
+    lampReach = town ? 9 : Math.max(5, Math.hypot(room.width, room.depth) / 2.2);
+    // Outdoors, the street lamps nearest you light up (see `lightStreets`); the rest only glow.
+    const kept = town ? [] : spreadLights(lights, LIT_LAMPS);
     for (const [i, light] of bulbs.entries()) {
       const l = kept[i];
       // Dark, but still there, so the number of lights stays the same.
@@ -757,7 +812,13 @@ export async function createStage(
       light.position.copy(l.at);
       warm.push({ light, fire: l.fire });
     }
+    if (town) for (const light of bulbs) warm.push({ light, fire: false });
+    litAt = undefined;
+    sunAt = undefined;
   };
+  // Where the street lamps were last lit round, and the sun last aimed from: outdoors, both follow you.
+  let litAt: [number, number] | undefined;
+  let sunAt: [number, number] | undefined;
   furnish();
 
   // Come in through a door: just inside it, facing in, at no spot.
@@ -828,6 +889,11 @@ export async function createStage(
   scene.add(me.body, me.gaze);
   if (arrival) me.placeAt(arrival.at, arrival.facing);
   host.dataset.motion = "code";
+  /** Your own body's pace for the place it is in: brisker outdoors, where the streets are long. */
+  const paceFor = () => {
+    if (opts.visitor) me.walker.speed = WALK_SPEED * (isOutdoors(room) ? OUTDOOR_PACE : 1);
+  };
+  paceFor();
 
   // Other agents in the room, by agent; and those still loading.
   const companions = new Map<string, Figure & { name?: string }>();
@@ -838,8 +904,12 @@ export async function createStage(
   // Lines about to be said, for a visitor to hear when they start; `via`, the one here whose phone a far line comes out of.
   let voices: { agent: string; text: string; at: number; via?: string }[] = [];
   const arriving = new Set<string>();
-  // Bodies on their way out through the door, until they get there.
-  const departing: { fig: Figure; from: number }[] = [];
+  // Bodies about to go by in the town, still loading: apart from those arriving, so a walk cut short by going
+  // somewhere else never keeps an agent from turning up there.
+  const passing = new Set<string>();
+  // Bodies walking out, each gone once it gets where it is going, or by `until` (seconds on the stage's clock); one
+  // going by in the town says whose it is (`agent`), so its next walk takes its place.
+  const departing: { fig: Figure; from: number; until?: number; agent?: string }[] = [];
   // When the stage came to the place it shows, and which place that is, counted: see `meet`.
   let placedAt = performance.now();
   let placeGen = 0;
@@ -965,19 +1035,61 @@ export async function createStage(
   Object.assign(sun.shadow.camera, { left: -3.2, right: 3.2, top: 3.2, bottom: -3.2, near: 0.5, far: 16 });
   sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.02;
-  scene.add(sky, sun);
-  /** The shadows cover the whole room, however big it has been made. */
+  scene.add(sky, sun, sun.target);
+  /** How far round you the shadows are drawn outdoors, either side: the town is far too big to shadow at once. */
+  const OUTDOOR_SHADOWS = 26;
+  /**
+   * The shadows cover the whole room, however big it has been made. Outdoors
+   * they cover the ground round you, and follow you (see `aimSun`).
+   */
   const fitShadows = () => {
-    const half = Math.max(room.width, room.depth) / 2 + 0.6;
-    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half });
+    const half = town ? OUTDOOR_SHADOWS : Math.max(room.width, room.depth) / 2 + 0.6;
+    Object.assign(sun.shadow.camera, { left: -half, right: half, top: half, bottom: -half, far: town ? 120 : 16 });
     sun.shadow.camera.updateProjectionMatrix();
+    if (!town) {
+      sun.position.set(-4, 5.5, 2.5);
+      sun.target.position.set(0, 0, 0);
+      sun.target.updateMatrixWorld();
+    }
   };
   fitShadows();
+  /** Outdoors, the sun (or the moon) shines from where the hour puts it, on the ground round `at`. */
+  const aimSun = (at: [number, number]) => {
+    const [x, y, z] = lightFrom(hour);
+    sun.target.position.set(at[0], 0, at[1]);
+    sun.position.set(at[0] + x * 50, y * 50, at[1] + z * 50);
+    sun.target.updateMatrixWorld();
+    sunAt = at;
+  };
+  /**
+   * Outdoors, the street lamps nearest `at` light the street after dark; the
+   * others only glow. By day they light nothing, so they are put away, and the
+   * whole town is drawn without them.
+   */
+  const lightStreets = (at: [number, number]) => {
+    if (!isOutdoors(room)) return;
+    const near = nearestLamps(room.town.lamps, at, LIT_LAMPS);
+    const on = !!lit?.lamp.on;
+    for (const [i, light] of bulbs.entries()) {
+      const lamp = near[i];
+      light.visible = on && !!lamp;
+      if (lamp) light.position.set(lamp[0], 3.2, lamp[1]);
+    }
+    litAt = at;
+  };
   let lit: Lighting | undefined;
   const light = (l: Lighting) => {
     lit = l;
     // Paper on the walls (a board, a calendar) takes on a home's lamplight after dark; a screen lights itself.
     layer.dom.style.setProperty("--surface-paper", lights === "home" && l.lamp.on ? LAMPLIT : "none");
+    // Outdoors: the sky for the hour, the street lamps on after dark, and the far distance lost in the sky's haze.
+    if (town) {
+      town.setHour(hour, l.lamp.on);
+      town.setWindows(activities, hour);
+      scene.fog = new THREE.Fog(skyFor(hour).horizon, 90, 380);
+      aimSun(sunAt ?? [me.walker.place.x, me.walker.place.z]);
+      lightStreets(litAt ?? [me.walker.place.x, me.walker.place.z]);
+    } else for (const bulb of bulbs) bulb.visible = true;
     sky.color.setHex(l.sky.color);
     sky.groundColor.setHex(l.sky.ground);
     sky.intensity = l.sky.intensity;
@@ -1003,7 +1115,7 @@ export async function createStage(
   let lights: Lights = opts.lights ?? "home";
   light(lightingFor(hour, lights));
 
-  const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, 1, 0.05, farFor(room));
+  const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, 1, isOutdoors(room) ? 0.15 : 0.05, farFor(room));
   const controls = new OrbitControls(camera, renderer.domElement);
   // Dragging turns the view. The wheel is left to scroll the page.
   Object.assign(controls, { enableZoom: false, enablePan: false, enableDamping: true, rotateSpeed: 0.6 });
@@ -1022,7 +1134,8 @@ export async function createStage(
         const dir = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - 0.08, a);
         sight.set(target, dir);
         sight.far = d + 0.1;
-        if (!sight.intersectObjects(scenery, true).length) return { azimuth: a, distance: d };
+        // A door in the town too far off to be drawn is no more in the way than it is clickable.
+        if (!sight.intersectObjects(scenery, true).some((h) => shown(h.object))) return { azimuth: a, distance: d };
       }
     }
     return { azimuth: preferred, distance };
@@ -1067,9 +1180,11 @@ export async function createStage(
   const visibleAspect = () => Math.max(MIN_ASPECT, (part.right - part.left) / Math.max(1, part.bottom - part.top));
   /** The share of the stage's height the camera frames into, between the toolbar and a phone's chat. */
   const visibleTall = () => Math.min(1, Math.max(0.2, (part.bottom - part.top) / stageH));
+  /** How much round you the walking camera takes in, as last zoomed: indoors or out. */
+  const reachNow = () => (isOutdoors(room) ? outdoorReachKept : reachKept);
   /** How far back the camera following a visitor sits: the reach they zoomed to, in what can be seen of this room. */
   const followBack = () =>
-    followDistance(clampReach(reachKept, widestReach(room)), visibleAspect(), ROOM_VIEW.fov, visibleTall());
+    followDistance(clampReach(reachNow(), widestReach(room)), visibleAspect(), ROOM_VIEW.fov, visibleTall());
 
   const framing = (view: StageView): Framing => {
     if (view === "close") {
@@ -1224,7 +1339,8 @@ export async function createStage(
 
   /** Zoom the walking camera to a reach, kept for the rest of the page's life. */
   const zoomTo = (reach: number) => {
-    reachKept = reach;
+    if (isOutdoors(room)) outdoorReachKept = reach;
+    else reachKept = reach;
   };
   /** The chat page's view of the agent, which the wheel and a pinch bring nearer or take further back. */
   const ownView = () => !opts.visitor && !opts.still && view === "room";
@@ -1247,7 +1363,7 @@ export async function createStage(
     if (!opts.visitor || travel !== "walk") return;
     e.preventDefault();
     const widest = widestReach(room);
-    zoomTo(wheelReach(clampReach(reachKept, widest), wheelPixels(e), widest));
+    zoomTo(wheelReach(clampReach(reachNow(), widest), wheelPixels(e), widest));
   };
   // Fingers on the stage, by pointer, for a pinch; and whether this touch has been one, so it isn't a tap as well.
   const touches = new Map<number, [number, number]>();
@@ -1277,7 +1393,7 @@ export async function createStage(
     if (apart > 0 && now > 0) {
       if (editing) editZoomTo((editZoom * apart) / now);
       else if (ownView()) zoomKept = ownZoom((zoomKept * apart) / now, room, visibleAspect(), visibleTall());
-      else zoomTo(pinchReach(clampReach(reachKept, widest), apart, now, widest));
+      else zoomTo(pinchReach(clampReach(reachNow(), widest), apart, now, widest));
     }
     apart = now;
   };
@@ -1393,12 +1509,18 @@ export async function createStage(
       leave(it.door);
       return;
     }
+    // A building in the town: up to its door.
+    if (it?.approach && opts.visitor && travel === "walk") {
+      greeting = undefined;
+      me.goTo(room, it.approach, obstacles);
+      return;
+    }
     if (it?.spot) go(it.spot);
     else if (opts.visitor && travel === "walk") {
       const to = floorAt(e);
       if (to) {
         greeting = undefined;
-        me.goTo(room, to, obstacles);
+        me.goTo(room, isOutdoors(room) ? ashore(room.town, to, me.radius) : to, obstacles);
       }
     }
   };
@@ -1432,7 +1554,9 @@ export async function createStage(
         y: e.clientY - box.top,
       });
     hoveredSurface = reads;
-    canvas.style.cursor = (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || door ? "pointer" : "";
+    const approach = !!it?.approach && opts.visitor && travel === "walk";
+    canvas.style.cursor =
+      (opts.onPick && who) || it?.spot || (it?.action && opts.onUse) || door || approach ? "pointer" : "";
   };
   /** The pointer is over a body now, or none: its tag says more, and the last one's goes back. */
   const hover = (who: string | undefined) => {
@@ -2384,7 +2508,7 @@ export async function createStage(
   /** One frame of a visit: move by the held keys, at a run while Shift is held. */
   function visit(dt: number) {
     const { right: r, forward: f, up: u, running } = heldMove(held);
-    const speed = travelSpeed(travel, running) * dt;
+    const speed = travelSpeed(travel, running, !!town) * dt;
     pushing = undefined;
     if (travel === "walk") {
       if (r || f) {
@@ -2579,6 +2703,29 @@ export async function createStage(
     }
   }
 
+  // When the town's doors were last shown or hidden by how near they are.
+  let doorsAt = 0;
+  /**
+   * Each frame outdoors: the sky keeps round the camera; the street lamps
+   * nearest you light up and the sun's shadows are drawn round you, each
+   * moved on once you have walked a little way; and the doors further off
+   * than `DOOR_SHOWN` aren't drawn, a few times a second.
+   */
+  function keepTown(t: number) {
+    if (!town) return;
+    town.sky.position.copy(camera.position);
+    const p = me.walker.place;
+    const here: [number, number] = travel === "walk" ? [p.x, p.z] : [controls.target.x, controls.target.z];
+    const far = (a: [number, number] | undefined, by: number) => !a || Math.hypot(a[0] - here[0], a[1] - here[1]) > by;
+    if (far(litAt, 3)) lightStreets(here);
+    if (far(sunAt, 6)) aimSun(here);
+    if (t - doorsAt > 0.3) {
+      doorsAt = t;
+      const at = controls.target;
+      for (const d of townDoors) d.visible = Math.hypot(d.position.x - at.x, d.position.z - at.z) < DOOR_SHOWN;
+    }
+  }
+
   renderer.setAnimationLoop((now: number) => {
     // A photo's frame, once ready, holds: the screenshot is of that moment, not a later one.
     if (readyFired && opts.still) {
@@ -2745,9 +2892,9 @@ export async function createStage(
     }
     // Those leaving walk on to the door, and are gone once they reach it.
     for (let i = departing.length - 1; i >= 0; i--) {
-      const { fig, from } = departing[i];
+      const { fig, from, until } = departing[i];
       fig.step(room, ways(), poseAt, dt, { state: "idle", loudness: 0 }, meHead);
-      if ((t - from > 0.5 && !fig.moving) || t - from > LEAVING_SECONDS) {
+      if ((t - from > 0.5 && !fig.moving) || t > (until ?? from + LEAVING_SECONDS)) {
         fig.dispose();
         departing.splice(i, 1);
       }
@@ -2772,6 +2919,9 @@ export async function createStage(
       // GPU. A count that keeps growing place after place is something not let go.
       const { geometries, textures } = renderer.info.memory;
       host.dataset.gpu = `${geometries} ${textures}`;
+      // And what the last frame drew, for measuring a place's cost: draws and triangles.
+      const { calls, triangles } = renderer.info.render;
+      host.dataset.draws = `${calls} ${triangles}`;
     }
     if (opts.visitor) {
       noticeVisitor(t);
@@ -2814,6 +2964,7 @@ export async function createStage(
         }
       }
     }
+    if (town) keepTown(t);
     floatOver(dt);
     seeThrough(dt);
     if (reading) clearView();
@@ -2887,6 +3038,7 @@ export async function createStage(
       given = next;
       room = next;
       camera.far = farFor(room);
+      camera.near = isOutdoors(room) ? 0.15 : 0.05;
       camera.updateProjectionMatrix();
       // Rearranging, what you moved is where you put it already: it doesn't glide over from where it was.
       furnish(changed?.fresh, editing ? undefined : changed?.moved);
@@ -2923,12 +3075,14 @@ export async function createStage(
       given = next;
       room = next;
       camera.far = farFor(room);
+      camera.near = isOutdoors(room) ? 0.15 : 0.05;
       camera.updateProjectionMatrix();
       furnish();
       if (lit) light(lit);
       fitShadows();
       markEdit();
       me.director.setRoom(room);
+      paceFor();
       const door = doorTo(room, from);
       const first = spotById(room, room.start) ?? room.spots[0];
       const to = door
@@ -2985,6 +3139,44 @@ export async function createStage(
       aim(at);
       return layer.pointOn(id, ray.ray);
     },
+    walkBy(walker) {
+      const { agent } = walker;
+      if (!isOutdoors(room) || opts.still || companions.has(agent) || arriving.has(agent) || passing.has(agent)) return;
+      const gen = placeGen;
+      passing.add(agent);
+      loadModel(walker.url)
+        .then((model) => {
+          passing.delete(agent);
+          if (disposed || gen !== placeGen) {
+            VRMUtils.deepDispose(model.scene);
+            return;
+          }
+          // Still on its last walk: that body goes, and this one sets out from the door it left by.
+          for (let i = departing.length - 1; i >= 0; i--)
+            if (departing[i].agent === agent) departing.splice(i, 1)[0].fig.dispose();
+          const [dx, dz] = [walker.to[0] - walker.from[0], walker.to[1] - walker.from[1]];
+          const start = { id: "", name: "", place: "", at: walker.from, facing: (Math.atan2(dx, dz) * 180) / Math.PI };
+          const fig = new Figure(model, room, start, {
+            reducedMotion: opts.reducedMotion,
+            animations: walker.animations,
+            hue: hueFor(walker.agent),
+            wear: walker.wear,
+            pace: PASSING_PACE,
+          });
+          scene.add(fig.body, fig.gaze);
+          fig.label(walker.name, undefined);
+          fig.goTo(room, walker.to, ways());
+          // However far the streets take it, with time to spare, and then gone even if something held it up.
+          departing.push({ fig, from: clock, until: clock + (Math.hypot(dx, dz) * 1.6) / PASSING_PACE + 8, agent });
+        })
+        .catch(() => {
+          passing.delete(agent);
+        });
+    },
+    where() {
+      const p = me.walker.place;
+      return travel === "walk" ? [p.x, p.z] : [controls.target.x, controls.target.z];
+    },
     setWear(wear) {
       me.dress(wear);
     },
@@ -2995,6 +3187,9 @@ export async function createStage(
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
       lightDoors();
+      // Outdoors, each house's windows follow its owner: lit while it works, dark once it sleeps. Only those whose
+      // look changed are repainted.
+      town?.setWindows(activities, hour);
       // A call heard of after what was said on it: the far side's words, waiting for a phone here to come out of.
       for (const [agent, line] of inOrder(speech)) hear(agent, line);
     },

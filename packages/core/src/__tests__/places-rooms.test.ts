@@ -256,8 +256,8 @@ describe("every room the world starts with", () => {
       expect(found.length, p.name).toBeGreaterThan(0);
       expect(found[0].width).toBeGreaterThanOrEqual(DOORWAY.width);
     }
-    // The lobby is the hub: room for several.
-    expect(doorways(lobby()).length).toBeGreaterThanOrEqual(3);
+    // The lobby's way out is at its open front, so it needs no doorway in a wall, but still has room for one.
+    expect(doorways(lobby()).length).toBeGreaterThanOrEqual(1);
   });
 
   it("can be walked round: every spot is reachable from where everyone starts", () => {
