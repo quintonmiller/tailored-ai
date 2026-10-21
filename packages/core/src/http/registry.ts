@@ -2,9 +2,9 @@
  * HTTP route seam — lets plugins mount HTTP routes on the TAI server without
  * coupling core to a web framework. Core owns a framework-agnostic
  * {@link HttpRouteRegistry} of route descriptors; the server (Hono today)
- * iterates the registry after building its app and adapts each descriptor onto
- * its own router. Core never imports Hono; the dependency direction stays
- * server → core.
+ * matches each request against the registry as it is then and adapts the
+ * matching descriptor onto its own request and response. Core never imports
+ * Hono; the dependency direction stays server → core.
  *
  * A plugin registers routes through `ctx.http` (see plugin-context.ts):
  *
@@ -113,13 +113,22 @@ function trimSlashes(p: string): string {
 
 /**
  * Runtime-owned registry of plugin HTTP routes. Lives on the runtime and
- * deliberately survives `reload()` — web routers (Hono) can't unmount routes
- * once added, so the registry tracks the desired set and route handlers read
- * live runtime state on each request. The server iterates {@link list} once
- * after building its app.
+ * survives `reload()`; what changes across a reload is its contents, as the
+ * host disposes runtime plugins (which deregisters their routes) and loads
+ * them again. The server matches each request against {@link list} as it is
+ * then, so it serves the current set without re-mounting anything.
  */
 export class HttpRouteRegistry {
   private routes: ResolvedHttpRoute[] = [];
+  private _version = 0;
+
+  /**
+   * A number that changes whenever the route set does, so a server can keep
+   * a compiled table and rebuild it only when this moves.
+   */
+  get version(): number {
+    return this._version;
+  }
 
   /**
    * Register a single route. `prefix` (when given) namespaces it under
@@ -140,21 +149,21 @@ export class HttpRouteRegistry {
       throw new Error(`HTTP route already registered: ${descriptor.method} ${mountPath}`);
     }
     this.routes.push({ ...descriptor, mountPath });
+    this._version++;
     return mountPath;
   }
 
   /**
    * Remove a previously-registered route by method + resolved mount path.
-   * Returns true when a route was removed. Note: the server (Hono) can't
-   * unmount routes already adapted onto its router, so deregistering after
-   * the server has started only affects the registry's bookkeeping (and the
-   * auth-exempt set, which is computed once at server build). Its real use is
-   * keeping the registry clean across the reload dispose/reload cycle.
+   * Returns true when a route was removed. The server stops serving it, and
+   * stops exempting it from auth, from the next request on.
    */
   deregister(method: HttpMethod, mountPath: string): boolean {
     const before = this.routes.length;
     this.routes = this.routes.filter((r) => !(r.method === method && r.mountPath === mountPath));
-    return this.routes.length < before;
+    if (this.routes.length === before) return false;
+    this._version++;
+    return true;
   }
 
   /**
@@ -174,6 +183,7 @@ export class HttpRouteRegistry {
   /** Clear all routes. Used by tests; the runtime never clears in production. */
   clear(): void {
     this.routes = [];
+    this._version++;
   }
 
   private resolveMountPath(descriptor: HttpRouteDescriptor, prefix?: string): string {

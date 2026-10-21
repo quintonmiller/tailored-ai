@@ -36,12 +36,9 @@ the ones it names, so a reader that should only look things up might take
 `[directory, writeup]`, and one that shouldn't have `state` leaves it out.
 
 **Changing it while TAI runs.** A config reload picks up `pin` and the two
-bars at once. Turning the directory off by reload removes its types and
-prompt block straight away, but agents keep the three tools until the next
-reload or a restart: a reload builds the tool set before it reloads plugins.
-Until then each tool answers that the directory is turned off. The two HTTP
-routes are mounted when TAI starts, so turning the directory on or off moves
-them only at a restart.
+bars at once, and turning the directory on or off by reload adds or removes
+its tools, types, prompt block and routes straight away. A call already
+running when it is turned off answers that the directory is turned off.
 
 **A type of the same name in your config wins.** If `state.types` declares a
 `profile`, `commitment`, `doc` or `miss`, that declaration replaces the

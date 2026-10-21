@@ -241,6 +241,32 @@ describe("loadPlugins teardown", () => {
     expect(loaded.stop).toBeUndefined();
   });
 
+  it("collects a registration from every view the context offers", async () => {
+    // A view `collectingContext` doesn't wrap reaches the plugin through the
+    // spread of the base context: it works, and escapes teardown, so a plugin
+    // a reload turns off keeps what it registered there. The world-state views
+    // did. This fails for any view added to the context and not to the list.
+    const base = createPluginContext();
+    let seen: Record<string, unknown> | undefined;
+    await loadPlugins(
+      baseConfig(["fake"]),
+      moduleOf((ctx: Record<string, unknown>) => {
+        seen = ctx;
+      }),
+      { context: base },
+    );
+    const views = Object.entries(base).filter(
+      ([, view]) => typeof (view as { register?: unknown } | undefined)?.register === "function",
+    );
+    expect(views.length).toBeGreaterThan(10);
+    for (const [name, view] of views) {
+      expect(
+        (seen?.[name] as { register: unknown }).register,
+        `ctx.${name}.register is the base context's own, so its registrations escape collection`,
+      ).not.toBe((view as { register: unknown }).register);
+    }
+  });
+
   it("scopes collection per plugin", async () => {
     const loaded = await loadPlugins(baseConfig(["a", "b"]), (name: string) =>
       Promise.resolve({

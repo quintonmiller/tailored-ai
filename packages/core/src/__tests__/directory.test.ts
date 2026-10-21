@@ -262,7 +262,7 @@ describe("the directory plugin", () => {
     expect(await prompt("planner")).toContain('planner-weekly-review "Weekly review"');
   });
 
-  it("gives tools an older load built the newest config, and says it's off once nothing replaced it", async () => {
+  it("gives a call still running on an older load's tool the newest config, and says it's off once nothing replaced it", async () => {
     await run("trip-planner", "commitment", { action: "open", goal: "Lisbon trip prep", doneWhen: "Booked" });
     const kept = build("directory");
     const q = "Lisbon weather forecast tomorrow";
@@ -271,7 +271,7 @@ describe("the directory plugin", () => {
     await unload(loaded[0]);
     await load({ minWords: 0.1 });
     expect((await callTool(kept, "writer", { action: "search", q })).text).toContain("trip-planner-lisbon-trip-prep");
-    // Turned off by a reload: agents still hold the tools until the next one, and each says why it does nothing.
+    // Turned off by a reload: a call already running on a tool says why it does nothing.
     const held = TOOLS.map(build);
     await unload(loaded[0]);
     for (const tool of held) {

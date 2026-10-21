@@ -406,10 +406,9 @@ export interface CreatePluginContextOptions {
 
 /**
  * Route registration returns its own disposer already; this only tees a copy
- * into the collector so plugin teardown covers routes as well. Routes are the
- * clearest case for the collector: the underlying registry deliberately
- * survives `reload()` because the HTTP router cannot unmount, so a route left
- * behind by an unloaded plugin stays reachable until the process restarts.
+ * into the collector so plugin teardown covers routes as well. The underlying
+ * registry survives `reload()` and the server serves whatever it holds, so a
+ * route left behind by an unloaded plugin would stay reachable.
  */
 function collectingHttp(view: HttpRegistryView, collect: ((dispose: Disposer) => void) | undefined): HttpRegistryView {
   if (!collect) return view;

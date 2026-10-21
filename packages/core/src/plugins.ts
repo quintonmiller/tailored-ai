@@ -64,11 +64,13 @@ export interface LoadPluginsOptions {
  * Wrap a context so every registration made through it is also handed to
  * `collect`, and give it this entry's own config bag and route namespace.
  *
- * Each view is re-wrapped by hand rather than mapped generically: there are
- * twelve, the list is closed, and an explicit wrapper is what makes a new view
- * a compile error here instead of a registration that silently escapes
- * collection. Calls delegate through an arrow so a view implemented as a
- * method keeps its receiver.
+ * Each view is re-wrapped by hand rather than mapped generically, and calls
+ * delegate through an arrow so a view implemented as a method keeps its
+ * receiver. The `...base` spread means a view left off this list still works
+ * but escapes collection, so a plugin a reload turns off keeps what it
+ * registered there; the three world-state views did. A test in
+ * `registration-disposers.test.ts` fails for any view the context offers that
+ * isn't wrapped here.
  */
 function collectingContext(
   base: PluginContext,
@@ -91,6 +93,9 @@ function collectingContext(
     providers: { register: wrap((...a) => base.providers.register(...a)) },
     embeddings: { register: wrap((...a) => base.embeddings.register(...a)) },
     memoryBackends: { register: wrap((...a) => base.memoryBackends.register(...a)) },
+    stateProviders: { register: wrap((...a) => base.stateProviders.register(...a)) },
+    stateTypes: { register: wrap((...a) => base.stateTypes.register(...a)) },
+    componentKinds: { register: wrap((...a) => base.componentKinds.register(...a)) },
     mediaStores: { register: wrap((...a) => base.mediaStores.register(...a)) },
     mediaRenditions: { register: wrap((...a) => base.mediaRenditions.register(...a)) },
     taskBackends: { register: wrap((...a) => base.taskBackends.register(...a)) },
@@ -129,14 +134,19 @@ function composeStop(
         console.warn(`[plugins] ${moduleName}: disposer threw: ${(err as Error).message}`);
       }
     }
-    for (let i = registered.length - 1; i >= 0; i--) {
-      try {
-        registered[i]();
-      } catch (err) {
-        console.warn(`[plugins] ${moduleName}: unregister threw: ${(err as Error).message}`);
-      }
-    }
+    unregisterAll(moduleName, registered);
   };
+}
+
+/** Undo a plugin's registrations, last first. One that throws is logged and the rest still run. */
+function unregisterAll(moduleName: string, registered: Disposer[]): void {
+  for (let i = registered.length - 1; i >= 0; i--) {
+    try {
+      registered[i]();
+    } catch (err) {
+      console.warn(`[plugins] ${moduleName}: unregister threw: ${(err as Error).message}`);
+    }
+  }
 }
 
 /**
@@ -179,7 +189,8 @@ function composeStop(
  * **Disposers**: a `register(ctx)` plugin may return a teardown function, and
  * every registration it makes through `ctx` yields one of its own. Both are
  * composed onto {@link LoadedPlugin.stop} so the host can undo a plugin as a
- * unit on shutdown / reload.
+ * unit on shutdown / reload. A plugin whose `register(ctx)` throws has what it
+ * registered before the throw undone at once, so a failed load leaves nothing.
  */
 export async function loadPlugins(
   config: AgentConfig,
@@ -263,6 +274,12 @@ export async function loadPlugins(
         results.push({ module: moduleName, ok: true, shape: "side-effect", meta, warnings });
       }
     } catch (err) {
+      // A plugin that throws partway through `register()` has already put
+      // some of itself in place. A failed load has no `stop` for the host to
+      // call, so undo those here: otherwise its tools and routes outlive the
+      // failure, and the next load collides with them (a route registered
+      // twice throws), so the plugin could never load again.
+      unregisterAll(moduleName, registered);
       const message = (err as Error).message;
       console.warn(`[plugins] failed to load ${moduleName}: ${message} — continuing without it`);
       results.push({ module: moduleName, ok: false, error: message });

@@ -66,11 +66,11 @@ export interface DirectoryConfig {
 
 /**
  * The config of the load in effect, or null once the plugin is unloaded with
- * nothing in its place. A reload rebuilds the tool set before it reloads
- * plugins, so agents keep the tools an older load built until the reload
- * after. Those tools read this rather than their own load's config: a new
- * bar applies at once, and a plugin turned off says so instead of failing
- * against types that are gone.
+ * nothing in its place. A reload swaps in the tools the new load builds, but
+ * a call already running keeps the instance it started on. Tools read this
+ * rather than their own load's config, so such a call sees the new bar, and
+ * one running as the plugin is turned off says so instead of failing against
+ * types that are gone.
  */
 let live: DirectoryConfig | null = null;
 

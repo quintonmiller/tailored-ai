@@ -1,14 +1,19 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type AgentConfig,
   AgentRuntime,
   type AIProvider,
+  createPluginContext,
+  createTools,
   type HttpRouteDescriptor,
   initDatabase,
+  type LoadedPlugin,
+  loadPlugins,
+  type PluginContext,
 } from "@tailored-ai/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { routePathToRegex } from "../http-routes.js";
 import { createServer } from "../index.js";
@@ -184,5 +189,226 @@ describe("plugin HTTP routes mounted on Hono", () => {
     // The sibling token route still 401s without a bearer.
     const guarded = await call(app, "POST", "/api/inbound/guarded");
     expect(guarded.status).toBe(401);
+  });
+});
+
+describe("plugin HTTP routes after the server is built", () => {
+  it("serves a route registered later, and stops serving one deregistered", async () => {
+    const runtime = makeRuntime(buildConfig());
+    const { app } = createServer({ runtime });
+    expect((await call(app, "GET", "/api/ext/demo/late")).status).toBe(404);
+
+    const mountPath = runtime
+      .getHttpRoutes()
+      .register({ method: "GET", path: "late", handler: async () => ({ json: { late: true } }) }, "demo");
+    const r = await call(app, "GET", "/api/ext/demo/late");
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.text)).toEqual({ late: true });
+
+    runtime.getHttpRoutes().deregister("GET", mountPath);
+    const gone = await call(app, "GET", "/api/ext/demo/late");
+    // Answered by the plugin mount itself, in the API's own shape, whatever is mounted after it.
+    expect({ status: gone.status, body: JSON.parse(gone.text) }).toEqual({ status: 404, body: { error: "not_found" } });
+  });
+
+  it("answers HEAD off a GET route and hands a handler decoded params", async () => {
+    const runtime = makeRuntime(buildConfig());
+    const { app } = createServer({ runtime });
+    runtime.getHttpRoutes().register(
+      {
+        method: "GET",
+        path: "items/:id",
+        handler: async (req) => ({ json: { id: req.params.id, method: req.method } }),
+      },
+      "demo",
+    );
+
+    // An encoded slash stays encoded through Hono's path decoding; the param is decoded, as `c.req.param()` does.
+    const got = await call(app, "GET", "/api/ext/demo/items/a%2Fb%20c");
+    expect(JSON.parse(got.text)).toEqual({ id: "a/b c", method: "GET" });
+    // A bad escape is left as it came, and the good ones around it still decode.
+    const bad = await call(app, "GET", "/api/ext/demo/items/a%2Fb%ZZ");
+    expect(JSON.parse(bad.text)).toEqual({ id: "a/b%ZZ", method: "GET" });
+    const head = await app.fetch(new Request("http://t/api/ext/demo/items/x", { method: "HEAD" }));
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+  });
+
+  it("answers 404, not the web UI's page, for a plugin route that is gone", async () => {
+    const ui = join(tmpDir, "ui");
+    mkdirSync(ui);
+    writeFileSync(join(ui, "index.html"), "<html>the app</html>");
+    const runtime = makeRuntime(buildConfig());
+    const { app } = createServer({ runtime, uiProvider: { id: "test", staticDir: ui } });
+    const routes = runtime.getHttpRoutes();
+    const namespaced = routes.register(
+      { method: "GET", path: "gone", handler: async () => ({ json: "here" }) },
+      "demo",
+    );
+    const absolute = routes.register({
+      method: "GET",
+      path: "/api/legacy/gone",
+      absolute: true,
+      handler: async () => ({ json: "here" }),
+    });
+    expect(JSON.parse((await call(app, "GET", "/api/ext/demo/gone")).text)).toBe("here");
+
+    routes.deregister("GET", namespaced);
+    routes.deregister("GET", absolute);
+
+    for (const path of ["/api/ext/demo/gone", "/api/legacy/gone", "/api/ext/never-registered"]) {
+      const r = await call(app, "GET", path);
+      expect({ path, status: r.status, body: JSON.parse(r.text) }).toEqual({
+        path,
+        status: 404,
+        body: { error: "not_found" },
+      });
+    }
+    // Pages outside the API still get the app, for client-side routing.
+    const page = await call(app, "GET", "/chat");
+    expect(page.status).toBe(200);
+    expect(page.text).toContain("the app");
+  });
+
+  it("leaves core routes to win over a plugin route at the same path", async () => {
+    const runtime = makeRuntime(buildConfig());
+    const { app } = createServer({ runtime });
+    runtime
+      .getHttpRoutes()
+      .register({ method: "GET", path: "/api/tools", absolute: true, handler: async () => ({ json: "plugin" }) });
+    const r = await call(app, "GET", "/api/tools");
+    expect(JSON.parse(r.text)).toEqual([]);
+  });
+});
+
+/**
+ * Through `runtime.reload()`, with the host's plugin pass after it as the CLI
+ * runs it, against one server built at the start: the routes and tools a
+ * reload turns on, off or changes are what the server serves next.
+ */
+describe("a reload moves a runtime plugin's routes and tools on the running server", () => {
+  let loaded: LoadedPlugin[] = [];
+
+  beforeEach(() => {
+    loaded = [];
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    for (const p of loaded) await p.stop?.();
+    vi.restoreAllMocks();
+  });
+
+  function probePlugin(ctx: PluginContext) {
+    const greeting = String(ctx.config.greeting ?? "hi");
+    ctx.tools.register("probe", () => [
+      {
+        name: "probe",
+        description: `says ${greeting}`,
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ success: true, output: greeting }),
+      } as never,
+    ]);
+    ctx.http.register({ method: "GET", path: "hello", handler: () => ({ json: { greeting } }) });
+    // A webhook a service calls with its own secret, so it skips the bearer check.
+    ctx.http.register({ method: "POST", path: "hook", auth: "none", handler: () => ({ json: { greeting } }) });
+  }
+
+  function withPlugin(plugin: Record<string, unknown>, server: Partial<AgentConfig["server"]> = {}): AgentConfig {
+    return { ...buildConfig(server), plugins: [{ module: "probe-plugin", ...plugin }] } as unknown as AgentConfig;
+  }
+
+  async function boot(initial: AgentConfig) {
+    let cfg = initial;
+    const configPath = join(tmpDir, "config.yaml");
+    writeFileSync(configPath, YAML.stringify({}), "utf-8");
+    const runtime = new AgentRuntime(
+      {
+        configPath,
+        db,
+        contextDir: join(tmpDir, "context"),
+        kbDir: join(tmpDir, "kb"),
+        createTools: (c, dir, path, runtimeOpts) => createTools(c, dir, path, runtimeOpts),
+        createProvider: () => ({ provider: fakeProvider(), model: "fake" }),
+      },
+      () => cfg,
+      cfg,
+    );
+    const load = async () => {
+      loaded = await loadPlugins(runtime.getConfig(), async () => ({ default: probePlugin }), {
+        context: createPluginContext({ runtime, events: runtime.events }),
+      });
+      runtime.syncToolFactories();
+    };
+    let pending: Promise<void> | undefined;
+    runtime.onReload(() => {
+      pending = (async () => {
+        for (const p of loaded) await p.stop?.();
+        await load();
+      })();
+    });
+    await load();
+    const { app } = createServer({ runtime });
+    return {
+      app,
+      async reload(next: AgentConfig) {
+        cfg = next;
+        runtime.reload();
+        await pending;
+      },
+      probeTools: async () =>
+        (JSON.parse((await call(app, "GET", "/api/tools")).text) as { name: string; description: string }[]).filter(
+          (t) => t.name === "probe",
+        ),
+    };
+  }
+
+  it("serves a plugin's routes and tools from the reload that turns it on", async () => {
+    const tai = await boot(withPlugin({ enabled: false }));
+    expect((await call(tai.app, "GET", "/api/ext/probe-plugin/hello")).status).toBe(404);
+    expect(await tai.probeTools()).toEqual([]);
+
+    await tai.reload(withPlugin({ config: { greeting: "on" } }));
+
+    const r = await call(tai.app, "GET", "/api/ext/probe-plugin/hello");
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.text)).toEqual({ greeting: "on" });
+    expect((await tai.probeTools()).map((t) => t.description)).toEqual(["says on"]);
+  });
+
+  it("serves the changed handler and tool after a config change", async () => {
+    const tai = await boot(withPlugin({ config: { greeting: "hi" } }));
+    expect(JSON.parse((await call(tai.app, "GET", "/api/ext/probe-plugin/hello")).text)).toEqual({ greeting: "hi" });
+
+    await tai.reload(withPlugin({ config: { greeting: "hello" } }));
+
+    expect(JSON.parse((await call(tai.app, "GET", "/api/ext/probe-plugin/hello")).text)).toEqual({
+      greeting: "hello",
+    });
+    expect((await tai.probeTools()).map((t) => t.description)).toEqual(["says hello"]);
+  });
+
+  it("stops serving a plugin's routes and tools when a reload turns it off", async () => {
+    const tai = await boot(withPlugin({ config: {} }));
+    expect((await call(tai.app, "GET", "/api/ext/probe-plugin/hello")).status).toBe(200);
+
+    await tai.reload(withPlugin({ enabled: false }));
+
+    expect((await call(tai.app, "GET", "/api/ext/probe-plugin/hello")).status).toBe(404);
+    expect(await tai.probeTools()).toEqual([]);
+  });
+
+  it("exempts an auth:'none' route from the reload that adds it, and gates its path again once it's gone", async () => {
+    const tai = await boot(withPlugin({ enabled: false }, { authToken: "secret" }));
+    expect((await call(tai.app, "POST", "/api/ext/probe-plugin/hook")).status).toBe(401);
+
+    await tai.reload(withPlugin({ config: {} }, { authToken: "secret" }));
+    expect((await call(tai.app, "POST", "/api/ext/probe-plugin/hook")).status).toBe(200);
+    // Its token sibling is still gated.
+    expect((await call(tai.app, "GET", "/api/ext/probe-plugin/hello")).status).toBe(401);
+
+    await tai.reload(withPlugin({ enabled: false }, { authToken: "secret" }));
+    expect((await call(tai.app, "POST", "/api/ext/probe-plugin/hook")).status).toBe(401);
   });
 });

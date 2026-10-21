@@ -7,6 +7,7 @@ Deep notes on the runtime, factories, and how to add new tools/channels/provider
 `packages/core/src/runtime.ts` holds all mutable state (config, tools, model provider, time provider) and provides getters that return the current values. Key behaviors:
 
 - **`reload()`** — re-reads `config.yaml`, rebuilds tools, model provider, and time provider. All-or-nothing: keeps previous state on failure. It can fire **mid-turn**: `updateRawConfig` reloads after every config write, so the `admin` tool lets an agent rebuild its own provider between rounds, and an external edit to `config.yaml` does the same via the watcher. Anything holding per-turn or per-run state on a rebuilt collaborator loses it — see [defensive-patterns.md](./defensive-patterns.md#a-reload-can-rebuild-a-collaborator-in-the-middle-of-a-turn).
+- **`syncToolFactories()`** — rebuilds the tools the factories build, from the factories registered now, and returns the names it added and removed. The host calls it after loading runtime plugins, at startup and after every reload; see [Runtime plugins across a reload](#runtime-plugins-across-a-reload). `applyPendingToolFactories()` is its older name and returns only the added names.
 - **`startWatching()`** — uses `fs.watch` with 500ms debounce to auto-reload on config file changes.
 - **`resolveHooks({ agentName?, overrideHooks? })`** — resolves merged hooks for an agent + optional overrides (e.g. cron job hooks).
 - **`generation`** — monotonic counter that increments on each successful reload.
@@ -185,6 +186,11 @@ without the plugin author writing an uninstall path. The plugin's own disposer
 runs first — it may still need what it registered while shutting down — and the
 registrations come out last-in-first-out.
 
+A plugin whose `register(ctx)` throws partway has what it registered before the
+throw undone by `loadPlugins` itself, since a failed load has no `stop` for the
+host to call. Its tools and routes don't outlive the failure, and the next
+reload can load it cleanly rather than colliding with its own leftovers.
+
 Ignoring the return value is fine and changes nothing; the contract is there for
 whoever owns a lifecycle.
 
@@ -193,6 +199,52 @@ module-scope `register*` functions at import time with no context, so nothing
 observes what they added. And `reload()` still clears the event bus wholesale
 rather than unwinding per plugin — see [#533](https://github.com/quintonmiller/tailored-ai/issues/533)
 for what remains.
+
+The collector wraps each view by hand, so a view left off its list still works
+and silently escapes teardown. The three world-state views (`stateProviders`,
+`stateTypes`, `componentKinds`) were, so a plugin turned off by reload kept its
+world-state types until a restart. A test in `registration-disposers.test.ts`
+now fails for any view on the context that the collector doesn't wrap.
+
+### Runtime plugins across a reload
+
+Runtime-context plugins (the `builtin:*` set, places among them, and
+trusted-actions) load after the runtime exists, because they need
+`ctx.runtime`. On every reload the CLI disposes them and loads them again
+against the new config. Two things have to follow that second load, and both
+used to be fixed at what the first one did:
+
+1. **Tools.** `reload()` rebuilds the tool set before the host gets to the
+   plugins, so its walk builds their tools from the registrations about to be
+   disposed: the old config, or a plugin that is now off. After loading them
+   again the host calls `runtime.syncToolFactories()`, which runs every
+   factory and puts what they build now in place of what the last walk built.
+   A plugin's tools are then rebuilt from its new registration on the first
+   reload after a config change, removed when it is turned off, and added when
+   it is turned on. Every factory runs, not only the plugins', because a
+   built-in's output can hang on what a plugin registered: `state` is offered
+   once any world-state type exists. Tools registered straight into the
+   registry (MCP tools) are left alone. A replaced or removed tool is
+   destroyed as `reload()` destroys its own, unless its factory handed the
+   same instance back, which neither path destroys. An agent mid-turn gets the
+   new set on its next round, because the loop re-resolves its tools. A call
+   already running keeps the instance it started on, but that instance's
+   `destroy()` runs at once rather than when the call settles, so a tool with
+   a destroy hook (the browser) can fail a call in flight during a reload.
+2. **HTTP routes.** See [Plugin HTTP Routes](#plugin-http-routes): the server
+   serves the route registry as it is at each request, and the plugin's
+   collected disposers take its old routes out of it.
+
+A host embedding core that reloads runtime plugins itself should do the same:
+dispose them, load them, then call `syncToolFactories()`. Between the dispose
+and the sync there is a window of a few milliseconds where a request can miss a
+route (and is answered 404) and a tool call can reach a plugin mid-reload; the
+tool set and routes are whole again once the load finishes.
+
+One thing doesn't follow yet: a world-state provider's registration goes with
+its plugin, but `StateService` keeps each provider it has built for the life of
+the process, so one already in use keeps serving until a restart. No runtime
+plugin registers a state provider today.
 
 ## Event dispatch modes
 
@@ -444,12 +496,12 @@ timedOut: true }` is the case an auditor most wants to be able to find.
 
 Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam — core never imports Hono, the dependency direction stays server → core.
 
-- **Core side** (`packages/core/src/http/registry.ts`): the runtime owns one `HttpRouteRegistry` of route descriptors `{ method, path, handler, auth?, absolute? }`. A handler is `(req: TaiHttpRequest) => Promise<TaiHttpResponse>` with simple request (method, params, query, headers, `json()`/`text()`) and response (status, headers, `json`/`body`) shapes — not a re-creation of Express. The registry survives `reload()` because Hono can't unmount routes once added; handlers read live runtime state per request.
+- **Core side** (`packages/core/src/http/registry.ts`): the runtime owns one `HttpRouteRegistry` of route descriptors `{ method, path, handler, auth?, absolute? }`. A handler is `(req: TaiHttpRequest) => Promise<TaiHttpResponse>` with simple request (method, params, query, headers, `json()`/`text()`) and response (status, headers, `json`/`body`) shapes — not a re-creation of Express. The registry object survives `reload()`; its contents follow the plugins, since disposing a runtime plugin deregisters its routes and loading it again registers the new ones. `version` changes whenever the route set does.
 - **Plugin side**: a plugin registers via `ctx.http.register(descriptor)` or `ctx.http.mount(prefix, descriptors)`. Both return a disposer — call it from the plugin's own disposer so routes don't collide when the runtime re-loads the plugin on reload.
 - **Namespace**: plugin routes mount under `/api/ext/<plugin-id>/…` so they can never shadow a core route. The loader bakes the plugin's module id in as the default prefix; `mount("admin", …)` nests under `/api/ext/<plugin-id>/admin/…`.
 - **Auth**: `auth: "token"` (default) puts the route behind the server's `server.authToken` bearer check like every other `/api/*` route. `auth: "none"` exempts it — for a webhook/callback called by a service (not a browser) that authenticates with its own secret. The exemption is matched against the concrete request path in the server's auth middleware.
 - **Absolute escape hatch**: `absolute: true` opts a descriptor out of the namespace and mounts it at the verbatim `path` (which must start with `/`). Reserved for first-party packages preserving a legacy path the UI or an external service already calls — a deliberate, reviewed exception, not a default. The trusted-actions package uses it to keep `/api/trusted-actions/*` working (see [docs/trusted-actions.md](./trusted-actions.md)).
-- **Server side** (`packages/server/src/http-routes.ts`): after building the Hono app and the auth middleware, `mountPluginHttpRoutes(app, runtime)` iterates the registry and adapts each descriptor onto Hono, before the SPA static fallback. Routes register at startup (the runtime-context plugin pass runs before `createServer`).
+- **Server side** (`packages/server/src/http-routes.ts`): after building the Hono app and the auth middleware, `mountPluginHttpRoutes(app, runtime)` adds one middleware, before the SPA static fallback, that matches each request against the registry as it is then (with Hono's own router, rebuilt only when `version` moves) and adapts the matching descriptor. Hono can't unmount a route, so this is how a reload that turns a plugin on, off, or changes its handlers takes effect without a restart. A core route still wins over a plugin route at the same path. A request under `/api/ext/` that no plugin route matches, such as one to a route a reload took away, is answered `404 {"error":"not_found"}`; any other falls through to the static UI, whose page fallback likewise answers 404 for an `/api/` path rather than the web UI's page. The auth middleware's `auth: "none"` exemptions are read from the live registry the same way, so a webhook a reload adds is reachable at once and its path is gated again once it is gone.
 
 ## Plugin Slash Commands
 

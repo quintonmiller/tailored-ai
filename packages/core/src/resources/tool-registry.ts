@@ -51,6 +51,12 @@ export class ToolRegistry {
     return this.resources.unregister({ kind: "tool", id, version });
   }
 
+  /** Remove this tool instance, whatever id it was registered under. Returns whether it was registered. */
+  remove(tool: Tool): boolean {
+    const res = this.resources.list<Tool>("tool").find((r) => r.body === tool);
+    return res ? this.unregister(res.manifest.id, res.manifest.version) : false;
+  }
+
   /** Get a single tool by id (and optional pinned version). */
   get(id: string, version?: string): Tool | undefined {
     const res = this.resources.get<Tool>({ kind: "tool", id, version });
@@ -84,13 +90,22 @@ export class ToolRegistry {
 
   /** Run destroy() on all currently-registered tools (used during reload). */
   async destroyAll(): Promise<void> {
-    for (const tool of this.list()) {
-      try {
-        await tool.destroy?.();
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error(`[resources] tool ${tool.name} destroy() failed`, err);
-      }
+    await destroyTools(this.list());
+  }
+}
+
+/**
+ * Run destroy() on each tool, one after another. A tool whose destroy throws
+ * is logged and the rest still run, so one bad tool can't keep the others'
+ * processes and timers alive.
+ */
+export async function destroyTools(tools: Iterable<Tool>): Promise<void> {
+  for (const tool of tools) {
+    try {
+      await tool.destroy?.();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[resources] tool ${tool.name} destroy() failed`, err);
     }
   }
 }
