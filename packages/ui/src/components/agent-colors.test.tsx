@@ -119,6 +119,13 @@ describe("an agent's colour", () => {
     expect(dots()).toEqual({ map: css("#e0457b"), needs: "#e0457b", card: css("#e0457b") });
     hear({ type: "body", id: "planner", op: "update", after: { color: "#2f9e8f" } } as Partial<StateChangeInfo>);
     expect(dots()).toEqual({ map: css("#2f9e8f"), needs: "#2f9e8f", card: css("#2f9e8f") });
+    // Archived, its body is out of effect: the name's colour, until it is restored.
+    const archive = (lifecycle: "archived" | "unarchived") =>
+      hear({ type: "body", id: "planner", op: "update", after: { color: "#2f9e8f" }, lifecycle });
+    archive("archived");
+    expect(dots().card).toBe(css(agentColor("planner")));
+    archive("unarchived");
+    expect(dots().card).toBe(css("#2f9e8f"));
     // Back to its own: the name's again.
     hear({ type: "body", id: "planner", op: "delete" } as Partial<StateChangeInfo>);
     expect(dots().card).toBe(css(agentColor("planner")));

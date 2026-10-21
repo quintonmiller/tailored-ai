@@ -7,7 +7,7 @@
  * announcement and a write that slips past it is invisible to all of them.
  */
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type RuntimeEventPayload, TypedEventBus } from "../events.js";
 import { registerStateProvider, registerStateType } from "../state/registry.js";
 import { type StateCaller, type StateConfig, StateService } from "../state/service.js";
@@ -372,7 +372,7 @@ describe("StateService", () => {
         await service.put(person, { ...ref, scope: "global", data: { title: "x" } });
         changes.length = 0;
         await expect(service.archive(person, ref, "done")).rejects.toThrow(
-          'The "plain" store cannot archive task records. Delete it instead.',
+          'The "plain" store cannot archive task records, so task/t1 is unchanged.',
         );
         await expect(service.unarchive(person, ref)).rejects.toThrow("cannot archive");
         expect((await service.query(person, { type: "task" })).map((r) => r.id)).toEqual(["t1"]);
@@ -406,8 +406,50 @@ describe("StateService", () => {
       await service.put(person, { type: "task", id: "kept", scope: "global", data: {} });
       await service.put(person, { type: "task", id: "gone", scope: "global", data: {} });
       await service.archive(person, { type: "task", id: "gone" });
-      expect((await service.query(person, { type: "task" })).map((r) => r.id)).toEqual(["kept"]);
-      expect(await service.query(person, { type: "task", includeArchived: true })).toHaveLength(2);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect((await service.query(person, { type: "task" })).map((r) => r.id)).toEqual(["kept"]);
+        expect(await service.query(person, { type: "task", includeArchived: true })).toHaveLength(2);
+        await service.query(person, { type: "task" });
+        // The page came back short, which reads as the end of the list: whoever runs it is told, once.
+        expect(warn.mock.calls).toEqual([
+          [
+            '[state] the "careless" store returned archived task records to a query that didn\'t ask; pages will come back short',
+          ],
+        ]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("fails loudly when a store's put leaves a record archived, and announces nothing", async () => {
+      const elsewhere = new Database(":memory:");
+      disposers.push(
+        registerStateProvider("sticky", () => {
+          const inner = new SqliteStateProvider(elsewhere);
+          // An upsert that leaves its archive flag alone, as a store written without that duty might.
+          return Object.assign(Object.create(inner), {
+            id: "sticky",
+            put: async (write: Parameters<SqliteStateProvider["put"]>[0], expected?: number) => {
+              const ref = { type: write.type, id: write.id };
+              const was = await inner.get(ref);
+              const result = await inner.put(write, expected);
+              if (!was?.archivedAt) return result;
+              const kept = await inner.archive(ref, write.actor, was.archiveReason);
+              return { record: kept?.record ?? result.record, previous: result.previous };
+            },
+          });
+        }),
+      );
+      config.state.types = [...(config.state.types ?? []), { name: "task", provider: "sticky" }];
+      const ref = { type: "task", id: "t1" };
+      await service.put(person, { ...ref, scope: "global", data: { title: "x" } });
+      await service.archive(person, ref, "done");
+      changes.length = 0;
+      await expect(service.put(person, { ...ref, scope: "global", data: { title: "y" } })).rejects.toThrow(
+        'The "sticky" store kept task/t1 archived after a put, which must write it live.',
+      );
+      expect(changes).toEqual([]);
     });
 
     it("fails loudly when a store says it archived a record and didn't", async () => {

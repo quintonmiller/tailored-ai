@@ -158,7 +158,8 @@ Archiving is optional for a provider and comes as a pair, `archive` and
 report success and leave the record live, and a store without them keeps the
 rest of this contract unchanged. Core also drops any archived record a query
 returns uninvited, so a provider that ignores `includeArchived` returns a short
-page, never a hidden record. What else archiving means, for callers and for
+page, never a hidden record, and core fails a `put` that leaves a record
+archived instead of reporting it saved. What else archiving means, for callers and for
 the 3D world, is in [world-state.md](./world-state.md#archiving).
 
 ## Change events

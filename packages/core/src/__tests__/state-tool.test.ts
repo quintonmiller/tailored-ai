@@ -114,12 +114,17 @@ describe("state tool", () => {
       ].join("\n"),
     );
     const got = await run({ action: "get", type: "plan", id: "trip" });
-    expect(got.output).toMatch(/\nArchived \S+ by planner: the trip is over Action "unarchive" brings it back\.\n/);
+    expect(got.output).toMatch(/\nArchived \S+ by planner: the trip is over\. Action "unarchive" brings it back\.\n/);
 
     expect((await run({ action: "unarchive", type: "plan", id: "trip" })).output).toBe(
       "plan/trip is back (version 3).",
     );
     expect((await run({ action: "query", type: "plan" })).output).toContain("2 plan record(s)");
+    // Asked again, it says nothing changed, and nothing does.
+    expect((await run({ action: "unarchive", type: "plan", id: "trip" })).output).toBe(
+      "plan/trip isn't archived; nothing to do.",
+    );
+    expect((await run({ action: "get", type: "plan", id: "trip" })).output).toMatch(/\(version 3,/);
   });
 
   it("asks for an id to archive, and says when there is nothing to archive", async () => {

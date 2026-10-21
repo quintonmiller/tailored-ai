@@ -1026,6 +1026,14 @@ describe("bodies going where the talk is", () => {
         expect((await visit("guest"))?.data.errand).toBe("sleep");
       });
 
+      it("lets the body walk home to work when its talk with you is archived", async () => {
+        await presence.keep("host", out);
+        await withYou("host");
+        await state.archive(owner, { type: TALK_TYPE, id: "host" });
+        await presence.started("host");
+        expect(await visit("host")).toBeNull();
+      });
+
       it("reads a talk record as face to face with you only while it lasts, and not on the phone", () => {
         const now = Date.now();
         const until = new Date(now + 1000).toISOString();
@@ -2454,6 +2462,27 @@ describe("a person changing a place on the page", () => {
     const after = (await readHome(state, person, "assistant")).place;
     expect(lamps(after)).toBe(before);
     expect(after.changes?.[0]).toMatchObject({ who: "assistant", what: expect.stringMatching(/^took back "added/) });
+  });
+
+  it("won't let the agent's undo bring back an archived room, whoever archived it", async () => {
+    const ref = { type: PLACE_TYPE, id: homeId("assistant") };
+    const agent: StateCaller = { actor: { kind: "agent", name: "assistant" } };
+    await tool.execute({ action: "add", kind: "lamp" }, as);
+    for (const who of [agent, person]) {
+      const archived = await state.archive(who, ref, "starting over later");
+      const undone = await tool.execute({ action: "undo" }, as);
+      expect(undone.success).toBe(false);
+      expect(undone.error).toMatch(/^This room is archived, so undo leaves it alone\./);
+      expect(await state.get(person, ref)).toMatchObject({
+        version: archived?.version,
+        archivedAt: expect.any(String),
+      });
+      // Restored, the last change the agent made is archiving it, which is nothing to take back either.
+      const restored = await state.unarchive(person, ref);
+      const again = await tool.execute({ action: "undo" }, as);
+      expect(again.error).toBe("The last change here archived or restored the room, which undo doesn't take back.");
+      expect((await state.get(person, ref))?.version).toBe(restored?.version);
+    }
   });
 
   it("makes a meeting room's record with the first change, as a member's first change does", async () => {

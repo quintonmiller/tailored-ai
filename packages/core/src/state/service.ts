@@ -79,6 +79,8 @@ export class StateService {
   private readonly providers = new Map<string, Promise<StateProvider>>();
   private readonly watchers: Disposer[] = [];
   private readonly now: () => Date;
+  /** Stores already warned about for returning archived records to a query that didn't ask. */
+  private readonly warnedArchived = new Set<string>();
 
   constructor(private readonly opts: StateServiceOptions) {
     this.now = opts.now ?? (() => new Date());
@@ -136,11 +138,20 @@ export class StateService {
       scopes = [input.scope];
     }
     const { scope: _scope, ...rest } = input;
-    const records = await (await this.providerFor(def)).query({ ...rest, scopes });
+    const provider = await this.providerFor(def);
+    const records = await provider.query({ ...rest, scopes });
+    if (input.includeArchived) return records;
     // A store that archives but ignores the flag still never puts an archived
     // record in front of a caller that didn't ask: a page comes back short
-    // instead.
-    return input.includeArchived ? records : records.filter((r) => !r.archivedAt);
+    // instead. Said once, since a short page reads as the end of the list.
+    const live = records.filter((r) => !r.archivedAt);
+    if (live.length < records.length && !this.warnedArchived.has(provider.id)) {
+      this.warnedArchived.add(provider.id);
+      console.warn(
+        `[state] the "${provider.id}" store returned archived ${def.name} records to a query that didn't ask; pages will come back short`,
+      );
+    }
+    return live;
   }
 
   /**
@@ -310,7 +321,9 @@ export class StateService {
     // Refused outright rather than reported as done: a store that can't
     // archive would otherwise leave the record live in every query.
     if (!provider.archive || !provider.unarchive) {
-      throw new StateError(`The "${provider.id}" store cannot archive ${def.name} records. Delete it instead.`);
+      throw new StateError(
+        `The "${provider.id}" store cannot archive ${def.name} records, so ${def.name}/${ref.id} is unchanged.`,
+      );
     }
     const existing = await provider.get(ref);
     if (!existing || !this.canSee(caller, existing.scope)) return null;
@@ -424,6 +437,13 @@ export class StateService {
       { ...target, actor: caller.actor, ...(caller.source ? { source: caller.source } : {}) },
       expectedVersion,
     );
+    if (result.record.archivedAt) {
+      // A put writes the record live. One the store kept archived would be
+      // reported saved while every query and pinned prompt leaves it out.
+      throw new Error(
+        `The "${provider.id}" store kept ${target.type}/${target.id} archived after a put, which must write it live.`,
+      );
+    }
     this.emit({
       type: result.record.type,
       id: result.record.id,

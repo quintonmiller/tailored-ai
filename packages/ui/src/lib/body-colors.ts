@@ -36,7 +36,8 @@ function start(): () => void {
   try {
     off = subscribeStateChanges((change) => {
       if (change.type !== BODY_TYPE) return;
-      const color = change.op === "delete" ? undefined : colorIn(change.after);
+      // An archived body is not in effect, as the first read (which leaves archived records out) has it.
+      const color = change.op === "delete" || change.lifecycle === "archived" ? undefined : colorIn(change.after);
       heard.set(change.id, color);
       if ((chosen[change.id] ?? undefined) === color) return;
       const next = { ...chosen };

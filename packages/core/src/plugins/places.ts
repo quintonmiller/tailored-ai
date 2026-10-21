@@ -1569,13 +1569,16 @@ export class Presence {
     }
   }
 
-  /** Whether the agent is talking with you face to face now: its `talk` record, with you and not on the phone. */
+  /**
+   * Whether the agent is talking with you face to face now: its `talk` record, with you and not on the phone. An
+   * archived one is not in effect, as the change it came in on is not (see `followDays`).
+   */
   private async withYou(agent: string, now: number): Promise<boolean> {
     const talk = await this.opts
       .state()
       .get(PRESENCE_CALLER, { type: TALK_TYPE, id: agent })
       .catch(() => null);
-    return faceToFaceWithYou(talk?.data, now);
+    return !talk?.archivedAt && faceToFaceWithYou(talk?.data, now);
   }
 
   /** Every outing ended, and every night's sleep: the routines are off, and nobody is left out in the town. */
@@ -2929,6 +2932,12 @@ export class PlaceTool implements Tool {
       if (action === "undo") {
         const { id } = await readCurrent(service, caller, agent, meetings, this.homes);
         const ref = { type: PLACE_TYPE, id };
+        // Undo writes the room over its record, which would bring an archived one back unasked, with whatever it
+        // took back besides. Whoever archived it, restoring it is a choice of its own.
+        if ((await service.get(caller, ref).catch(() => null))?.archivedAt)
+          return fail(
+            `This room is archived, so undo leaves it alone. Unarchiving it (the state tool, or Restore on the State page) brings it back.`,
+          );
         const recent = await service.history(caller, ref, { limit: PEOPLE_LOOK }).catch(() => []);
         const [newest] = recent;
         let last: StateChange | undefined = newest;
@@ -2945,6 +2954,10 @@ export class PlaceTool implements Tool {
             );
           }
         }
+        // Archiving and restoring change nothing in the room, so neither is a change undo can take back. (A put
+        // that restored the room while changing it is, and taking it back leaves the room restored.)
+        if (last?.lifecycle && isDeepStrictEqual(last.before, last.after))
+          return fail("The last change here archived or restored the room, which undo doesn't take back.");
         // A meeting room's first change made its record: taking that back is the room as it was drawn.
         if (last?.op === "create" && id.startsWith("room:") && !byPlugin(last.actor)) {
           await service.delete(caller, ref, newest?.version);

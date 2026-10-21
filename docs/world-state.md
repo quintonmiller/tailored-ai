@@ -132,7 +132,9 @@ out: an archived room drops off the map and nobody is in it, an archived
 Restoring it puts it back. Two things stay: an agent's home room, since an
 agent always has one, and a door to an archived room, so restoring the room
 joins it up again. A change the world makes over an archived record, such as
-an agent changing how it looks, writes a fresh record over it.
+an agent changing how it looks, writes a fresh record over it. The place
+tool's `undo` leaves an archived room alone, since writing over it would
+bring it back.
 
 ## Scopes
 
@@ -177,8 +179,10 @@ bound to it shows the same as its first line.
   `expectedVersion` applies, and history logs each one.
 - **Who may:** the same as for any write. An agent archives what its type's
   `access.write` and its scopes let it change.
-
-## Events
+- **Reading by id, in code:** `get` (and `GET /api/state/:type/:id`) returns
+  an archived record too, with `archivedAt` set. Code that reads a record by
+  id and treats it as current should check `archivedAt`, as the built-in
+  places plugin does; `query` already leaves archived records out.
 
 ## Events
 
@@ -190,6 +194,12 @@ the record, with `archiveReason` when one was given, and `"unarchived"` on the
 one that brought it back (including a `put` over an archived record). Neither
 changes the data, so `before` and `after` are the same. A subscription line
 reads `plan/trip archived by planner: the trip is over`.
+
+A consumer that keeps its own copy of a type's live records, such as a page
+that read the list once and follows the stream, must drop a record on
+`lifecycle: "archived"` and add it back on `"unarchived"`. Otherwise an
+archive looks like an edit, and the copy keeps showing a record every list
+leaves out.
 
 ```yaml
 hooks:
@@ -357,9 +367,9 @@ TAI implements `watch`, and core re-announces what it reports as
 
 **Archiving, for a provider.** Archiving is optional. A provider without
 `archive` and `unarchive` keeps working as before, and archiving one of its
-records is refused with `The "<id>" store cannot archive <type> records`, so a
-record is never reported archived while it stays live. A provider that
-implements them takes on four duties:
+records is refused with `The "<id>" store cannot archive <type> records, so
+<type>/<id> is unchanged.`, so a record is never reported archived while it
+stays live. A provider that implements them takes on four duties:
 
 - `archive(ref, actor, reason?, source?, expectedVersion?)` and
   `unarchive(ref, actor, source?, expectedVersion?)` are writes: bump the
@@ -370,9 +380,12 @@ implements them takes on four duties:
   `archiveReason`.
 - `query` leaves archived records out unless `includeArchived` is set. Core
   also drops any archived record a query returns uninvited, so a provider
-  that gets this wrong returns a short page rather than a hidden record.
+  that gets this wrong returns a short page rather than a hidden record, and
+  core logs a warning the first time it happens.
 - `put` writes the record live: one over an archived record brings it back,
-  and logs `lifecycle: "unarchived"`.
+  and logs `lifecycle: "unarchived"`. A put that comes back still archived
+  fails loudly and announces nothing, rather than reporting a save that every
+  query would leave out.
 
 The SQLite provider adds its archive columns to an existing database when it
 starts, and reads every older record as live.

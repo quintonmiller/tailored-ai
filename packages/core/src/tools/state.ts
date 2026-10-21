@@ -31,7 +31,7 @@ export class StateTool implements Tool {
         type: "string",
         enum: ["types", "get", "query", "put", "patch", "delete", "archive", "unarchive"],
         description:
-          "types: what exists. get: one record. query: records matching `where`. put: create, or replace by id. patch: change some fields. delete: remove it (its history is kept). archive: retire it, kept but left out of queries. unarchive: bring it back.",
+          "types: what exists. get: one record. query: records matching `where`. put: create, or replace by id. patch: change some fields. archive: retire it, kept but left out of queries; better than delete for anything that may matter again. unarchive: bring it back. delete: remove it (its history is kept).",
       },
       type: { type: "string", description: 'Record type, e.g. "plan". Required except for types.' },
       id: {
@@ -62,7 +62,7 @@ export class StateTool implements Tool {
       reason: { type: "string", description: "archive: why, in a few words." },
       expectedVersion: {
         type: "number",
-        description: "put or patch: write only if the record is still at this version.",
+        description: "put, patch, archive or unarchive: write only if the record is still at this version.",
       },
     },
     required: ["action"],
@@ -132,7 +132,10 @@ export class StateTool implements Tool {
         }
         case "unarchive": {
           if (!id) return fail("unarchive needs the record's `id`.");
-          const restored = await service.unarchive(caller, { type, id }, expectedVersion);
+          // Unarchiving a live record changes nothing, and saying it "is back" would suggest it was gone.
+          const found = await service.get(caller, { type, id });
+          if (found && !found.archivedAt) return ok(`${type}/${id} isn't archived; nothing to do.`);
+          const restored = found ? await service.unarchive(caller, { type, id }, expectedVersion) : null;
           return restored
             ? ok(`${type}/${id} is back (version ${restored.version}).`)
             : fail(`There is no ${type} record with id "${id}" to unarchive.`);

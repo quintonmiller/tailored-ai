@@ -25,15 +25,24 @@ brings it back.
 
 What changes for existing code:
 
+- `StateService.get` (and `GET /api/state/:type/:id`) now returns an
+  archived record too, with `archivedAt` set. Code that reads a record by id
+  and treats it as current should check `archivedAt`, as the built-in places
+  plugin does; `query` already leaves archived records out.
 - A `patch` to an archived record is refused with a message that says to
   unarchive it first. A `put` replaces it and brings it back.
 - Archiving is announced as `state.changed` with `op: "update"`, so existing
   hooks and subscribers keep working; the new `lifecycle` field
-  (`"archived"` or `"unarchived"`) tells them apart.
+  (`"archived"` or `"unarchived"`) tells them apart. A consumer that keeps
+  its own copy of a type's live records must drop a record on
+  `lifecycle: "archived"` and add it back on `"unarchived"`; otherwise an
+  archive looks like an edit.
 - Provider contract: `StateRecord` gains `archivedAt`, `archivedBy` and
   `archiveReason`; `StateQuery` gains `includeArchived`; `StateChange` gains
   `lifecycle` and `archiveReason`; `StateProvider` gains optional `archive`
   and `unarchive`. A provider without them keeps working, and archiving in it
-  is refused rather than reported as done. The built-in SQLite and memory
-  providers implement both, and the SQLite provider adds its new columns to an
-  existing database on start, reading every older record as live.
+  is refused rather than reported as done. A provider's `put` must write the
+  record live: one that comes back archived fails loudly. The built-in SQLite
+  and memory providers implement both, and the SQLite provider adds its new
+  columns to an existing database on start, reading every older record as
+  live.

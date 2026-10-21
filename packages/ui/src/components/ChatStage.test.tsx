@@ -903,6 +903,18 @@ describe("the chat page's scene", () => {
     await settle();
     expect(stage.rooms.length).toBeGreaterThan(drawn);
     expect(stage.rooms.at(-1)?.doors?.map((d) => d.along)).toEqual([2.5]);
+    // Archived, the room is drawn as the server has it, not from the record the archive came with.
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "place",
+        id: "home:talker",
+        op: "update",
+        after: rearranged,
+        lifecycle: "archived",
+      }),
+    );
+    await settle();
+    expect(stage.rooms.at(-1)?.props.map((p) => p.name)).toEqual(["the reading chair"]);
   });
 
   it("shows who else is in the room, and the agent knows they are there", async () => {
@@ -991,6 +1003,15 @@ describe("the chat page's scene", () => {
     await act(async () => FakeEventSource.last?.emit("change", { type: "plan", id: "x", op: "update", after: {} }));
     expect(stage.activities.length).toBe(before);
     await act(async () => FakeEventSource.last?.emit("change", { type: "activity", id: "planner", op: "delete" }));
+    expect(Object.keys(stage.activities.at(-1) ?? {})).toEqual(["talker"]);
+    // Archived, a record is out of effect though it comes as an update with its data; restored, it is back.
+    const archive = (lifecycle: string) =>
+      act(async () =>
+        FakeEventSource.last?.emit("change", { type: "activity", id: "talker", op: "update", after: {}, lifecycle }),
+      );
+    await archive("archived");
+    expect(Object.keys(stage.activities.at(-1) ?? {})).toEqual([]);
+    await archive("unarchived");
     expect(Object.keys(stage.activities.at(-1) ?? {})).toEqual(["talker"]);
   });
 
@@ -1094,6 +1115,19 @@ describe("the chat page's scene", () => {
     expect(container.querySelector(".world-map")).toBeNull();
     // The agent's cues have no body to move while you visit.
     expect(extras.at(-1)?.body).toBeUndefined();
+    // The room archived while you are in it: drawn as the server has it, not from the record the archive came with.
+    const lamp = { id: "lamp", name: "the lamp", kind: "lamp", at: [1, -1], facing: 0 };
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "place",
+        id: "room:local:trip",
+        op: "update",
+        after: { ...home, name: "trip", props: [...home.props, lamp] },
+        lifecycle: "archived",
+      }),
+    );
+    await settle();
+    expect(stage.rooms.at(-1)?.props.map((p) => p.name)).toEqual(["the reading chair"]);
     // Standing next to someone offers to talk to them.
     await act(async () => stage.onNear?.("writer"));
     await act(async () => tool("Talk to writer").click());

@@ -30,7 +30,8 @@ export function actorName(actor: Actor): string {
 export function archivedLine(record: StateRecord): string {
   if (!record.archivedAt) return "";
   const by = record.archivedBy ? ` by ${actorName(record.archivedBy)}` : "";
-  return `Archived ${record.archivedAt}${by}${record.archiveReason ? `: ${record.archiveReason}` : "."}`;
+  const reason = record.archiveReason;
+  return `Archived ${record.archivedAt}${by}${reason ? `: ${reason}${/[.!?]$/.test(reason) ? "" : "."}` : "."}`;
 }
 
 /** `field` sorts ascending, `-field` descending; anything else leaves the provider's default. */
