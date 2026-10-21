@@ -131,8 +131,11 @@ let root: Root;
 let container: HTMLDivElement;
 let agent: ReturnType<typeof tripPlanner> | null;
 let directoryOff: "404" | "html" | null;
+let directoryBroken: boolean;
 let hotels: Record<string, unknown>[];
+let hotelsRead: "ok" | "fail" | Promise<void>;
 let handStatus: number;
+let handWhy: string | undefined;
 const calls: { method: string; url: string; body?: unknown }[] = [];
 
 beforeEach(() => {
@@ -141,7 +144,10 @@ beforeEach(() => {
   root = createRoot(container);
   agent = tripPlanner();
   directoryOff = null;
+  directoryBroken = false;
+  hotelsRead = "ok";
   handStatus = 201;
+  handWhy = undefined;
   hotels = [
     rec("hotel", "tejo", { name: "Lisboa Tejo", price: 122, shortlisted: true }),
     rec("hotel", "memmo", { name: "Memmo Alfama", price: 178, shortlisted: true }),
@@ -157,19 +163,28 @@ beforeEach(() => {
       if (url.startsWith("/api/ext/builtin:directory/")) {
         if (directoryOff === "404") return new Response("Not Found", { status: 404 });
         if (directoryOff === "html") return new Response("<!doctype html><html></html>", { status: 200 });
+        // A store that threw: the server's plain-text 500, not JSON.
+        if (directoryBroken) return new Response("Internal Server Error", { status: 500 });
         if (method === "POST") {
           if (handStatus !== 201)
             return new Response(JSON.stringify({ error: "Say what you're handing over." }), { status: handStatus });
-          return new Response(JSON.stringify({ commitment: { id: "trip-planner-new" }, inPrompt: true }), {
-            status: 201,
-          });
+          const answer = {
+            commitment: { id: "trip-planner-new" },
+            inPrompt: !handWhy,
+            ...(handWhy ? { why: handWhy } : {}),
+          };
+          return new Response(JSON.stringify(answer), { status: 201 });
         }
         return new Response(JSON.stringify(agent), { status: 200 });
       }
       if (url.startsWith("/api/state/types")) {
         return new Response(JSON.stringify({ types: [{ name: "hotel", title: "name", canWrite: true }] }));
       }
-      if (url.startsWith("/api/state/hotel")) return new Response(JSON.stringify({ records: hotels }));
+      if (url.startsWith("/api/state/hotel")) {
+        if (hotelsRead === "fail") return new Response(JSON.stringify({ error: "No such type." }), { status: 400 });
+        if (hotelsRead !== "ok") await hotelsRead;
+        return new Response(JSON.stringify({ records: hotels }));
+      }
       return new Response(JSON.stringify({}), { status: 404 });
     }),
   );
@@ -191,6 +206,30 @@ async function render(name = "trip-planner", description = "Plans trips.") {
 const section = (label: string) => container.querySelector(`section[aria-label="${label}"]`) as HTMLElement | null;
 const headings = () => [...container.querySelectorAll("section > h2")].map((h) => h.childNodes[0]?.textContent);
 const settle = () => act(() => new Promise((r) => setTimeout(r, 200)));
+
+/** trip-planner with one section of its own: a hotel shortlist, first. */
+function withShortlist() {
+  return {
+    ...tripPlanner(),
+    page: rec("page", "trip-planner", {
+      owner: "trip-planner",
+      order: ["hotel-shortlist"],
+      extra: [
+        {
+          id: "hotel-shortlist",
+          title: "Hotel shortlist",
+          query: {
+            type: "hotel",
+            where: { shortlisted: true },
+            orderBy: "price",
+            limit: 5,
+            scopes: ["agent:trip-planner", "global"],
+          },
+        },
+      ],
+    }),
+  };
+}
 
 describe("an agent's page", () => {
   it("says what it's for: purpose, its note in its own words, what it takes on and how to ask", async () => {
@@ -312,26 +351,7 @@ describe("an agent's page", () => {
   });
 
   it("draws a section the agent added as a list bound to its query, in its order and among its scopes", async () => {
-    agent = {
-      ...tripPlanner(),
-      page: rec("page", "trip-planner", {
-        owner: "trip-planner",
-        order: ["hotel-shortlist"],
-        extra: [
-          {
-            id: "hotel-shortlist",
-            title: "Hotel shortlist",
-            query: {
-              type: "hotel",
-              where: { shortlisted: true },
-              orderBy: "price",
-              limit: 5,
-              scopes: ["agent:trip-planner", "global"],
-            },
-          },
-        ],
-      }),
-    };
+    agent = withShortlist();
     await render();
     await act(async () => {});
     expect(headings()[0]).toBe("Hotel shortlist");
@@ -353,6 +373,84 @@ describe("an agent's page", () => {
     );
     await act(async () => {});
     expect([...list.querySelectorAll(".iface-list li")].map((l) => l.textContent)).toContain("Santiago de Alfama");
+  });
+
+  it("says an added section is loading, or couldn't be read, rather than that nothing matches", async () => {
+    let release = () => {};
+    hotelsRead = new Promise<void>((r) => {
+      release = r;
+    });
+    agent = withShortlist();
+    await render();
+    const list = () => section("Hotel shortlist") as HTMLElement;
+    expect(list().textContent).toBe("Hotel shortlistLoading…");
+    await act(async () => release());
+    await act(async () => {});
+    expect([...list().querySelectorAll(".iface-list li")].map((l) => l.textContent)).toEqual([
+      "Lisboa Tejo",
+      "Memmo Alfama",
+    ]);
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    hotelsRead = "fail";
+    await render();
+    await act(async () => {});
+    expect(list().textContent).toBe("Hotel shortlistCouldn't read these records.");
+    expect(list().textContent).not.toContain("Nothing matches");
+  });
+
+  it("says a fresh agent has nothing yet in one line, so the form isn't pushed under empty sections", async () => {
+    agent = { ...tripPlanner(), commitments: [], docs: [], misses: [] };
+    await render();
+    expect(headings()).toEqual(["What I'm for", "Hand it something"]);
+    expect(section("Nothing yet")?.textContent).toBe(
+      "Nothing open, waiting on you, finished lately or written up yet. Hand it something below.",
+    );
+
+    // It says only the sections the page shows, where the first of them goes.
+    act(() => root.unmount());
+    root = createRoot(container);
+    agent = {
+      ...tripPlanner(),
+      commitments: [],
+      docs: [],
+      misses: [],
+      page: rec("page", "trip-planner", { owner: "trip-planner", order: ["waiting", "about"], hide: ["docs"] }),
+    };
+    await render();
+    expect(container.querySelector(".agent-page")?.firstElementChild?.getAttribute("aria-label")).toBe("Nothing yet");
+    expect(section("Nothing yet")?.textContent).toBe(
+      "Nothing waiting on you, open or finished lately yet. Hand it something below.",
+    );
+
+    // Any work at all brings the sections back.
+    act(() => root.unmount());
+    root = createRoot(container);
+    agent = { ...tripPlanner(), commitments: [], misses: [] };
+    await render();
+    expect(section("Nothing yet")).toBeNull();
+    expect(section("Working on")?.textContent).toContain("Nothing open right now.");
+  });
+
+  it("keeps ages current on a page left open", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: NOW });
+    try {
+      await render();
+      const meta = () => section("Working on")?.querySelector(".agent-page-meta")?.textContent;
+      expect(meta()).toBe("check Friday · asks first · updated 2h ago");
+      await act(async () => vi.advanceTimersByTime(60 * 60_000));
+      expect(meta()).toBe("check Friday · asks first · updated 3h ago");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says it couldn't load when the directory fails with something that isn't JSON, not that it's off", async () => {
+    directoryBroken = true;
+    await render();
+    expect(container.textContent).toContain("Couldn't load the page: 500");
+    expect(container.textContent).not.toContain("Turn on the directory");
   });
 
   it("keeps up with the agent's records as they change, and ignores other agents'", async () => {
@@ -432,6 +530,35 @@ describe("handing it something", () => {
     );
     expect(field(0).value).toBe("");
     expect(field(1).value).toBe("");
+  });
+
+  it("hints with a kind of work the agent takes on, or asks plainly without a profile", async () => {
+    await render();
+    expect(field(0).placeholder).toBe("Something like: trip research");
+    act(() => root.unmount());
+    root = createRoot(container);
+    agent = { ...tripPlanner(), profile: null as never };
+    await render();
+    expect(field(0).placeholder).toBe("What should it take on?");
+  });
+
+  it("says why the agent won't see it in its prompt: no commitment tool, or the block turned off", async () => {
+    const said: Record<string, string> = {
+      tool: "It doesn't have the commitment tool, so it won't see this in its prompt.",
+      pin: "The “Your commitments” block is turned off, so it won't see this unless it looks.",
+    };
+    for (const why of ["tool", "pin"]) {
+      handWhy = why;
+      await render();
+      await act(async () => type(field(0), "Book a fado night"));
+      await act(async () => submit().click());
+      await act(async () => {});
+      expect(container.querySelector("output")?.textContent).toBe(
+        `Handed to trip-planner: “Book a fado night”. ${said[why]}`,
+      );
+      act(() => root.unmount());
+      root = createRoot(container);
+    }
   });
 
   it("leaves done-when out when it's empty, and shows the server's refusal", async () => {

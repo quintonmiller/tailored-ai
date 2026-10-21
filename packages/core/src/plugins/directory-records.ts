@@ -600,7 +600,8 @@ export class Directory {
    * matches. The query is run as the caller first, so a type it can't read or
    * a `where` its own query would refuse is refused here, and the section
    * keeps the scopes the caller can see, so the page never lists more than
-   * the agent could find itself.
+   * the agent could find itself. A type people can't read is refused too:
+   * the page reads as a person, and would show it as an empty list.
    */
   async section(
     caller: StateCaller,
@@ -608,12 +609,21 @@ export class Directory {
     query: { type: string; where?: Record<string, unknown>; orderBy?: string; limit?: number },
   ): Promise<Omit<PageSection, "id">> {
     const service = this.service();
-    await service.query(caller, {
-      type: query.type,
-      ...(query.where ? { where: query.where as Record<string, FieldCondition> } : {}),
-      ...parseOrderBy(query.orderBy),
-      limit: 1,
-    });
+    try {
+      await service.query(caller, {
+        type: query.type,
+        ...(query.where ? { where: query.where as Record<string, FieldCondition> } : {}),
+        ...parseOrderBy(query.orderBy),
+        limit: 1,
+      });
+    } catch (err) {
+      // The query is the agent's own: its refusal says what to fix.
+      if (err instanceof StateError) throw new StateError(`That section's query doesn't run for you: ${err.message}`);
+      throw err;
+    }
+    if (!service.listTypes(PERSON).some((t) => t.def.name === query.type)) {
+      throw new StateError(`People can't read ${query.type} records, so your page couldn't show them.`);
+    }
     const asked = Number.isFinite(query.limit) ? Math.floor(query.limit as number) : DEFAULT_EXTRA_LIMIT;
     const scopes = service.visibleScopes(caller);
     return {

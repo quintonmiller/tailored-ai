@@ -25,6 +25,28 @@ const PAGE_TYPES = new Set(["profile", "commitment", "doc", "miss", "page"]);
 const SETTLE_MS = 120;
 
 /**
+ * The sections that list work, and what each says it has none of. When every
+ * one shown is empty, as on a fresh agent's page, they're said in one line,
+ * so the form isn't pushed below four empty cards.
+ */
+const QUIET: Record<string, string> = {
+  working: "open",
+  waiting: "waiting on you",
+  results: "finished lately",
+  docs: "written up",
+};
+
+/** The time, moved on every minute, so ages and the two-week cut-off keep up with a page left open. */
+function useNow(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return now;
+}
+
+/**
  * An agent's page: what it's for, what it's working on, what waits on you,
  * what it finished, what it wrote up, what others asked it that nobody could
  * answer, and a form to hand it something. Drawn from the directory's
@@ -96,14 +118,24 @@ export function DirectoryOff({ description }: { description?: string }) {
 }
 
 function PageBody({ agent }: { agent: DirectoryAgent }) {
-  const now = new Date();
+  const now = useNow();
   const page = agent.page?.data;
   const extra = new Map(pageSections(page).map((s) => [s.id, s]));
   const groups = groupCommitments(agent.commitments, now);
   const misses = recentMisses(agent.misses, now);
   const docs = agent.docs.filter((d) => !d.archivedAt);
+  const order = pageOrder(page);
+  const counts: Record<string, number> = {
+    working: groups.working.length,
+    waiting: groups.waiting.length,
+    results: groups.results.length,
+    docs: docs.length,
+  };
+  const quiet = order.filter((id) => id in QUIET);
+  const allQuiet = quiet.length > 1 && quiet.every((id) => counts[id] === 0);
 
   const section = (id: string) => {
+    if (allQuiet && id in QUIET) return id === quiet[0] ? <Quiet key="quiet" ids={quiet} /> : null;
     switch (id) {
       case "about":
         return <About key={id} agent={agent} />;
@@ -115,7 +147,7 @@ function PageBody({ agent }: { agent: DirectoryAgent }) {
             ) : (
               <ul className="agent-page-list">
                 {groups.working.map((r) => (
-                  <Working key={r.id} record={r} agent={agent.name} />
+                  <Working key={r.id} record={r} agent={agent.name} now={now} />
                 ))}
               </ul>
             )}
@@ -129,7 +161,7 @@ function PageBody({ agent }: { agent: DirectoryAgent }) {
             ) : (
               <ul className="agent-page-list">
                 {groups.waiting.map((r) => (
-                  <Waiting key={r.id} record={r} agent={agent.name} />
+                  <Waiting key={r.id} record={r} agent={agent.name} now={now} />
                 ))}
               </ul>
             )}
@@ -175,9 +207,20 @@ function PageBody({ agent }: { agent: DirectoryAgent }) {
 
   return (
     <div className="agent-page">
-      {pageOrder(page).map(section)}
-      <HandOver agent={agent.name} />
+      {order.map(section)}
+      <HandOver agent={agent.name} example={list(agent.profile?.data.takesOn)[0]} />
     </div>
+  );
+}
+
+/** The sections that list work, all empty, said in one line. */
+function Quiet({ ids }: { ids: string[] }) {
+  const words = ids.map((id) => QUIET[id]);
+  const said = words.length > 1 ? `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}` : words[0];
+  return (
+    <section className="agent-section agent-page-section agent-page-quiet" aria-label="Nothing yet">
+      <p className="agent-empty">Nothing {said} yet. Hand it something below.</p>
+    </section>
   );
 }
 
@@ -302,14 +345,14 @@ function Updates({ record }: { record: StateRecordInfo }) {
   );
 }
 
-function Working({ record, agent }: { record: StateRecordInfo; agent: string }) {
+function Working({ record, agent, now }: { record: StateRecordInfo; agent: string; now: Date }) {
   const d = record.data;
   const progress = progressOf(d.progress);
   const meta = [
     text(d.nextCheck) && `check ${text(d.nextCheck)}`,
     text(d.autonomy) && (AUTONOMY[text(d.autonomy) as string] ?? text(d.autonomy)),
     text(d.from) && `from ${text(d.from)}`,
-    `updated ${ago(lastMoved(record))}`,
+    `updated ${ago(lastMoved(record), now)}`,
   ].filter(Boolean);
   return (
     <li className="agent-page-item">
@@ -340,7 +383,7 @@ function Working({ record, agent }: { record: StateRecordInfo; agent: string }) 
   );
 }
 
-function Waiting({ record, agent }: { record: StateRecordInfo; agent: string }) {
+function Waiting({ record, agent, now }: { record: StateRecordInfo; agent: string; now: Date }) {
   const d = record.data;
   return (
     <li className="agent-page-item">
@@ -353,7 +396,7 @@ function Waiting({ record, agent }: { record: StateRecordInfo; agent: string }) 
           <span className="agent-page-label">Then</span> {text(d.nextStep)}
         </div>
       )}
-      <div className="agent-page-meta">since {ago(lastMoved(record))}</div>
+      <div className="agent-page-meta">since {ago(lastMoved(record), now)}</div>
       <Updates record={record} />
     </li>
   );
@@ -463,13 +506,19 @@ function Extra({ section }: { section: PageSection }) {
   );
 }
 
-/** Hand the agent a commitment of its own, from you. */
-function HandOver({ agent }: { agent: string }) {
+/** Why an agent won't see a commitment it was handed in its prompt, by the reason the server gives. */
+const NOT_IN_PROMPT: Record<string, string> = {
+  tool: "It doesn't have the commitment tool, so it won't see this in its prompt.",
+  pin: "The “Your commitments” block is turned off, so it won't see this unless it looks.",
+};
+
+/** Hand the agent a commitment of its own, from you. `example` is a kind of work it takes on, for the hint. */
+function HandOver({ agent, example }: { agent: string; example?: string }) {
   const [goal, setGoal] = useState("");
   const [doneWhen, setDoneWhen] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [handed, setHanded] = useState<{ goal: string; inPrompt: boolean } | null>(null);
+  const [handed, setHanded] = useState<{ goal: string; inPrompt: boolean; why?: string } | null>(null);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -481,7 +530,7 @@ function HandOver({ agent }: { agent: string }) {
         goal: goal.trim(),
         ...(doneWhen.trim() ? { doneWhen: doneWhen.trim() } : {}),
       });
-      setHanded({ goal: goal.trim(), inPrompt: res.inPrompt });
+      setHanded({ goal: goal.trim(), inPrompt: res.inPrompt, why: res.why });
       setGoal("");
       setDoneWhen("");
     } catch (err) {
@@ -501,7 +550,7 @@ function HandOver({ agent }: { agent: string }) {
             type="text"
             value={goal}
             maxLength={300}
-            placeholder="Keep an eye on hotel prices for Lisbon"
+            placeholder={example ? `Something like: ${example}` : "What should it take on?"}
             onChange={(e) => setGoal(e.target.value)}
           />
         </label>
@@ -524,7 +573,7 @@ function HandOver({ agent }: { agent: string }) {
           Handed to {agent}: “{handed.goal}”.{" "}
           {handed.inPrompt
             ? "It sees this under “Your commitments” on its next turn."
-            : "It doesn't have the commitment tool, so it won't see this in its prompt."}
+            : ((handed.why && NOT_IN_PROMPT[handed.why]) ?? "It won't see this in its prompt on its own.")}
         </output>
       )}
       {error && (

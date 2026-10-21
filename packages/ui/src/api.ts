@@ -2067,7 +2067,9 @@ export function unarchiveStateRecord(type: string, id: string, expectedVersion: 
 //
 // Served by the `builtin:directory` plugin when it is on. With it off its
 // routes are not mounted, and the server's page fallback answers them with
-// the UI itself rather than JSON, so every read here says "off" as `null`.
+// the UI itself rather than JSON; after a reload turns it off they answer
+// 404. Every read here says "off" as `null`, and throws on anything else
+// that went wrong, so a failing store isn't mistaken for a directory that's off.
 
 /** One agent as the agent list shows it. */
 export interface DirectoryAgentSummary {
@@ -2094,12 +2096,16 @@ export interface DirectoryAgent {
 
 const DIRECTORY = "/api/ext/builtin:directory";
 
-/** A directory read: null when the directory is off (404, or a page where JSON should be). */
+/** A directory read: null when the directory is off (404, or the page where JSON should be). */
 async function directoryRead<T>(path: string): Promise<T | null> {
   const res = await fetch(`${DIRECTORY}/${path}`);
   if (res.status === 404) return null;
   const json = (await res.json().catch(() => undefined)) as (T & { error?: string }) | undefined;
-  if (json === undefined) return null;
+  if (json === undefined) {
+    // The page fallback answers 200. A failure that isn't JSON, such as a store that threw, is still a failure.
+    if (res.ok) return null;
+    throw new Error(`${res.status} ${res.statusText}`.trim());
+  }
   if (!res.ok) throw new Error(json.error ?? `${res.status} ${res.statusText}`);
   return json;
 }
@@ -2117,11 +2123,12 @@ export function fetchDirectoryAgent(name: string): Promise<DirectoryAgent | null
 
 /**
  * Hand an agent something: a commitment it owns, from you. `inPrompt` says
- * whether it will see it in its "Your commitments" block next turn.
+ * whether it will see it in its "Your commitments" block next turn; when it
+ * won't, `why` says whether it has no `commitment` tool or the block is off.
  */
 export async function handToAgent(
   name: string,
   input: { goal: string; doneWhen?: string },
-): Promise<{ commitment: StateRecordInfo; inPrompt: boolean }> {
+): Promise<{ commitment: StateRecordInfo; inPrompt: boolean; why?: "tool" | "pin" }> {
   return stateWrite("POST", `${DIRECTORY}/agents/${encodeURIComponent(name)}/commitments`, input);
 }

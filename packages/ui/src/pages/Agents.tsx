@@ -75,11 +75,28 @@ function useDirectory(): DirectoryAgentSummary[] | null | undefined {
   return agents;
 }
 
-/** "2 open · 1 waiting", or nothing when there's neither. */
-function workCounts(summary: DirectoryAgentSummary | undefined): string {
-  if (!summary) return "";
-  const { open, waiting } = summary.commitments;
-  return [open && `${open} open`, waiting && `${waiting} waiting`].filter(Boolean).join(" · ");
+/** "2 open · 1 waiting", with what waits on you picked out, or nothing when there's neither. */
+function WorkCounts({ summary }: { summary: DirectoryAgentSummary | undefined }) {
+  const open = summary?.commitments.open ?? 0;
+  const waiting = summary?.commitments.waiting ?? 0;
+  if (!open && !waiting) return null;
+  return (
+    <span className="agents-sidebar-counts">
+      {open > 0 && <span>{open} open</span>}
+      {open > 0 && waiting > 0 && " · "}
+      {waiting > 0 && <span className="waiting">{waiting} waiting</span>}
+    </span>
+  );
+}
+
+/** A watcher's state as its badge says it, or "static" for an agent without one. */
+function agentStatus(agent: CombinedAgent, running: boolean): string {
+  const w = agent.watcher;
+  if (!w) return "static";
+  if (!w.enabled_in_state) return "off";
+  if (w.paused_until && new Date(w.paused_until) > new Date()) return "paused";
+  if (running) return "running";
+  return w.last_tick_status ?? "idle";
 }
 
 /** An agent's purpose line: its profile's, or its configured description. */
@@ -171,21 +188,10 @@ export function Agents({ agentName, view }: AgentsPageProps) {
           </header>
           <ul className="agents-sidebar-list">
             {agents.map((a) => {
-              const running = activity?.agentName === a.name;
-              const paused = a.watcher?.paused_until && new Date(a.watcher.paused_until) > new Date();
-              const status: string = a.watcher
-                ? !a.watcher.enabled_in_state
-                  ? "off"
-                  : paused
-                    ? "paused"
-                    : running
-                      ? "running"
-                      : (a.watcher.last_tick_status ?? "idle")
-                : "static";
+              const status = agentStatus(a, activity?.agentName === a.name);
               const isActive = a.name === agentName;
               const summary = summaryOf(a.name);
               const purpose = purposeOf(summary, a.info);
-              const counts = workCounts(summary);
               return (
                 <li key={a.name}>
                   <a href={`#/agents/${a.name}`} className={`agents-sidebar-item ${isActive ? "active" : ""}`}>
@@ -193,16 +199,17 @@ export function Agents({ agentName, view }: AgentsPageProps) {
                     <div className="agents-sidebar-meta">
                       <div className="agents-sidebar-name">{a.name}</div>
                       {purpose && <div className="agents-sidebar-purpose">{purpose}</div>}
+                      {/* The same line whatever the agent has on: its counts come after, not instead. */}
                       <div className="agents-sidebar-sub">
-                        {counts ? (
-                          <span className="agents-sidebar-counts">{counts}</span>
-                        ) : a.watcher ? (
+                        {a.watcher ? (
                           <>
                             {a.watcher.runs_today} runs · {a.watcher.tokens_today.toLocaleString()} tok
                           </>
                         ) : (
                           <>{a.info.tools?.length ?? 0} tools</>
                         )}
+                        {summary && summary.commitments.open + summary.commitments.waiting > 0 && " · "}
+                        <WorkCounts summary={summary} />
                       </div>
                     </div>
                   </a>
@@ -286,10 +293,15 @@ function AgentOverview({
           const summary = directory?.find((d) => d.name === a.name);
           const purpose = purposeOf(summary, a.info);
           const c = summary?.commitments;
+          // A watcher's state shows here as in the sidebar, so a paused or failing one is seen without opening it.
+          const status = a.watcher ? agentStatus(a, activity?.agentName === a.name) : null;
           return (
             <li key={a.name}>
               <a href={`#/agents/${a.name}`} className="agent-overview-card">
-                <span className="agent-overview-name">{a.name}</span>
+                <span className="agent-overview-title">
+                  <span className="agent-overview-name">{a.name}</span>
+                  {status && <span className={`agent-state state-${status}`}>{status}</span>}
+                </span>
                 <span className={`agent-overview-purpose${purpose ? "" : " empty"}`}>
                   {purpose ?? "No description yet."}
                 </span>
@@ -300,6 +312,11 @@ function AgentOverview({
                     <span className={summary.docs ? "" : "zero"}>
                       {summary.docs} doc{summary.docs === 1 ? "" : "s"}
                     </span>
+                  </span>
+                )}
+                {a.watcher && (
+                  <span className="agent-overview-runs">
+                    {a.watcher.runs_today} runs · {a.watcher.tokens_today.toLocaleString()} tok today
                   </span>
                 )}
               </a>
@@ -351,16 +368,7 @@ function AgentDetail({
 }) {
   const w = agent.watcher;
   const paused = w?.paused_until && new Date(w.paused_until) > new Date();
-  const running = !!activity;
-  const status: string = w
-    ? !w.enabled_in_state
-      ? "off"
-      : paused
-        ? "paused"
-        : running
-          ? "running"
-          : (w.last_tick_status ?? "idle")
-    : "static";
+  const status = agentStatus(agent, !!activity);
 
   const header = (
     <AgentDetailHeader

@@ -210,6 +210,15 @@ function similarLine(hits: StateSearchHit[], now: Date): string | undefined {
 /** The arguments that change a page; `page` with none of them reads it. */
 const PAGE_CHANGES = ["note", "order", "hide", "add", "remove"];
 
+/**
+ * Whether a `page` call changes anything. A null is no change: many models
+ * send one for every optional argument they don't use, and the loop passes it
+ * through.
+ */
+function changesPage(args: Record<string, unknown>): boolean {
+  return PAGE_CHANGES.some((k) => args[k] != null);
+}
+
 /** An object as a model sends one: itself, or JSON text of one. */
 function jsonObject(value: unknown): Record<string, unknown> | undefined {
   let v = value;
@@ -323,9 +332,7 @@ export class DirectoryTool implements Tool {
     required: ["action"],
   };
   effect = (args: Record<string, unknown>) =>
-    args.action === "profile" || (args.action === "page" && PAGE_CHANGES.some((k) => args[k] !== undefined))
-      ? ("write" as const)
-      : ("read" as const);
+    args.action === "profile" || (args.action === "page" && changesPage(args)) ? ("write" as const) : ("read" as const);
 
   constructor(private readonly directory: Directory) {}
 
@@ -383,18 +390,18 @@ export class DirectoryTool implements Tool {
   /** Change the caller's page as asked, or with nothing asked, say how it's laid out now. */
   private async page(caller: StateCaller, args: Record<string, unknown>): Promise<ToolResult> {
     const me = caller.actor.name;
-    if (!PAGE_CHANGES.some((k) => args[k] !== undefined)) {
+    if (!changesPage(args)) {
       const current = await this.directory.page(caller, me);
       return ok(`${describePage(current?.data ?? {})}\nChange it with note, order, hide, add or remove.`);
     }
     // A note given empty takes it away; one too long is refused rather than cut, so the agent rewrites it.
-    const note = args.note === undefined || args.note === null ? undefined : String(args.note).trim();
+    const note = args.note == null ? undefined : String(args.note).trim();
     if (note && note.length > 300)
       return fail(`note is a sentence or two: at most 300 characters, and this is ${note.length}.`);
-    const order = args.order === undefined ? undefined : (stringList(args.order) ?? []);
-    const hide = args.hide === undefined ? undefined : (stringList(args.hide) ?? []);
+    const order = args.order == null ? undefined : (stringList(args.order) ?? []);
+    const hide = args.hide == null ? undefined : (stringList(args.hide) ?? []);
     const remove = text(args.remove);
-    const add = args.add === undefined ? undefined : await this.addSection(caller, args.add);
+    const add = args.add == null ? undefined : await this.addSection(caller, args.add);
     const record = await this.directory.savePage(caller, (data) => {
       let extra = sectionsOf(data.extra);
       if (remove) {
@@ -421,7 +428,10 @@ export class DirectoryTool implements Tool {
           `No section called ${unknown.map((id) => `"${id}"`).join(", ")}. Sections: ${known.join(", ")}.`,
         );
       }
-      const kept = (hide ?? []).filter((id) => KEPT_SECTIONS.includes(id));
+      // A section a person hid that the agent may not hide stays hidden: the agent's list replaces only its own.
+      // Naming one of those again changes nothing, so it isn't refused.
+      const theirs = (stringList(data.hide) ?? []).filter((id) => KEPT_SECTIONS.includes(id));
+      const kept = (hide ?? []).filter((id) => KEPT_SECTIONS.includes(id) && !theirs.includes(id));
       if (kept.length) {
         throw new StateError(
           `${kept.join(" and ")} stay on your page: people need to see what waits on them and what nobody could answer.`,
@@ -435,7 +445,7 @@ export class DirectoryTool implements Tool {
       };
       set("note", note);
       set("order", order);
-      set("hide", hide);
+      set("hide", hide && [...hide, ...theirs.filter((id) => !hide.includes(id))]);
       // A section taken away leaves no trace in the order or the hidden list.
       const ids = new Set(known);
       for (const key of ["order", "hide"]) {
@@ -464,18 +474,12 @@ export class DirectoryTool implements Tool {
     const where = input.where === undefined ? undefined : jsonObject(input.where);
     if (input.where !== undefined && !where) throw new StateError(`where is an object of conditions. ${example}`);
     const limit = typeof input.limit === "number" ? input.limit : Number(text(input.limit) ?? Number.NaN);
-    try {
-      return await this.directory.section(caller, title, {
-        type,
-        ...(where ? { where } : {}),
-        ...(text(input.orderBy) ? { orderBy: text(input.orderBy) } : {}),
-        ...(Number.isFinite(limit) ? { limit } : {}),
-      });
-    } catch (err) {
-      // The query is the agent's own: its refusal says what to fix.
-      if (err instanceof StateError) throw new StateError(`That section's query doesn't run for you: ${err.message}`);
-      throw err;
-    }
+    return this.directory.section(caller, title, {
+      type,
+      ...(where ? { where } : {}),
+      ...(text(input.orderBy) ? { orderBy: text(input.orderBy) } : {}),
+      ...(Number.isFinite(limit) ? { limit } : {}),
+    });
   }
 
   private async search(caller: ReturnType<typeof agentStateCaller>, q: string, kind?: string): Promise<string> {

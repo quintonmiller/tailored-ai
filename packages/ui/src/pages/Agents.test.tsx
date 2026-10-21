@@ -33,6 +33,8 @@ const configured = {
 
 let summaries: unknown[];
 let directoryOn: boolean;
+let directoryBroken: boolean;
+let watchers: Record<string, unknown>[];
 let root: Root;
 let container: HTMLDivElement;
 
@@ -41,6 +43,8 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   directoryOn = true;
+  directoryBroken = false;
+  watchers = [];
   summaries = [
     {
       name: "chef",
@@ -63,10 +67,11 @@ beforeEach(() => {
     vi.fn(async (url: string) => {
       const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
       if (url === "/api/agents") return json(configured);
-      if (url === "/api/exploratory/agents") return json({ enabled: false, activity: null, agents: [] });
+      if (url === "/api/exploratory/agents") return json({ enabled: true, activity: null, agents: watchers });
       if (url.startsWith("/api/ext/builtin:directory/")) {
         // Off: the route isn't mounted, and the server's page fallback answers with the UI.
         if (!directoryOn) return new Response("<!doctype html>", { status: 200 });
+        if (directoryBroken) return new Response("Internal Server Error", { status: 500 });
         if (url.endsWith("/agents")) return json({ agents: summaries });
         return json({
           name: "trip-planner",
@@ -121,6 +126,41 @@ describe("the agent list", () => {
     );
     expect(side?.querySelector(".agents-sidebar-purpose")?.textContent).toBe("Plans trips end to end.");
     expect(side?.querySelector(".agents-sidebar-counts")?.textContent).toBe("2 open · 1 waiting");
+    // The same line whether or not it has work: the counts come after the tools, and only waiting is picked out.
+    expect(side?.querySelector(".agents-sidebar-sub")?.textContent).toBe("2 tools · 2 open · 1 waiting");
+    expect(side?.querySelector(".agents-sidebar-counts .waiting")?.textContent).toBe("1 waiting");
+    const chef = [...container.querySelectorAll(".agents-sidebar-item")].find((i) => i.textContent?.includes("chef"));
+    expect(chef?.querySelector(".agents-sidebar-sub")?.textContent).toBe("0 tools");
+  });
+
+  it("shows each watcher's state and today's runs on its card", async () => {
+    watchers = [
+      {
+        name: "chef",
+        enabled_in_state: true,
+        paused_until: new Date(Date.now() + 3_600_000).toISOString(),
+        last_tick_status: "ok",
+        runs_today: 3,
+        tokens_today: 1200,
+      },
+    ];
+    await render();
+    const card = (name: string) =>
+      [...container.querySelectorAll(".agent-overview-card")].find(
+        (c) => c.querySelector(".agent-overview-name")?.textContent === name,
+      );
+    expect(card("chef")?.querySelector(".agent-state")?.textContent).toBe("paused");
+    expect(card("chef")?.querySelector(".agent-overview-runs")?.textContent).toBe("3 runs · 1,200 tok today");
+    expect(card("trip-planner")?.querySelector(".agent-state")).toBeNull();
+  });
+
+  it("doesn't take a failing directory for one that's off", async () => {
+    directoryBroken = true;
+    await render();
+    expect(container.textContent).not.toContain("Turn on the directory");
+    await render({ agentName: "trip-planner" });
+    expect(container.querySelector(".agent-detail-tabs")).not.toBeNull();
+    expect(container.textContent).toContain("Couldn't load the page: 500");
   });
 
   it("keeps the counts current as commitments change", async () => {

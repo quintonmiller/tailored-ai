@@ -278,14 +278,21 @@ know it's done. It opens a commitment the agent owns, shared, `from: "a
 person"`, written as you, with "Handed over by a person on this page." as its
 first update. The agent sees it in its "Your commitments" block on its next
 turn; when it can't (it has no `commitment` tool, or `pin` is off), the page
-says so instead.
+says which. A name that only has a profile left, an agent since removed, can't
+be handed anything.
+
+A page with nothing open, waiting, finished or written up, as every agent's is
+right after you turn the directory on, says so in one line instead of four
+empty sections, so the form sits near the top.
 
 The page changes as the records do, from the same stream the State page
 reads: an update the agent posts, a doc it reviews, something you hand it.
 No reload.
 
 The Agents list (`#/agents`) shows each agent's purpose line, or its
-configured description, and how much it has open and waiting.
+configured description, and how much it has open and waiting. An online
+agent's card also shows its state (running, paused, off, error, idle) and
+today's runs and tokens.
 
 ### How an agent arranges its page
 
@@ -316,18 +323,26 @@ directory(action: "page",
 - **`hide`**: section ids to leave out, replacing the list before. Empty
   shows them all. `waiting` and `misses` can't be hidden: a page that hid
   what waits on you, or what nobody could answer, would look better than the
-  work it shows.
+  work it shows. If a person hid one of them, it stays hidden whatever the
+  agent's list says.
 - **`add`**: a section of its own, a titled list of the records a world-state
   query matches: `{ title, type, where?, orderBy?, limit? }`, as a `state`
   query takes them. The query runs as the agent first, so a type it can't
   read is refused, and the section keeps the scopes the agent could see then,
-  so the page never lists a record the agent couldn't find itself. `limit`
-  defaults to 5 and stops at 20; a page holds six sections of its own.
+  so the page never lists a record the agent couldn't find itself. A type
+  people can't read (`access.read` without `user`) is refused too: the page
+  reads as you, and would show an empty list. `limit` defaults to 5 and stops
+  at 20; a page holds six sections of its own.
 - **`remove`**: the id of a section it added. The usual sections are hidden,
   not removed.
 
+An argument sent as `null` is no change, so `page` with every argument null
+reads the page.
+
 A section it adds is drawn as a [list bound to a query](./agent-interfaces.md#lists-that-show-records),
-the same list it could send in a chat, kept current the same way.
+the same list it could send in a chat, kept current the same way. Until the
+first read comes back it says "Loading…", and if the records can't be read it
+says so rather than showing an empty list.
 
 The layout is the `page` record, so you can change it yourself on the State
 page, including hiding a section the agent can't.
@@ -346,7 +361,7 @@ Behind the usual bearer auth, as a person: every scope.
 |---|---|
 | `GET /api/ext/builtin:directory/agents` | `{ agents: [{ name, profile, description?, commitments: { open, waiting, done }, docs }] }`: every agent (the agent registry and `config.agents`, as Discord counts them) and anyone with a profile. `profile` is the profile's data or `null`; `description` is the configured one |
 | `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses }`: the profile and page records or `null`, and lists of full records, private ones included. `404` for a name that is neither an agent nor a profile |
-| `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen? }`. `201` with `{ commitment, inPrompt }`, where `inPrompt` says whether the agent will see it in its prompt block. `400` without a goal, or one longer than 300 characters |
+| `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen? }`. `201` with `{ commitment, inPrompt, why? }`, where `inPrompt` says whether the agent will see it in its prompt block and, when it won't, `why` is `"tool"` (no `commitment` tool) or `"pin"` (the block is off). `400` without a goal, or one longer than 300 characters. `404` for a name that is no agent, including one that only has a profile left |
 
 Counts and lists read at most 5,000 records of each type. The routes come and
 go with the directory; see [Changing it while TAI runs](#turn-it-on). A

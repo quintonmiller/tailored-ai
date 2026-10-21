@@ -190,7 +190,16 @@ interface Archived {
  * `undefined` for anything that is not a list, or before the first read.
  */
 function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined {
+  return useListRead(spec).props;
+}
+
+/**
+ * `useListItems`, and whether the newest read failed: a list drawn outside a
+ * chat has no items it was sent with to fall back on, so it says so instead.
+ */
+function useListRead(spec: ComponentSpec): { props?: Record<string, unknown>; failed: boolean } {
   const [props, setProps] = useState<Record<string, unknown> | undefined>(undefined);
+  const [failed, setFailed] = useState(false);
   const query = spec.query;
   const key = query ? JSON.stringify(query) : "";
   const base = spec.props;
@@ -211,9 +220,10 @@ function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined 
           if (cancelled) return;
           const view = kind === "table" ? tableView : listView;
           setProps(view(base, res.records, limit, query.scopes, titleField));
+          setFailed(false);
         })
         // Unreadable now: keep drawing the items it was sent with.
-        .catch(() => {});
+        .catch(() => !cancelled && setFailed(true));
     load();
     const off = subscribeStateChanges((c) => {
       if (c.type === query.type) load();
@@ -224,7 +234,7 @@ function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined 
     };
   }, [key]);
 
-  return props;
+  return { props, failed };
 }
 
 /** A table's props from its records. Mirrors `tableProps` in core's `interfaces/bind.ts`. */
@@ -624,7 +634,15 @@ function Title({ text }: { text: unknown }) {
  * component on the server to answer.
  */
 export function QueryList({ spec }: { spec: ComponentSpec }) {
-  const listed = useListItems(spec);
+  const { props: listed, failed } = useListRead(spec);
+  // Until the first read lands there is nothing to say: "Nothing matches" would be a guess.
+  if (!listed && spec.query) {
+    return (
+      <div className={`iface iface-${spec.kind}`}>
+        <div className="iface-details">{failed ? "Couldn't read these records." : "Loading…"}</div>
+      </div>
+    );
+  }
   const { check: _check, ...props } = listed ?? spec.props;
   return (
     <div className={`iface iface-${spec.kind}`}>

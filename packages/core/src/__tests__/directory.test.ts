@@ -1297,6 +1297,34 @@ describe("the page", () => {
     expect(await record(PAGE_TYPE, "planner")).toBeNull();
   });
 
+  it("takes a null as no change, so a model that sends one for every argument keeps what's saved", async () => {
+    await run("planner", "directory", { action: "page", note: "Mine.", order: "working", hide: "docs" });
+    const nulls = { action: "page", note: null, order: null, hide: null, add: null, remove: null };
+    const effect = build("directory").effect as (args: Record<string, unknown>) => string;
+    expect(effect(nulls)).toBe("read");
+    expect(await run("planner", "directory", nulls)).toContain("People see your page as, in order:");
+    expect(effect({ ...nulls, note: "Still mine." })).toBe("write");
+    await run("planner", "directory", { ...nulls, note: "Still mine." });
+    expect((await record(PAGE_TYPE, "planner"))?.data).toEqual({
+      owner: "planner",
+      note: "Still mine.",
+      order: ["working"],
+      hide: ["docs"],
+    });
+  });
+
+  it("keeps hidden what a person hid that the agent can't, when the agent changes its own hidden list", async () => {
+    await run("planner", "directory", { action: "page", hide: "results" });
+    await service.patch(PERSON, { type: PAGE_TYPE, id: "planner" }, { hide: ["results", "waiting"] });
+    await run("planner", "directory", { action: "page", hide: "docs" });
+    expect((await record(PAGE_TYPE, "planner"))?.data.hide).toEqual(["docs", "waiting"]);
+    // Naming it again changes nothing, so it isn't refused; showing everything shows everything it may.
+    await run("planner", "directory", { action: "page", hide: "waiting, docs" });
+    expect((await record(PAGE_TYPE, "planner"))?.data.hide).toEqual(["waiting", "docs"]);
+    expect(await run("planner", "directory", { action: "page", hide: "" })).toContain("Hidden: waiting.");
+    expect(await refused("planner", "directory", { action: "page", hide: "misses" })).toContain("misses stay");
+  });
+
   it("adds a section bound to a query the agent can run, keeping the scopes it can see, and takes it away", async () => {
     const added = await run(
       "planner",
@@ -1336,12 +1364,18 @@ describe("the page", () => {
     expect(data?.hide).toEqual(["open-work"]);
   });
 
-  it("refuses a section whose query the agent couldn't run itself", async () => {
+  it("refuses a section whose query the agent couldn't run itself, or whose records people can't read", async () => {
     configTypes = [
       {
         name: "ledger",
         scope: "global",
         schema: { type: "object", properties: { amount: { type: "number" } } },
+        access: { read: ["planner", "user"] },
+      },
+      {
+        name: "vault",
+        scope: "global",
+        schema: { type: "object", properties: { secret: { type: "string" } } },
         access: { read: ["planner"] },
       },
     ];
@@ -1357,6 +1391,11 @@ describe("the page", () => {
       "needs a title and a record type",
     );
     expect(await record(PAGE_TYPE, "writer")).toBeNull();
+    // The page reads as a person: a type only the agent can read would show as an empty list.
+    expect(await refused("planner", "directory", { action: "page", add: { title: "Keys", type: "vault" } })).toContain(
+      "People can't read vault records, so your page couldn't show them.",
+    );
+    expect(await record(PAGE_TYPE, "planner")).toBeNull();
     expect(await run("planner", "directory", { action: "page", add: { title: "Money", type: "ledger" } })).toContain(
       '- money: "Money", up to 5 ledger records',
     );
@@ -1439,8 +1478,28 @@ describe("handing an agent something", () => {
     agents.writer = { tools: ["state"] };
     const res = await post("agents/:name/commitments", { name: "writer" }, { goal: "Draft the newsletter" });
     expect(res.status).toBe(201);
-    expect((res.json as { inPrompt: boolean }).inPrompt).toBe(false);
+    expect(res.json).toMatchObject({ inPrompt: false, why: "tool" });
     expect((await record(COMMITMENT_TYPE, "writer-draft-the-newsletter"))?.data.doneWhen).toBeUndefined();
+    expect((await post("agents/:name/commitments", { name: "planner" }, { goal: "Hello" })).json).not.toHaveProperty(
+      "why",
+    );
+  });
+
+  it("says the block is off when it is, for an agent that has the tool", async () => {
+    await unload(loaded[0]);
+    await load({ pin: false });
+    const res = await post("agents/:name/commitments", { name: "planner" }, { goal: "Book the dentist" });
+    expect(res.status).toBe(201);
+    expect(res.json).toMatchObject({ inPrompt: false, why: "pin" });
+  });
+
+  it("won't hand work to a name that only has a profile left", async () => {
+    await run("retired", "directory", { action: "profile", purpose: "Used to file receipts." });
+    expect(((await get("agents/:name", { name: "retired" })).json as { name: string }).name).toBe("retired");
+    const res = await post("agents/:name/commitments", { name: "retired" }, { goal: "File this receipt" });
+    expect(res.status).toBe(404);
+    expect(res.json).toEqual({ error: "retired has a profile but isn't an agent any more." });
+    expect(await service.query(PERSON, { type: COMMITMENT_TYPE })).toEqual([]);
   });
 
   it("gives the page with the agent's records, and says the directory is off once it is", async () => {
@@ -1448,19 +1507,29 @@ describe("handing an agent something", () => {
     const body = (await get("agents/:name", { name: "planner" })).json as { page: { data: { note: string } } };
     expect(body.page.data.note).toBe("Ask me.");
     expect(((await get("agents/:name", { name: "writer" })).json as { page: unknown }).page).toBeNull();
-    // The server keeps a route it mounted after a reload turns the directory off; the route says so.
-    const agentsRoute = route("agents");
+    // The server keeps the routes it mounted after a reload turns the directory off; each says so.
+    const mounted = routes.list().filter((r) => r.mountPath.startsWith("/api/ext/builtin:directory/"));
+    expect(mounted.map((r) => `${r.method} ${r.mountPath.replace("/api/ext/builtin:directory/", "")}`)).toEqual([
+      "GET agents",
+      "GET agents/:name",
+      "POST agents/:name/commitments",
+    ]);
     await unload(loaded[0]);
-    const after = await agentsRoute.handler({
-      method: "GET",
-      path: agentsRoute.mountPath,
-      params: {},
-      query: {},
-      headers: {},
-      json: async () => ({}) as never,
-      text: async () => "",
-    });
-    expect(after.status).toBe(404);
-    expect(after.json).toEqual({ error: "The directory is turned off." });
+    for (const r of mounted) {
+      const after = await r.handler({
+        method: r.method,
+        path: r.mountPath,
+        params: { name: "planner" },
+        query: {},
+        headers: {},
+        json: async () => ({ goal: "Book the dentist" }) as never,
+        text: async () => "",
+      });
+      expect(after.status).toBe(404);
+      expect(after.json).toEqual({ error: "The directory is turned off." });
+    }
+    // Its type went with it, so look once it's back: the hand-over wrote nothing.
+    await load();
+    expect(await service.query(PERSON, { type: COMMITMENT_TYPE })).toEqual([]);
   });
 });

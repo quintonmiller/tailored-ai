@@ -308,6 +308,10 @@ const plugin: Plugin = (ctx) => {
       const name = req.params.name ?? "";
       const agent = await directory.resolve(name);
       if (!agent) return { status: 404, json: { error: `There's no agent called "${name}".` } };
+      // A name with only a profile left is no agent to work it.
+      if (!directory.agents().includes(agent)) {
+        return { status: 404, json: { error: `${agent} has a profile but isn't an agent any more.` } };
+      }
       const body = await req.json<Record<string, unknown>>().catch(() => null);
       const field = (key: string) => (typeof body?.[key] === "string" ? (body[key] as string).trim() : "");
       const goal = field("goal");
@@ -318,9 +322,10 @@ const plugin: Plugin = (ctx) => {
       if (doneWhen.length > 500) return { status: 400, json: { error: "Keep done-when to 500 characters at most." } };
       try {
         const commitment = await directory.handOver(agent, { goal, ...(doneWhen ? { doneWhen } : {}) });
-        // Whether the agent will see it behind its history next turn, so the page can say so honestly.
-        const inPrompt = (live ?? config).pin && hasCommitmentTool(runtime, agent);
-        return { status: 201, json: { commitment, inPrompt } };
+        // Whether the agent will see it behind its history next turn, and if not why, so the page can say so
+        // honestly: it has no commitment tool, or the block is turned off.
+        const why = !hasCommitmentTool(runtime, agent) ? "tool" : !(live ?? config).pin ? "pin" : undefined;
+        return { status: 201, json: { commitment, inPrompt: !why, ...(why ? { why } : {}) } };
       } catch (err) {
         if (err instanceof StateError) return { status: 400, json: { error: err.message } };
         throw err;
