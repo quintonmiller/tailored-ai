@@ -130,6 +130,22 @@ describe("SubscriptionDispatcher", () => {
     ).toEqual(["planner", "reviewer"]);
   });
 
+  it("counts a plugin's write for an agent as that agent's own change", async () => {
+    subscriptions = [
+      { agent: "planner", on: "state.changed", when: { type: "commitment" }, deliver: "immediate" },
+      { agent: "reviewer", on: "state.changed", when: { type: "commitment" }, deliver: "immediate" },
+    ];
+    dispatcher = makeDispatcher();
+    dispatcher.start();
+
+    const byPlugin = { type: "commitment", actor: { kind: "plugin" as const, name: "directory" } };
+    bus.emit("state.changed", change({ ...byPlugin, source: { tool: "commitment", onBehalfOf: "planner" } }));
+    await vi.advanceTimersByTimeAsync(0);
+    // planner's own update doesn't wake it; reviewer hears it, with planner named.
+    expect(calls.map((c) => c.agent)).toEqual(["reviewer"]);
+    expect(summaries()[0][0]).toContain("by plugin directory for planner");
+  });
+
   it("collapses a burst into one queued turn after the batching delay", async () => {
     subscriptions = [{ agent: "planner", on: "state.changed", deliver: "queue" }];
     dispatcher = makeDispatcher();

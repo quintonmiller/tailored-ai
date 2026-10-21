@@ -316,10 +316,15 @@ export class SubscriptionDispatcher {
   }
 }
 
-/** Did this agent make the change itself? Read from whichever field the event uses to name one. */
+/**
+ * Did this agent make the change itself? Read from whichever field the event
+ * uses to name one, including a plugin's write made for the agent.
+ */
 function madeBy(payload: Record<string, unknown>, agent: string): boolean {
   const actor = payload.actor as { kind?: unknown; name?: unknown } | undefined;
   if (actor && actor.kind === "agent" && actor.name === agent) return true;
+  const source = payload.source as { onBehalfOf?: unknown } | undefined;
+  if (source && source.onBehalfOf === agent) return true;
   return payload.agent === agent || payload.agentName === agent;
 }
 

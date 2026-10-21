@@ -55,7 +55,7 @@ interface StateRecord {
   version: number;         // optimistic concurrency
   updatedAt: string;
   updatedBy: Actor;        // who: { kind: "agent" | "user" | "plugin" | "system", name }
-  source?: Source;         // through what: { tool?, surface?, interfaceId? }
+  source?: Source;         // through what: { tool?, surface?, interfaceId?, onBehalfOf? }
   archivedAt?: string;     // set while archived: kept, but left out of queries
   archivedBy?: Actor;      //   unless they ask (`includeArchived`). Belongs to
   archiveReason?: string;  //   the record, not its data, so no schema sees it.

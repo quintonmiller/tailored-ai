@@ -1963,7 +1963,7 @@ export interface StateRecordInfo {
   createdAt: string;
   updatedAt: string;
   updatedBy: StateActor;
-  source?: { tool?: string; surface?: string; interfaceId?: string };
+  source?: { tool?: string; surface?: string; interfaceId?: string; onBehalfOf?: string };
   /** Set while the record is archived: kept, but left out of lists unless asked for. */
   archivedAt?: string;
   archivedBy?: StateActor;
@@ -1979,7 +1979,7 @@ export interface StateChangeInfo {
   after?: Record<string, unknown>;
   version: number;
   actor: StateActor;
-  source?: { tool?: string; surface?: string; interfaceId?: string };
+  source?: { tool?: string; surface?: string; interfaceId?: string; onBehalfOf?: string };
   at: string;
   /** On the update that archived the record or brought it back. */
   lifecycle?: "archived" | "unarchived";

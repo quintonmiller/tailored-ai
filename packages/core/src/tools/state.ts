@@ -1,5 +1,5 @@
 import { WAKE_ROOMS_KEY } from "../rooms/keys.js";
-import { actorName, archivedLine, formatRecordList, formatSearchHits, parseOrderBy } from "../state/format.js";
+import { archivedLine, formatRecordList, formatSearchHits, parseOrderBy, writerName } from "../state/format.js";
 import { searchFields } from "../state/search.js";
 import type { StateCaller, StateService, StateTypeView } from "../state/service.js";
 import { type FieldCondition, StateConflictError, StateError, type StateRecord } from "../state/types.js";
@@ -315,7 +315,7 @@ function formatTypes(views: StateTypeView[]): string {
 function formatRecord(record: StateRecord): string {
   const archived = archivedLine(record);
   return (
-    `${record.type}/${record.id} (version ${record.version}, scope ${record.scope}, updated ${record.updatedAt} by ${actorName(record.updatedBy)})\n` +
+    `${record.type}/${record.id} (version ${record.version}, scope ${record.scope}, updated ${record.updatedAt} by ${writerName(record)})\n` +
     (archived ? `${archived} Action "unarchive" brings it back.\n` : "") +
     JSON.stringify(record.data)
   );

@@ -38,6 +38,17 @@ describe("describeEvent", () => {
     );
   });
 
+  it("names the agent a plugin wrote for", () => {
+    const forAgent = {
+      ...base,
+      actor: { kind: "plugin" as const, name: "directory" },
+      source: { tool: "commitment", onBehalfOf: "planner" },
+    };
+    expect(describeEvent("state.changed", { ...forAgent, before: { status: "open" }, after: { status: "done" } })).toBe(
+      "plan/trip updated by plugin directory for planner: status: open → done",
+    );
+  });
+
   it("says when a record was archived, and why, or brought back", () => {
     const same = { before: { name: "Trip" }, after: { name: "Trip" } };
     expect(
