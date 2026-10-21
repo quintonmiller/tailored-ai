@@ -18,6 +18,8 @@ export interface PromoteResult {
   noteId: string;
   chunkCount: number;
   alreadyPromoted: boolean;
+  /** True when nothing was done because the note is archived. */
+  archived?: boolean;
 }
 
 /**
@@ -33,6 +35,9 @@ export async function promoteNote(
 ): Promise<PromoteResult | null> {
   const note = getNote(db, noteId);
   if (!note) return null;
+  // An archived note's chunks never surface, so indexing it would only spend
+  // an embedding call on text nobody can find. Say so instead.
+  if (note.archived_at) return { noteId: note.id, chunkCount: 0, alreadyPromoted: false, archived: true };
 
   const source = `note:${note.id}`;
   const existing = listChunksBySource(db, source);
@@ -94,20 +99,24 @@ export interface SweepOptions {
 }
 
 export interface SweepReport {
-  deletedExpired: number;
+  /** Expired notes archived this pass (`archived_by: "sweep"`, reason `expired`). */
+  archivedExpired: number;
   extendedTtl: number;
+  /** Live notes left: archived ones are not counted. */
   remainingNotes: number;
+  /** Chunks that can still surface. */
   totalChunks: number;
 }
 
 /**
  * Daily memory hygiene pass:
  *   1. Extend TTLs on referenced notes (so churn-worthy work survives).
- *   2. Delete expired low-importance notes.
+ *   2. Archive expired low-importance notes. Kept notes are never touched.
  *   3. Return counts for telemetry.
  *
- * Idempotent. Safe to call repeatedly. Order matters: extend before delete
- * so a referenced-but-expiring note gets its lease renewed.
+ * Idempotent. Safe to call repeatedly. Order matters: extend before archive
+ * so a referenced-but-expiring note gets its lease renewed. Nothing here
+ * deletes: an expired note someone still wanted can be unarchived.
  */
 export function runMemorySweep(db: Database.Database, opts: SweepOptions = {}): SweepReport {
   const refThreshold = opts.refExtendThreshold ?? DEFAULT_PROMOTE_THRESHOLD;
@@ -119,6 +128,7 @@ export function runMemorySweep(db: Database.Database, opts: SweepOptions = {}): 
     .prepare(
       `SELECT id FROM notes
        WHERE ttl_at IS NOT NULL
+         AND archived_at IS NULL
          AND ref_count >= ?
          AND datetime(ttl_at) <= datetime('now', '+1 day')`,
     )
@@ -127,11 +137,13 @@ export function runMemorySweep(db: Database.Database, opts: SweepOptions = {}): 
     if (extendNoteTtl(db, r.id, extendDays)) extendedTtl++;
   }
 
-  const deletedExpired = sweepExpiredNotes(db, opts.keepImportance);
-  const remainingNotes = (db.prepare("SELECT COUNT(*) AS c FROM notes").get() as { c: number }).c;
+  const archivedExpired = sweepExpiredNotes(db, opts.keepImportance);
+  const remainingNotes = (
+    db.prepare("SELECT COUNT(*) AS c FROM notes WHERE archived_at IS NULL").get() as { c: number }
+  ).c;
   const totalChunks = countChunks(db);
 
-  return { deletedExpired, extendedTtl, remainingNotes, totalChunks };
+  return { archivedExpired, extendedTtl, remainingNotes, totalChunks };
 }
 
 export const __TEST_HOOK__ = { DEFAULT_PROMOTE_THRESHOLD, DEFAULT_TTL_EXTEND_DAYS };

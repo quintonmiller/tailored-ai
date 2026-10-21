@@ -82,11 +82,15 @@ describe("three-class observation retention (DUX10)", () => {
 
     const sweeps = sweepExpiredNotes(db);
     expect(sweeps).toBe(1); // only the stale one
-    const survivors = db.prepare("SELECT id FROM notes ORDER BY id").all() as { id: string }[];
-    const ids = survivors.map((r) => r.id);
+    // The stale note is archived, not deleted: it leaves the live set but
+    // stays in the table, where it can be restored.
+    const live = db.prepare("SELECT id FROM notes WHERE archived_at IS NULL ORDER BY id").all() as { id: string }[];
+    const ids = live.map((r) => r.id);
     expect(ids).toContain(profile.id);
     expect(ids).toContain(fresh.id);
     expect(ids).not.toContain(stale.id);
+    const archived = db.prepare("SELECT archived_by, archive_reason FROM notes WHERE id = ?").get(stale.id);
+    expect(archived).toEqual({ archived_by: "sweep", archive_reason: "expired" });
   });
 
   it("high-importance profile facts survive the sweep even past TTL", () => {
@@ -100,7 +104,8 @@ describe("three-class observation retention (DUX10)", () => {
       ttl_at: new Date(Date.now() - 1000).toISOString(),
     });
     sweepExpiredNotes(db);
-    const row = db.prepare("SELECT id FROM notes WHERE id = ?").get(accident.id);
+    // Surviving means still live, now that the sweep archives instead of deleting.
+    const row = db.prepare("SELECT id FROM notes WHERE id = ? AND archived_at IS NULL").get(accident.id);
     expect(row).toBeTruthy();
   });
 });

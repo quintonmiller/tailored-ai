@@ -843,9 +843,12 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
-  // Safe migration: archival flag on notes (Phase 1, docs/agent-unification.md).
-  // Notes flagged archival=1 are the durable subset of recall — survive
-  // aggressive sweeps, agent-promoted explicitly.
+  // Safe migration: the "kept" flag on notes. `archival = 1` means KEPT: the
+  // note is never swept, set by `recall action="keep"` and read as `Note.kept`.
+  // It is not the archive. The column predates archiving and was set by an
+  // action that was then called "archive", which is why the name is wrong;
+  // renaming a column is not worth a migration. Hidden notes are the ones with
+  // `archived_at` set, below.
   try {
     db.exec("ALTER TABLE notes ADD COLUMN archival INTEGER NOT NULL DEFAULT 0");
   } catch {
@@ -855,6 +858,35 @@ export function initDatabase(dbPath: string): Database.Database {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_notes_archival
       ON notes(archival, created_at);
+  `);
+
+  // Safe migration: archiving notes and facts, the same three columns rooms
+  // use. NULL `archived_at` is live; anything else is hidden from recall,
+  // injection and lists until it is unarchived. Agents and the sweep archive
+  // instead of deleting, so what they remove can be brought back.
+  for (const sql of [
+    "ALTER TABLE notes ADD COLUMN archived_at TEXT",
+    "ALTER TABLE notes ADD COLUMN archived_by TEXT",
+    "ALTER TABLE notes ADD COLUMN archive_reason TEXT",
+    "ALTER TABLE facts ADD COLUMN archived_at TEXT",
+    "ALTER TABLE facts ADD COLUMN archived_by TEXT",
+    "ALTER TABLE facts ADD COLUMN archive_reason TEXT",
+  ]) {
+    try {
+      db.exec(sql);
+    } catch {
+      // Column already exists
+    }
+  }
+
+  // Every default read filters on `archived_at IS NULL`, so the hot lists get
+  // indexes over live rows only. Runs after the ALTERs because the indexes are
+  // partial over a column they may have just added.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_notes_live
+      ON notes(project_id, created_at) WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_facts_live
+      ON facts(project_id, category, entity, key) WHERE archived_at IS NULL;
   `);
 
   // Safe migration: session title + pinned flag (DUX1 — chat persistence).

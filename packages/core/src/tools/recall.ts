@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import { promoteNote } from "../agent/memory-promotion.js";
-import { createNote, deleteNote, getNote, listNotes, type Note } from "../db/note-queries.js";
+import { keepNote } from "../db/note-queries.js";
 import type { MemoryBackend } from "../memory/interface.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
@@ -11,23 +11,29 @@ import { formatHits, recallQueryAsync, type Tier } from "./recall-query.js";
  * Tiered memory surface. See docs/memory-tiers.md.
  *
  * Actions:
- *   - query   Search notes (short-term) and facts (long-term) by relevance.
- *   - note    Write a new short-term note. Tags / TTL / importance optional.
- *   - forget  Delete a note by ID.
- *   - list    Plain unranked list of recent notes.
+ *   - query      Search notes (short-term) and facts (long-term) by relevance.
+ *   - note       Write a new short-term note. Tags / TTL / importance optional.
+ *   - list       Plain unranked list of recent notes.
+ *   - promote    Index a note for semantic search.
+ *   - keep       Exempt a note from the TTL sweep (reason required).
+ *   - archive    Hide a note; `forget` is the same thing. Reversible.
+ *   - unarchive  Bring an archived note back.
+ *
+ * Nothing an agent does here deletes. `forget` used to, and `archive` used to
+ * mean what `keep` means now; both changed so an agent's mistakes can be undone.
  */
 export class RecallTool implements Tool {
   name = "recall";
   description =
-    "Search and write short-term memory — what was saved in past sessions, not what is in the conversation in front of you. Use query to find relevant notes + facts; note to save an observation; forget/list to manage notes.";
+    "Search and write short-term memory — what was saved in past sessions, not what is in the conversation in front of you. Use query to find relevant notes + facts; note to save an observation; list, keep, archive and unarchive to manage notes.";
   parameters = {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["query", "note", "forget", "list", "promote", "archive"],
+        enum: ["query", "note", "list", "promote", "keep", "archive", "forget", "unarchive"],
         description:
-          "query: ranked search. note: write prose. forget: delete by id. list: show recent notes. promote: clone a note into long-term semantic memory. archive: mark a note as durable (survives TTL sweeps) — requires reason.",
+          "query: ranked search. note: write prose. list: show recent notes. promote: clone a note into long-term semantic memory. keep: never sweep this note (needs reason). archive or forget: hide a note; unarchive brings it back.",
       },
       query: {
         type: "string",
@@ -57,7 +63,7 @@ export class RecallTool implements Tool {
       },
       id: {
         type: "string",
-        description: "Note id (required for action=forget and action=promote).",
+        description: "Note id, for promote, keep, archive, forget and unarchive.",
       },
       force: {
         type: "boolean",
@@ -66,7 +72,11 @@ export class RecallTool implements Tool {
       reason: {
         type: "string",
         description:
-          "Required for action=archive — a one-liner on why this note is worth keeping forever. Forces selectivity; over-archiving crowds out signal.",
+          "One line on why. Required for keep (keep few: kept notes crowd out the rest); optional for archive and forget.",
+      },
+      includeArchived: {
+        type: "boolean",
+        description: "For query and list: also return archived notes.",
       },
       project_id: {
         type: "string",
@@ -129,16 +139,19 @@ export class RecallTool implements Tool {
         case "note":
           return this.note(args, context, projectId);
         case "forget":
-          return this.forget(args);
+          return this.archive(args, context, "forgotten");
+        case "archive":
+          return this.archive(args, context);
+        case "unarchive":
+          return this.unarchive(args);
         case "list":
           return this.list(args, context, projectId);
         case "promote":
           return this.promote(args);
-        case "archive":
-          // Lifecycle action — stays SQLite-direct. Plugin backends that
-          // don't expose an archival flag would no-op here; in practice
-          // `archive` is only meaningful for the built-in SQLite store.
-          return this.archive(args);
+        case "keep":
+          // Lifecycle action — stays SQLite-direct, like the sweep it exempts
+          // a note from. A plugin backend owns its own retention.
+          return this.keep(args);
         default:
           return { success: false, output: "", error: `unknown action "${action}"` };
       }
@@ -170,6 +183,7 @@ export class RecallTool implements Tool {
         embedModel: this.embedModel,
         trackRefs: true,
         autoPromote: !!embedder,
+        includeArchived: args.includeArchived === true,
       },
       this.db,
     );
@@ -196,6 +210,9 @@ export class RecallTool implements Tool {
     });
     if (!result) {
       return { success: true, output: `(no note with id ${id})` };
+    }
+    if (result.archived) {
+      return { success: false, output: "", error: `${id} is archived — unarchive it before promoting` };
     }
     if (result.alreadyPromoted) {
       return {
@@ -259,52 +276,86 @@ export class RecallTool implements Tool {
     return { success: true, output: `saved ${display}` };
   }
 
-  private async forget(args: Record<string, unknown>): Promise<ToolResult> {
+  /**
+   * Hide a note. `forget` lands here too, so the notes an agent drops can be
+   * brought back. A backend that can't archive gets the old delete for
+   * `forget` (prompts rely on it working), said plainly in the output, and a
+   * refusal for `archive`, which promises something it couldn't keep.
+   */
+  private async archive(
+    args: Record<string, unknown>,
+    context: ToolContext,
+    defaultReason?: string,
+  ): Promise<ToolResult> {
+    const action = defaultReason ? "forget" : "archive";
     const id = typeof args.id === "string" ? args.id : "";
     if (!id) {
-      return { success: false, output: "", error: "id is required for action=forget" };
+      return { success: false, output: "", error: `id is required for action=${action}` };
     }
+    const reason = (typeof args.reason === "string" && args.reason.trim()) || defaultReason;
     const backend = await this.getMemoryBackend!();
-    if (!backend.delete) {
-      return { success: false, output: "", error: "delete is not supported by the active memory backend" };
-    }
     // Accept both the prefixed id we return today (`note:<id>`) and the bare
     // SQLite note id older sessions may still reference.
     const candidates = id.startsWith("note:") ? [id] : [`note:${id}`, id];
-    let removed = false;
+
+    if (!backend.archive) {
+      if (action === "archive" || !backend.delete) {
+        return { success: false, output: "", error: `the active memory backend can't ${action} notes` };
+      }
+      for (const candidate of candidates) {
+        if (await backend.delete(candidate)) {
+          return { success: true, output: `deleted ${id} for good (this memory backend can't archive)` };
+        }
+      }
+      return { success: true, output: `(no note with id ${id})` };
+    }
+
     for (const candidate of candidates) {
-      if (await backend.delete(candidate)) {
-        removed = true;
-        break;
+      if (await backend.archive(candidate, { by: context.agentName, reason })) {
+        const why = reason ? ` (${reason})` : "";
+        return { success: true, output: `archived ${id}${why} — action=unarchive brings it back` };
       }
     }
-    return { success: true, output: removed ? `forgot ${id}` : `(no note with id ${id})` };
+    return { success: true, output: `(no note with id ${id})` };
   }
 
-  private archive(args: Record<string, unknown>): ToolResult {
+  private async unarchive(args: Record<string, unknown>): Promise<ToolResult> {
+    const id = typeof args.id === "string" ? args.id : "";
+    if (!id) {
+      return { success: false, output: "", error: "id is required for action=unarchive" };
+    }
+    const backend = await this.getMemoryBackend!();
+    if (!backend.unarchive) {
+      return { success: false, output: "", error: "the active memory backend can't unarchive notes" };
+    }
+    const candidates = id.startsWith("note:") ? [id] : [`note:${id}`, id];
+    for (const candidate of candidates) {
+      if (await backend.unarchive(candidate)) return { success: true, output: `restored ${id}` };
+    }
+    return { success: true, output: `(no note with id ${id})` };
+  }
+
+  private keep(args: Record<string, unknown>): ToolResult {
     const id = typeof args.id === "string" ? args.id : "";
     const reason = typeof args.reason === "string" ? args.reason.trim() : "";
     if (!id) {
-      return { success: false, output: "", error: "id is required for action=archive" };
+      return { success: false, output: "", error: "id is required for action=keep" };
     }
     if (!reason) {
       return {
         success: false,
         output: "",
         error:
-          "reason is required for action=archive — one short line on why this note is worth keeping forever. Forces selectivity.",
+          "reason is required for action=keep — one short line on why this note is worth keeping forever. Forces selectivity.",
       };
     }
-    const note = getNote(this.db, id);
+    const note = keepNote(this.db, id, reason);
     if (!note) {
       return { success: false, output: "", error: `no note with id ${id}` };
     }
-    // Flip the archival flag; append the reason to tags so it's queryable
-    // from the Memory UI ("why was this archived?"). Idempotent.
-    this.db
-      .prepare("UPDATE notes SET archival = 1, tags = json_insert(tags, '$[#]', ?) WHERE id = ? AND archival = 0")
-      .run(`archive: ${reason}`, id);
-    return { success: true, output: `archived ${id} — "${reason}"` };
+    // Keeping doesn't unhide: say so rather than let the agent think it's back.
+    const hidden = note.archived_at ? " It is archived; action=unarchive brings it back." : "";
+    return { success: true, output: `kept ${id} — "${reason}"; the sweep will leave it alone.${hidden}` };
   }
 
   private async list(
@@ -322,6 +373,7 @@ export class RecallTool implements Tool {
       scope: scopeStr(projectId),
       kind: "note",
       tags: tag ? [tag] : undefined,
+      includeArchived: args.includeArchived === true,
       limit,
     });
     if (fragments.length === 0) {
@@ -345,6 +397,11 @@ function formatNoteFragment(f: import("../memory/interface.js").MemoryFragment):
   if (typeof md.created_at === "string") meta.push(md.created_at.slice(0, 16).replace("T", " "));
   if (Array.isArray(md.tags) && md.tags.length) meta.push(`tags=${(md.tags as string[]).join(",")}`);
   if (typeof md.importance === "number") meta.push(`importance=${md.importance}`);
+  if (md.kept === true) meta.push("kept");
+  if (typeof md.archived_at === "string") {
+    const why = typeof md.archive_reason === "string" ? `: ${md.archive_reason}` : "";
+    meta.push(`archived ${md.archived_at.slice(0, 10)}${why}`);
+  }
   const idStr = typeof f.id === "string" ? (f.id.startsWith("note:") ? f.id.slice("note:".length) : f.id) : "?";
   const head = `${idStr}  (${meta.join(", ")})`;
   const body = f.text.length > 200 ? `${f.text.slice(0, 200)}…` : f.text;
@@ -357,13 +414,4 @@ function resolveProjectId(raw: unknown): string | null {
     return raw;
   }
   return null;
-}
-
-function formatNote(n: Note): string {
-  const meta: string[] = [n.created_at.slice(0, 16).replace("T", " ")];
-  if (n.tags.length) meta.push(`tags=${n.tags.join(",")}`);
-  if (n.importance != null) meta.push(`importance=${n.importance}`);
-  const head = `${n.id}  (${meta.join(", ")})`;
-  const body = n.content.length > 200 ? `${n.content.slice(0, 200)}…` : n.content;
-  return `${head}\n  ${body}`;
 }

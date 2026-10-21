@@ -1,7 +1,8 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildMemoryBlockWithMeta } from "../agent/memory-inject.js";
-import { createNote, listPinnedNotes, updateNote } from "../db/note-queries.js";
+import { archiveFact, upsertFact } from "../db/fact-queries.js";
+import { archiveNote, createNote, listPinnedNotes, updateNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 
@@ -136,5 +137,27 @@ describe("pinned memory tier (DUX9)", () => {
     });
     expect(pinned?.tags).toContain("pinned");
     expect(pinned?.importance).toBe(0.95);
+  });
+});
+
+describe("archived memory never injects", () => {
+  it("leaves archived pinned notes, relevant notes and facts out of the block", async () => {
+    const pinnedLive = createNote(db, { content: "always answer in metric", project_id: "p", tags: ["pinned"] });
+    const pinnedGone = createNote(db, { content: "always answer in imperial", project_id: "p", tags: ["pinned"] });
+    const relevantGone = createNote(db, { content: "the ferry timetable changed in spring", project_id: "p" });
+    createNote(db, { content: "the ferry runs hourly", project_id: "p" });
+    const fact = upsertFact(db, { category: "ferry", key: "operator", value: "Bluewater", project_id: "p" });
+    archiveNote(db, pinnedGone.id);
+    archiveNote(db, relevantGone.id);
+    archiveFact(db, fact.id);
+
+    const meta = await buildMemoryBlockWithMeta(backend, { userMessage: "ferry timetable operator", projectId: "p" });
+    expect(meta.block).toContain("metric");
+    expect(meta.block).toContain("ferry runs hourly");
+    expect(meta.block).not.toContain("imperial");
+    expect(meta.block).not.toContain("timetable changed");
+    expect(meta.block).not.toContain("Bluewater");
+    expect(meta.pinned.map((p) => p.noteId)).toEqual([pinnedLive.id]);
+    expect(listPinnedNotes(db, { project_id: "p", includeArchived: true })).toHaveLength(2);
   });
 });

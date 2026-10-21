@@ -22,6 +22,8 @@ export interface RecallHit {
   score: number;
   snippet: string;
   createdAt: string;
+  /** Set only when the hit is archived, which needs `includeArchived`. */
+  archivedAt?: string;
 }
 
 export interface RecallQueryOptions {
@@ -40,6 +42,8 @@ export interface RecallQueryOptions {
   trackRefs?: boolean;
   autoPromote?: boolean;
   promoteThreshold?: number;
+  /** Also return archived notes and facts, marked with `archivedAt`. */
+  includeArchived?: boolean;
 }
 
 export { coverage, tokenize } from "../memory/scoring.js";
@@ -79,6 +83,7 @@ export async function recallQueryAsync(
     scope: memoryScope(opts.projectId ?? null, opts.agent),
     limit: opts.limit ?? 5,
     minImportance: opts.semanticMinScore,
+    includeArchived: opts.includeArchived,
   });
 
   const hits = fragments.map(toRecallHit).filter((h): h is RecallHit => h !== null);
@@ -122,21 +127,22 @@ function toRecallHit(f: MemoryFragment): RecallHit | null {
         ? md.updated_at
         : new Date().toISOString();
   const snippet = typeof md.snippet === "string" ? md.snippet : oneLine(f.text);
+  const archived = typeof md.archived_at === "string" ? { archivedAt: md.archived_at } : {};
 
   if (kind === "fact") {
     const label = typeof md.label === "string" ? md.label : (f.id ?? "");
-    return { tier: "long", source: label, score, snippet, createdAt };
+    return { tier: "long", source: label, score, snippet, createdAt, ...archived };
   }
   if (kind === "chunk") {
     const source = typeof md.source === "string" ? md.source : (f.id ?? "");
-    return { tier: "long", source, score, snippet, createdAt };
+    return { tier: "long", source, score, snippet, createdAt, ...archived };
   }
   if (kind === "note") {
     // Strip the `note:` prefix from the fragment id so legacy callers
     // that index by raw note id keep working.
     const idStr = typeof f.id === "string" ? f.id : "";
     const source = idStr.startsWith("note:") ? idStr.slice("note:".length) : idStr;
-    return { tier: "short", source, score, snippet, createdAt };
+    return { tier: "short", source, score, snippet, createdAt, ...archived };
   }
   return null;
 }
@@ -151,7 +157,8 @@ export function formatHits(hits: RecallHit[]): string {
   const lines: string[] = [];
   for (const h of hits) {
     const score = h.score.toFixed(2);
-    lines.push(`[${score}] ${h.tier.padEnd(5)} ${h.source}\n  ${h.snippet}`);
+    const archived = h.archivedAt ? ` (archived ${h.archivedAt.slice(0, 10)})` : "";
+    lines.push(`[${score}] ${h.tier.padEnd(5)} ${h.source}${archived}\n  ${h.snippet}`);
   }
   lines.push(`(${hits.length} ${hits.length === 1 ? "result" : "results"})`);
   return lines.join("\n");

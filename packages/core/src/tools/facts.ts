@@ -16,6 +16,10 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
  * `kind: "fact"` hint. Backends that don't index structured payloads
  * still work — the helper falls back to client-side filtering of the
  * returned fragments.
+ *
+ * `forget` archives rather than deletes: the fact drops out of lists,
+ * searches and recall, and setting the same key again brings it back with the
+ * new value. Deleting for good is left to a person.
  */
 export class FactsTool implements Tool {
   name = "facts";
@@ -28,7 +32,7 @@ export class FactsTool implements Tool {
         type: "string",
         enum: ["get", "set", "list", "forget", "search"],
         description:
-          "get: fetch one fact. set: upsert. list: filter by category/entity. forget: delete. search: text-match.",
+          "get: fetch one fact. set: upsert. list: filter by category/entity. forget: archive it (set it again to restore). search: text-match.",
       },
       category: { type: "string", description: "Top-level grouping. e.g. person, subscription, vehicle, device." },
       entity: {
@@ -52,6 +56,7 @@ export class FactsTool implements Tool {
         description: 'Project scope. Default: active project. Use "global" for cross-project facts.',
       },
       limit: { type: "number", description: "Cap for list/search results. Default 50." },
+      includeArchived: { type: "boolean", description: "For list and search: also return forgotten facts." },
     },
     required: ["action"],
   };
@@ -84,7 +89,7 @@ export class FactsTool implements Tool {
         case "list":
           return this.list(backend, args, projectId);
         case "forget":
-          return this.forget(backend, args, projectId);
+          return this.forget(backend, args, projectId, context);
         case "search":
           return this.search(backend, args, projectId);
         default:
@@ -138,6 +143,12 @@ export class FactsTool implements Tool {
     if (args.asof !== undefined) structured.asof = String(args.asof);
     if (typeof args.confidence === "number") structured.confidence = args.confidence;
 
+    // Setting a forgotten fact's key restores it; look first so the reply can say so.
+    const before = (
+      await backend.query({ scope: scopeOf(projectId), wantStructured: { category, entity, key }, limit: 1 })
+    ).find(isFactFragment);
+    const restored = typeof before?.metadata?.archived_at === "string" ? " (restored from the archive)" : "";
+
     await backend.write(
       { text: value, structured },
       {
@@ -164,8 +175,8 @@ export class FactsTool implements Tool {
     return {
       success: true,
       output: fragment
-        ? `saved: ${formatFactFragment(fragment)}`
-        : `saved: ${describe(category, entity, key)} = ${value}`,
+        ? `saved: ${formatFactFragment(fragment)}${restored}`
+        : `saved: ${describe(category, entity, key)} = ${value}${restored}`,
     };
   }
 
@@ -181,6 +192,7 @@ export class FactsTool implements Tool {
     const fragments = await backend.list({
       scope: scopeOf(projectId),
       kind: "fact",
+      includeArchived: args.includeArchived === true,
       limit,
     });
     const facts = fragments.filter(isFactFragment).filter((f) => matchesFilter(f, args));
@@ -188,10 +200,15 @@ export class FactsTool implements Tool {
     return { success: true, output: facts.map(formatFactFragment).join("\n") };
   }
 
+  /**
+   * Archive the fact, so it can be restored by setting it again. A backend
+   * that can't archive gets the old delete, said plainly in the reply.
+   */
   private async forget(
     backend: MemoryBackend,
     args: Record<string, unknown>,
     projectId: string | null,
+    context: ToolContext,
   ): Promise<ToolResult> {
     const category = String(args.category ?? "");
     const entity = String(args.entity ?? "");
@@ -199,8 +216,8 @@ export class FactsTool implements Tool {
     if (!category || !key) {
       return { success: false, output: "", error: "category and key are required for forget" };
     }
-    if (!backend.delete) {
-      return { success: false, output: "", error: "delete is not supported by the active memory backend" };
+    if (!backend.archive && !backend.delete) {
+      return { success: false, output: "", error: "the active memory backend can't forget facts" };
     }
     const hits = await backend.query({
       scope: scopeOf(projectId),
@@ -211,10 +228,21 @@ export class FactsTool implements Tool {
     if (!fragment || !fragment.id) {
       return { success: true, output: "(no fact to forget)" };
     }
-    const removed = await backend.delete(fragment.id);
+    const label = describe(category, entity, key);
+    if (typeof fragment.metadata?.archived_at === "string") {
+      return { success: true, output: `${label} is already forgotten` };
+    }
+    if (!backend.archive) {
+      const removed = await backend.delete!(fragment.id);
+      return {
+        success: true,
+        output: removed ? `deleted ${label} for good (this memory backend can't archive)` : "(no fact to forget)",
+      };
+    }
+    const archived = await backend.archive(fragment.id, { by: context.agentName, reason: "forgotten" });
     return {
       success: true,
-      output: removed ? `forgot ${describe(category, entity, key)}` : "(no fact to forget)",
+      output: archived ? `forgot ${label} — set it again to restore it` : "(no fact to forget)",
     };
   }
 
@@ -231,6 +259,7 @@ export class FactsTool implements Tool {
     const hits = await backend.query({
       scope: scopeOf(projectId),
       freeText: query,
+      includeArchived: args.includeArchived === true,
       limit,
     });
     const facts = hits.filter(isFactFragment);
@@ -293,6 +322,7 @@ function formatFactFragment(f: MemoryFragment): string {
   if (typeof md.asof === "string") meta.push(`asof=${md.asof}`);
   if (typeof md.confidence === "number") meta.push(`confidence=${md.confidence}`);
   if (typeof md.source === "string") meta.push(`source=${md.source}`);
+  if (typeof md.archived_at === "string") meta.push(`forgotten ${md.archived_at.slice(0, 10)}`);
   const suffix = meta.length ? `  (${meta.join(", ")})` : "";
   return `${head} = ${f.text}${suffix}`;
 }
@@ -312,5 +342,8 @@ function fragmentToFact(f: MemoryFragment): Fact | null {
     project_id: typeof md.project_id === "string" ? md.project_id : null,
     created_at: typeof md.created_at === "string" ? md.created_at : "",
     updated_at: typeof md.updated_at === "string" ? md.updated_at : "",
+    archived_at: typeof md.archived_at === "string" ? md.archived_at : null,
+    archived_by: typeof md.archived_by === "string" ? md.archived_by : null,
+    archive_reason: typeof md.archive_reason === "string" ? md.archive_reason : null,
   };
 }

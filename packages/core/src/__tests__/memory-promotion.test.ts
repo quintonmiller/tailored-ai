@@ -2,7 +2,15 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promoteNote, recordNoteHit, runMemorySweep } from "../agent/memory-promotion.js";
 import { countChunks, createChunk, listChunksBySource } from "../db/chunk-queries.js";
-import { createNote, extendNoteTtl, getNote, incrementNoteRef, listNotes } from "../db/note-queries.js";
+import {
+  archiveNote,
+  createNote,
+  extendNoteTtl,
+  getNote,
+  incrementNoteRef,
+  keepNote,
+  listNotes,
+} from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
@@ -114,6 +122,14 @@ describe("promoteNote", () => {
   it("returns null for a missing note", async () => {
     expect(await promoteNote(db, toyEmbedder(), "note_nope")).toBeNull();
   });
+
+  it("refuses an archived note, indexing nothing", async () => {
+    const n = createNote(db, { content: "important content", project_id: "p" });
+    archiveNote(db, n.id);
+    const res = await promoteNote(db, toyEmbedder(), n.id);
+    expect(res).toMatchObject({ archived: true, chunkCount: 0 });
+    expect(listChunksBySource(db, `note:${n.id}`)).toHaveLength(0);
+  });
 });
 
 describe("recordNoteHit", () => {
@@ -174,6 +190,25 @@ describe("recordNoteHit", () => {
 
   it("returns null for missing notes without throwing", () => {
     expect(recordNoteHit(db, "note_nope")).toBeNull();
+  });
+
+  it("never counts or auto-promotes an archived note", async () => {
+    const n = createNote(db, { content: "x", project_id: "p" });
+    archiveNote(db, n.id);
+    let onPromoteFired = false;
+    expect(
+      recordNoteHit(db, n.id, {
+        embedder: toyEmbedder(),
+        threshold: 1,
+        onPromote: () => {
+          onPromoteFired = true;
+        },
+      }),
+    ).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onPromoteFired).toBe(false);
+    expect(getNote(db, n.id)?.ref_count).toBe(0);
+    expect(listChunksBySource(db, `note:${n.id}`)).toHaveLength(0);
   });
 });
 
@@ -242,16 +277,37 @@ describe("runMemorySweep", () => {
     expect(report.extendedTtl).toBe(0);
   });
 
-  it("deletes expired low-importance notes (delegates to sweepExpiredNotes)", () => {
+  it("archives expired low-importance notes instead of deleting them", () => {
     const past = new Date(Date.now() - 1000).toISOString();
-    createNote(db, { content: "garbage", project_id: "p", ttl_at: past, importance: 0.2 });
+    const garbage = createNote(db, { content: "garbage", project_id: "p", ttl_at: past, importance: 0.2 });
     createNote(db, { content: "keep", project_id: "p", ttl_at: past, importance: 0.9 });
     const report = runMemorySweep(db);
-    expect(report.deletedExpired).toBe(1);
+    expect(report.archivedExpired).toBe(1);
+    expect(report.remainingNotes).toBe(1);
     expect(listNotes(db, {}).length).toBe(1);
+    // Still there, hidden, and stamped so a person can see why.
+    expect(listNotes(db, { includeArchived: true }).length).toBe(2);
+    expect(getNote(db, garbage.id)).toMatchObject({ archived_by: "sweep", archive_reason: "expired" });
   });
 
-  it("extends-then-deletes so referenced-but-stale notes survive", () => {
+  it("never touches a kept note, however expired and unimportant", () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const kept = createNote(db, { content: "the door code", project_id: "p", ttl_at: past, importance: 0.1 });
+    keepNote(db, kept.id, "needed every visit");
+    const report = runMemorySweep(db);
+    expect(report.archivedExpired).toBe(0);
+    expect(getNote(db, kept.id)).toMatchObject({ kept: true, archived_at: null });
+  });
+
+  it("leaves an archived note's stamp alone on the next sweep", () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const n = createNote(db, { content: "old", project_id: "p", ttl_at: past });
+    archiveNote(db, n.id, { by: "assistant", reason: "wrong" });
+    expect(runMemorySweep(db).archivedExpired).toBe(0);
+    expect(getNote(db, n.id)).toMatchObject({ archived_by: "assistant", archive_reason: "wrong" });
+  });
+
+  it("extends-then-archives so referenced-but-stale notes survive", () => {
     const past = new Date(Date.now() - 1000).toISOString();
     const refed = createNote(db, {
       content: "popular but expired",
@@ -265,9 +321,9 @@ describe("runMemorySweep", () => {
 
     const report = runMemorySweep(db);
     expect(report.extendedTtl).toBe(1);
-    // The extend ran first, so the delete sweep finds nothing expired.
-    expect(report.deletedExpired).toBe(0);
-    expect(getNote(db, refed.id)).not.toBeNull();
+    // The extend ran first, so the sweep finds nothing expired.
+    expect(report.archivedExpired).toBe(0);
+    expect(getNote(db, refed.id)?.archived_at).toBeNull();
   });
 
   it("reports remainingNotes + totalChunks counts", () => {
@@ -276,6 +332,17 @@ describe("runMemorySweep", () => {
     createChunk(db, { source: "x", content: "c", project_id: "p" });
     const report = runMemorySweep(db);
     expect(report.remainingNotes).toBe(2);
+    expect(report.totalChunks).toBe(1);
+  });
+
+  it("counts only live notes, and only chunks that can still surface", () => {
+    const a = createNote(db, { content: "a", project_id: "p" });
+    createNote(db, { content: "b", project_id: "p" });
+    createChunk(db, { source: `note:${a.id}`, content: "a", project_id: "p" });
+    createChunk(db, { source: "kb:guide.md", content: "kb", project_id: "p" });
+    archiveNote(db, a.id);
+    const report = runMemorySweep(db);
+    expect(report.remainingNotes).toBe(1);
     expect(report.totalChunks).toBe(1);
   });
 });

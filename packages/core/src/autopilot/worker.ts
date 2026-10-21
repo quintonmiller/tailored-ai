@@ -168,7 +168,7 @@ export class AutopilotWorker {
   }
 
   /**
-   * Daily memory hygiene sweep — extends TTL on referenced notes and deletes
+   * Daily memory hygiene sweep — extends TTL on referenced notes and archives
    * expired low-importance ones. Schedule comes from
    * `autopilot.memorySweepCron`; an empty value disables the sweep.
    */
@@ -184,7 +184,7 @@ export class AutopilotWorker {
         try {
           const report = runMemorySweep(this.runtime.db);
           console.log(
-            `[autopilot] Memory sweep: extended ${report.extendedTtl}, deleted ${report.deletedExpired}, ` +
+            `[autopilot] Memory sweep: extended ${report.extendedTtl}, archived ${report.archivedExpired}, ` +
               `remaining notes=${report.remainingNotes}, chunks=${report.totalChunks}`,
           );
         } catch (err) {

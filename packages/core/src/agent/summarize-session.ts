@@ -56,9 +56,12 @@ export async function summarizeSession(
   if (messages.length < MIN_MESSAGES_TO_SUMMARIZE) return null;
 
   if (!opts.force) {
+    // An archived summary still counts: someone hid it, or the sweep retired
+    // it, and writing a fresh one would quietly undo that.
     const existing = listNotes(db, {
       session_id: sessionId,
       tag: SESSION_SUMMARY_TAG,
+      includeArchived: true,
       limit: 1,
     });
     if (existing.length > 0) return null;

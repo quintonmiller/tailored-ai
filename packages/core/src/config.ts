@@ -1938,7 +1938,7 @@ export interface AgentConfig {
     taskPrompt?: string;
     /**
      * Cron expression for the daily memory-hygiene sweep (TTL extension on
-     * referenced notes, deletion of expired low-importance ones). Set to an
+     * referenced notes, archiving of expired low-importance ones). Set to an
      * empty string to disable the sweep. DEFAULT_CONFIG ships "14 3 * * *".
      */
     memorySweepCron?: string;

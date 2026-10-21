@@ -184,8 +184,12 @@ Open question: "agent decides, or rule-based?" Answer: **both**, layered.
 - `facts` is the explicit promotion path for anything K/V-shaped.
 
 Cleanup sweep:
-- Daily cron deletes `notes` past `ttl_at` unless `importance >= 0.8`.
-- `memory_chunks` are never auto-deleted (agent can `recall forget id=...`).
+- Daily cron archives `notes` past `ttl_at` unless they are kept
+  (`recall action="keep"`) or `importance >= 0.8`. Archived, not deleted:
+  `unarchive` brings one back. See [memory.md](./memory.md#archive).
+- `memory_chunks` are never swept on their own. A chunk promoted from a note
+  follows that note, so archiving the note (`recall forget id=...` does) hides
+  its chunks too, and a person deleting the note deletes them.
 
 ## Compatibility with existing surfaces
 

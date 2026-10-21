@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession } from "../agent/session.js";
 import { SESSION_SUMMARY_TAG } from "../agent/summarize-session.js";
 import { getCoreMemorySection } from "../db/core-memory-queries.js";
-import { createNote, listNotes } from "../db/note-queries.js";
+import { archiveNote, createNote, listNotes } from "../db/note-queries.js";
 import { saveMessage } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createPluginContext } from "../plugin-context.js";
@@ -231,6 +231,14 @@ describe("composeRecentSummary — composition + capping", () => {
     const out = composeRecentSummary(db, null, { count: 2, maxBytes: 600 });
     const lines = out.split("\n");
     expect(lines).toEqual(["- newest", "- middle"]);
+  });
+
+  it("leaves archived summaries out", () => {
+    seedSummaryNote("kept");
+    seedSummaryNote("retired");
+    const retired = listNotes(db, { tag: SESSION_SUMMARY_TAG }).find((n) => n.content === "retired")!;
+    archiveNote(db, retired.id, { by: "sweep", reason: "expired" });
+    expect(composeRecentSummary(db, null, { count: 3, maxBytes: 600 })).toBe("- kept");
   });
 
   it("hard-caps to maxBytes, dropping whole summaries from the tail", () => {

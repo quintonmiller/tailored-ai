@@ -4,16 +4,63 @@ Design: [memory-tiers.md](./memory-tiers.md). This doc captures the implementati
 
 ## Core APIs
 
-- `packages/core/src/tools/recall.ts` — `RecallTool` with `query` / `note` / `forget` / `list` actions
+- `packages/core/src/tools/recall.ts` — `RecallTool` with `query` / `note` / `list` / `promote` / `keep` / `archive` (alias `forget`) / `unarchive` actions
 - `packages/core/src/tools/recall-query.ts` — `recallQuery()` ranks notes (short-term) and facts (long-term) by term coverage with small bonuses for tag/key/entity matches. Scores are a ranking signal, not capped at 1.0
-- `packages/core/src/db/note-queries.ts` — `createNote`, `getNote`, `listNotes`, `deleteNote`, `sweepExpiredNotes`
+- `packages/core/src/db/note-queries.ts` — `createNote`, `getNote`, `listNotes`, `deleteNote`, `archiveNote`, `unarchiveNote`, `keepNote`, `sweepExpiredNotes`
+- `packages/core/src/db/fact-queries.ts` — `upsertFact`, `findFact`, `listFacts`, `archiveFact`, `unarchiveFact`, `deleteFact`
 - Note IDs: `note_<8-char-uuid>` format
 - Tags stored as JSON arrays, filtered via SQLite `json_each()`
 - TTLs stored as ISO 8601; compared via `datetime(ttl_at) > datetime('now')` to normalize formats
-- Default TTL: 14 days. Notes with `importance >= 0.8` survive sweeps
+- Default TTL: 14 days. Kept notes, and notes with `importance >= 0.8`, survive sweeps
 - Daily sweep schedule: `autopilot.memorySweepCron` (default `"14 3 * * *"`; empty string disables)
 - Project-scoped by default: pass `project_id: "global"` for cross-project notes
 - `query` action accepts `tier: any|short|long` to scope retrieval to one tier
+
+## Archive
+
+Notes and facts can be archived: hidden, not deleted. An archived note or fact
+stays out of everything that loads context or searches — the pinned and
+relevance tiers of injection, `recall` `query` and `list`, semantic search,
+the `facts` tool's `list` and `search`, the briefing, the session summarizer's
+`recent_summary`, an exploratory agent's tick notes, auto-promotion, and the
+HTTP lists and counts. `unarchive` brings it back exactly as it was.
+
+- **What agents remove, they archive.** `recall action="forget"` archives the
+  note (reason `forgotten`, stamped with the agent's name) and tells the agent
+  it can be restored. `facts action="forget"` archives the fact; setting the
+  same key again restores it with the new value.
+- **The sweep archives.** Expired, low-importance notes are archived with
+  `archived_by: "sweep"` and reason `expired`, not deleted. Kept notes are
+  never touched.
+- **A person's delete stays a delete.** `DELETE /api/memory/notes/:id` and the
+  Memory page's Delete remove the note for good, and now take its search
+  chunks with them (they used to be left behind, still searchable).
+- **Chunks follow their note.** A chunk promoted from a note surfaces only
+  while that note exists and is live: archive the note and its chunks drop out
+  of semantic search; restore it and they're back. The rule is a join on the
+  note, so it can't drift. KB chunks are unaffected. An archived note is never
+  auto-promoted, and `promote` refuses one.
+- **Asking for archived.** `includeArchived: true` on `listNotes`,
+  `listPinnedNotes`, `listFacts`, `semanticSearch`, `countChunks`, the recall
+  tool's `query` and `list`, the facts tool's `list` and `search`, and
+  `?includeArchived=1` on the HTTP lists bring archived items back, marked
+  with `archived_at`, `archived_by` and `archive_reason`. Fetching one item by
+  id — `getNote`, `GET /api/memory/notes/:id`, `facts get`,
+  `GET /api/facts/:category/:entity/:key` — works on an archived item and says
+  it's archived.
+
+Storage: `archived_at` (NULL means live), `archived_by` and `archive_reason`
+on `notes` and `facts`, the same three columns rooms use. Partial indexes over
+live rows (`idx_notes_live`, `idx_facts_live`) serve the default reads.
+
+**`keep` is not `archive`.** `recall action="keep"` (reason required) marks a
+note kept: the sweep never archives it. Before this, that action was called
+`archive` and set `notes.archival = 1`, which nothing read — a "kept" note was
+swept like any other. The column still holds the flag (exposed as `Note.kept`),
+and any old row with `archival = 1` reads as kept, never as hidden.
+
+Core memory and the markdown memory files have no archive: core memory is
+small, always loaded and edited in place.
 
 ## Injection & loop integration
 
@@ -84,21 +131,25 @@ For a personal install with Discord + web sessions, `keyPrefixes: ["discord:", "
 - `notes.ref_count` (M6): every note surfaced by `recall query` increments this counter. Auto-promotion (`recallQuery({trackRefs:true, autoPromote:true, embedder})`) clones a note into `memory_chunks` once `ref_count >= 3` so semantic search finds it. Idempotent: existing chunks short-circuit the promotion.
 - `recall action: promote` — manual promotion of a specific note id. Requires an embedder. Pass `force: true` to re-index.
 - `promoteNote(db, embedder, noteId, opts)` — programmatic API. `recordNoteHit(db, noteId, {embedder, threshold, onPromote})` — ref-tracker + fire-and-forget promotion.
-- `runMemorySweep(db, opts)` — daily hygiene pass: extends TTL on referenced-but-expiring notes (`ref_count >= 3`, ttl ≤ now+1d → +7 days), then deletes expired low-importance notes. Returns `{deletedExpired, extendedTtl, remainingNotes, totalChunks}`.
+- `runMemorySweep(db, opts)` — daily hygiene pass: extends TTL on referenced-but-expiring notes (`ref_count >= 3`, ttl ≤ now+1d → +7 days), then archives expired low-importance notes that aren't kept. Returns `{archivedExpired, extendedTtl, remainingNotes, totalChunks}`; `remainingNotes` counts live notes and `totalChunks` the chunks that can still surface. (It used to delete, and report `deletedExpired`.)
+- A promoted note that expires is archived like any other, and its chunks go with it. Mark it `keep` if it should stay.
 - AutopilotWorker schedules the sweep from `autopilot.memorySweepCron` (default daily at 03:14, via croner). Started/stopped with the worker.
 
 ## HTTP & UI
 
 HTTP API (M7) — under `/api/memory/`:
-- `GET /notes?project=&tag=&search=&limit=` — list live (non-expired) notes
-- `GET /notes/:id` — single note
-- `DELETE /notes/:id` — delete
-- `POST /notes/:id/promote` (body: `{ force?: boolean }`) — manual semantic promotion
-- `GET /recall?q=&project=&tier=&limit=` — ranked search, formatted output included
-- `GET /stats?project=` — `{ counts, topReferenced, embeddingsEnabled, embeddingModel }`
+- `GET /notes?project=&tag=&search=&limit=&includeArchived=1` — list live (non-expired) notes. With no `project`, every project's notes plus global ones; `project=global` for global only; a project id for that project plus global. (No `project` used to return global notes only.)
+- `GET /notes/:id` — single note, archived or not; an archived one carries `archived_at`, `archived_by`, `archive_reason`
+- `POST /notes/:id/archive` (body: `{ reason?: string }`) / `POST /notes/:id/unarchive` — hide or restore; stamped `archived_by: "owner"`. `501` when the memory backend can't archive
+- `DELETE /notes/:id` — delete for good, with the note's chunks
+- `POST /notes/:id/promote` (body: `{ force?: boolean }`) — manual semantic promotion; `409` for an archived note
+- `GET /recall?q=&project=&tier=&limit=&includeArchived=1` — ranked search, formatted output included
+- `GET /stats?project=` — `{ counts, topReferenced, embeddingsEnabled, embeddingModel }`; counts are of live records, with `archivedNotes` and `archivedFacts` beside them
 - `POST /sweep` — runs `runMemorySweep` on demand
 
-UI (M7): `#/memory` page with stats tiles, recall search, most-referenced panel, full note list with delete/promote actions. Dashboard gains a `Memory` section showing the same stats + top-referenced links to `#/memory`. See `packages/ui/src/pages/Memory.tsx`.
+Facts, under `/api/facts`: `GET ?includeArchived=1` lists archived facts too; `POST /:id/archive` (body `{ reason? }`) and `POST /:id/unarchive`; `DELETE /:id` stays a delete.
+
+UI (M7): `#/memory` page with stats tiles, recall search, most-referenced panel, full note list with pin, archive and delete actions, and the facts list with archive and delete. "Show archived" lists archived notes (in their own section) and facts, each marked with when, by whom and why, with Restore in place of Archive. Dashboard gains a `Memory` section showing the same stats + top-referenced links to `#/memory`. See `packages/ui/src/pages/Memory.tsx`.
 
 ## `/memory` — core memory from Discord
 

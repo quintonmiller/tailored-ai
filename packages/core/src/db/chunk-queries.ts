@@ -78,19 +78,69 @@ export function deleteChunksBySource(db: Database.Database, source: string): num
   return db.prepare("DELETE FROM memory_chunks WHERE source = ?").run(source).changes;
 }
 
-export function countChunks(db: Database.Database, projectId?: string | null): number {
-  if (projectId === undefined) {
-    const r = db.prepare("SELECT COUNT(*) AS c FROM memory_chunks").get() as { c: number };
-    return r.c;
+/**
+ * Which chunks a read may see. A chunk promoted from a note (`source` is
+ * `note:<id>`) follows that note: it surfaces only while the note exists and
+ * is live. Chunks from anywhere else (a KB file) are unaffected.
+ */
+export interface ChunkVisibility {
+  /** undefined = every project, null = global only, id = that project. */
+  projectId?: string | null;
+  /** Also see chunks of archived notes. A deleted note's chunks never surface. */
+  includeArchived?: boolean;
+}
+
+/**
+ * The FROM and WHERE for a chunk read under {@link ChunkVisibility}. The note
+ * filter is a join on the note itself rather than a copy of its state on the
+ * chunk, so archiving, restoring or deleting a note can't leave its chunks
+ * saying something else.
+ */
+function visibleChunks(v: ChunkVisibility, extra: string[] = []): { sql: string; params: unknown[] } {
+  const clauses = [...extra];
+  const params: unknown[] = [];
+  if (v.projectId !== undefined) {
+    if (v.projectId === null) {
+      clauses.push("c.project_id IS NULL");
+    } else {
+      clauses.push("c.project_id = ?");
+      params.push(v.projectId);
+    }
   }
-  const r = db
-    .prepare(
-      projectId === null
-        ? "SELECT COUNT(*) AS c FROM memory_chunks WHERE project_id IS NULL"
-        : "SELECT COUNT(*) AS c FROM memory_chunks WHERE project_id = ?",
-    )
-    .get(...(projectId === null ? [] : [projectId])) as { c: number };
+  const live = v.includeArchived ? "n.id IS NOT NULL" : "n.id IS NOT NULL AND n.archived_at IS NULL";
+  clauses.push(`(substr(c.source, 1, 5) != 'note:' OR (${live}))`);
+  return {
+    sql: `FROM memory_chunks c
+          LEFT JOIN notes n ON substr(c.source, 1, 5) = 'note:' AND n.id = substr(c.source, 6)
+          WHERE ${clauses.join(" AND ")}`,
+    params,
+  };
+}
+
+/**
+ * How many chunks can surface: chunks of archived or deleted notes are left
+ * out unless `includeArchived` (which still leaves out a deleted note's).
+ */
+export function countChunks(
+  db: Database.Database,
+  projectId?: string | null,
+  opts: Omit<ChunkVisibility, "projectId"> = {},
+): number {
+  const { sql, params } = visibleChunks({ ...opts, projectId });
+  const r = db.prepare(`SELECT COUNT(*) AS c ${sql}`).get(...params) as { c: number };
   return r.c;
+}
+
+/** Newest-first page of the chunks a read may see. */
+export function listChunks(
+  db: Database.Database,
+  opts: ChunkVisibility & { limit?: number; offset?: number } = {},
+): MemoryChunk[] {
+  const { sql, params } = visibleChunks(opts);
+  const rows = db
+    .prepare(`SELECT c.* ${sql} ORDER BY c.created_at DESC, c.rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, opts.limit ?? 100, opts.offset ?? 0) as ChunkRow[];
+  return rows.map(rowToChunk);
 }
 
 export interface ChunkSearchHit {
@@ -99,29 +149,22 @@ export interface ChunkSearchHit {
 }
 
 /**
- * Brute-force cosine search across all chunks in scope. Acceptable up to a
- * few thousand chunks; revisit when the corpus grows past ~10k.
+ * Brute-force cosine search across the chunks a read may see (see
+ * {@link ChunkVisibility}): a chunk promoted from a note follows that note's
+ * archive state, so archiving the note hides what was promoted from it too.
+ * Acceptable up to a few thousand chunks; revisit when the corpus grows past
+ * ~10k.
  */
 export function semanticSearch(
   db: Database.Database,
   query: Float32Array,
-  opts: { projectId?: string | null; limit?: number; minScore?: number } = {},
+  opts: ChunkVisibility & { limit?: number; minScore?: number } = {},
 ): ChunkSearchHit[] {
   const limit = opts.limit ?? 5;
   const minScore = opts.minScore ?? 0;
 
-  const clauses: string[] = ["embedding IS NOT NULL"];
-  const params: unknown[] = [];
-  if (opts.projectId !== undefined) {
-    if (opts.projectId === null) {
-      clauses.push("project_id IS NULL");
-    } else {
-      clauses.push("project_id = ?");
-      params.push(opts.projectId);
-    }
-  }
-  const where = `WHERE ${clauses.join(" AND ")}`;
-  const rows = db.prepare(`SELECT * FROM memory_chunks ${where}`).all(...params) as ChunkRow[];
+  const { sql, params } = visibleChunks(opts, ["c.embedding IS NOT NULL"]);
+  const rows = db.prepare(`SELECT c.* ${sql}`).all(...params) as ChunkRow[];
 
   const hits: ChunkSearchHit[] = [];
   for (const row of rows) {

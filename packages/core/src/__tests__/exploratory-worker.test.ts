@@ -9,7 +9,7 @@ import {
   listExploratoryRuns,
   updateExploratoryState,
 } from "../db/exploratory-queries.js";
-import { createNote } from "../db/note-queries.js";
+import { archiveNote, createNote } from "../db/note-queries.js";
 import { isAgentsPaused } from "../db/runtime-settings-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { ExploratoryWorker } from "../exploratory/worker.js";
@@ -928,5 +928,17 @@ describe("ExploratoryWorker lifecycle", () => {
     worker.start(); // second call is a no-op
     worker.stop();
     worker.stop(); // also fine
+  });
+});
+
+describe("tick prompt notes", () => {
+  it("leaves the agent's archived notes out of [Recent notes]", async () => {
+    createNote(db, { agent: "scout", content: "checked the river gauge" });
+    const gone = createNote(db, { agent: "scout", content: "the bridge is closed" });
+    archiveNote(db, gone.id, { by: "scout", reason: "reopened" });
+    const worker = new ExploratoryWorker({ runtime: mockRuntime(baseConfig()) });
+    const prompt = await worker.buildTickPrompt("scout", {} as never);
+    expect(prompt).toContain("river gauge");
+    expect(prompt).not.toContain("bridge is closed");
   });
 });
