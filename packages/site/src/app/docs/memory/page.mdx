@@ -23,6 +23,10 @@ a strictly-structured key-value store for `(category, entity, key, value)`
 data. Used for "the user's address is X" type information that's better
 stored as data than prose.
 
+Notes are private to the agent that wrote them: an agent's `recall` reads
+its own notes plus unowned ones (a person's, and older session summaries),
+never another agent's. Facts are shared by every agent.
+
 ## The tools
 
 Four tools touch these stores:

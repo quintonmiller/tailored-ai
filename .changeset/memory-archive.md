@@ -63,14 +63,22 @@ every-project view falls back to the global notes it showed before. See
 **Agents no longer read each other's notes.** The `recall` tool's `query` and
 `list` now return the calling agent's own notes plus unowned ones, the scope
 prompt injection already used, and semantic search follows each chunk's
-source note, so promoting a note doesn't make it public. If your agents relied
-on reading each other's notes, have them write facts instead (facts stay
-shared), or write the note unowned. A session with no agent name, and the
-Memory page, still see everything.
+source note, so promoting a note doesn't make it public. An agent also can't
+archive, restore, keep or promote another agent's note by its id. If your
+agents relied on reading each other's notes: a named agent's notes are now
+always its own, so to share, it writes a fact (facts stay shared) or a doc. A
+person can still write an unowned note, which every agent reads, through `POST
+/api/memory/notes` or by accepting a note a chat proposes. A session with no
+agent name, and the Memory page, still see everything.
 
 `recall` now defaults to the session's active project, as its `project_id`
 description always said; it used to fall back to global. Notes written in a
-project session land in that project.
+project session land in that project, so they no longer show up (by recall or
+injection) in sessions outside it, such as a Discord DM or a global chat; pass
+`project_id: "global"` for a note that should follow the agent everywhere. A
+project session's semantic search now reaches global chunks, KB files among
+them, as well as its project's; it used to see only the project's, so prompt
+injection in a project session never surfaced the KB.
 
 Session summaries belong to the agent that ran the session, when one named
 agent did: the session summarizer and the summary written before

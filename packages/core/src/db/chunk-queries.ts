@@ -117,6 +117,13 @@ export interface ChunkVisibility {
   /** undefined = every project, null = global only, id = that project. */
   projectId?: string | null;
   /**
+   * With a project id, also see global chunks (`project_id IS NULL`), the way
+   * the keyword tier reads a project's notes plus global ones. KB files are
+   * indexed global, so without this a project session's semantic search never
+   * reaches them.
+   */
+  includeGlobal?: boolean;
+  /**
    * Leave out chunks of notes another agent owns, the same rule recall
    * applies to the notes themselves: promoting a note into the search index
    * must not make it readable by every agent in the project.
@@ -138,6 +145,9 @@ function visibleChunks(v: ChunkVisibility, extra: string[] = []): { sql: string;
   if (v.projectId !== undefined) {
     if (v.projectId === null) {
       clauses.push("c.project_id IS NULL");
+    } else if (v.includeGlobal) {
+      clauses.push("(c.project_id = ? OR c.project_id IS NULL)");
+      params.push(v.projectId);
     } else {
       clauses.push("c.project_id = ?");
       params.push(v.projectId);

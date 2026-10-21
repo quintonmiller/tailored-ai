@@ -246,8 +246,17 @@ export class SqliteMemoryBackend implements MemoryBackend {
     if (context.vector) {
       const minScore = context.minImportance ?? 0;
       // Chunks follow their source note's owner, the same rule as the keyword
-      // tier above, so a promoted note stays as private as it was.
-      const hits = semanticSearch(this.db, context.vector, { projectId, agent, limit, minScore, includeArchived });
+      // tier above, so a promoted note stays as private as it was. A project
+      // reads its own chunks plus global ones, also like the keyword tier:
+      // KB files are indexed global, and recall defaults to the active project.
+      const hits = semanticSearch(this.db, context.vector, {
+        projectId,
+        includeGlobal: projectId !== null,
+        agent,
+        limit,
+        minScore,
+        includeArchived,
+      });
       for (const hit of hits) {
         const frag = chunkFragment(hit.chunk, {
           tier: "long",
@@ -361,6 +370,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
     if (kind === "chunk") {
       const chunks = listChunks(this.db, {
         projectId,
+        includeGlobal: projectId !== null,
         agent,
         includeArchived,
         limit: query.limit,

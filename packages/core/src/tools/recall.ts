@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import { promoteNote } from "../agent/memory-promotion.js";
-import { keepNote } from "../db/note-queries.js";
+import { getNote, keepNote } from "../db/note-queries.js";
 import type { MemoryBackend } from "../memory/interface.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
@@ -23,8 +23,9 @@ import { formatHits, recallQueryAsync, type Tier } from "./recall-query.js";
  * mean what `keep` means now; both changed so an agent's mistakes can be undone.
  *
  * `query` and `list` read the calling agent's own notes plus unowned ones, the
- * scope prompt injection uses; an unnamed session reads them all. The project
- * defaults to the session's active project.
+ * scope prompt injection uses, and the actions that change a note change only
+ * those; an unnamed session reads and changes them all. The project defaults
+ * to the session's active project.
  */
 export class RecallTool implements Tool {
   name = "recall";
@@ -147,15 +148,15 @@ export class RecallTool implements Tool {
         case "archive":
           return this.archive(args, context);
         case "unarchive":
-          return this.unarchive(args);
+          return this.unarchive(args, context);
         case "list":
           return this.list(args, context, projectId);
         case "promote":
-          return this.promote(args);
+          return this.promote(args, context);
         case "keep":
           // Lifecycle action — stays SQLite-direct, like the sweep it exempts
           // a note from. A plugin backend owns its own retention.
-          return this.keep(args);
+          return this.keep(args, context);
         default:
           return { success: false, output: "", error: `unknown action "${action}"` };
       }
@@ -203,7 +204,7 @@ export class RecallTool implements Tool {
     return { success: true, output: formatHits(hits) };
   }
 
-  private async promote(args: Record<string, unknown>): Promise<ToolResult> {
+  private async promote(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const id = typeof args.id === "string" ? args.id : "";
     if (!id) {
       return { success: false, output: "", error: "id is required for action=promote" };
@@ -217,6 +218,10 @@ export class RecallTool implements Tool {
       };
     }
     const force = args.force === true;
+    const owned = getNote(this.db, bareNoteId(id));
+    if (owned && !mayChange(owned.agent, context.agentName)) {
+      return { success: true, output: `(no note with id ${id})` };
+    }
     const result = await promoteNote(this.db, embedder, bareNoteId(id), {
       force,
       model: this.embedModel,
@@ -307,7 +312,7 @@ export class RecallTool implements Tool {
     }
     const reason = (typeof args.reason === "string" && args.reason.trim()) || defaultReason;
     const backend = await this.getMemoryBackend!();
-    const { candidates, found } = await findNote(backend, id);
+    const { candidates, found } = await findNote(backend, id, context.agentName);
 
     if (!backend.archive) {
       if (action === "archive" || !backend.delete) {
@@ -341,7 +346,7 @@ export class RecallTool implements Tool {
     return { success: false, output: "", error: `the active memory backend couldn't ${action} ${id}` };
   }
 
-  private async unarchive(args: Record<string, unknown>): Promise<ToolResult> {
+  private async unarchive(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const id = typeof args.id === "string" ? args.id : "";
     if (!id) {
       return { success: false, output: "", error: "id is required for action=unarchive" };
@@ -350,7 +355,7 @@ export class RecallTool implements Tool {
     if (!backend.unarchive) {
       return { success: false, output: "", error: "the active memory backend can't unarchive notes" };
     }
-    const { candidates, found } = await findNote(backend, id);
+    const { candidates, found } = await findNote(backend, id, context.agentName);
     for (const candidate of candidates) {
       if (await backend.unarchive(candidate)) return { success: true, output: `restored ${id}` };
     }
@@ -358,7 +363,7 @@ export class RecallTool implements Tool {
     return { success: true, output: `(no note with id ${id})` };
   }
 
-  private keep(args: Record<string, unknown>): ToolResult {
+  private keep(args: Record<string, unknown>, context: ToolContext): ToolResult {
     const id = typeof args.id === "string" ? args.id : "";
     const reason = typeof args.reason === "string" ? args.reason.trim() : "";
     if (!id) {
@@ -372,7 +377,8 @@ export class RecallTool implements Tool {
           "reason is required for action=keep — one short line on why this note is worth keeping forever. Forces selectivity.",
       };
     }
-    const note = keepNote(this.db, bareNoteId(id), reason);
+    const owned = getNote(this.db, bareNoteId(id));
+    const note = owned && mayChange(owned.agent, context.agentName) ? keepNote(this.db, owned.id, reason) : null;
     if (!note) {
       return { success: false, output: "", error: `no note with id ${id}` };
     }
@@ -412,15 +418,35 @@ export class RecallTool implements Tool {
  * `found` is true only when the backend's `get` confirmed the note exists.
  * Otherwise every form stays a candidate, as before this lookup existed: a
  * backend with no `get`, or one whose `get` doesn't cover notes, can't say.
+ *
+ * Another agent's note comes back as no candidates at all: see {@link mayChange}.
  */
-async function findNote(backend: MemoryBackend, id: string): Promise<{ candidates: string[]; found: boolean }> {
+async function findNote(
+  backend: MemoryBackend,
+  id: string,
+  caller: string | undefined,
+): Promise<{ candidates: string[]; found: boolean }> {
   const forms = id.startsWith("note:") ? [id] : [`note:${id}`, id];
   if (backend.get) {
     for (const form of forms) {
-      if (await backend.get(form)) return { candidates: [form], found: true };
+      const note = await backend.get(form);
+      if (!note) continue;
+      if (!mayChange(note.metadata?.agent, caller)) return { candidates: [], found: false };
+      return { candidates: [form], found: true };
     }
   }
   return { candidates: forms, found: false };
+}
+
+/**
+ * Whether the caller may change a note: a named agent its own notes and
+ * unowned ones, the same notes its `query` and `list` read; an unnamed
+ * session any note. To a named agent another agent's note doesn't exist, so
+ * it can't hide, restore, keep or promote one whose id it saw somewhere else,
+ * such as a shared room's transcript.
+ */
+function mayChange(owner: unknown, caller: string | undefined): boolean {
+  return !caller || typeof owner !== "string" || owner === caller;
 }
 
 /**

@@ -13,7 +13,7 @@ Design: [memory-tiers.md](./memory-tiers.md). This doc captures the implementati
 - TTLs stored as ISO 8601; compared via `datetime(ttl_at) > datetime('now')` to normalize formats
 - Default TTL: 14 days. A kept note never expires (`keep` clears its TTL); notes with `importance >= 0.8` survive sweeps
 - Daily sweep schedule: `autopilot.memorySweepCron` (default `"14 3 * * *"`; empty string disables)
-- Project-scoped by default: `recall` reads and writes the session's active project (plus global notes, when reading) unless told otherwise; pass `project_id: "global"` for cross-project notes. It used to fall back to global when `project_id` was left out
+- Project-scoped by default: `recall` reads and writes the session's active project (plus global notes and search chunks, when reading) unless told otherwise; pass `project_id: "global"` for cross-project notes. It used to fall back to global when `project_id` was left out. So a note an agent writes in a project session is no longer visible from sessions outside that project (a DM, a global chat); a note that should follow the agent everywhere needs `project_id: "global"`
 - `query` action accepts `tier: any|short|long` to scope retrieval to one tier
 
 ## Archive
@@ -83,7 +83,9 @@ Notes are private to the agent that wrote them. An agent reads its own notes plu
 
 - prompt injection, both the pinned and the relevance tier;
 - the `recall` tool's `query` and `list`, which pass the calling agent (`ToolContext.agentName`) the same way;
-- semantic search: a chunk promoted from a note follows that note's owner (a join on the note, so it can't drift), so promoting a note into the index doesn't make it public. KB chunks stay shared.
+- semantic search: a chunk promoted from a note follows that note's owner (a join on the note, so it can't drift), so promoting a note into the index doesn't make it public. KB chunks stay shared, and a project session's search reaches global chunks (KB files are indexed global) as well as its project's.
+
+What an agent can't read it can't change either: `recall`'s `archive`, `forget`, `unarchive`, `keep` and `promote` answer "no note with id" for another agent's note, even given its id (from a shared room's transcript, say).
 
 The scope travels as an open token string, `global agent:planner` or `project:x agent:planner`, built by `memoryScope()` in `packages/core/src/memory/scope.ts`. The SQLite backend's `parseScope` understands `agent:` for `query` and `list` alike.
 
@@ -93,7 +95,7 @@ A session with no agent name sends no `agent:` token and so keeps the cross-agen
 
 **Facts stay shared.** The `facts` table has no `agent` column — the authoring agent is recorded only as free-text `source` — and that's on purpose: a fact is about the world (a birthday, a tyre size), and every agent should get the same answer. If an agent's finding should reach others, it writes a fact or a doc; nothing leaks through recall.
 
-Why it matters: any agent with `recall` or `injectMemory` used to read every other agent's notes and narrate them as its own recollection. Pinned notes were the expensive case, since those inject regardless of relevance and so landed in every agent's prompt on every turn. The symptom reads as a persona bug and is very hard to trace back to scoping. If your agents relied on reading each other's notes, have them write facts instead, or leave the note unowned by writing it from an unnamed session or the Memory page.
+Why it matters: any agent with `recall` or `injectMemory` used to read every other agent's notes and narrate them as its own recollection. Pinned notes were the expensive case, since those inject regardless of relevance and so landed in every agent's prompt on every turn. The symptom reads as a persona bug and is very hard to trace back to scoping. If your agents relied on reading each other's notes: a named agent's notes are always its own, so to share, it writes a fact or a doc. A person can still write an unowned note, which every agent reads, through `POST /api/memory/notes` or by accepting a note a chat proposes, and notes an unnamed session writes are unowned.
 
 ## Session summarization
 

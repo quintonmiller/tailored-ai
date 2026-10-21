@@ -14,7 +14,7 @@ import { buildMemoryBlockWithMeta } from "../agent/memory-inject.js";
 import { newSession } from "../agent/session.js";
 import { SESSION_SUMMARY_TAG, summarizeSession, sweepIdleSessions } from "../agent/summarize-session.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
-import { createChunk } from "../db/chunk-queries.js";
+import { createChunk, listChunksBySource } from "../db/chunk-queries.js";
 import { createNote, getNote, listNotes } from "../db/note-queries.js";
 import { saveMessage, sessionAgent } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
@@ -127,6 +127,61 @@ describe("the recall tool reads only the caller's own notes and unowned ones", (
     const tool = new RecallTool(db, { getEmbedder: () => sameVectorEmbedder() });
     const res = await tool.execute({ action: "query", query: "zebra" }, ctx("planner"));
     expect(res.output).toContain("kb:house.md");
+  });
+
+  // KB files are indexed global. Once recall defaulted to the active project,
+  // a strict project match on chunks cut a project session off from all of them.
+  it("a project session's semantic search still reaches global chunks, not another project's", async () => {
+    createChunk(db, { source: "kb:house.md", content: "house manual", embedding: new Float32Array([1, 0, 0]) });
+    createChunk(db, {
+      source: "kb:office.md",
+      content: "office manual",
+      project_id: "office",
+      embedding: new Float32Array([1, 0, 0]),
+    });
+    const tool = new RecallTool(db, { getEmbedder: () => sameVectorEmbedder() });
+    const res = await tool.execute({ action: "query", query: "zebra", limit: 10 }, ctx("planner", "house"));
+    expect(res.output).toContain("kb:house.md");
+    expect(res.output).not.toContain("kb:office.md");
+    const listed = await backend.list({ kind: "chunk", scope: "project:house" });
+    expect(listed.map((c) => c.metadata?.source)).toEqual(["kb:house.md"]);
+  });
+});
+
+describe("an agent changes only the notes it can read", () => {
+  // Reading was scoped; changing wasn't. An id seen in a shared room was
+  // enough to hide, restore, keep or promote another agent's note.
+  it("can't archive, forget, unarchive, keep or promote another agent's note", async () => {
+    const theirs = createNote(db, { content: "the ferry leaves at noon", agent: "writer" });
+    const tool = new RecallTool(db, { getEmbedder: () => sameVectorEmbedder() });
+
+    for (const action of ["archive", "forget"]) {
+      const res = await tool.execute({ action, id: theirs.id }, ctx("planner"));
+      expect(res.output).toContain("no note with id");
+      expect(getNote(db, theirs.id)?.archived_at).toBeNull();
+    }
+    const keep = await tool.execute({ action: "keep", id: theirs.id, reason: "mine now" }, ctx("planner"));
+    expect(keep.error).toContain("no note with id");
+    expect(getNote(db, theirs.id)?.kept).toBe(false);
+    const promote = await tool.execute({ action: "promote", id: theirs.id }, ctx("planner"));
+    expect(promote.output).toContain("no note with id");
+    expect(listChunksBySource(db, `note:${theirs.id}`)).toHaveLength(0);
+
+    await tool.execute({ action: "archive", id: theirs.id }, ctx("writer"));
+    const restore = await tool.execute({ action: "unarchive", id: `note:${theirs.id}` }, ctx("planner"));
+    expect(restore.output).toContain("no note with id");
+    expect(getNote(db, theirs.id)?.archived_at).not.toBeNull();
+  });
+
+  it("can change its own and unowned notes; an unnamed session can change any", async () => {
+    const shared = createNote(db, { content: "shared", agent: null });
+    const theirs = createNote(db, { content: "theirs", agent: "writer" });
+    const tool = new RecallTool(db);
+
+    expect((await tool.execute({ action: "archive", id: shared.id }, ctx("planner"))).output).toContain("archived");
+    expect((await tool.execute({ action: "unarchive", id: shared.id }, ctx("planner"))).output).toContain("restored");
+    expect((await tool.execute({ action: "keep", id: shared.id, reason: "r" }, ctx("planner"))).success).toBe(true);
+    expect((await tool.execute({ action: "archive", id: theirs.id }, ctx(undefined))).output).toContain("archived");
   });
 });
 
