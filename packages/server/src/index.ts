@@ -129,6 +129,7 @@ import {
   StateConflictError,
   StateError,
   type Suggestions,
+  sessionAgent,
   setSecret,
   speakable,
   speechStages,
@@ -726,7 +727,12 @@ export function createServer(opts: ServerOptions) {
     let noteId: string | null = null;
     if (wantSummary) {
       try {
-        const result = await summarizeSession(runtime.db, id, runtime.getProvider(), runtime.getModel(), { force });
+        // The summary belongs to the session's agent when one ran it, so it
+        // stays as private in recall as the conversation was.
+        const result = await summarizeSession(runtime.db, id, runtime.getProvider(), runtime.getModel(), {
+          force,
+          agent: sessionAgent(runtime.db, id),
+        });
         if (result) noteId = result.noteId;
       } catch (err) {
         console.error("[server] session summary failed:", (err as Error).message);

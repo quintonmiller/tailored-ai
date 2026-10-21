@@ -20,9 +20,14 @@ import {
   createNote,
   getNote,
   initDatabase,
+  listNotes,
   type MemoryBackend,
+  newSession,
+  recordTokenUsage,
   registerMemoryBackendFactory,
+  SESSION_SUMMARY_TAG,
   SqliteMemoryBackend,
+  saveMessage,
   upsertFact,
 } from "@tailored-ai/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -294,5 +299,30 @@ describe("/api/facts", () => {
 
     expect((await call("POST", "/api/facts/fact_nope/archive")).status).toBe(404);
     expect((await call("POST", "/api/facts/fact_nope/unarchive")).status).toBe(404);
+  });
+});
+
+describe("DELETE /api/sessions/:id", () => {
+  it("writes the parting summary as the session's agent's note", async () => {
+    const session = newSession(db, "fake", "fake");
+    for (let i = 0; i < 6; i++) {
+      saveMessage(db, session.id, { role: i % 2 === 0 ? "user" : "assistant", content: `message ${i}` });
+    }
+    recordTokenUsage(db, { sessionId: session.id, agent: "planner", promptTokens: 1, completionTokens: 1 });
+
+    const res = await call("DELETE", `/api/sessions/${session.id}`);
+    expect(res.status).toBe(200);
+    const id = res.json.summaryNoteId as string;
+    expect(getNote(db, id)?.agent).toBe("planner");
+    expect(listNotes(db, { tag: SESSION_SUMMARY_TAG })).toHaveLength(1);
+  });
+
+  it("leaves the summary unowned when no named agent ran the session", async () => {
+    const session = newSession(db, "fake", "fake");
+    for (let i = 0; i < 6; i++) {
+      saveMessage(db, session.id, { role: i % 2 === 0 ? "user" : "assistant", content: `message ${i}` });
+    }
+    const res = await call("DELETE", `/api/sessions/${session.id}`);
+    expect(getNote(db, res.json.summaryNoteId as string)?.agent).toBeNull();
   });
 });

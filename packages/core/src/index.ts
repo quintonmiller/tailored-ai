@@ -576,6 +576,7 @@ export {
   getSessionMessages,
   listSessions,
   saveMessage,
+  sessionAgent,
   updateSessionMeta,
 } from "./db/queries.js";
 export type { PauseScope, RunKind, RuntimeSettings } from "./db/runtime-settings-queries.js";

@@ -248,7 +248,9 @@ export class SqliteMemoryBackend implements MemoryBackend {
     const semanticHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
     if (context.vector) {
       const minScore = context.minImportance ?? 0;
-      const hits = semanticSearch(this.db, context.vector, { projectId, limit, minScore, includeArchived });
+      // Chunks follow their source note's owner, the same rule as the keyword
+      // tier above, so a promoted note stays as private as it was.
+      const hits = semanticSearch(this.db, context.vector, { projectId, agent, limit, minScore, includeArchived });
       for (const hit of hits) {
         const frag = chunkFragment(hit.chunk, {
           tier: "long",
@@ -344,7 +346,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
   }
 
   async list(query: ListQuery): Promise<MemoryFragment[]> {
-    const { projectId } = parseScope(query.scope);
+    const { projectId, agent } = parseScope(query.scope);
     const kind = query.kind ?? "note";
     const includeArchived = query.includeArchived === true;
 
@@ -359,7 +361,13 @@ export class SqliteMemoryBackend implements MemoryBackend {
     }
 
     if (kind === "chunk") {
-      const chunks = listChunks(this.db, { projectId, includeArchived, limit: query.limit, offset: query.offset });
+      const chunks = listChunks(this.db, {
+        projectId,
+        agent,
+        includeArchived,
+        limit: query.limit,
+        offset: query.offset,
+      });
       return chunks.map((c) => ({
         text: c.content,
         id: `chunk:${c.id}`,
@@ -369,7 +377,6 @@ export class SqliteMemoryBackend implements MemoryBackend {
 
     if (kind === "prelude") {
       // List every section row for the scope. Without an agent, return [].
-      const { agent } = parseScope(query.scope);
       if (!agent) return [];
       return getCoreMemory(this.db, { agent, project_id: projectId ?? null }).map((row) => ({
         text: row.content,
@@ -378,9 +385,12 @@ export class SqliteMemoryBackend implements MemoryBackend {
       }));
     }
 
-    // Default: notes
+    // Default: notes. An `agent:` token scopes them the way `query` does: that
+    // agent's own notes plus unowned ones. No token keeps the view of all.
     const notes = listNotes(this.db, {
       project_id: projectId,
+      agent,
+      includeUnowned: true,
       tag: query.tags?.[0],
       excludeExpired: true,
       includeGlobal: projectId !== null,

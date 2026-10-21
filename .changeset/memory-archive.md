@@ -4,7 +4,7 @@
 "@tailored-ai/ui": patch
 ---
 
-Archive notes and facts instead of losing them.
+Archive notes and facts instead of losing them, and keep each agent's notes its own.
 
 **`recall action="archive"` used to mean "keep", and it never worked.** It set
 a flag nothing read, so a note an agent "archived" to keep forever was swept
@@ -51,3 +51,21 @@ reason })` and `unarchive(id)`, `QueryContext` and `ListQuery` gain
 `includeArchived`, archived fragments carry `metadata.archived_at`, and
 `ListQuery.scope` accepts `project:*` for every project. A backend that ignores
 all of it keeps working. See `docs/memory-storage-registry.md`.
+
+**Agents no longer read each other's notes.** The `recall` tool's `query` and
+`list` now return the calling agent's own notes plus unowned ones, the scope
+prompt injection already used, and semantic search follows each chunk's
+source note, so promoting a note doesn't make it public. If your agents relied
+on reading each other's notes, have them write facts instead (facts stay
+shared), or write the note unowned. A session with no agent name, and the
+Memory page, still see everything.
+
+`recall` now defaults to the session's active project, as its `project_id`
+description always said; it used to fall back to global. Notes written in a
+project session land in that project.
+
+Session summaries belong to the agent that ran the session, when one named
+agent did: the session summarizer and the summary written before
+`DELETE /api/sessions/:id` both pass it (`sessionAgent(db, sessionId)`). Older
+summaries stay unowned. The summarizer's `recent_summary` for the `default`
+agent is composed from its own summaries and unowned ones only.

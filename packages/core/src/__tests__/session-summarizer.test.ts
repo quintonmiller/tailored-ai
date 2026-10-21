@@ -17,6 +17,7 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession } from "../agent/session.js";
 import { SESSION_SUMMARY_TAG } from "../agent/summarize-session.js";
+import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemorySection } from "../db/core-memory-queries.js";
 import { archiveNote, createNote, listNotes } from "../db/note-queries.js";
 import { saveMessage } from "../db/queries.js";
@@ -128,6 +129,22 @@ describe("session-summarizer — sweep behavior", () => {
     // recent_summary core memory was refreshed for the default agent.
     const row = getCoreMemorySection(db, { agent: "default", project_id: null }, "recent_summary");
     expect(row?.content).toContain("owner asked about taxes");
+  });
+
+  it("gives each summary to the agent that ran its session", async () => {
+    const { provider } = countingProvider("planned the move");
+    const runtime = makeRuntime(provider);
+    const planned = seedIdleSession({ key: "web:a", idleMinutes: 200 });
+    recordTokenUsage(db, { sessionId: planned.id, agent: "planner", promptTokens: 1, completionTokens: 1 });
+    seedIdleSession({ key: "web:b", idleMinutes: 200 });
+
+    await new SessionSummarizer({ runtime, config: { idleMinutes: 120 } }).runSweep();
+
+    const owners = listNotes(db, { tag: SESSION_SUMMARY_TAG }).map((n) => n.agent);
+    expect(owners.sort()).toEqual(["planner", null].sort());
+    // planner's summary is not composed into the default agent's recent_summary.
+    const row = getCoreMemorySection(db, { agent: "default", project_id: null }, "recent_summary");
+    expect(row?.content.split("\n")).toHaveLength(1);
   });
 
   it("does not summarize sessions newer than idleMinutes", async () => {

@@ -178,7 +178,7 @@ export interface PreludeContext {
 }
 
 export interface ListQuery {
-  scope?: string | string[];                          // also `project:*`: every project at once
+  scope?: string | string[];                          // also `project:*` (every project); `agent:<name>` = own + unowned
   tags?: string[];
   kind?: string;
   pinned?: boolean;
@@ -207,6 +207,12 @@ A backend written before archiving existed leaves both verbs out and ignores
 back to `delete` and say in their reply that the delete was for good; `recall
 archive` / `unarchive` refuse; the HTTP archive routes answer `501`. Nothing
 reports a hide that didn't happen.
+
+Owner scoping rides the same open `scope` string: with an `agent:<name>`
+token, the built-in's `query` and `list` return that agent's notes plus
+unowned ones, and its semantic tier drops chunks promoted from another
+agent's notes. A backend that ignores the token returns everything, which is
+what it did before.
 
 The built-in archives notes and facts. A chunk promoted from a note follows
 that note rather than carrying its own state, and core memory is edited in

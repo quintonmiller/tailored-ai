@@ -21,6 +21,10 @@ import { formatHits, recallQueryAsync, type Tier } from "./recall-query.js";
  *
  * Nothing an agent does here deletes. `forget` used to, and `archive` used to
  * mean what `keep` means now; both changed so an agent's mistakes can be undone.
+ *
+ * `query` and `list` read the calling agent's own notes plus unowned ones, the
+ * scope prompt injection uses; an unnamed session reads them all. The project
+ * defaults to the session's active project.
  */
 export class RecallTool implements Tool {
   name = "recall";
@@ -130,12 +134,12 @@ export class RecallTool implements Tool {
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const action = String(args.action ?? "").toLowerCase();
-    const projectId = resolveProjectId(args.project_id);
+    const projectId = resolveProjectId(args.project_id, context.projectId);
 
     try {
       switch (action) {
         case "query":
-          return this.query(args, projectId);
+          return this.query(args, context, projectId);
         case "note":
           return this.note(args, context, projectId);
         case "forget":
@@ -160,7 +164,11 @@ export class RecallTool implements Tool {
     }
   }
 
-  private async query(args: Record<string, unknown>, projectId: string | null): Promise<ToolResult> {
+  private async query(
+    args: Record<string, unknown>,
+    context: ToolContext,
+    projectId: string | null,
+  ): Promise<ToolResult> {
     const query = typeof args.query === "string" ? args.query.trim() : "";
     if (!query) {
       return { success: false, output: "", error: "query is required for action=query" };
@@ -178,6 +186,11 @@ export class RecallTool implements Tool {
         query,
         tier: tierArg as "any" | Tier,
         projectId,
+        // Whose memory this is: the agent's own notes plus unowned ones.
+        // Without it any agent read every other agent's notes and narrated
+        // them as its own recollection. Undefined for an unnamed session,
+        // which keeps the cross-agent view.
+        agent: context.agentName,
         limit,
         embedder,
         embedModel: this.embedModel,
@@ -360,7 +373,7 @@ export class RecallTool implements Tool {
 
   private async list(
     args: Record<string, unknown>,
-    _context: ToolContext,
+    context: ToolContext,
     projectId: string | null,
   ): Promise<ToolResult> {
     const limit = typeof args.limit === "number" ? args.limit : 10;
@@ -370,7 +383,7 @@ export class RecallTool implements Tool {
       return { success: false, output: "", error: "list is not supported by the active memory backend" };
     }
     const fragments = await backend.list({
-      scope: scopeStr(projectId),
+      scope: scopeStr(projectId, context.agentName),
       kind: "note",
       tags: tag ? [tag] : undefined,
       includeArchived: args.includeArchived === true,
@@ -408,10 +421,16 @@ function formatNoteFragment(f: import("../memory/interface.js").MemoryFragment):
   return `${head}\n  ${body}`;
 }
 
-function resolveProjectId(raw: unknown): string | null {
+/**
+ * `project_id` as given, `"global"` (or empty) for global, and the session's
+ * active project when it's left out — what the parameter has always promised.
+ * It used to fall back to global, so an agent working in a project couldn't
+ * recall what it had noted there unless it passed the id.
+ */
+function resolveProjectId(raw: unknown, active: string | null | undefined): string | null {
   if (typeof raw === "string") {
     if (raw === "global" || raw === "") return null;
     return raw;
   }
-  return null;
+  return active ?? null;
 }

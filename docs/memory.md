@@ -13,7 +13,7 @@ Design: [memory-tiers.md](./memory-tiers.md). This doc captures the implementati
 - TTLs stored as ISO 8601; compared via `datetime(ttl_at) > datetime('now')` to normalize formats
 - Default TTL: 14 days. Kept notes, and notes with `importance >= 0.8`, survive sweeps
 - Daily sweep schedule: `autopilot.memorySweepCron` (default `"14 3 * * *"`; empty string disables)
-- Project-scoped by default: pass `project_id: "global"` for cross-project notes
+- Project-scoped by default: `recall` reads and writes the session's active project (plus global notes, when reading) unless told otherwise; pass `project_id: "global"` for cross-project notes. It used to fall back to global when `project_id` was left out
 - `query` action accepts `tier: any|short|long` to scope retrieval to one tier
 
 ## Archive
@@ -68,24 +68,30 @@ small, always loaded and edited in place.
 - `ToolContext.workingMemory: Map<string,string>` — per-loop scratch shared across tool calls within a single agent run. Cleared when the loop ends. Use for "stash so the next tool call can pick it up" patterns.
 - `ToolContext.projectId` — mirrors `session.projectId`, available to tools that need project scope without poking at the db.
 
-### Whose memory gets injected
+### Whose memory an agent reads
 
-Injection is scoped by **agent**, not just project. An agent recalls its own notes plus notes nobody claimed (`agent IS NULL` — written before authorship was recorded, or by an unnamed session). It does not recall another agent's.
+Notes are private to the agent that wrote them. An agent reads its own notes plus notes nobody claimed (`agent IS NULL` — written before authorship was recorded, or by an unnamed session), and never another agent's, by every path it has:
 
-The scope travels as an open token string, `global agent:coder` or `project:x agent:coder`, built by `memoryScope()` in `packages/core/src/memory/scope.ts`. No `MemoryBackend` contract change was needed: `scope` was already `string | string[]`, and the SQLite backend's `parseScope` already understood `agent:` — the injection path simply never sent it.
+- prompt injection, both the pinned and the relevance tier;
+- the `recall` tool's `query` and `list`, which pass the calling agent (`ToolContext.agentName`) the same way;
+- semantic search: a chunk promoted from a note follows that note's owner (a join on the note, so it can't drift), so promoting a note into the index doesn't make it public. KB chunks stay shared.
 
-A session with no agent name sends no `agent:` token and so keeps the cross-agent view, which is the behaviour that predates scoping. That is deliberate: a session that cannot say whose it is should not silently recall less.
+The scope travels as an open token string, `global agent:planner` or `project:x agent:planner`, built by `memoryScope()` in `packages/core/src/memory/scope.ts`. The SQLite backend's `parseScope` understands `agent:` for `query` and `list` alike.
 
-**Facts are still not agent-scoped.** The `facts` table has no `agent` column at all — the authoring agent is recorded only as free-text `source` — so a fact remains visible to every agent. Fixing that needs a migration and is tracked separately.
+A session with no agent name sends no `agent:` token and so keeps the cross-agent view. That is deliberate: a session that cannot say whose it is should not silently recall less. The Memory page and `/api/memory/*` are a person's view and see everything.
 
-Why it matters: before this, any agent with `injectMemory` read every other agent's notes and narrated them as its own recollection. Pinned notes were the expensive case, since those inject regardless of relevance and so landed in every agent's prompt on every turn. The symptom reads as a persona bug and is very hard to trace back to scoping.
+**Session summaries belong to the session's agent** when it's known: the one named agent whose model calls the session recorded (`sessionAgent(db, sessionId)`, read from `token_usage`). The session summarizer and the summary written before `DELETE /api/sessions/:id` both pass it. A session no named agent ran, or more than one did, gets an unowned summary, and summaries written before this stay unowned.
+
+**Facts stay shared.** The `facts` table has no `agent` column — the authoring agent is recorded only as free-text `source` — and that's on purpose: a fact is about the world (a birthday, a tyre size), and every agent should get the same answer. If an agent's finding should reach others, it writes a fact or a doc; nothing leaks through recall.
+
+Why it matters: any agent with `recall` or `injectMemory` used to read every other agent's notes and narrate them as its own recollection. Pinned notes were the expensive case, since those inject regardless of relevance and so landed in every agent's prompt on every turn. The symptom reads as a persona bug and is very hard to trace back to scoping. If your agents relied on reading each other's notes, have them write facts instead, or leave the note unowned by writing it from an unnamed session or the Memory page.
 
 ## Session summarization
 
-- `packages/core/src/agent/summarize-session.ts` — `summarizeSession(db, sessionId, provider, model, opts)` writes a note tagged `session-summary` capturing the transcript. Idempotent (skipped if a summary already exists; `force: true` overrides). Importance scales with message count + tool calls. Default TTL 30 days.
-- `sweepIdleSessions(db, provider, model, opts)` — batch helper finds sessions where `updated_at <= now - idleMinutes` and runs `summarizeSession` on each. Supports `keyPrefixes` to target specific session kinds (e.g. `["autopilot:", "cron:"]`).
+- `packages/core/src/agent/summarize-session.ts` — `summarizeSession(db, sessionId, provider, model, opts)` writes a note tagged `session-summary` capturing the transcript. Idempotent (skipped if a summary already exists, archived ones included; `force: true` overrides). Importance scales with message count + tool calls. Default TTL 30 days. `opts.agent` makes it that agent's note; the default is unowned.
+- `sweepIdleSessions(db, provider, model, opts)` — batch helper finds sessions where `updated_at <= now - idleMinutes` and runs `summarizeSession` on each. Supports `keyPrefixes` to target specific session kinds (e.g. `["autopilot:", "cron:"]`), and `agentFor: (id) => sessionAgent(db, id)` to give each summary to the agent that ran its session.
 - `deleteSession(db, sessionId)` — removes the session row + all its messages.
-- HTTP: `DELETE /api/sessions/:id` summarizes (unless `?summarize=0`) then deletes. Pass `?force=1` to re-summarize.
+- HTTP: `DELETE /api/sessions/:id` summarizes (unless `?summarize=0`), as the session's agent, then deletes. Pass `?force=1` to re-summarize.
 
 ### `builtin:session-summarizer` plugin (cross-channel continuity, opt-in)
 
@@ -93,7 +99,7 @@ Sessions are hermetic per-channel silos (`discord:<user>`, `web:<key>`). Out of 
 
 It ships **installed but disabled** (`DEFAULT_DISABLED_PLUGIN_MODULES` in `config.ts`). It autonomously calls the LLM and writes memory, so it's opt-in: enable it deliberately. No behavior change for anyone who leaves it off.
 
-On a timer it sweeps idle sessions (`sweepIdleSessions`), then refreshes the `recent_summary` **core-memory** section — the always-injected identity layer keyed by `(agent, project_id)`, read on every turn (`agent/loop.ts`). `recent_summary` is what carries continuity: the next session on any channel sees a compact "here's what recently happened" block. The section is composed from the most recent summaries (newest first) and hard-capped (~600 bytes) so the always-injected layer stays small for local models. Sessions don't store an agent, so the section is keyed by the `default` agent (the same fallback the loop uses for anonymous chat) plus the session's `project_id`.
+On a timer it sweeps idle sessions (`sweepIdleSessions`), then refreshes the `recent_summary` **core-memory** section — the always-injected identity layer keyed by `(agent, project_id)`, read on every turn (`agent/loop.ts`). `recent_summary` is what carries continuity: the next session on any channel sees a compact "here's what recently happened" block. The section is composed from the most recent summaries (newest first) and hard-capped (~600 bytes) so the always-injected layer stays small for local models. The section is keyed by the `default` agent (the same fallback the loop uses for anonymous chat) plus the session's `project_id`, and composed from the `default` agent's summaries and unowned ones only. Each summary the plugin writes belongs to the agent that ran the session, so another named agent's conversations stay out of it.
 
 Idempotence comes for free: `summarizeSession` skips sessions that already have a `session-summary` note (the plugin never passes `force`), so a steady-state sweep makes no LLM calls and the log line is silent.
 

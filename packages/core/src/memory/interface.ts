@@ -154,7 +154,9 @@ export interface PreludeContext {
 export interface ListQuery {
   /**
    * `global` / `project:<id>`, or `project:*` for every project at once (the
-   * Memory page with no project chosen). The built-in honours all three.
+   * Memory page with no project chosen). The built-in honours all three, and
+   * an `agent:<name>` token the way `query` does: that agent's own records
+   * plus the ones no agent owns.
    */
   scope?: string | string[];
   tags?: string[];

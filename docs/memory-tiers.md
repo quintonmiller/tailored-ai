@@ -237,7 +237,7 @@ worker tick recalls them.
 | Scope     | Default for       | When to override                              |
 |-----------|-------------------|-----------------------------------------------|
 | `project` | All tiers         | Default for everything. Matches today's `facts`. |
-| `agent`   | Working only      | Sub-agents (via `delegate`) that should not share notes back with the parent. |
+| `agent`   | Notes             | Always, for a named agent: it reads its own notes plus unowned ones, by `recall`, injection and semantic search. An unnamed session reads them all. Facts are not agent-scoped. See [memory.md](./memory.md#whose-memory-an-agent-reads). |
 | `global`  | Long-term opt-in  | Cross-project facts ("my birthday", "the office network is X"). Today's `global` `memory` scope continues to map here. |
 
 `project_id` on `notes` and `memory_chunks` matches the column already
@@ -315,9 +315,9 @@ Each is intentionally a few-day slice; none is a one-shot.
   index lazily on first `recall`, persist embeddings, skip unchanged files.
 - **Stale notes pollute retrieval.** Daily TTL sweep + low default
   importance should keep this bounded; revisit after M5 in real usage.
-- **Multi-agent contention on the same project.** Notes from agent A might
-  confuse agent B. Tag notes with `agent`; `recall` defaults to "any agent"
-  but can filter. Not a blocker but worth marking.
+- **Multi-agent contention on the same project.** Notes from agent A used to
+  confuse agent B, who read them as its own. Resolved: notes carry `agent`
+  and every read path scopes to the caller's own plus unowned ones.
 - **No reranking model in M5.** Score blending across keyword + semantic
   is a heuristic. If results are noisy, M7 can add a cheap LLM rerank pass.
 - **Sub-agent isolation** (`scope: agent`) requires a parent-child note

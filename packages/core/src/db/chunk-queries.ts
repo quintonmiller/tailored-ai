@@ -81,11 +81,18 @@ export function deleteChunksBySource(db: Database.Database, source: string): num
 /**
  * Which chunks a read may see. A chunk promoted from a note (`source` is
  * `note:<id>`) follows that note: it surfaces only while the note exists and
- * is live. Chunks from anywhere else (a KB file) are unaffected.
+ * is live, and, given an `agent`, only when the note is that agent's or no
+ * agent's. Chunks from anywhere else (a KB file) are shared and unaffected.
  */
 export interface ChunkVisibility {
   /** undefined = every project, null = global only, id = that project. */
   projectId?: string | null;
+  /**
+   * Leave out chunks of notes another agent owns, the same rule recall
+   * applies to the notes themselves: promoting a note into the search index
+   * must not make it readable by every agent in the project.
+   */
+  agent?: string;
   /** Also see chunks of archived notes. A deleted note's chunks never surface. */
   includeArchived?: boolean;
 }
@@ -109,6 +116,10 @@ function visibleChunks(v: ChunkVisibility, extra: string[] = []): { sql: string;
   }
   const live = v.includeArchived ? "n.id IS NOT NULL" : "n.id IS NOT NULL AND n.archived_at IS NULL";
   clauses.push(`(substr(c.source, 1, 5) != 'note:' OR (${live}))`);
+  if (v.agent) {
+    clauses.push("(n.id IS NULL OR n.agent IS NULL OR n.agent = ?)");
+    params.push(v.agent);
+  }
   return {
     sql: `FROM memory_chunks c
           LEFT JOIN notes n ON substr(c.source, 1, 5) = 'note:' AND n.id = substr(c.source, 6)
@@ -151,9 +162,9 @@ export interface ChunkSearchHit {
 /**
  * Brute-force cosine search across the chunks a read may see (see
  * {@link ChunkVisibility}): a chunk promoted from a note follows that note's
- * archive state, so archiving the note hides what was promoted from it too.
- * Acceptable up to a few thousand chunks; revisit when the corpus grows past
- * ~10k.
+ * owner and archive state, so promoting a note into the index doesn't make it
+ * public, and archiving it hides what was promoted from it too. Acceptable up
+ * to a few thousand chunks; revisit when the corpus grows past ~10k.
  */
 export function semanticSearch(
   db: Database.Database,
