@@ -77,6 +77,19 @@ from one that never registered. Where the read is cheap and idempotent, running
 it again after late registration is usually better than documenting the
 deadline.
 
+It came back on reload. The fix ran the walk again after the runtime plugins
+loaded, but only added names it hadn't seen, and the server copied plugin routes
+onto Hono once, at start. A reload builds its tools before the host re-loads
+those plugins, so their tools stayed the ones the disposed registration built: a
+config change took two reloads, and a plugin turned off left its tools in every
+agent's list, calling into a plugin that had been torn down. Its routes stayed
+until a restart.
+
+**Rule:** a re-read that only adds is half of one. When entries can also be
+replaced or withdrawn, the re-read has to replace and remove too. A consumer
+that can't be re-run — a router that can't unmount — should read the registry
+when it is used, not copy it once.
+
 ## A dependency read from the constructor, supplied at the call
 
 The fourth member of that family, and the one a test will actively hide.

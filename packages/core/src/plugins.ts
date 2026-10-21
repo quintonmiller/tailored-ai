@@ -64,11 +64,13 @@ export interface LoadPluginsOptions {
  * Wrap a context so every registration made through it is also handed to
  * `collect`, and give it this entry's own config bag and route namespace.
  *
- * Each view is re-wrapped by hand rather than mapped generically: there are
- * twelve, the list is closed, and an explicit wrapper is what makes a new view
- * a compile error here instead of a registration that silently escapes
- * collection. Calls delegate through an arrow so a view implemented as a
- * method keeps its receiver.
+ * Each view is re-wrapped by hand rather than mapped generically, and calls
+ * delegate through an arrow so a view implemented as a method keeps its
+ * receiver. The `...base` spread means a view left off this list still works
+ * but escapes collection, so a plugin a reload turns off keeps what it
+ * registered there; the three world-state views did. A test in
+ * `registration-disposers.test.ts` fails for any view the context offers that
+ * isn't wrapped here.
  */
 function collectingContext(
   base: PluginContext,
@@ -91,6 +93,9 @@ function collectingContext(
     providers: { register: wrap((...a) => base.providers.register(...a)) },
     embeddings: { register: wrap((...a) => base.embeddings.register(...a)) },
     memoryBackends: { register: wrap((...a) => base.memoryBackends.register(...a)) },
+    stateProviders: { register: wrap((...a) => base.stateProviders.register(...a)) },
+    stateTypes: { register: wrap((...a) => base.stateTypes.register(...a)) },
+    componentKinds: { register: wrap((...a) => base.componentKinds.register(...a)) },
     mediaStores: { register: wrap((...a) => base.mediaStores.register(...a)) },
     mediaRenditions: { register: wrap((...a) => base.mediaRenditions.register(...a)) },
     taskBackends: { register: wrap((...a) => base.taskBackends.register(...a)) },

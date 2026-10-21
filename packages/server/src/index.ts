@@ -174,7 +174,7 @@ import {
   SESSION_COOKIE,
   verifyPassword,
 } from "./auth/proxy-auth.js";
-import { mountPluginHttpRoutes, routePathToRegex } from "./http-routes.js";
+import { mountPluginHttpRoutes, pluginAuthExemption } from "./http-routes.js";
 // `checkPortAvailable` is re-exported below but not called here.
 import { portInUseMessage } from "./port.js";
 import { OpenStreams, type Stoppable, stopServer, untilEnded } from "./streams.js";
@@ -529,13 +529,11 @@ export function createServer(opts: ServerOptions) {
     });
   }
 
+  // Plugin routes declared `auth: "none"` skip the bearer check. Matched on the
   // concrete request path (`c.req.routePath` is the middleware's own `/api/*`
-  // pattern inside `app.use`, so it can't identify the matched handler).
-  const authExemptMatchers = runtime
-    .getHttpRoutes()
-    .list()
-    .filter((r) => r.auth === "none")
-    .map((r) => ({ method: r.method, regex: routePathToRegex(r.mountPath) }));
+  // pattern inside `app.use`, so it can't identify the matched handler), and
+  // against the routes registered now, so one a reload adds is exempt at once.
+  const isAuthExempt = pluginAuthExemption(runtime);
   // Reads by this process itself, such as the places camera rendering the UI
   // in a headless browser. Random per start, held only in memory, and good
   // for GET and HEAD alone: it can show a page, never change anything.
@@ -556,7 +554,7 @@ export function createServer(opts: ServerOptions) {
       return next();
     }
 
-    if (authExemptMatchers.some((m) => m.method === method && m.regex.test(c.req.path))) {
+    if (isAuthExempt(method, c.req.path)) {
       return next();
     }
 
@@ -4849,8 +4847,10 @@ export function createServer(opts: ServerOptions) {
 
   // --- Plugin-mounted HTTP routes ---
   //
-  // Adapt every route the runtime's HttpRouteRegistry holds onto Hono. Plugins
-  // (e.g. @tailored-ai/trusted-actions) register these via `ctx.http`. Mounted
+  // Serve the routes the runtime's HttpRouteRegistry holds, as it holds them
+  // at each request, so a reload that turns a plugin on or off or changes its
+  // handlers takes effect without a restart. Plugins (e.g.
+  // @tailored-ai/trusted-actions) register these via `ctx.http`. Mounted
   // after the core routes and the auth middleware (which already covers
   // `/api/*`), and before the SPA fallback so a plugin route under `/api/ext/…`
   // or an allow-listed absolute path wins over the static index. See #206.

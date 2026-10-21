@@ -303,6 +303,8 @@ async function runServer(
     // notifier/guards went silent until process restart). onReload runs
     // AFTER the clear, so dispose the stale instances and re-load against
     // the fresh config to re-arm subscriptions (and pick up plugin toggles).
+    // The re-load also brings the tool set and the plugin HTTP routes in line
+    // with what the plugins registered this time.
     await disposeRuntimePlugins();
     runtimePlugins = await loadRuntimePlugins();
 
@@ -1072,15 +1074,14 @@ async function main() {
       context: createPluginContext({ runtime, events }),
     });
     runtime.recordLoadedPlugins(loaded);
-    // These plugins load *after* the runtime built its tool set, so a
-    // `ctx.tools.register` call from one of them missed the single walk
-    // `createTools()` does in the constructor. Without this its tools would
-    // first appear on a reload — a registration that silently does nothing
-    // until something unrelated happens.
-    const added = runtime.applyPendingToolFactories();
-    if (added.length > 0) {
-      console.log(`[plugins] registered tools from runtime plugins: ${added.join(", ")}`);
-    }
+    // These plugins load *after* the runtime built its tool set: at startup
+    // the walk `createTools()` does missed them, and on a reload it built
+    // their tools from the registrations disposed just before this load.
+    // Syncing rebuilds the tool set from the factories as they are now, so a
+    // plugin that re-loaded, turned on or turned off is reflected at once.
+    const { added, removed } = runtime.syncToolFactories();
+    if (added.length > 0) console.log(`[plugins] registered tools from runtime plugins: ${added.join(", ")}`);
+    if (removed.length > 0) console.log(`[plugins] removed tools no factory builds now: ${removed.join(", ")}`);
     return loaded;
   };
 

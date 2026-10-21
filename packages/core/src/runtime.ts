@@ -57,7 +57,7 @@ import { PromptRegistry } from "./resources/prompt-registry.js";
 import { ProviderRegistry } from "./resources/provider-registry.js";
 import { SkillRegistry } from "./resources/skill.js";
 import { StepExecutorRegistry } from "./resources/step-executor-registry.js";
-import { ToolRegistry } from "./resources/tool-registry.js";
+import { destroyTools, ToolRegistry } from "./resources/tool-registry.js";
 import { populateBuiltinTriggers, TriggerKindRegistry } from "./resources/trigger-registry.js";
 import { LocalRoomBackend } from "./rooms/local.js";
 import { getRoomBackend, registerRoomBackend } from "./rooms/registry.js";
@@ -126,6 +126,14 @@ export interface RuntimeOptions {
 export interface SelfAccess {
   baseUrl: string;
   headers: Record<string, string>;
+}
+
+/** Which tools {@link AgentRuntime.syncToolFactories} added and removed, by name. */
+export interface ToolFactorySync {
+  /** Tools the factories build now that the tool set didn't have. */
+  added: string[];
+  /** Tools the tool set had that no factory builds any more. */
+  removed: string[];
 }
 
 export class AgentRuntime {
@@ -201,6 +209,12 @@ export class AgentRuntime {
   private _embedder: import("./providers/embedding.js").EmbeddingProvider | undefined;
   private _loadConfig: (path: string) => AgentConfig;
   private _toolRegistry: ToolRegistry = new ToolRegistry();
+  /**
+   * The tools a factory walk put in the registry, as against ones registered
+   * straight into it (`McpManager`'s). {@link syncToolFactories} rebuilds the
+   * first kind and leaves the second alone.
+   */
+  private _built = new WeakSet<Tool>();
   private _providerRegistry: ProviderRegistry = new ProviderRegistry();
   private _skillRegistry: SkillRegistry = new SkillRegistry();
   private _agentRegistry: AgentRegistry = new AgentRegistry();
@@ -216,10 +230,10 @@ export class AgentRuntime {
   private _workflows: WorkflowRegistry = new WorkflowRegistry();
   private _workflowEngine: import("./workflows/engine.js").WorkflowEngine | undefined;
   /**
-   * Plugin-registered HTTP routes. Lives on the runtime and deliberately
-   * survives `reload()` — the server (Hono) can't unmount routes once added,
-   * so route handlers read live runtime state on each request instead. The
-   * server iterates this once after building its app. See http/registry.ts.
+   * Plugin-registered HTTP routes. Lives on the runtime and survives
+   * `reload()`; its contents follow the runtime plugins as the host disposes
+   * and re-loads them, and the server serves it as it is at each request.
+   * See http/registry.ts.
    */
   private _httpRoutes: HttpRouteRegistry = new HttpRouteRegistry();
   /** How code in this process reaches the HTTP server in front of it; set by the server once it listens. */
@@ -274,7 +288,10 @@ export class AgentRuntime {
           timeProvider: this._timeProvider,
         }),
       ) ?? [];
-    for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
+    for (const tool of builtinTools) {
+      this._toolRegistry.registerBuiltin(tool);
+      this._built.add(tool);
+    }
     const { provider, model } = opts.createProvider(merged);
     this._provider = provider;
     this._model = model;
@@ -341,33 +358,6 @@ export class AgentRuntime {
   }
 
   /**
-   * Run the tool factories again and register anything that is new.
-   *
-   * `createTools()` walks the factory registry once, in the constructor. That
-   * is fine for factories registered on module import, which is how every
-   * built-in and every *registry*-pass plugin arrives — they are all in place
-   * before the runtime exists.
-   *
-   * It is not fine for a **runtime-context plugin**. Those load in a second
-   * pass, after the runtime is built, precisely because they need
-   * `ctx.runtime`. `PluginContext` offers them `ctx.tools.register` like
-   * everyone else, but by the time they call it the walk has already happened,
-   * so their tools reached the agent on the next reload and never at startup —
-   * a registration that validates, returns a disposer, and does nothing. Same
-   * class as #561 and #609.
-   *
-   * Call this after loading runtime plugins. It returns the names it added, so
-   * the caller can say what appeared rather than leaving it to be inferred.
-   *
-   * **Additive on purpose.** It does not rebuild the registry, because the
-   * registry also holds tools nobody's factory produces — `McpManager`
-   * registers discovered MCP tools directly into it — and a rebuild would drop
-   * those. Nor does it remove a tool whose config gate has since closed: this
-   * runs at startup, before any turn, where the only difference between the
-   * two walks is the factories that were not registered yet. Reacting to a
-   * config change is `reload()`'s job and stays there.
-   */
-  /**
    * What every tool factory is handed, wherever the tools are built: at
    * construction, for late plugin factories, and on reload. One builder, so a
    * capability added to one walk reaches all three. The construction walk
@@ -396,7 +386,38 @@ export class AgentRuntime {
     };
   }
 
-  applyPendingToolFactories(): string[] {
+  /**
+   * Rebuild the tools the factories build, from the factories registered now,
+   * and say which tools that added and removed.
+   *
+   * `createTools()` walks the factory registry in the constructor and on
+   * every `reload()`. That walk sees every built-in and every *registry*-pass
+   * plugin, which are registered before the runtime exists. It does not see a
+   * **runtime-context plugin** as it is now. Those load in a second pass,
+   * after the runtime is built, because they need `ctx.runtime`, and the host
+   * loads them again after each reload. So at startup their tools are missing
+   * from the walk, and after a reload the walk built them from the
+   * registrations the host disposes next: the old config, or a plugin that is
+   * now off.
+   *
+   * Call this after loading runtime plugins, at startup and after each reload.
+   * It walks the factories again and puts what they build now in place of
+   * what the last walk built: a plugin that re-loaded gets the tools its new
+   * registration builds, one turned off loses its tools, one turned on gains
+   * them. Every factory runs, not just plugins', because a built-in's output
+   * can hang on what a plugin registered: `state` is offered once any
+   * world-state type exists.
+   *
+   * A new tool takes the old one's place in the list. Tools registered
+   * straight into the registry rather than built by a walk are left alone:
+   * `McpManager` registers discovered MCP tools that way, and one holding a
+   * name keeps it. A tool that is replaced or removed is destroyed, as
+   * `reload()` destroys the tools it rebuilds, unless the factory handed the
+   * same instance back. An agent mid-turn sees the new set on its next round,
+   * since the loop re-resolves its tools each round; a call already running
+   * finishes on the instance it started on.
+   */
+  syncToolFactories(): ToolFactorySync {
     const produced =
       this._createTools(
         this._config,
@@ -408,14 +429,49 @@ export class AgentRuntime {
           timeProvider: this._timeProvider,
         }),
       ) ?? [];
-    const existing = new Set(this._toolRegistry.list().map((t) => t.name));
-    const added: string[] = [];
-    for (const tool of produced) {
-      if (existing.has(tool.name)) continue;
-      this._toolRegistry.registerBuiltin(tool);
-      added.push(tool.name);
+    const registry = this._toolRegistry;
+    const previous = new Map(
+      registry
+        .list()
+        .filter((tool) => this._built.has(tool))
+        .map((tool) => [tool.name, tool]),
+    );
+    // The later of two tools with one name wins, as it does in a reload's registry.
+    const next = new Map(produced.map((tool) => [tool.name, tool]));
+    const retired = produced.filter((tool) => next.get(tool.name) !== tool);
+    const sync: ToolFactorySync = { added: [], removed: [] };
+    for (const [name, tool] of next) {
+      const holder = registry.getByName(name);
+      if (holder && !this._built.has(holder)) {
+        retired.push(tool);
+        continue;
+      }
+      const old = previous.get(name);
+      if (old === tool) continue;
+      registry.registerBuiltin(tool);
+      this._built.add(tool);
+      if (old) retired.push(old);
+      else sync.added.push(name);
     }
-    return added;
+    for (const [name, old] of previous) {
+      if (next.has(name)) continue;
+      registry.remove(old);
+      retired.push(old);
+      sync.removed.push(name);
+    }
+    const live = new Set(registry.list());
+    destroyTools(retired.filter((tool) => !live.has(tool))).catch((e) => {
+      console.error("[runtime] destroying replaced tools failed:", (e as Error).message);
+    });
+    return sync;
+  }
+
+  /**
+   * The names of the tools {@link syncToolFactories} added. The older name for
+   * it, from when it could only add; it now rebuilds and removes as well.
+   */
+  applyPendingToolFactories(): string[] {
+    return this.syncToolFactories().added;
   }
 
   /**
@@ -823,15 +879,19 @@ export class AgentRuntime {
           this.toolContext({ taskBackend, getEmbedder: () => embedder, timeProvider }),
         ) ?? [];
       const { provider, model } = this._createProvider(config);
-      // Clean up old tools that have a destroy hook (e.g. browser processes).
-      // destroyAll() runs in parallel and swallows individual errors so one
-      // bad tool can't block reload.
-      const oldRegistry = this._toolRegistry;
-      oldRegistry.destroyAll().catch((e) => {
+      // Clean up old tools that have a destroy hook (e.g. browser processes),
+      // except an instance a factory handed back again, which is still in use.
+      // Runs in the background and swallows individual errors so one bad tool
+      // can't block reload.
+      const carried = new Set(tools);
+      destroyTools(this._toolRegistry.list().filter((tool) => !carried.has(tool))).catch((e) => {
         console.error("[runtime] destroyAll failed:", (e as Error).message);
       });
       const newToolRegistry = new ToolRegistry();
-      for (const tool of tools) newToolRegistry.registerBuiltin(tool);
+      for (const tool of tools) {
+        newToolRegistry.registerBuiltin(tool);
+        this._built.add(tool);
+      }
       const newProviderRegistry = new ProviderRegistry();
       newProviderRegistry.registerBuiltin({
         id: config.agent.defaultProvider,
