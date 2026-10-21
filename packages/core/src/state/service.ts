@@ -15,7 +15,7 @@ import { cosine, type EmbeddingProvider } from "../providers/embedding.js";
 import type { Disposer } from "../registry.js";
 import "./builtin.js";
 import { stateProviderRegistry, stateTypeRegistry } from "./registry.js";
-import { embedQuery, hashText, StateSearchIndex, searchText, wordScores } from "./search.js";
+import { embedQuery, hashText, StateSearchIndex, searchFields, searchText, wordScores } from "./search.js";
 import {
   type Actor,
   type HistoryOptions,
@@ -107,6 +107,18 @@ export interface StateSearchHit {
   how: "meaning" | "words";
 }
 
+export interface StateSearchResult {
+  /** Best first, at most the limit asked for. */
+  hits: StateSearchHit[];
+  /**
+   * Types whose records were not all read: one with more records than a
+   * search reads, a store that stopped paging, or a store that failed. A
+   * record missing from `hits` may still exist in these, so a caller asking
+   * "has anyone written this up?" should not take silence as no.
+   */
+  partial: string[];
+}
+
 /** An id a person can read back to an agent: letters, digits, and `_ . : -`. */
 const RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
@@ -123,14 +135,23 @@ const SEARCH_SCAN = 5_000;
 /** Records asked for per page while reading a type for search. */
 const SCAN_PAGE = 500;
 
+/** A type's records as a search read them, and whether that was every one of them. */
+interface Scanned {
+  records: StateRecord[];
+  /** False when the read stopped short: at the cap, or at a store that stopped paging. */
+  complete: boolean;
+}
+
 export class StateService {
   private readonly providers = new Map<string, Promise<StateProvider>>();
   private readonly watchers: Disposer[] = [];
   private readonly now: () => Date;
   /** Stores already warned about for returning archived records to a query that didn't ask. */
   private readonly warnedArchived = new Set<string>();
-  /** Types already warned about for having more records than a search reads. */
+  /** Types already warned about for being read short by a search: `<type>:cap` or `<type>:paging`. */
   private readonly warnedScan = new Set<string>();
+  /** Types whose store failed a search, warned about once until they answer again. */
+  private readonly warnedSearch = new Set<string>();
   /** Vectors for meaning search. Absent without a database to keep them in or an embedder to make them. */
   private readonly index: StateSearchIndex | undefined;
 
@@ -223,9 +244,10 @@ export class StateService {
    * embedded. A search that finds records without a current vector queues
    * them, so the next one can match them by meaning.
    */
-  async search(caller: StateCaller, input: StateSearchInput): Promise<StateSearchHit[]> {
+  async search(caller: StateCaller, input: StateSearchInput): Promise<StateSearchResult> {
     const text = typeof input.text === "string" ? input.text.trim() : "";
     if (!text) throw new StateError("Say what to look for with `text`.");
+    const named = (input.types ?? []).some((n) => typeof n === "string" && n.trim());
     const defs = this.searchableTypes(caller, input.types);
     const scopes = this.scopesFor(caller, input.scope);
     const asked = Number.isFinite(input.limit) ? Math.floor(input.limit as number) : SEARCH_LIMIT;
@@ -233,37 +255,78 @@ export class StateService {
     const includeArchived = input.includeArchived === true;
 
     const index = this.index;
-    const embedder = defs.length ? index?.embedder() : undefined;
+    const embedder = index?.embedder();
     const query = embedder ? await embedQuery(embedder, text) : undefined;
     const model = index && embedder && query ? index.modelKey(embedder) : undefined;
 
     const hits: StateSearchHit[] = [];
+    const partial: string[] = [];
     for (const def of defs) {
-      const fields = def.search?.fields ?? [];
-      const records = await this.scan(def, scopes, includeArchived);
-      const texts = records.map((r) => searchText(fields, r.data));
-      const vectors = index && model ? index.vectors(def.name, model, scopes) : undefined;
-      const byWords: number[] = [];
-      for (const [i, record] of records.entries()) {
-        if (!texts[i]) continue;
-        const hash = hashText(texts[i]);
-        const indexed = vectors?.get(record.id);
-        if (query && indexed && indexed.hash === hash) {
+      try {
+        const { records, complete } = await this.scan(def, scopes, includeArchived);
+        if (!complete) partial.push(def.name);
+        hits.push(...this.score(def, records, scopes, text, query, model));
+        this.warnedSearch.delete(def.name);
+      } catch (err) {
+        // A type the caller named should say why it found nothing. Searching
+        // everything, one store that is down shouldn't sink the rest: it is
+        // reported as not read, and warned about once until it answers again.
+        if (named) throw err;
+        partial.push(def.name);
+        if (!this.warnedSearch.has(def.name)) {
+          this.warnedSearch.add(def.name);
+          console.warn(`[state] search left out ${def.name} records: ${(err as Error).message}`);
+        }
+      }
+    }
+    hits.sort((a, b) => b.score - a.score || b.record.updatedAt.localeCompare(a.record.updatedAt));
+    return { hits: hits.slice(0, limit), partial };
+  }
+
+  /**
+   * One type's hits: by meaning for each record with a current vector, by
+   * words for the rest, which are queued so the next search has a vector.
+   */
+  private score(
+    def: StateTypeDef,
+    records: StateRecord[],
+    scopes: string[] | undefined,
+    text: string,
+    query: Float32Array | undefined,
+    model: string | undefined,
+  ): StateSearchHit[] {
+    const index = this.index;
+    const fields = searchFields(def);
+    const texts = records.map((r) => searchText(fields, r.data));
+    const vectors = index && model ? index.vectors(def.name, model, scopes) : undefined;
+    const hits: StateSearchHit[] = [];
+    const byWords: number[] = [];
+    for (const [i, record] of records.entries()) {
+      if (!texts[i]) continue;
+      const hash = hashText(texts[i]);
+      const indexed = vectors?.get(record.id);
+      let stale = false;
+      if (query && indexed && indexed.hash === hash) {
+        if (indexed.vector.length === query.length) {
           const score = cosine(query, indexed.vector);
           if (score > 0) hits.push({ record, score, how: "meaning" });
           continue;
         }
-        byWords.push(i);
-        if (index && model) {
-          index.queue({ type: def.name, id: record.id, scope: record.scope, text: texts[i], hash }, model);
-        }
+        // Same text, same model name, another length: a different model now
+        // answers to that name (a gateway alias moved). The vector can't be
+        // compared, so the record goes to words and is embedded again, even
+        // though its row looks current.
+        stale = true;
       }
-      if (byWords.length === 0) continue;
-      const scores = wordScores(text, texts);
-      for (const i of byWords) if (scores[i] > 0) hits.push({ record: records[i], score: scores[i], how: "words" });
+      byWords.push(i);
+      if (index && model) {
+        index.queue({ type: def.name, id: record.id, scope: record.scope, text: texts[i], hash }, model, stale);
+      }
     }
-    hits.sort((a, b) => b.score - a.score || b.record.updatedAt.localeCompare(a.record.updatedAt));
-    return hits.slice(0, limit);
+    if (byWords.length === 0) return hits;
+    const scores = wordScores(text, texts);
+    for (const i of byWords) if (scores[i] > 0) hits.push({ record: records[i], score: scores[i], how: "words" });
+    return hits;
   }
 
   /**
@@ -282,10 +345,10 @@ export class StateService {
     const model = index.modelKey(embedder);
     let queued = 0;
     for (const def of this.types()) {
-      const fields = def.search?.fields;
-      if (!fields?.length) continue;
+      const fields = searchFields(def);
+      if (fields.length === 0) continue;
       try {
-        const records = await this.scan(def, undefined, true);
+        const { records, complete } = await this.scan(def, undefined, true);
         const vectors = index.vectors(def.name, model);
         for (const record of records) {
           const text = searchText(fields, record.data);
@@ -299,12 +362,28 @@ export class StateService {
           if (index.queue({ type: def.name, id: record.id, scope: record.scope, text, hash }, model)) queued++;
         }
         // Only a scan that saw every record can say which entries are orphaned.
-        if (records.length < SEARCH_SCAN) index.prune(def.name, new Set(records.map((r) => r.id)));
+        if (complete) await this.prune(def, index, new Set(records.map((r) => r.id)));
       } catch (err) {
         console.warn(`[state] could not index ${def.name} records for search: ${(err as Error).message}`);
       }
     }
     return queued;
+  }
+
+  /**
+   * Drop the entries of records that are gone. Each one the scan didn't see is
+   * asked for by id first: paging by last update can step over a record that
+   * moves or a neighbour that is deleted mid-scan, and dropping a live
+   * record's vector would only cost it an embedding to get back.
+   */
+  private async prune(def: StateTypeDef, index: StateSearchIndex, seen: Set<string>): Promise<void> {
+    const unseen = index.ids(def.name).filter((id) => !seen.has(id));
+    if (unseen.length === 0) return;
+    const provider = await this.providerFor(def);
+    for (const id of unseen) {
+      const ref = { type: def.name, id };
+      if ((await provider.get(ref)) === null) index.removed(ref);
+    }
   }
 
   /**
@@ -539,15 +618,29 @@ export class StateService {
 
   /**
    * The types a search covers. Named types must be readable and searchable,
-   * and saying so beats returning nothing, which reads as "no match".
+   * and with none named at least one must be: saying so beats returning
+   * nothing, which reads as "no match".
    */
   private searchableTypes(caller: StateCaller, names: string[] | undefined): StateTypeDef[] {
     const readable = () =>
       this.listTypes(caller)
         .map((v) => v.def)
         .filter(isSearchable);
-    const wanted = [...new Set((names ?? []).map((n) => n.trim()).filter(Boolean))];
-    if (wanted.length === 0) return readable();
+    const wanted = [
+      ...new Set(
+        (names ?? [])
+          .filter((n) => typeof n === "string")
+          .map((n) => n.trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (wanted.length === 0) {
+      const all = readable();
+      if (all.length === 0) {
+        throw new StateError("No type you can read is searchable. A type opts in with `search: { fields: [...] }`.");
+      }
+      return all;
+    }
     return wanted.map((name) => {
       const def = this.requireType(caller, name, "read");
       if (isSearchable(def)) return def;
@@ -563,15 +656,13 @@ export class StateService {
    * A type's records, newest first, up to {@link SEARCH_SCAN}. Read in pages
    * until one comes back empty, so a store that caps its pages lower than we
    * ask still gets read to the end; a page with nothing new ends it too, for a
-   * store that ignores `offset`.
+   * store that ignores `offset`. Either cut-off makes the read incomplete,
+   * which the caller passes on rather than letting a miss read as "none".
    */
-  private async scan(
-    def: StateTypeDef,
-    scopes: string[] | undefined,
-    includeArchived: boolean,
-  ): Promise<StateRecord[]> {
+  private async scan(def: StateTypeDef, scopes: string[] | undefined, includeArchived: boolean): Promise<Scanned> {
     const provider = await this.providerFor(def);
     const seen = new Map<string, StateRecord>();
+    let complete = false;
     for (let offset = 0; seen.size < SEARCH_SCAN; ) {
       const page = await provider.query({
         type: def.name,
@@ -581,24 +672,40 @@ export class StateService {
         limit: SCAN_PAGE,
         offset,
       });
+      if (page.length === 0) {
+        complete = true;
+        break;
+      }
       let fresh = 0;
       for (const record of page) {
         if (seen.has(record.id)) continue;
         seen.set(record.id, record);
         fresh++;
       }
-      if (page.length === 0 || fresh === 0) break;
+      if (fresh === 0) {
+        this.warnScanOnce(
+          `${def.name}:paging`,
+          `[state] the store for ${def.name} returned the same records for a later page, so search may not read all of them`,
+        );
+        break;
+      }
       offset += page.length;
     }
-    if (seen.size >= SEARCH_SCAN && !this.warnedScan.has(def.name)) {
-      this.warnedScan.add(def.name);
-      console.warn(
+    if (!complete && seen.size >= SEARCH_SCAN) {
+      this.warnScanOnce(
+        `${def.name}:cap`,
         `[state] ${def.name} has more than ${SEARCH_SCAN} records; search reads the ${SEARCH_SCAN} most recently updated and leaves older ones out`,
       );
     }
     const records = [...seen.values()].slice(0, SEARCH_SCAN);
     // As for `query`: an archived record never reaches a caller that didn't ask.
-    return includeArchived ? records : records.filter((r) => !r.archivedAt);
+    return { records: includeArchived ? records : records.filter((r) => !r.archivedAt), complete };
+  }
+
+  private warnScanOnce(key: string, message: string): void {
+    if (this.warnedScan.has(key)) return;
+    this.warnedScan.add(key);
+    console.warn(message);
   }
 
   private requireType(caller: StateCaller, name: string, mode: "read" | "write"): StateTypeDef {
@@ -722,8 +829,8 @@ export class StateService {
         this.index.removed(ref);
         return;
       }
-      const fields = this.getType(change.type)?.search?.fields;
-      if (!fields?.length) return;
+      const fields = searchFields(this.getType(change.type));
+      if (fields.length === 0) return;
       this.index.changed(ref, change.scope, searchText(fields, change.after ?? {}));
     } catch (err) {
       console.warn(`[state] the search index missed ${change.type}/${change.id}: ${(err as Error).message}`);
@@ -769,7 +876,7 @@ export class StateService {
 }
 
 function isSearchable(def: StateTypeDef): boolean {
-  return (def.search?.fields?.length ?? 0) > 0;
+  return searchFields(def).length > 0;
 }
 
 function allowed(def: StateTypeDef, caller: StateCaller, mode: "read" | "write"): boolean {

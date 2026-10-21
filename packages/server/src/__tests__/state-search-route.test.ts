@@ -86,13 +86,14 @@ let runtime: AgentRuntime;
 let app: ReturnType<typeof createServer>["app"];
 let tmpDir: string;
 let originalHome: string | undefined;
+let cfg: ReturnType<typeof buildConfig>;
 
 beforeEach(() => {
   originalHome = process.env.HOME;
   tmpDir = mkdtempSync(join(tmpdir(), "state-search-route-"));
   process.env.HOME = tmpDir;
   db = initDatabase(":memory:");
-  const cfg = buildConfig();
+  cfg = buildConfig();
   runtime = new AgentRuntime(
     {
       configPath: join(tmpDir, "config.yaml"),
@@ -125,7 +126,7 @@ interface Hit {
 
 async function search(query: string) {
   const res = await app.fetch(new Request(`http://t/api/state/search${query}`));
-  return { status: res.status, json: (await res.json()) as { hits?: Hit[]; error?: string } };
+  return { status: res.status, json: (await res.json()) as { hits?: Hit[]; partial?: string[]; error?: string } };
 }
 
 describe("GET /api/state/search", () => {
@@ -141,6 +142,8 @@ describe("GET /api/state/search", () => {
   it("ranks by meaning, and shows a person records in an agent's private scope", async () => {
     const { status, json } = await search("?q=lodging%20portugal");
     expect(status).toBe(200);
+    // Every type was read in full.
+    expect(json.partial).toEqual([]);
     const hits = json.hits ?? [];
     expect(
       hits
@@ -169,6 +172,14 @@ describe("GET /api/state/search", () => {
     const plan = await search("?q=stay&types=plan");
     expect(plan.status).toBe(400);
     expect(plan.json.error).toBe("plan records are not searchable. Searchable types: commitment, doc.");
+  });
+
+  it("answers 400 when no type is searchable, rather than an empty list that reads as no match", async () => {
+    if (cfg.state) cfg.state.types = [{ name: "plan", title: "name" }];
+    expect(await search("?q=stay")).toEqual({
+      status: 400,
+      json: { error: "No type you can read is searchable. A type opts in with `search: { fields: [...] }`." },
+    });
   });
 
   it("caps the number of hits at the limit asked for", async () => {

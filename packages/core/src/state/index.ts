@@ -16,6 +16,7 @@ export {
   type StateQueryInput,
   type StateSearchHit,
   type StateSearchInput,
+  type StateSearchResult,
   StateService,
   type StateServiceOptions,
   type StateTypeView,

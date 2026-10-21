@@ -8,9 +8,11 @@
  *   record's search text is embedded in the background and kept in
  *   `state_search`, beside the record's scope, the embedder that made the
  *   vector, and a hash of the text it was made from. A vector counts only
- *   while that hash still matches the record and that embedder is still the
- *   one configured, so a stale vector is never used: the record is matched by
- *   words instead, and queued to be embedded again.
+ *   while that hash still matches the record, that embedder is still the one
+ *   configured, and it is as long as the query's (a model swapped in behind
+ *   the same name makes vectors of another length), so a stale vector is
+ *   never used: the record is matched by words instead, and queued to be
+ *   embedded again.
  * - **Words.** Overlap between the query's words and the record's, rarer words
  *   counting for more. Always available, and what a record is matched by until
  *   it has a current vector.
@@ -22,7 +24,7 @@
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { blobToVector, type EmbeddingProvider, vectorToBlob } from "../providers/embedding.js";
-import type { StateRef } from "./types.js";
+import type { StateRef, StateTypeDef } from "./types.js";
 
 /** Most texts sent in one embedding call. */
 const BATCH_SIZE = 16;
@@ -37,6 +39,34 @@ const GIVE_UP_AFTER = 3;
 
 /** Nested arrays and objects read for text, at most this deep. */
 const MAX_DEPTH = 8;
+
+/**
+ * The fields a type is searched by, or none when it doesn't opt in. Read
+ * through here rather than straight off the definition: config shape problems
+ * are only warnings, so `fields: summary` (a string) or a number in the list
+ * reaches the runtime as written, and either way the type counts as not
+ * searchable, as the config warning says, instead of failing later.
+ */
+export function searchFields(def: StateTypeDef | undefined): string[] {
+  const fields = def?.search?.fields;
+  if (!Array.isArray(fields)) return [];
+  return fields.filter((f): f is string => typeof f === "string" && f.trim() !== "").map((f) => f.trim());
+}
+
+/**
+ * Whether a vector can be compared at all: some length, every entry a finite
+ * number, and not all zeros. An embedder that answers with less than it was
+ * asked for can leave empty slots, and cosine against one is always 0.
+ */
+export function usableVector(v: Float32Array | undefined): v is Float32Array {
+  if (!v || v.length === 0) return false;
+  let norm = 0;
+  for (const x of v) {
+    if (!Number.isFinite(x)) return false;
+    norm += x * x;
+  }
+  return norm > 0;
+}
 
 /**
  * The text a record is searched by: the values of its type's search fields,
@@ -82,7 +112,10 @@ export async function embedQuery(embedder: EmbeddingProvider, text: string): Pro
       QUERY_TIMEOUT_MS,
       controller,
     );
-    return result.vectors[0];
+    const vector = result.vectors[0];
+    // An empty or all-zero answer would make every stored vector look stale.
+    if (!usableVector(vector)) throw new Error("the embedder returned no usable vector");
+    return vector;
   } catch (err) {
     console.warn(`[state] search matched words only: embedding the query failed: ${(err as Error).message}`);
     return undefined;
@@ -284,29 +317,25 @@ export class StateSearchIndex {
     this.db.prepare("UPDATE state_search SET scope = ? WHERE type = ? AND id = ?").run(scope, ref.type, ref.id);
   }
 
-  /** Drop a type's entries for every record not in `live`, after a scan that saw all of them. */
-  prune(type: string, live: Set<string>): number {
-    const ids = this.db.prepare("SELECT id FROM state_search WHERE type = ?").pluck().all(type) as string[];
-    const gone = ids.filter((id) => !live.has(id));
-    const drop = this.db.prepare("DELETE FROM state_search WHERE type = ? AND id = ?");
-    this.db.transaction(() => {
-      for (const id of gone) drop.run(type, id);
-    })();
-    for (const id of gone) this.queued.delete(keyOf({ type, id }));
-    return gone.length;
+  /** The ids of every record of a type with an entry, whatever its model. */
+  ids(type: string): string[] {
+    return this.db.prepare("SELECT id FROM state_search WHERE type = ?").pluck().all(type) as string[];
   }
 
   /**
    * Queue a record to be embedded by `model`. Nothing is queued when its
-   * vector already matches, or the same text is already waiting. Returns
-   * whether it is waiting now.
+   * vector already matches, or the same text is already waiting. `force`
+   * queues it even when its row looks current, for a vector a search found it
+   * can't use. Returns whether it is waiting now.
    */
-  queue(item: Queued, model: string): boolean {
+  queue(item: Queued, model: string, force = false): boolean {
     if (this.closed) return false;
     const key = keyOf(item);
-    const row = this.db
-      .prepare("SELECT model, text_hash FROM state_search WHERE type = ? AND id = ?")
-      .get(item.type, item.id) as { model: string; text_hash: string } | undefined;
+    const row = force
+      ? undefined
+      : (this.db
+          .prepare("SELECT model, text_hash FROM state_search WHERE type = ? AND id = ?")
+          .get(item.type, item.id) as { model: string; text_hash: string } | undefined);
     if (row && row.model === model && row.text_hash === item.hash) {
       this.queued.delete(key);
       return false;
@@ -328,9 +357,14 @@ export class StateSearchIndex {
     return this.queued.size;
   }
 
-  /** Resolves once nothing is waiting or being embedded. */
+  /**
+   * Resolves once nothing is waiting or being embedded. While anyone waits,
+   * the pause between calls holds the process open, so a script that awaits
+   * this doesn't exit before the backlog is done.
+   */
   whenIdle(): Promise<void> {
     if (!this.timer && !this.running && this.queued.size === 0) return Promise.resolve();
+    this.timer?.ref?.();
     return new Promise((resolve) => this.waiting.push(resolve));
   }
 
@@ -356,7 +390,9 @@ export class StateSearchIndex {
         else this.settle();
       });
     }, wait);
-    this.timer.unref?.();
+    // A server has other reasons to stay up, and the backlog alone shouldn't
+    // keep a process alive; one waiting on `whenIdle` should be kept alive.
+    if (this.waiting.length === 0) this.timer.unref?.();
   }
 
   private settle(): void {
@@ -373,6 +409,8 @@ export class StateSearchIndex {
     }
     const model = this.modelKey(embedder);
     const batch = [...this.queued.values()].slice(0, this.batchSize);
+    // Everything queued may have been deleted or settled since the timer was set.
+    if (batch.length === 0) return;
     this.lastCall = Date.now();
     const controller = new AbortController();
     this.inFlight = controller;
@@ -390,6 +428,8 @@ export class StateSearchIndex {
       if (result.vectors.length !== batch.length) {
         throw new Error(`asked for ${batch.length} vectors and got ${result.vectors.length}`);
       }
+      // A call that answered with nothing usable failed as surely as one that threw.
+      if (!result.vectors.some((v) => usableVector(v))) throw new Error("no usable vector came back");
       vectors = result.vectors;
       this.failures = 0;
     } catch (err) {
@@ -408,12 +448,21 @@ export class StateSearchIndex {
          vector = excluded.vector, text_hash = excluded.text_hash, indexed_at = excluded.indexed_at`,
     );
     const at = new Date().toISOString();
+    const dim = commonLength(vectors);
+    let refused = 0;
     for (const [i, item] of batch.entries()) {
       const key = keyOf(item);
       // Changed again, deleted or erased while the call was out: the newer
       // state stands, and a deleted record never comes back as a vector.
       if (this.queued.get(key) !== item) continue;
       this.queued.delete(key);
+      // An empty slot, or a vector unlike the rest of its batch, would be
+      // stored as current and never match. Left out, the record stays on
+      // words, and a search or backfill queues it again.
+      if (!usableVector(vectors[i]) || vectors[i].length !== dim) {
+        refused++;
+        continue;
+      }
       try {
         upsert.run(item.type, item.id, item.scope, model, vectorToBlob(vectors[i]), item.hash, at);
       } catch (err) {
@@ -421,6 +470,11 @@ export class StateSearchIndex {
           `[state] could not save the search vector for ${key.replace("\u0000", "/")}: ${(err as Error).message}`,
         );
       }
+    }
+    if (refused > 0) {
+      console.warn(
+        `[state] the embedder gave ${refused} of ${batch.length} record(s) an empty or odd-sized vector; they are found by words meanwhile`,
+      );
     }
   }
 
@@ -442,6 +496,21 @@ export class StateSearchIndex {
     this.queued.clear();
     this.failures = 0;
   }
+}
+
+/** The length most of a batch's usable vectors share, which the odd ones out are measured against. */
+function commonLength(vectors: Float32Array[]): number {
+  const counts = new Map<number, number>();
+  for (const v of vectors) if (usableVector(v)) counts.set(v.length, (counts.get(v.length) ?? 0) + 1);
+  let best = 0;
+  let most = 0;
+  for (const [length, count] of counts) {
+    if (count > most) {
+      best = length;
+      most = count;
+    }
+  }
+  return best;
 }
 
 function keyOf(ref: StateRef): string {

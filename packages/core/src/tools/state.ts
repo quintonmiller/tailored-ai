@@ -1,5 +1,6 @@
 import { WAKE_ROOMS_KEY } from "../rooms/keys.js";
 import { actorName, archivedLine, formatRecordList, formatSearchHits, parseOrderBy } from "../state/format.js";
+import { searchFields } from "../state/search.js";
 import type { StateCaller, StateService, StateTypeView } from "../state/service.js";
 import { type FieldCondition, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import { summarizeFields } from "../state/validate.js";
@@ -9,39 +10,33 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 const DEFAULT_LIMIT = 20;
 /** A search's default number of hits, smaller still: it should find the few that matter. */
 const SEARCH_LIMIT = 8;
-const ALL_ACTIONS = ["types", "get", "query", "search", "put", "patch", "delete", "archive", "unarchive"];
 
 /**
- * World state for an agent: one tool, nine actions.
- *
- * One tool rather than nine because every tool costs attention and history
- * budget, and that cost is steepest on the small local models TAI has to
- * work well on. For the same reason output is compact — field summaries
- * rather than JSON Schema, one line per record — and every failure is a
- * sentence saying what to do instead.
- *
- * The caller's identity, rooms and project come from the tool context, never
- * from arguments, so an agent cannot read or write as another agent.
+ * The tool's parameters, without search or with it. `search` and `text` are
+ * offered only once some type opts into search: until then they would cost
+ * every agent schema it can't use, and invite a call that can only fail.
+ * Both are built once, so the schema an agent sees changes only when that
+ * does.
  */
-export class StateTool implements Tool {
-  name = "state";
-  description =
-    'Read and write shared, structured state: typed records other agents and people also see. Start with action "types" to see what exists and each type\'s fields.';
-  parameters = {
+function schemaFor(search: boolean): Record<string, unknown> {
+  const actions = ["types", "get", "query", ...(search ? ["search"] : []), "put", "patch", "delete", "archive"];
+  const searchLine = search ? " search: records about `text`, closest first." : "";
+  const reads = search ? "query or search" : "query";
+  return {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ALL_ACTIONS,
-        description:
-          "types: what exists. get: one record. query: records matching `where`. search: records about `text`, closest first. put: create, or replace by id. patch: change some fields. archive: retire it, kept but left out of queries; better than delete for anything that may matter again. unarchive: bring it back. delete: remove it (its history is kept).",
+        enum: [...actions, "unarchive"],
+        description: `types: what exists. get: one record. query: records matching \`where\`.${searchLine} put: create, or replace by id. patch: change some fields. archive: retire it, kept but left out of queries; better than delete for anything that may matter again. unarchive: bring it back. delete: remove it (its history is kept).`,
       },
       type: {
         type: "string",
-        description:
-          'Record type, e.g. "plan". Required except for types and search; search takes one, several comma-separated, or none for every searchable type.',
+        description: search
+          ? 'Record type, e.g. "plan". Required except for types and search; search takes one, several comma-separated, or none for every searchable type.'
+          : 'Record type, e.g. "plan". Required except for types.',
       },
-      text: { type: "string", description: "search: what to look for, in a few words." },
+      ...(search ? { text: { type: "string", description: "search: what to look for, in a few words." } } : {}),
       id: {
         type: "string",
         description:
@@ -57,8 +52,7 @@ export class StateTool implements Tool {
       },
       scope: {
         type: "string",
-        description:
-          'Optional. Where a new record goes, or the one scope to query or search: "global", "agent:<name>", "room:<ref>".',
+        description: `Optional. Where a new record goes, or the one scope to ${search ? "query or search" : "query"}: "global", "agent:<name>", "room:<ref>".`,
       },
       orderBy: {
         type: "string",
@@ -67,9 +61,11 @@ export class StateTool implements Tool {
       },
       limit: {
         type: "number",
-        description: `query or search: at most this many records. Default ${DEFAULT_LIMIT}, or ${SEARCH_LIMIT} for search.`,
+        description: search
+          ? `query or search: at most this many records. Default ${DEFAULT_LIMIT}, or ${SEARCH_LIMIT} for search.`
+          : `query: at most this many records. Default ${DEFAULT_LIMIT}.`,
       },
-      includeArchived: { type: "boolean", description: "query or search: include archived records." },
+      includeArchived: { type: "boolean", description: `${reads}: include archived records.` },
       reason: { type: "string", description: "archive: why, in a few words." },
       expectedVersion: {
         type: "number",
@@ -78,8 +74,49 @@ export class StateTool implements Tool {
     },
     required: ["action"],
   };
+}
+
+const PLAIN_SCHEMA = schemaFor(false);
+const SEARCH_SCHEMA = schemaFor(true);
+
+/**
+ * World state for an agent: one tool, eight actions, and a ninth, `search`,
+ * once a type opts into it.
+ *
+ * One tool rather than nine because every tool costs attention and history
+ * budget, and that cost is steepest on the small local models TAI has to
+ * work well on. For the same reason output is compact — field summaries
+ * rather than JSON Schema, one line per record — and every failure is a
+ * sentence saying what to do instead.
+ *
+ * The caller's identity, rooms and project come from the tool context, never
+ * from arguments, so an agent cannot read or write as another agent.
+ */
+export class StateTool implements Tool {
+  name = "state";
+  description =
+    'Read and write shared, structured state: typed records other agents and people also see. Start with action "types" to see what exists and each type\'s fields.';
 
   constructor(private readonly getService: () => StateService) {}
+
+  /**
+   * Read on every request, so a type that opts into search later (a plugin
+   * loaded after this tool was built, a config edit) brings `search` in
+   * without rebuilding the tool.
+   */
+  get parameters(): Record<string, unknown> {
+    return this.offersSearch() ? SEARCH_SCHEMA : PLAIN_SCHEMA;
+  }
+
+  private offersSearch(): boolean {
+    try {
+      return this.getService()
+        .types()
+        .some((def) => searchFields(def).length > 0);
+    } catch {
+      return false;
+    }
+  }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const service = this.getService();
@@ -94,7 +131,8 @@ export class StateTool implements Tool {
       if (action === "types") return ok(formatTypes(service.listTypes(caller)));
       if (action === "search") return await search(service, caller, args, scope);
       if (!ACTIONS.includes(action)) {
-        return fail(`Unknown action "${args.action}". Use one of: ${ALL_ACTIONS.join(", ")}.`);
+        const offered = ["types", ...(this.offersSearch() ? ["search"] : []), ...ACTIONS];
+        return fail(`Unknown action "${args.action}". Use one of: ${offered.join(", ")}.`);
       }
       if (!type) return fail(`Say which type with \`type\`. Use action "types" to see what exists.`);
       const title = service.getType(type)?.title;
@@ -185,21 +223,21 @@ async function search(
   const types = listArg(args.type ?? args.types);
   const searchable = service
     .listTypes(caller)
-    .filter((v) => v.def.search?.fields?.length)
+    .filter((v) => searchFields(v.def).length > 0)
     .map((v) => v.def.name);
   if (types.length === 0 && searchable.length === 0) {
     return fail(
       'None of the types you can read are searchable. Use action "query" to filter records by field instead.',
     );
   }
-  const hits = await service.search(caller, {
+  const { hits, partial } = await service.search(caller, {
     text,
     ...(types.length ? { types } : {}),
     ...(scope ? { scope } : {}),
     limit: typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : SEARCH_LIMIT,
     ...(args.includeArchived === true || args.includeArchived === "true" ? { includeArchived: true } : {}),
   });
-  return ok(formatSearchHits(text, hits, types.length ? types : searchable, (t) => service.getType(t)?.title));
+  return ok(formatSearchHits(text, hits, types.length ? types : searchable, partial, (t) => service.getType(t)?.title));
 }
 
 /** A list of names from an array, or from one string with commas between them. */
@@ -264,7 +302,8 @@ function formatTypes(views: StateTypeView[]): string {
     .map(({ def, canWrite }) => {
       const lines = [`- ${def.name}${def.description ? `: ${def.description}` : ""}`];
       lines.push(`  fields: ${summarizeFields(def.schema)}`);
-      if (def.search?.fields?.length) lines.push(`  searchable by: ${def.search.fields.join(", ")}`);
+      const fields = searchFields(def);
+      if (fields.length) lines.push(`  searchable by: ${fields.join(", ")}`);
       lines.push(
         `  new records go in ${where[def.scope ?? "global"]}; you can ${canWrite ? "read and write" : "only read"}`,
       );

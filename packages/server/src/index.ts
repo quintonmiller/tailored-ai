@@ -2379,14 +2379,15 @@ export function createServer(opts: ServerOptions) {
       .filter(Boolean);
     const limit = Number.parseInt(c.req.query("limit") ?? "", 10);
     try {
-      const hits = await runtime.getStateService().search(stateCaller, {
+      const { hits, partial } = await runtime.getStateService().search(stateCaller, {
         text,
         ...(types.length ? { types } : {}),
         ...(c.req.query("scope") ? { scope: c.req.query("scope") } : {}),
         ...(limit > 0 ? { limit } : {}),
         ...(["1", "true"].includes(c.req.query("includeArchived") ?? "") ? { includeArchived: true } : {}),
       });
-      return c.json({ hits });
+      // `partial` names the types not read in full, so a page can say a miss there isn't proof.
+      return c.json({ hits, partial });
     } catch (err) {
       const { body, status } = stateFailure(err);
       return c.json(body, status);

@@ -97,4 +97,11 @@ describe("state config", () => {
       'state: `types.0.search.fields` must be an array, got the string "title".',
     ]);
   });
+
+  it("warns about a type named after one of the state routes", () => {
+    expect(stateWarnings({ state: { types: [{ name: "search" }, { name: "events" }, { name: "plan" }] } })).toEqual([
+      "state type \"search\": /api/state/search is a route of its own, so this type's records can't be listed over HTTP or on the State page; pick another name.",
+      "state type \"events\": /api/state/events is a route of its own, so this type's records can't be listed over HTTP or on the State page; pick another name.",
+    ]);
+  });
 });

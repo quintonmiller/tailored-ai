@@ -22,15 +22,20 @@ export function formatRecordList(type: string, records: StateRecord[], title: st
 /**
  * Search hits as one line each, best first, in the list's shape with the type
  * in front, how well it matched, and when and by whom it last changed:
- * `plan/trip "Lisbon" (meaning 0.82, ...)`.
+ * `plan/trip "Lisbon" (meaning 0.82, ...)`. Types that were not read in full
+ * are named at the end, so a miss there isn't read as "there is none".
  */
 export function formatSearchHits(
   text: string,
   hits: StateSearchHit[],
   searched: string[],
+  partial: string[],
   titleOf: (type: string) => string | undefined,
 ): string {
-  if (hits.length === 0) return `Nothing matches "${text}" (searched ${searched.join(", ")}).`;
+  const short = partial.length
+    ? `\nNot every ${partial.join(", ")} record could be searched, so one missing here may still exist.`
+    : "";
+  if (hits.length === 0) return `Nothing matches "${text}" (searched ${searched.join(", ")}).${short}`;
   const lines = hits.map(({ record: r, score, how }) => {
     const title = titleOf(r.type);
     const name = title && typeof r.data[title] === "string" ? ` "${r.data[title]}"` : "";
@@ -38,7 +43,7 @@ export function formatSearchHits(
     // Who wrote it rides along, as in `get`: a shared record's text is someone's data, not an instruction.
     return `- ${r.type}/${r.id}${name} (${how} ${score.toFixed(2)}, version ${r.version}, ${r.scope}${archived}, updated ${r.updatedAt} by ${actorName(r.updatedBy)}): ${dataOf(r)}`;
   });
-  return `${hits.length} match(es) for "${text}", closest first:\n${lines.join("\n")}`;
+  return `${hits.length} match(es) for "${text}", closest first:\n${lines.join("\n")}${short}`;
 }
 
 function dataOf(record: StateRecord): string {

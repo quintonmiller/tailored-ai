@@ -38,14 +38,16 @@ is reported by `validateConfig` rather than silently trusted.
 
 ## How agents use it
 
-Once at least one type exists, agents get one tool, `state`, with nine actions:
+Once at least one type exists, agents get one tool, `state`, with eight
+actions, and a ninth, `search`, once some type opts into
+[search](#searching):
 
 | action | does |
 |---|---|
 | `types` | what exists, each type's fields, the fields search reads, and whether this agent can write it |
 | `get` | one record by id |
 | `query` | records matching `where`, e.g. `{"status": "active"}` or `{"priority": {"gte": 3}}`; `includeArchived: true` adds archived ones |
-| `search` | records about `text`, closest first, from the types that opt in; see [Searching](#searching) |
+| `search` | records about `text`, closest first, from the types that opt in; offered only while one does. See [Searching](#searching) |
 | `put` | create a record (omit `id` for a generated one), or replace one by id |
 | `patch` | change some fields; a field set to `null` is removed |
 | `delete` | remove a record; its history is kept |
@@ -127,13 +129,16 @@ state:
   and numbers are read as text, and an array or object is read through to
   the text inside it, so `tags: [travel, lisbon]` works, and `updates.text`
   reads the `text` of every entry in `updates`. A type without `search` is
-  never indexed or searched.
+  never indexed or searched, and neither is one whose `fields` isn't a list
+  of names (`fields: title` rather than `fields: [title]`); TAI warns about
+  that at load.
 - **Asking:** the `state` tool's `search` action takes `text`, and optionally
   `type` (one, several comma-separated, or none for every searchable type),
   `scope`, `limit` (default 8) and `includeArchived`. Over HTTP it's
   `GET /api/state/search?q=`. In code,
   `StateService.search(caller, { text, types?, scope?, limit?, includeArchived? })`
-  returns `{ record, score, how }[]`.
+  returns `{ hits: { record, score, how }[], partial }`. When no type you
+  can read is searchable, a search says so instead of finding nothing.
 - **What comes back:** the closest records first, each saying how it matched
   and when and by whom it last changed:
 
@@ -163,8 +168,11 @@ Meaning needs each record embedded, which happens in the background:
   and a failing embedder never fails a write.
 - **Until then,** the record is still found, by words. So is a record whose
   text changed since its vector was made: a vector counts only while it
-  matches the record's current text and the embedder that made it is still
-  the one configured.
+  matches the record's current text, the embedder that made it is still the
+  one configured, and it is as long as the query's. That last one catches a
+  different model answering to the same name, such as a gateway alias that
+  now points elsewhere: the next search finds those records by words and
+  embeds them again.
 - **At start and after every reload,** TAI queues each searchable record
   that has no current vector. Change the embedding model and everything is
   embedded again, in the background.
@@ -181,11 +189,20 @@ they were made from. The table never decides what anyone sees: a search reads
 its candidates through the store, scoped as a query is, and takes only their
 vectors from the table. So search works with any state provider.
 
-**Limits.** A search reads a type's records and scores them in process, which
-is quick for a few thousand records per type. Past 5,000 it reads the 5,000
-most recently updated and logs a warning once. Meaning scores and words scores
-come from different measures but are ranked together, so a caller that wants
-a cut-off should set one for each.
+**When a search can't read everything.** A search reads a type's records and
+scores them in process, which is quick for a few thousand records per type.
+Past 5,000 it reads the 5,000 most recently updated. A store that hands back
+the same page twice (one that ignores `offset`) stops the read there, and a
+store that fails is left out when you didn't name its type, so one store
+that is down doesn't sink every search; name the type and the search fails
+with that store's error. Each of these lands the type in `partial`, which the
+tool passes on to the agent ("Not every doc record could be searched, so one
+missing here may still exist"), so a miss there isn't read as proof that no
+such record exists. Each also logs a warning once.
+
+**Scores.** Meaning scores and words scores come from different measures but
+are ranked together, so a caller that wants a cut-off should set one for
+each.
 
 ## Types that come with the 3D world
 
@@ -387,7 +404,7 @@ Behind the usual bearer auth. A person through the API sees every scope.
 | `GET /api/state/:type` | records; `?where=<json>&orderBy=-field&limit=&offset=&scope=`. Archived records only with `includeArchived=1` |
 | `GET /api/state/:type/:id` | one record, or 404. An archived record comes back with `archivedAt`, `archivedBy` and `archiveReason` |
 | `GET /api/state/:type/:id/history` | its changes, most recent first |
-| `GET /api/state/search` | records about some text, closest first: `?q=<text>&types=a,b&scope=&limit=`; `{hits: [{record, score, how}]}`. Archived records only with `includeArchived=1`. `400` without `q`, or for a type that isn't searchable |
+| `GET /api/state/search` | records about some text, closest first: `?q=<text>&types=a,b&scope=&limit=`; `{hits: [{record, score, how}], partial: [type]}`, where `partial` names the types not read in full. Archived records only with `includeArchived=1`. `400` without `q`, for a type that isn't searchable, or when no type is |
 | `GET /api/state/events` | a server-sent event stream: a `change` event carrying each `state.changed` payload as it happens; `?type=` narrows it to one type |
 | `POST /api/state/:type` | create: `{id?, scope?, data}`; `201` with the record. An `id` that exists is `409` |
 | `PUT /api/state/:type/:id` | replace the data: `{data, scope?, expectedVersion?}` |
@@ -400,8 +417,8 @@ A write that does not fit the type is `400`, with the sentence an agent would
 get, and so is a `PATCH` to an archived record, or an archive in a store that
 can't archive. A write whose `expectedVersion` is out of date is `409`. Because
 `/api/state/types`, `/api/state/events` and `/api/state/search` are routes, a
-type named `types`, `events` or `search` cannot be listed over HTTP; pick
-another name.
+type named `types`, `events` or `search` cannot be listed over HTTP or on the
+State page; TAI warns about one at load. Pick another name.
 
 ## Replacing the store
 

@@ -188,6 +188,7 @@ export {
   type StateScopeKind,
   type StateSearchHit,
   type StateSearchInput,
+  type StateSearchResult,
   StateService,
   type StateTypeDef,
   type StateTypeView,

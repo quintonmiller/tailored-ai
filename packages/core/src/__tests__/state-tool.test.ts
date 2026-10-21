@@ -6,11 +6,12 @@
  * schema in the prompt until something can be stored.
  */
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig } from "../config.js";
 import { WAKE_ROOMS_KEY } from "../rooms/watcher.js";
-import { registerStateType } from "../state/registry.js";
+import { registerStateProvider, registerStateType } from "../state/registry.js";
 import { type StateConfig, StateService } from "../state/service.js";
+import { SqliteStateProvider } from "../state/sqlite-provider.js";
 import "../tools/builtin.js";
 import type { ToolContext } from "../tools/interface.js";
 import { StateTool } from "../tools/state.js";
@@ -171,7 +172,7 @@ describe("state tool", () => {
       'Say which type with `type`. Use action "types" to see what exists.',
     );
     expect((await run({ action: "fly" })).error).toBe(
-      'Unknown action "fly". Use one of: types, get, query, search, put, patch, delete, archive, unarchive.',
+      'Unknown action "fly". Use one of: types, get, query, put, patch, delete, archive, unarchive.',
     );
     expect((await run({ action: "get", type: "plans", id: "x" })).error).toBe(
       'There is no state type called "plans". Types you can use: ledger, plan.',
@@ -266,6 +267,74 @@ describe("state tool search", () => {
     expect((await run({ action: "types" })).output).toContain(
       "- doc\n  fields: any fields\n  searchable by: title, summary\n",
     );
+  });
+
+  it("offers search only while some type opts in, and picks up one that does later", async () => {
+    const live: { state: StateConfig } = { state: { backend: "sqlite", types: [{ name: "plan" }] } };
+    const later = new StateService({ getConfig: () => live, db: new Database(":memory:") });
+    const laterTool = new StateTool(() => later);
+    const actions = () => (laterTool.parameters.properties as { action: { enum: string[] } }).action.enum;
+    const props = () => Object.keys(laterTool.parameters.properties as object);
+    expect(actions()).not.toContain("search");
+    expect(props()).not.toContain("text");
+    expect((await laterTool.execute({ action: "fly" }, context())).error).not.toContain("search");
+
+    live.state.types = [{ name: "plan" }, { name: "doc", search: { fields: ["title"] } }];
+    expect(actions()).toContain("search");
+    expect(props()).toContain("text");
+    expect((await laterTool.execute({ action: "fly" }, context())).error).toBe(
+      'Unknown action "fly". Use one of: types, search, get, query, put, patch, delete, archive, unarchive.',
+    );
+    await later.close();
+  });
+
+  it("lists types, and counts none as searchable, when `search.fields` is malformed", async () => {
+    const odd: { state: StateConfig } = {
+      state: { backend: "sqlite", types: [{ name: "brief", search: { fields: "title" as unknown as string[] } }] },
+    };
+    const oddService = new StateService({ getConfig: () => odd, db: new Database(":memory:") });
+    const oddTool = new StateTool(() => oddService);
+    const res = await oddTool.execute({ action: "types" }, context());
+    expect(res.success).toBe(true);
+    expect(res.output).not.toContain("searchable by");
+    expect((await oddTool.execute({ action: "search", text: "hotel" }, context())).error).toContain(
+      "None of the types you can read are searchable.",
+    );
+    await oddService.close();
+  });
+
+  it("says which types it couldn't read in full, so a miss there isn't taken as none", async () => {
+    const elsewhere = new Database(":memory:");
+    const dispose = registerStateProvider("broken", () =>
+      Object.assign(Object.create(new SqliteStateProvider(elsewhere)), {
+        id: "broken",
+        query: async () => {
+          throw new Error("store down");
+        },
+      }),
+    );
+    const mixed: { state: StateConfig } = {
+      state: {
+        backend: "sqlite",
+        types: [
+          { name: "doc", search: { fields: ["title"] } },
+          { name: "remote", provider: "broken", search: { fields: ["title"] } },
+        ],
+      },
+    };
+    const mixedService = new StateService({ getConfig: () => mixed, db: new Database(":memory:") });
+    const mixedTool = new StateTool(() => mixedService);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const res = await mixedTool.execute({ action: "search", text: "hotel" }, context());
+      expect(res.output).toBe(
+        'Nothing matches "hotel" (searched doc, remote).\nNot every remote record could be searched, so one missing here may still exist.',
+      );
+    } finally {
+      warn.mockRestore();
+      dispose();
+      await mixedService.close();
+    }
   });
 });
 
