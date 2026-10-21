@@ -436,6 +436,9 @@ describe("the build tool", () => {
     const face = shown["planner:todo_board"].parts.find((p) => p.face)?.face as { spec?: { kind: string } };
     expect(face.spec?.kind).toBe("list");
     expect(Object.keys(shown)).toEqual(["planner:todo_board"]);
+    // Archived, the model is left out of the room, as the shelf's list leaves it out.
+    await state.archive(owner, { type: MODEL_TYPE, id: "planner:todo_board" });
+    expect(await modelsIn(state, owner, store, room.props)).toEqual({});
   });
 });
 

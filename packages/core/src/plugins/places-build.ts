@@ -76,12 +76,18 @@ export class ModelShelf {
     private readonly getStore: () => InterfaceStore | undefined,
   ) {}
 
-  /** An agent's own model by name, as its record holds it. */
-  async get(caller: StateCaller, agent: string, name: string): Promise<{ model: Model; version: number } | undefined> {
+  /** An agent's own model by name, as its record holds it, archived or not. */
+  async get(
+    caller: StateCaller,
+    agent: string,
+    name: string,
+  ): Promise<{ model: Model; version: number; archived: boolean } | undefined> {
     const found = await this.getService()
       .get(caller, { type: MODEL_TYPE, id: modelId(agent, name) })
       .catch(() => null);
-    return found ? { model: found.data as unknown as Model, version: found.version } : undefined;
+    return found
+      ? { model: found.data as unknown as Model, version: found.version, archived: !!found.archivedAt }
+      : undefined;
   }
 
   /** Every model an agent keeps, by name. */
@@ -110,7 +116,9 @@ export class ModelShelf {
     name: string,
   ): Promise<{ model: Model; own?: () => Promise<Model> } | undefined> {
     const found = await this.get(agentStateCaller(context, "place"), agent, name);
-    if (found) return { model: found.model };
+    // An archived model isn't drawn in any room (see `modelsIn`), so it isn't one to place. A ready-made one of the
+    // same name is made the agent's own again, which writes over it.
+    if (found && !found.archived) return { model: found.model };
     const ready = readyModel(name);
     if (!ready) return undefined;
     const model = modelFrom({
@@ -484,8 +492,9 @@ export async function modelsIn(
 ): Promise<Record<string, Model>> {
   const out: Record<string, Model> = {};
   for (const id of new Set(props.flatMap((p) => (p.model ? [p.model] : [])))) {
+    // An archived model is left out of the room, as the shelf's list leaves it out.
     const found = await service.get(caller, { type: MODEL_TYPE, id }).catch(() => null);
-    if (!found) continue;
+    if (!found || found.archivedAt) continue;
     const model = found.data as unknown as Model;
     const mine = found.scope === `agent:${model.owner}`;
     out[id] = {

@@ -56,6 +56,9 @@ interface StateRecord {
   updatedAt: string;
   updatedBy: Actor;        // who: { kind: "agent" | "user" | "plugin" | "system", name }
   source?: Source;         // through what: { tool?, surface?, interfaceId? }
+  archivedAt?: string;     // set while archived: kept, but left out of queries
+  archivedBy?: Actor;      //   unless they ask (`includeArchived`). Belongs to
+  archiveReason?: string;  //   the record, not its data, so no schema sees it.
 }
 ```
 
@@ -125,11 +128,14 @@ speak our vocabulary.
 ```ts
 interface StateProvider {
   id: string;
-  get(ref: StateRef): Promise<StateRecord | null>;
-  query(q: StateQuery): Promise<StateRecord[]>;   // field filters, order, limit
-  put(input: StateWrite, expectedVersion?: number): Promise<StateRecord>;
-  delete?(ref: StateRef): Promise<boolean>;
+  get(ref: StateRef): Promise<StateRecord | null>;  // archived records too, with their archive fields
+  query(q: StateQuery): Promise<StateRecord[]>;     // field filters, order, limit; archived only with includeArchived
+  put(input: StateWrite, expectedVersion?: number): Promise<StateWriteResult>;  // writes the record live
+  delete?(ref: StateRef, actor: Actor, source?: Source, expectedVersion?: number): Promise<StateRecord | null>;
+  archive?(ref: StateRef, actor: Actor, reason?: string, source?: Source, expectedVersion?: number): Promise<StateWriteResult | null>;
+  unarchive?(ref: StateRef, actor: Actor, source?: Source, expectedVersion?: number): Promise<StateWriteResult | null>;
   history?(ref: StateRef, opts?: HistoryOptions): Promise<StateChange[]>;
+  purge?(ref: StateRef): Promise<boolean>;
   /** For data that changes outside TAI (an issue edited on GitHub). */
   watch?(emit: (change: StateChange) => void): Disposer;
   close?(): Promise<void>;
@@ -147,6 +153,15 @@ A version mismatch is an error returned to the writer, written for an agent to
 act on ("this plan changed since you read it; read it again"). No automatic
 merge in the first version.
 
+Archiving is optional for a provider and comes as a pair, `archive` and
+`unarchive`. Core refuses to archive in a store that lacks either, rather than
+report success and leave the record live, and a store without them keeps the
+rest of this contract unchanged. Core also drops any archived record a query
+returns uninvited, so a provider that ignores `includeArchived` returns a short
+page, never a hidden record, and core fails a `put` that leaves a record
+archived instead of reporting it saved. What else archiving means, for callers and for
+the 3D world, is in [world-state.md](./world-state.md#archiving).
+
 ## Change events
 
 Every write emits `state.changed` on the runtime bus:
@@ -163,10 +178,14 @@ interface StateChange {
   actor: Actor;
   source?: Source;
   at: string;
+  lifecycle?: "archived" | "unarchived";  // on the update that archived or restored it
+  archiveReason?: string;
 }
 ```
 
-It is an ordinary runtime event, so everything that already consumes the bus
+Archiving and restoring are `update`s, so consumers written before archiving
+existed keep working; one that cares reads `lifecycle`. It is an ordinary
+runtime event, so everything that already consumes the bus
 works on it: `hooks.on`, plugins, the event journal. Providers with `watch`
 emit the same event for external changes.
 

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  archiveStateRecord,
   createStateRecord,
   deleteStateRecord,
   fetchStateHistory,
+  fetchStateRecord,
   fetchStateRecords,
   fetchStateTypes,
   replaceStateRecord,
@@ -10,14 +12,16 @@ import {
   type StateChangeInfo,
   type StateRecordInfo,
   type StateTypeInfo,
+  unarchiveStateRecord,
 } from "../api";
 
 /**
  * World state: the typed records agents and people share.
  *
- * Browse a type's records, open one for its data and history, and edit or
- * delete it. Changes from anywhere — an agent's tool call, a subscription, a
- * plugin — arrive over `/api/state/events` and refresh what is on screen.
+ * Browse a type's records, open one for its data and history, and edit,
+ * archive or delete it. Archived records are hidden until "Show archived" is
+ * on. Changes from anywhere — an agent's tool call, a subscription, a plugin —
+ * arrive over `/api/state/events` and refresh what is on screen.
  */
 export function State({ type, id }: { type?: string; id?: string }) {
   const [types, setTypes] = useState<StateTypeInfo[] | null>(null);
@@ -104,15 +108,19 @@ function TypePanel({
   const [error, setError] = useState<string | null>(null);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  // An opened record the list leaves out, read by id: an archived one while archived records are hidden,
+  // or `null` once the read says it is gone.
+  const [unlisted, setUnlisted] = useState<{ id: string; record: StateRecordInfo | null } | undefined>(undefined);
 
   const load = useCallback(() => {
-    fetchStateRecords(def.name)
+    fetchStateRecords(def.name, 200, showArchived ? { includeArchived: true } : {})
       .then((res) => {
         setRecords(res.records);
         setError(null);
       })
       .catch((e) => setError((e as Error).message));
-  }, [def.name]);
+  }, [def.name, showArchived]);
 
   useEffect(load, [load]);
 
@@ -134,7 +142,21 @@ function TypePanel({
     return () => clearTimeout(timer);
   }, [lastChange, def.name, load]);
 
-  const open = records?.find((r) => r.id === openId);
+  const listed = records?.find((r) => r.id === openId);
+  // Read again whenever the list is, so an archived record that is open stays current.
+  useEffect(() => {
+    if (!openId || !records || listed) return;
+    let cancelled = false;
+    fetchStateRecord(def.name, openId)
+      .then((record) => !cancelled && setUnlisted({ id: openId, record }))
+      .catch(() => !cancelled && setUnlisted({ id: openId, record: null }));
+    return () => {
+      cancelled = true;
+    };
+  }, [def.name, openId, records, listed]);
+  const fetched = openId && unlisted?.id === openId ? unlisted.record : undefined;
+  const open = listed ?? fetched ?? undefined;
+  const archivedCount = records?.filter((r) => r.archivedAt).length ?? 0;
 
   return (
     <section className="state-main">
@@ -144,14 +166,25 @@ function TypePanel({
           <div className="state-meta-line">
             <span className="state-chip">{def.scope ?? "global"} scope</span>
             {!def.canWrite && <span className="state-chip">read only</span>}
-            {records && <span>{records.length === 200 ? "first 200 records" : `${records.length} records`}</span>}
+            {records && (
+              <span>
+                {records.length === 200 ? "first 200 records" : `${records.length} records`}
+                {showArchived && archivedCount > 0 ? `, ${archivedCount} archived` : ""}
+              </span>
+            )}
           </div>
         </div>
-        {def.canWrite && !creating && (
-          <button type="button" className="btn-secondary" onClick={() => setCreating(true)}>
-            New record
-          </button>
-        )}
+        <div className="state-actions">
+          <label className="state-toggle">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            Show archived
+          </label>
+          {def.canWrite && !creating && (
+            <button type="button" className="btn-secondary" onClick={() => setCreating(true)}>
+              New record
+            </button>
+          )}
+        </div>
       </header>
       {error && <div className="config-error">{error}</div>}
       {creating && (
@@ -165,7 +198,11 @@ function TypePanel({
         />
       )}
       {records && records.length === 0 && !creating && (
-        <div className="empty-state">No {def.name} records yet. Agents create them with the state tool.</div>
+        <div className="empty-state">
+          {showArchived
+            ? `No ${def.name} records yet. Agents create them with the state tool.`
+            : `No ${def.name} records to show. Agents create them with the state tool; archived ones are hidden.`}
+        </div>
       )}
       {records && records.length > 0 && (
         <div className="state-table-wrap">
@@ -183,7 +220,7 @@ function TypePanel({
               {records.map((r) => (
                 <tr
                   key={r.id}
-                  className={`${r.id === openId ? "active" : ""}${fresh.has(r.id) ? " fresh" : ""}`}
+                  className={`${r.id === openId ? "active" : ""}${fresh.has(r.id) ? " fresh" : ""}${r.archivedAt ? " archived" : ""}`}
                   onClick={() => {
                     window.location.hash = `#/state/${encodeURIComponent(def.name)}/${encodeURIComponent(r.id)}`;
                   }}
@@ -195,12 +232,15 @@ function TypePanel({
                     >
                       {r.id}
                     </a>
+                    {r.archivedAt && <span className="state-chip state-chip-archived">archived</span>}
                   </td>
                   {def.title && <td>{typeof r.data[def.title] === "string" ? String(r.data[def.title]) : ""}</td>}
                   <td className="dim">{r.scope}</td>
                   <td className="num">{r.version}</td>
-                  <td className="dim">
-                    {relativeTime(r.updatedAt)} · {actorLabel(r.updatedBy)}
+                  <td className="dim" title={r.archiveReason}>
+                    {r.archivedAt
+                      ? archivedLabel(r, "archived")
+                      : `${relativeTime(r.updatedAt)} · ${actorLabel(r.updatedBy)}`}
                   </td>
                 </tr>
               ))}
@@ -208,12 +248,12 @@ function TypePanel({
           </table>
         </div>
       )}
-      {openId && records && !open && (
+      {openId && records && !open && fetched === null && (
         <div className="empty-state">
           {def.name}/{openId} no longer exists. Its history is kept; agents can still read it by id.
         </div>
       )}
-      {open && <RecordPanel def={def} record={open} lastChange={lastChange} />}
+      {open && <RecordPanel def={def} record={open} lastChange={lastChange} onChanged={load} />}
     </section>
   );
 }
@@ -222,10 +262,13 @@ function RecordPanel({
   def,
   record,
   lastChange,
+  onChanged,
 }: {
   def: StateTypeInfo;
   record: StateRecordInfo;
   lastChange: StateChangeInfo | null;
+  /** After an archive or a restore, so the list need not wait for the stream. */
+  onChanged: () => void;
 }) {
   const [history, setHistory] = useState<StateChangeInfo[] | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -277,6 +320,36 @@ function RecordPanel({
     }
   }
 
+  async function archive() {
+    const reason = prompt(
+      `Archive ${def.name}/${record.id}? It is kept, with its history, but left out of lists and agents' queries. Why? (optional)`,
+    );
+    if (reason === null) return;
+    setBusy(true);
+    try {
+      await archiveStateRecord(def.name, record.id, reason.trim() || undefined, record.version);
+      setError(null);
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restore() {
+    setBusy(true);
+    try {
+      await unarchiveStateRecord(def.name, record.id, record.version);
+      setError(null);
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function remove() {
     if (!confirm(`Delete ${def.name}/${record.id}? Its history is kept.`)) return;
     setBusy(true);
@@ -298,6 +371,7 @@ function RecordPanel({
           </h3>
           <div className="state-meta-line">
             <span className="state-chip">{record.scope}</span>
+            {record.archivedAt && <span className="state-chip state-chip-archived">archived</span>}
             <span>version {record.version}</span>
             <span>
               updated {relativeTime(record.updatedAt)} by {actorLabel(record.updatedBy)}
@@ -308,23 +382,41 @@ function RecordPanel({
         </div>
         {def.canWrite && editing === null && (
           <div className="state-actions">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setEditing(JSON.stringify(record.data, null, 2));
-                setEditVersion(record.version);
-                setError(null);
-              }}
-            >
-              Edit
-            </button>
+            {record.archivedAt ? (
+              // Restored first, then edited: saving an edit would bring it back without saying so.
+              <button type="button" className="btn-secondary" disabled={busy} onClick={restore}>
+                Restore
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setEditing(JSON.stringify(record.data, null, 2));
+                    setEditVersion(record.version);
+                    setError(null);
+                  }}
+                >
+                  Edit
+                </button>
+                <button type="button" className="btn-secondary" disabled={busy} onClick={archive}>
+                  Archive
+                </button>
+              </>
+            )}
             <button type="button" className="btn-danger" disabled={busy} onClick={remove}>
               Delete
             </button>
           </div>
         )}
       </header>
+      {record.archivedAt && (
+        <div className="state-archived-note">
+          <span>{archivedLabel(record, "Archived")}</span>
+          <span className="dim">Lists and agents' queries leave it out until it is restored.</span>
+        </div>
+      )}
       {error && <div className="config-error">{error}</div>}
       {editing === null ? (
         <pre className="state-json">{JSON.stringify(record.data, null, 2)}</pre>
@@ -361,7 +453,7 @@ function RecordPanel({
         <ol className="state-history">
           {history.map((c) => (
             <li key={`${c.version}-${c.at}`}>
-              <span className={`state-op state-op-${c.op}`}>{c.op}</span>
+              <span className={`state-op state-op-${c.lifecycle ?? c.op}`}>{c.lifecycle ?? c.op}</span>
               <span className="num">v{c.version}</span>
               <span>{actorLabel(c.actor)}</span>
               <span className="dim">{relativeTime(c.at)}</span>
@@ -452,6 +544,7 @@ function skeleton(schema: Record<string, unknown> | undefined): Record<string, u
 }
 
 function changedFields(c: StateChangeInfo): string {
+  if (c.lifecycle === "archived") return c.archiveReason ?? "";
   if (c.op === "create") return Object.keys(c.after ?? {}).join(", ");
   if (c.op === "delete") return "";
   const before = c.before ?? {};
@@ -459,6 +552,12 @@ function changedFields(c: StateChangeInfo): string {
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   const changed = [...keys].filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]));
   return changed.length ? `changed ${changed.join(", ")}` : "";
+}
+
+/** When an archived record was archived, by whom and why: "archived 2h ago by you: trip is over". */
+function archivedLabel(r: StateRecordInfo, word: string): string {
+  const by = r.archivedBy ? ` by ${actorLabel(r.archivedBy)}` : "";
+  return `${word} ${relativeTime(r.archivedAt ?? r.updatedAt)}${by}${r.archiveReason ? `: ${r.archiveReason}` : ""}`;
 }
 
 function actorLabel(a: StateActor): string {

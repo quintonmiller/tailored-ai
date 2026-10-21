@@ -2310,6 +2310,8 @@ export function createServer(opts: ServerOptions) {
           : {}),
         ...(limitRaw ? { limit: Math.max(1, Math.min(500, Number.parseInt(limitRaw, 10) || 50)) } : {}),
         ...(offsetRaw ? { offset: Math.max(0, Number.parseInt(offsetRaw, 10) || 0) } : {}),
+        // Archived records are left out unless asked for.
+        ...(["1", "true"].includes(c.req.query("includeArchived") ?? "") ? { includeArchived: true } : {}),
       });
       return c.json({ records });
     } catch (err) {
@@ -2408,6 +2410,39 @@ export function createServer(opts: ServerOptions) {
       const removed = await runtime.getStateService().delete(stateCaller, { type, id }, expected);
       if (!removed) return c.json({ error: `No ${type} record with id "${id}"` }, 404);
       return c.json(removed);
+    } catch (err) {
+      const { body: error, status } = stateFailure(err);
+      return c.json(error, status);
+    }
+  });
+
+  // Archive: kept, with its history, but left out of lists and queries until it is unarchived.
+  // `expectedVersion` in the body archives it only if nobody has changed it since.
+  app.post("/api/state/:type/:id/archive", async (c) => {
+    const { type, id } = c.req.param();
+    const body = (await stateBody(c)) ?? {};
+    const reason = typeof body.reason === "string" ? body.reason : undefined;
+    try {
+      const record = await runtime
+        .getStateService()
+        .archive(stateCaller, { type, id }, reason, versionOf(body.expectedVersion));
+      if (!record) return c.json({ error: `No ${type} record with id "${id}"` }, 404);
+      return c.json(record);
+    } catch (err) {
+      const { body: error, status } = stateFailure(err);
+      return c.json(error, status);
+    }
+  });
+
+  app.post("/api/state/:type/:id/unarchive", async (c) => {
+    const { type, id } = c.req.param();
+    const body = (await stateBody(c)) ?? {};
+    try {
+      const record = await runtime
+        .getStateService()
+        .unarchive(stateCaller, { type, id }, versionOf(body.expectedVersion));
+      if (!record) return c.json({ error: `No ${type} record with id "${id}"` }, 404);
+      return c.json(record);
     } catch (err) {
       const { body: error, status } = stateFailure(err);
       return c.json(error, status);

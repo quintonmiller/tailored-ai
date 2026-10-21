@@ -225,6 +225,63 @@ describe("writing state over HTTP", () => {
   });
 });
 
+describe("archiving over HTTP", () => {
+  it("archives a record out of lists, lists it on request, reads it by id, and brings it back", async () => {
+    await send("POST", "/api/state/task", { id: "t1", data: { title: "Buy milk" } });
+    await send("POST", "/api/state/task", { id: "t2", data: { title: "Call the bank" } });
+
+    const archived = await send("POST", "/api/state/task/t1/archive", { reason: "bought it" });
+    expect(archived.status).toBe(200);
+    expect(archived.json).toMatchObject({
+      id: "t1",
+      version: 2,
+      archivedBy: { kind: "user", name: "owner" },
+      archiveReason: "bought it",
+    });
+    const ids = async (path: string) => ((await get(path)).json.records as { id: string }[]).map((r) => r.id).sort();
+    expect(await ids("/api/state/task")).toEqual(["t2"]);
+    expect(await ids("/api/state/task?includeArchived=1")).toEqual(["t1", "t2"]);
+    expect(await ids("/api/state/task?includeArchived=true")).toEqual(["t1", "t2"]);
+    expect((await get("/api/state/task/t1")).json).toMatchObject({ archiveReason: "bought it" });
+
+    const restored = await send("POST", "/api/state/task/t1/unarchive");
+    expect(restored.status).toBe(200);
+    expect(restored.json).toMatchObject({ version: 3 });
+    expect(restored.json).not.toHaveProperty("archivedAt");
+    expect(await ids("/api/state/task")).toEqual(["t1", "t2"]);
+
+    const history = await get("/api/state/task/t1/history");
+    expect((history.json.changes as { lifecycle?: string }[]).map((c) => c.lifecycle ?? null)).toEqual([
+      "unarchived",
+      "archived",
+      null,
+    ]);
+  });
+
+  it("refuses a stale archive with 409, and answers 404 for a record that isn't there", async () => {
+    await send("POST", "/api/state/task", { id: "t1", data: { title: "One" } });
+    await send("PATCH", "/api/state/task/t1", { changes: { done: true } });
+    const stale = await send("POST", "/api/state/task/t1/archive", { expectedVersion: 1 });
+    expect(stale.status).toBe(409);
+    expect(stale.json.error).toBe("task/t1 is at version 2, but the write expected version 1.");
+    expect((await get("/api/state/task")).json.records).toHaveLength(1);
+    expect((await send("POST", "/api/state/task/t1/archive", { expectedVersion: 2 })).status).toBe(200);
+    expect((await send("POST", "/api/state/task/t1/unarchive", { expectedVersion: 2 })).status).toBe(409);
+
+    expect((await send("POST", "/api/state/task/nope/archive")).status).toBe(404);
+    expect((await send("POST", "/api/state/task/nope/unarchive")).status).toBe(404);
+    expect((await send("POST", "/api/state/tasks/t1/archive")).status).toBe(400);
+  });
+
+  it("refuses to change an archived record until it is unarchived", async () => {
+    await send("POST", "/api/state/task", { id: "t1", data: { title: "One" } });
+    await send("POST", "/api/state/task/t1/archive");
+    const changed = await send("PATCH", "/api/state/task/t1", { changes: { done: true } });
+    expect(changed.status).toBe(400);
+    expect(changed.json.error).toBe("task/t1 is archived. Unarchive it before changing it.");
+  });
+});
+
 describe("GET /api/state/events", () => {
   /** Open the stream and collect `change` events until `count` arrive or time runs out. */
   async function watch(path: string, act: () => Promise<void>, count: number) {

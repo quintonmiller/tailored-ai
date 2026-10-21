@@ -7,7 +7,7 @@
  * announcement and a write that slips past it is invisible to all of them.
  */
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type RuntimeEventPayload, TypedEventBus } from "../events.js";
 import { registerStateProvider, registerStateType } from "../state/registry.js";
 import { type StateCaller, type StateConfig, StateService } from "../state/service.js";
@@ -235,6 +235,244 @@ describe("StateService", () => {
       expect(err).toBe('There is no state type called "secret". Types you can use: ledger, note, plan.');
       expect(service.listTypes(reviewer).map((t) => t.def.name)).toEqual(["ledger", "note", "plan"]);
       expect(service.listTypes(planner).find((t) => t.def.name === "secret")?.canWrite).toBe(true);
+    });
+  });
+
+  describe("archiving", () => {
+    const trip = { type: "plan", id: "trip" };
+
+    beforeEach(async () => {
+      await service.put(planner, { type: "plan", id: "trip", data: { name: "Trip" } });
+      changes.length = 0;
+    });
+
+    it("keeps an archived record readable by id, with when, who and why, and out of queries unless asked", async () => {
+      const archived = await service.archive(planner, trip, "  the trip is over ");
+      expect(archived).toMatchObject({ version: 2, archivedBy: planner.actor, archiveReason: "the trip is over" });
+      expect(await service.get(planner, trip)).toEqual(archived);
+      expect(await service.query(planner, { type: "plan" })).toEqual([]);
+      expect(await service.query(person, { type: "plan" })).toEqual([]);
+      expect((await service.query(planner, { type: "plan", includeArchived: true })).map((r) => r.id)).toEqual([
+        "trip",
+      ]);
+    });
+
+    it("announces both as updates, marked so a consumer can tell them apart", async () => {
+      await service.archive(planner, trip, "the trip is over");
+      await service.unarchive(person, trip);
+      expect(changes.map((c) => [c.op, c.version, c.lifecycle, c.actor.kind])).toEqual([
+        ["update", 2, "archived", "agent"],
+        ["update", 3, "unarchived", "user"],
+      ]);
+      expect(changes[0]).toMatchObject({
+        scope: "room:local:eng",
+        before: { name: "Trip" },
+        after: { name: "Trip" },
+        archiveReason: "the trip is over",
+        source: { tool: "state" },
+      });
+      expect(changes[1].archiveReason).toBeUndefined();
+      const history = await service.history(person, trip);
+      expect(history.map((c) => c.lifecycle ?? c.op)).toEqual(["unarchived", "archived", "create"]);
+    });
+
+    it("leaves a record that is already where it was asked to be as it is, and announces nothing", async () => {
+      await service.archive(planner, trip, "first");
+      changes.length = 0;
+      expect(await service.archive(planner, trip, "second")).toMatchObject({ version: 2, archiveReason: "first" });
+      await service.unarchive(planner, trip);
+      expect(await service.unarchive(planner, trip)).toMatchObject({ version: 3 });
+      expect(changes.map((c) => c.lifecycle)).toEqual(["unarchived"]);
+    });
+
+    it("checks access and scopes the way a write does", async () => {
+      // Another agent can't see the room the record is in, so for it there is nothing to archive.
+      expect(await service.archive(reviewer, trip)).toBeNull();
+      await service.put(person, { type: "ledger", id: "q1", data: { total: 3 } });
+      await expect(service.archive(reviewer, { type: "ledger", id: "q1" })).rejects.toThrow(
+        "You can read ledger records but not change them.",
+      );
+      await expect(service.archive(reviewer, { type: "secret", id: "x" })).rejects.toThrow(
+        'There is no state type called "secret"',
+      );
+      expect(await service.archive(planner, { type: "plan", id: "nowhere" })).toBeNull();
+      expect((await service.get(planner, trip))?.archivedAt).toBeUndefined();
+      expect(changes.filter((c) => c.lifecycle)).toEqual([]);
+    });
+
+    it("archives and unarchives only at the version given, when one is given", async () => {
+      await service.patch(person, trip, { status: "active" });
+      await expect(service.archive(planner, trip, "over", 1)).rejects.toThrow(StateConflictError);
+      expect((await service.get(planner, trip))?.archivedAt).toBeUndefined();
+      await service.archive(planner, trip, "over", 2);
+      await expect(service.unarchive(planner, trip, 2)).rejects.toThrow(StateConflictError);
+      expect(await service.unarchive(planner, trip, 3)).toMatchObject({ version: 4 });
+    });
+
+    it("refuses to patch an archived record, and a put over it brings it back", async () => {
+      await service.archive(planner, trip);
+      await expect(service.patch(planner, trip, { status: "active" })).rejects.toThrow(
+        "plan/trip is archived. Unarchive it before changing it.",
+      );
+      const replaced = await service.put(planner, { ...trip, data: { name: "Trip, again" } });
+      expect(replaced.archivedAt).toBeUndefined();
+      expect(changes.at(-1)).toMatchObject({ op: "update", lifecycle: "unarchived", after: { name: "Trip, again" } });
+      expect((await service.query(planner, { type: "plan" })).map((r) => r.id)).toEqual(["trip"]);
+    });
+
+    it("deletes an archived record", async () => {
+      await service.archive(planner, trip);
+      expect(await service.delete(person, trip)).toMatchObject({ id: "trip" });
+      expect(await service.get(person, trip)).toBeNull();
+    });
+
+    it("archives a record of a closed schema, since the archive belongs to the record and not its data", async () => {
+      config.state.types = [
+        ...(config.state.types ?? []),
+        {
+          name: "strict",
+          schema: {
+            type: "object",
+            required: ["title"],
+            additionalProperties: false,
+            properties: { title: { type: "string" } },
+          },
+        },
+      ];
+      const ref = { type: "strict", id: "s1" };
+      await service.put(person, { ...ref, scope: "global", data: { title: "Closed" } });
+      const archived = await service.archive(person, ref, "not needed");
+      expect(archived).toMatchObject({ data: { title: "Closed" }, archiveReason: "not needed" });
+      expect(await service.unarchive(person, ref)).toMatchObject({ data: { title: "Closed" } });
+      // The schema still holds for the data, archive or not.
+      await expect(service.put(person, { ...ref, data: { title: "x", archivedAt: "now" } })).rejects.toThrow(
+        "was not saved",
+      );
+    });
+
+    describe("in a store that doesn't archive", () => {
+      /** A provider written before archiving: everything but archive and unarchive. */
+      const plain = (inner: SqliteStateProvider) => ({
+        id: "plain",
+        get: inner.get.bind(inner),
+        query: inner.query.bind(inner),
+        put: inner.put.bind(inner),
+        delete: inner.delete.bind(inner),
+        history: inner.history.bind(inner),
+      });
+
+      beforeEach(() => {
+        const elsewhere = new Database(":memory:");
+        disposers.push(registerStateProvider("plain", () => plain(new SqliteStateProvider(elsewhere))));
+        config.state.types = [...(config.state.types ?? []), { name: "task", provider: "plain" }];
+      });
+
+      it("refuses, rather than report success and leave the record live", async () => {
+        const ref = { type: "task", id: "t1" };
+        await service.put(person, { ...ref, scope: "global", data: { title: "x" } });
+        changes.length = 0;
+        await expect(service.archive(person, ref, "done")).rejects.toThrow(
+          'The "plain" store cannot archive task records, so task/t1 is unchanged.',
+        );
+        await expect(service.unarchive(person, ref)).rejects.toThrow("cannot archive");
+        expect((await service.query(person, { type: "task" })).map((r) => r.id)).toEqual(["t1"]);
+        expect(changes).toEqual([]);
+      });
+
+      it("keeps working for everything else", async () => {
+        const ref = { type: "task", id: "t1" };
+        await service.put(person, { ...ref, scope: "global", data: { title: "x" } });
+        await service.patch(person, ref, { title: "y" });
+        expect(await service.query(person, { type: "task", includeArchived: true })).toMatchObject([
+          { data: { title: "y" }, version: 2 },
+        ]);
+        expect(await service.delete(person, ref)).toMatchObject({ version: 2 });
+        expect(changes.map((c) => c.op)).toEqual(["create", "update", "delete"]);
+      });
+    });
+
+    it("never hands a caller an archived record it didn't ask for, even from a store that ignores the flag", async () => {
+      const elsewhere = new Database(":memory:");
+      disposers.push(
+        registerStateProvider("careless", () => {
+          const inner = new SqliteStateProvider(elsewhere);
+          return Object.assign(Object.create(inner), {
+            id: "careless",
+            query: (q: Parameters<SqliteStateProvider["query"]>[0]) => inner.query({ ...q, includeArchived: true }),
+          });
+        }),
+      );
+      config.state.types = [...(config.state.types ?? []), { name: "task", provider: "careless" }];
+      await service.put(person, { type: "task", id: "kept", scope: "global", data: {} });
+      await service.put(person, { type: "task", id: "gone", scope: "global", data: {} });
+      await service.archive(person, { type: "task", id: "gone" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        expect((await service.query(person, { type: "task" })).map((r) => r.id)).toEqual(["kept"]);
+        expect(await service.query(person, { type: "task", includeArchived: true })).toHaveLength(2);
+        await service.query(person, { type: "task" });
+        // The page came back short, which reads as the end of the list: whoever runs it is told, once.
+        expect(warn.mock.calls).toEqual([
+          [
+            '[state] the "careless" store returned archived task records to a query that didn\'t ask; pages will come back short',
+          ],
+        ]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("fails loudly when a store's put leaves a record archived, and announces nothing", async () => {
+      const elsewhere = new Database(":memory:");
+      disposers.push(
+        registerStateProvider("sticky", () => {
+          const inner = new SqliteStateProvider(elsewhere);
+          // An upsert that leaves its archive flag alone, as a store written without that duty might.
+          return Object.assign(Object.create(inner), {
+            id: "sticky",
+            put: async (write: Parameters<SqliteStateProvider["put"]>[0], expected?: number) => {
+              const ref = { type: write.type, id: write.id };
+              const was = await inner.get(ref);
+              const result = await inner.put(write, expected);
+              if (!was?.archivedAt) return result;
+              const kept = await inner.archive(ref, write.actor, was.archiveReason);
+              return { record: kept?.record ?? result.record, previous: result.previous };
+            },
+          });
+        }),
+      );
+      config.state.types = [...(config.state.types ?? []), { name: "task", provider: "sticky" }];
+      const ref = { type: "task", id: "t1" };
+      await service.put(person, { ...ref, scope: "global", data: { title: "x" } });
+      await service.archive(person, ref, "done");
+      changes.length = 0;
+      await expect(service.put(person, { ...ref, scope: "global", data: { title: "y" } })).rejects.toThrow(
+        'The "sticky" store kept task/t1 archived after a put, which must write it live.',
+      );
+      expect(changes).toEqual([]);
+    });
+
+    it("fails loudly when a store says it archived a record and didn't", async () => {
+      const elsewhere = new Database(":memory:");
+      disposers.push(
+        registerStateProvider("liar", () => {
+          const inner = new SqliteStateProvider(elsewhere);
+          return Object.assign(Object.create(inner), {
+            id: "liar",
+            archive: async (ref: { type: string; id: string }) => {
+              const record = await inner.get(ref);
+              return record ? { record, previous: record } : null;
+            },
+          });
+        }),
+      );
+      config.state.types = [...(config.state.types ?? []), { name: "task", provider: "liar" }];
+      await service.put(person, { type: "task", id: "t1", scope: "global", data: {} });
+      changes.length = 0;
+      await expect(service.archive(person, { type: "task", id: "t1" })).rejects.toThrow(
+        'The "liar" store reported task/t1 archived, but it is not.',
+      );
+      expect(changes).toEqual([]);
     });
   });
 

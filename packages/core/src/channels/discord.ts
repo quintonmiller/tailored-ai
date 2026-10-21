@@ -346,6 +346,14 @@ export class DiscordChannel implements Channel, OutboundNotifier {
                   createdAt: change.at,
                   updatedAt: change.at,
                   updatedBy: change.actor,
+                  // Only an archive leaves a record archived: a patch refuses one, and a put brings it back.
+                  ...(change.lifecycle === "archived"
+                    ? {
+                        archivedAt: change.at,
+                        archivedBy: change.actor,
+                        ...(change.archiveReason ? { archiveReason: change.archiveReason } : {}),
+                      }
+                    : {}),
                 },
                 titleField,
                 record.spec.bind,

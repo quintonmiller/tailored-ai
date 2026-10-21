@@ -362,9 +362,12 @@ export async function readHome(
   const ref = { type: PLACE_TYPE, id: homeId(agent) };
   const name = agent === "default" ? "your room" : `${agent}'s room`;
   const home = homes?.(agent);
+  // An archived home is still home: an agent always has one. It is never
+  // drawn again over, either, which would bring it back unasked; an archive
+  // changes no data, so to `untouched` it still looks as the system made it.
   const found = await service.get(caller, ref);
   if (found) {
-    const fresh = await upgrade(service, found, name, home);
+    const fresh = found.archivedAt ? undefined : await upgrade(service, found, name, home);
     return fresh ?? { place: found.data as unknown as Place, version: found.version };
   }
   const place = drawHome(ref.id, name, home);
@@ -551,13 +554,16 @@ export async function whereIs(
   agent: string,
   rooms?: TalkRoom[],
 ): Promise<string> {
-  // A store that keeps no whereabouts has everyone at home.
+  // A store that keeps no whereabouts has everyone at home. Archived records
+  // are drawn nowhere, as the queries the world is drawn from leave them out:
+  // archived whereabouts are home, and an archived place has nobody in it.
   const found = await service.get(caller, { type: WHEREABOUTS_TYPE, id: agent }).catch(() => null);
-  const id = typeof found?.data.place === "string" ? found.data.place : undefined;
+  const id = typeof found?.data.place === "string" && !found.archivedAt ? found.data.place : undefined;
   if (!id || id === homeId(agent)) return homeId(agent);
   // A meeting room is there while its room is, and only for its members: one who has left the room is home again.
   if (id.startsWith("room:")) return mayChange(id, agent, rooms ?? []) ? id : homeId(agent);
-  return (await service.get(caller, { type: PLACE_TYPE, id })) ? id : homeId(agent);
+  const there = await service.get(caller, { type: PLACE_TYPE, id });
+  return there && !there.archivedAt ? id : homeId(agent);
 }
 
 /** Where an agent's body is drawn: in a meeting room while it is talking there, otherwise where it lives. */
@@ -568,7 +574,7 @@ export async function bodyAt(
   rooms?: TalkRoom[],
 ): Promise<string> {
   const visit = await service.get(caller, { type: VISIT_TYPE, id: agent }).catch(() => null);
-  return visitOf(visit?.data, Date.now()) ?? whereIs(service, caller, agent, rooms);
+  return visitOf(visit?.archivedAt ? undefined : visit?.data, Date.now()) ?? whereIs(service, caller, agent, rooms);
 }
 
 /**
@@ -609,9 +615,13 @@ export async function readCurrent(
 ): Promise<{ id: string; place: Place; version: number; scope: string }> {
   const id = await whereIs(service, caller, agent, meetings?.rooms);
   const found = id === homeId(agent) ? undefined : await service.get(caller, { type: PLACE_TYPE, id });
-  if (found) return { id, place: found.data as unknown as Place, version: found.version, scope: found.scope };
+  if (found && !found.archivedAt)
+    return { id, place: found.data as unknown as Place, version: found.version, scope: found.scope };
   const talk = talkRoomOf(meetings?.rooms, id);
-  if (talk && meetings) return { id, place: drawMeeting(talk, meetings.hasBody).place, version: 0, scope: "global" };
+  // A meeting room whose record is archived is drawn fresh, at that record's version, so a change made to it
+  // writes over the archived one instead of failing as a create over a record that exists.
+  if (talk && meetings)
+    return { id, place: drawMeeting(talk, meetings.hasBody).place, version: found?.version ?? 0, scope: "global" };
   return { id: homeId(agent), ...(await readHome(service, caller, agent, homes)), scope: `agent:${agent}` };
 }
 
@@ -773,6 +783,7 @@ export async function tidyByReading(service: StateService, id: string, place: Pl
   const there = await Promise.all(
     links.map(async (l) => {
       try {
+        // An archived place still counts: its door stays, so bringing the place back joins it up again.
         const far = await service.get(PLUGIN_CALLER, { type: PLACE_TYPE, id: l.to });
         return !!far && linksOf(far.data as unknown as Place).some((back) => back.to === id);
       } catch {
@@ -845,9 +856,12 @@ async function readPlace(
   const talk = id.startsWith("room:") ? talkRoomOf(meetings.rooms, id) : undefined;
   if (id.startsWith("room:") && !talk) return null;
   const kept = await service.get(caller, { type: PLACE_TYPE, id }).catch(() => null);
-  if (kept) return { place: kept.data as unknown as Place, version: kept.version, scope: kept.scope };
-  if (talk) return { place: drawMeeting(talk, meetings.hasBody).place, version: 0, scope: "global" };
-  if (id === LOBBY) return { place: drawOnce(LOBBY, lobby), version: 0, scope: "global" };
+  if (kept && !kept.archivedAt)
+    return { place: kept.data as unknown as Place, version: kept.version, scope: kept.scope };
+  // Archived, a drawn room is drawn fresh at the archived record's version (see `readCurrent`); any other place is gone.
+  const version = kept?.version ?? 0;
+  if (talk) return { place: drawMeeting(talk, meetings.hasBody).place, version, scope: "global" };
+  if (id === LOBBY) return { place: drawOnce(LOBBY, lobby), version, scope: "global" };
   return null;
 }
 
@@ -1289,11 +1303,12 @@ async function sceneOf(
   homes: HomeFor | undefined,
 ): Promise<SceneOf | null> {
   if (id === LOBBY) {
-    // Drawn fresh until a person changes it, and kept as they left it from then on.
+    // Drawn fresh until a person changes it, and kept as they left it from then on. Archived, it is drawn fresh
+    // again, at the archived record's version so a change writes over it.
     const kept = await service.get(caller, { type: PLACE_TYPE, id }).catch(() => null);
-    return kept
+    return kept && !kept.archivedAt
       ? { id, place: kept.data as unknown as Place, agents: [], version: kept.version, scope: kept.scope }
-      : { id, place: drawOnce(LOBBY, lobby), agents: [], version: 0, scope: "global" };
+      : { id, place: drawOnce(LOBBY, lobby), agents: [], version: kept?.version ?? 0, scope: "global" };
   }
   if (id === TOWN) {
     if (!world) return null;
@@ -1314,9 +1329,10 @@ async function sceneOf(
   if (id.startsWith("room:")) {
     const room = talkRoomOf(rooms, id);
     if (!room) return null;
-    // Once a member has changed it, it is kept: drawn from the record, never from its name again.
+    // Once a member has changed it, it is kept: drawn from the record, never from its name again. Archived, it is
+    // drawn from its name, at the archived record's version so a change writes over it.
     const kept = await service.get(caller, { type: PLACE_TYPE, id }).catch(() => null);
-    const own = kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place;
+    const own = kept && !kept.archivedAt ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place;
     const place = shownPurpose(own, room);
     return {
       id,
@@ -1340,7 +1356,7 @@ async function sceneOf(
     };
   }
   const found = await service.get(caller, { type: PLACE_TYPE, id });
-  if (!found) return null;
+  if (!found || found.archivedAt) return null;
   const agents = await whoIsIn(service, caller, id, hasBody, undefined, rooms);
   return { id, place: found.data as unknown as Place, agents, version: found.version, scope: found.scope };
 }
@@ -1553,13 +1569,16 @@ export class Presence {
     }
   }
 
-  /** Whether the agent is talking with you face to face now: its `talk` record, with you and not on the phone. */
+  /**
+   * Whether the agent is talking with you face to face now: its `talk` record, with you and not on the phone. An
+   * archived one is not in effect, as the change it came in on is not (see `followDays`).
+   */
   private async withYou(agent: string, now: number): Promise<boolean> {
     const talk = await this.opts
       .state()
       .get(PRESENCE_CALLER, { type: TALK_TYPE, id: agent })
       .catch(() => null);
-    return faceToFaceWithYou(talk?.data, now);
+    return !talk?.archivedAt && faceToFaceWithYou(talk?.data, now);
   }
 
   /** Every outing ended, and every night's sleep: the routines are off, and nobody is left out in the town. */
@@ -1722,7 +1741,12 @@ export function followDays(
     events.on("agent.turn_started", (e) => void presence.started(e.agent || "default")),
     events.on("agent.turn_ended", (e) => presence.ended(e.agent || "default")),
     events.on("state.changed", (e) => {
-      if (e.type === TALK_TYPE && e.op !== "delete" && faceToFaceWithYou(e.after, Date.now())) {
+      if (
+        e.type === TALK_TYPE &&
+        e.op !== "delete" &&
+        e.lifecycle !== "archived" &&
+        faceToFaceWithYou(e.after, Date.now())
+      ) {
         void presence.faceToFace(e.id);
         return;
       }
@@ -2825,7 +2849,12 @@ export class PlaceTool implements Tool {
 
   /** What an agent wears, and whether it chose that or its role did. */
   private async wearing(service: StateService, caller: StateCaller, agent: string): Promise<string> {
-    const read = (type: string) => service.get(caller, { type, id: agent }).catch(() => null);
+    // An archived record is not worn: read as none, as the body's drawing does.
+    const read = (type: string) =>
+      service
+        .get(caller, { type, id: agent })
+        .then((r) => (r?.archivedAt ? null : r))
+        .catch(() => null);
     const [body, old] = await Promise.all([read(BODY_TYPE), read(WEAR_TYPE)]);
     const role = this.roles(agent);
     const own = body?.data as BodyData | undefined;
@@ -2903,6 +2932,12 @@ export class PlaceTool implements Tool {
       if (action === "undo") {
         const { id } = await readCurrent(service, caller, agent, meetings, this.homes);
         const ref = { type: PLACE_TYPE, id };
+        // Undo writes the room over its record, which would bring an archived one back unasked, with whatever it
+        // took back besides. Whoever archived it, restoring it is a choice of its own.
+        if ((await service.get(caller, ref).catch(() => null))?.archivedAt)
+          return fail(
+            `This room is archived, so undo leaves it alone. Unarchiving it (the state tool, or Restore on the State page) brings it back.`,
+          );
         const recent = await service.history(caller, ref, { limit: PEOPLE_LOOK }).catch(() => []);
         const [newest] = recent;
         let last: StateChange | undefined = newest;
@@ -2919,6 +2954,10 @@ export class PlaceTool implements Tool {
             );
           }
         }
+        // Archiving and restoring change nothing in the room, so neither is a change undo can take back. (A put
+        // that restored the room while changing it is, and taking it back leaves the room restored.)
+        if (last?.lifecycle && isDeepStrictEqual(last.before, last.after))
+          return fail("The last change here archived or restored the room, which undo doesn't take back.");
         // A meeting room's first change made its record: taking that back is the room as it was drawn.
         if (last?.op === "create" && id.startsWith("room:") && !byPlugin(last.actor)) {
           await service.delete(caller, ref, newest?.version);
@@ -3287,8 +3326,9 @@ export class PlaceTool implements Tool {
   ): Promise<ToolResult> {
     if (!name || !slug(name)) return fail('Give the new place a name, like "the lounge".');
     const id = `${SHARED}${slug(name)}`;
-    if (await service.get(caller, { type: PLACE_TYPE, id }))
-      return fail(`There's already a place called ${name}. Go there with action "go".`);
+    const there = await service.get(caller, { type: PLACE_TYPE, id });
+    if (there?.archivedAt) return fail(`There's an archived place called ${name}. Pick another name.`);
+    if (there) return fail(`There's already a place called ${name}. Go there with action "go".`);
     const named = /^(the|a|an)\s/i.test(name) ? name : `the ${name}`;
     const elsewhere = area && areaId(area) !== MAIN ? area.slice(0, 60) : undefined;
     const place: Place = { ...sharedPlace(id, named.slice(0, 80)), ...(elsewhere ? { area: elsewhere } : {}) };
@@ -3773,7 +3813,7 @@ const plugin: Plugin = (ctx) => {
           .getStateService()
           .get(PLUGIN_CALLER, { type: MODEL_TYPE, id: edit.model })
           .catch(() => null);
-        const m = found?.data as unknown as Model | undefined;
+        const m = found?.archivedAt ? undefined : (found?.data as unknown as Model | undefined);
         if (!m) return { json: { why: "That model isn't there any more: its agent may have just deleted it." } };
         edit = { ...edit, kind: MOUNT_KIND[m.mount], size: m.size, name: m.name.replace(/_/g, " ") };
       }
@@ -3965,7 +4005,8 @@ const plugin: Plugin = (ctx) => {
     for (const agent of agents) {
       let kept = homesKept.get(agent);
       if (!kept || now.getTime() - kept.at > HOMES_FRESH_MS) {
-        // Read only: a home nobody has looked at yet is drawn as it will be, and not written for a routine.
+        // Read only: a home nobody has looked at yet is drawn as it will be, and not written for a routine. An
+        // archived home is still home, as `readHome` has it.
         const found = await service.get(PLUGIN_CALLER, { type: PLACE_TYPE, id: homeId(agent) }).catch(() => null);
         const name = agent === "default" ? "your room" : `${agent}'s room`;
         const place = found ? (found.data as unknown as Place) : drawHome(homeId(agent), name, homes(agent));
@@ -3998,7 +4039,7 @@ const plugin: Plugin = (ctx) => {
       if (!Number.isFinite(last) || now.getTime() - last > LIVELY_MS) continue;
       const id = roomPlaceId(room.ref);
       const kept = await service.get(PLUGIN_CALLER, { type: PLACE_TYPE, id }).catch(() => null);
-      const place = kept ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place;
+      const place = kept && !kept.archivedAt ? (kept.data as unknown as Place) : drawMeeting(room, hasBody).place;
       seats.push(
         ...seatsIn(id, place, {
           kind: "meeting",

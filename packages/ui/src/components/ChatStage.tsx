@@ -186,7 +186,8 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
       // A door put in or taken out somewhere else may be the way back to here, which shows once both sides are in.
       if (change.type === "place" && id && change.id !== id && relinked(change)) void load(true);
       if (change.type !== "place" || !id || change.id !== id) return;
-      if (change.op === "delete" || !change.after || resized(change)) void load();
+      // Archived or restored, the server says what is drawn here now: an archived place is gone, as deleted.
+      if (change.op === "delete" || change.lifecycle || !change.after || resized(change)) void load();
       else {
         // Shown as changed at once; and since where its door goes depends on what is in it, asked again for that,
         // and whole for a model it has now that the page hasn't been sent.
@@ -336,7 +337,9 @@ export function useRecords<T>(type: string, enabled: boolean, stamp = false): Re
       if (change.type !== type) return;
       setRecords((all) => {
         const next = { ...all };
-        if (change.op === "delete" || !change.after) delete next[change.id];
+        // An archive comes as an update with the data as it was, but the record is out of effect, as the first read
+        // (which leaves archived records out) has it; restoring it comes with the data, and puts it back.
+        if (change.op === "delete" || change.lifecycle === "archived" || !change.after) delete next[change.id];
         else next[change.id] = (stamp ? { ...change.after, heard: Date.now() } : change.after) as unknown as T;
         return next;
       });
@@ -1029,7 +1032,8 @@ export function useScene(id: string | null): SceneInfo | null {
       // A door put in or taken out elsewhere may be the way back to here, which shows once both sides are in.
       else if (change.type === "place" && change.id !== id && relinked(change)) void load(true);
       if (change.type !== "place" || change.id !== id) return;
-      if (change.op === "delete" || !change.after || resized(change)) void load();
+      // Archived or restored, the server says what is drawn here now: an archived place is gone, as deleted.
+      if (change.op === "delete" || change.lifecycle || !change.after || resized(change)) void load();
       else {
         const next = withModels(change.after as unknown as Room, shown);
         shown = next.room;

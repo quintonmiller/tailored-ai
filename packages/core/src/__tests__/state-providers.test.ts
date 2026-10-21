@@ -29,6 +29,37 @@ describe("SqliteStateProvider", () => {
       .all() as { name: string }[];
     expect(tables.map((t) => t.name)).toEqual(["state_changes", "state_records"]);
   });
+
+  it("adds the archive columns to a store from before archiving, and reads its records as live", async () => {
+    const db = new Database(":memory:");
+    // The tables as they were before archiving, with a record and its history in them.
+    db.exec(`
+      CREATE TABLE state_records (
+        type TEXT NOT NULL, id TEXT NOT NULL, scope TEXT NOT NULL, data TEXT NOT NULL, version INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, source TEXT,
+        deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (type, id)
+      );
+      CREATE TABLE state_changes (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, id TEXT NOT NULL, scope TEXT NOT NULL,
+        op TEXT NOT NULL, before TEXT, after TEXT, version INTEGER NOT NULL, actor TEXT NOT NULL, source TEXT,
+        at TEXT NOT NULL
+      );
+      INSERT INTO state_records VALUES ('plan', 'old', 'global', '{"name":"Old"}', 1, 't0', 't0', '{"kind":"user","name":"owner"}', NULL, 0);
+      INSERT INTO state_changes (type, id, scope, op, after, version, actor, at)
+        VALUES ('plan', 'old', 'global', 'create', '{"name":"Old"}', 1, '{"kind":"user","name":"owner"}', 't0');
+    `);
+    const provider = new SqliteStateProvider(db, now);
+    // Built twice over the same database, as a restart does: the columns are added once.
+    new SqliteStateProvider(db, now);
+
+    const record = await provider.get({ type: "plan", id: "old" });
+    expect(record).toMatchObject({ data: { name: "Old" }, version: 1 });
+    expect(record?.archivedAt).toBeUndefined();
+    expect((await provider.query({ type: "plan" })).map((r) => r.id)).toEqual(["old"]);
+    expect((await provider.history({ type: "plan", id: "old" }))[0].lifecycle).toBeUndefined();
+    await provider.archive({ type: "plan", id: "old" }, person, "done with it");
+    expect(await provider.query({ type: "plan" })).toEqual([]);
+  });
 });
 
 describe("MemoryStateProvider", () => {
@@ -53,8 +84,8 @@ describe("MemoryStateProvider", () => {
   });
 });
 
-/** Both keep history and can delete, which the optional parts of the contract leave open. */
-type Store = StateProvider & Required<Pick<StateProvider, "delete" | "history" | "purge">>;
+/** Both keep history, delete and archive, which the optional parts of the contract leave open. */
+type Store = StateProvider & Required<Pick<StateProvider, "delete" | "history" | "purge" | "archive" | "unarchive">>;
 
 describe.each([
   ["sqlite", (): Store => new SqliteStateProvider(new Database(":memory:"), now)],
@@ -130,6 +161,123 @@ describe.each([
     const { record, previous } = await provider.put(write("trip", { name: "Again" }), 0);
     expect(previous).toBeUndefined();
     expect(record.version).toBe(3);
+  });
+
+  describe("archive", () => {
+    const ref = { type: "plan", id: "trip" };
+
+    it("keeps an archived record, with who archived it and why, but leaves it out of queries", async () => {
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.put(write("other", { name: "Other" }));
+      const result = await provider.archive(ref, person, "trip is over", { surface: "web" });
+      expect(result?.previous?.archivedAt).toBeUndefined();
+      expect(result?.record).toMatchObject({
+        data: { name: "Trip" },
+        version: 2,
+        updatedBy: person,
+        source: { surface: "web" },
+        archivedBy: person,
+        archiveReason: "trip is over",
+      });
+      expect(result?.record.archivedAt).toBe(result?.record.updatedAt);
+
+      expect(await provider.get(ref)).toEqual(result?.record);
+      expect((await provider.query({ type: "plan" })).map((r) => r.id)).toEqual(["other"]);
+      const all = await provider.query({
+        type: "plan",
+        includeArchived: true,
+        orderBy: { field: "id", direction: "asc" },
+      });
+      expect(all.map((r) => [r.id, !!r.archivedAt])).toEqual([
+        ["other", false],
+        ["trip", true],
+      ]);
+    });
+
+    it("applies scopes and conditions to archived records the same way when asked for them", async () => {
+      await provider.put(write("trip", { name: "Trip", status: "done" }, "room:local:eng"));
+      await provider.archive(ref, person);
+      const find = (q: Partial<Parameters<Store["query"]>[0]>) =>
+        provider.query({ type: "plan", includeArchived: true, ...q }).then((rs) => rs.map((r) => r.id));
+      expect(await find({ scopes: ["room:local:eng"], where: { status: "done" } })).toEqual(["trip"]);
+      expect(await find({ scopes: ["global"] })).toEqual([]);
+      expect(await find({ where: { status: "active" } })).toEqual([]);
+    });
+
+    it("unarchives, and the record is back in queries with no archive fields", async () => {
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.archive(ref, person, "trip is over");
+      const result = await provider.unarchive(ref, agent);
+      expect(result?.previous?.archiveReason).toBe("trip is over");
+      expect(result?.record).toMatchObject({ data: { name: "Trip" }, version: 3, updatedBy: agent });
+      for (const field of ["archivedAt", "archivedBy", "archiveReason"])
+        expect(result?.record).not.toHaveProperty(field);
+      expect(await provider.get(ref)).toEqual(result?.record);
+      expect((await provider.query({ type: "plan" })).map((r) => r.id)).toEqual(["trip"]);
+    });
+
+    it("logs both as updates that change no data, marked with the lifecycle change", async () => {
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.archive(ref, person, "trip is over");
+      await provider.unarchive(ref, person);
+      const history = await provider.history(ref);
+      expect(history.map((c) => [c.op, c.version, c.lifecycle ?? null, c.archiveReason ?? null])).toEqual([
+        ["update", 3, "unarchived", null],
+        ["update", 2, "archived", "trip is over"],
+        ["create", 1, null, null],
+      ]);
+      expect(history[1].before).toEqual({ name: "Trip" });
+      expect(history[1].after).toEqual({ name: "Trip" });
+    });
+
+    it("archives only at the expected version, when one is given", async () => {
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.put(write("trip", { name: "Trip, changed" }));
+      await expect(provider.archive(ref, person, undefined, undefined, 1)).rejects.toThrow(StateConflictError);
+      expect((await provider.get(ref))?.archivedAt).toBeUndefined();
+      await expect(provider.archive(ref, person, undefined, undefined, 2)).resolves.toMatchObject({
+        record: { version: 3 },
+      });
+      await expect(provider.unarchive(ref, person, undefined, 2)).rejects.toThrow(StateConflictError);
+    });
+
+    it("archives nothing that isn't there, or is deleted", async () => {
+      expect(await provider.archive(ref, person)).toBeNull();
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.delete(ref, person);
+      expect(await provider.archive(ref, person)).toBeNull();
+      expect(await provider.unarchive(ref, person)).toBeNull();
+    });
+
+    it("brings an archived record back on a put over it, and says so in its history", async () => {
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.archive(ref, person, "trip is over");
+      const { record, previous } = await provider.put(write("trip", { name: "Trip again" }), 2);
+      expect(previous?.archivedAt).toBeDefined();
+      expect(record.version).toBe(3);
+      expect(record.archivedAt).toBeUndefined();
+      expect((await provider.query({ type: "plan" })).map((r) => r.data.name)).toEqual(["Trip again"]);
+      const [latest] = await provider.history(ref);
+      expect([latest.op, latest.lifecycle]).toEqual(["update", "unarchived"]);
+    });
+
+    it("refuses a create over an archived record, which still exists", async () => {
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.archive(ref, person);
+      await expect(provider.put(write("trip", { name: "x" }), 0)).rejects.toThrow("already exists");
+    });
+
+    it("deletes an archived record like any other, and one made again in its place starts live", async () => {
+      await provider.put(write("trip", { name: "Trip" }));
+      await provider.archive(ref, person);
+      expect(await provider.delete(ref, person)).toMatchObject({ version: 2 });
+      expect(await provider.get(ref)).toBeNull();
+      expect(await provider.query({ type: "plan", includeArchived: true })).toEqual([]);
+      const { record } = await provider.put(write("trip", { name: "New" }), 0);
+      expect(record.version).toBe(4);
+      expect(record.archivedAt).toBeUndefined();
+      expect((await provider.history(ref))[0].lifecycle).toBeUndefined();
+    });
   });
 
   it("purges a record and its history outright", async () => {

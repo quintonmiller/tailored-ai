@@ -20,16 +20,21 @@ export async function changeBody(agent: string, change: BodyChange, what = "chan
   for (let attempt = 0; ; attempt++) {
     const got = await fetch(path);
     if (!got.ok && got.status !== 404) throw await failed(got, what);
-    const record = got.ok ? ((await got.json()) as { data?: Record<string, unknown>; version?: number }) : null;
+    const record = got.ok
+      ? ((await got.json()) as { data?: Record<string, unknown>; version?: number; archivedAt?: string })
+      : null;
+    // As core's: an archived body record is not in effect, so a change starts from nothing and writes over it at its
+    // version, and is never taken away by emptying it.
+    const live = record && !record.archivedAt ? record : null;
     const version = record?.version ?? 0;
-    const data = bodyWith(record?.data ?? {}, change);
+    const data = bodyWith(live?.data ?? {}, change);
     const res = Object.keys(data).length
       ? await fetch(path, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ scope: `agent:${agent}`, data, expectedVersion: version }),
         })
-      : record
+      : live
         ? await fetch(`${path}?expectedVersion=${version}`, { method: "DELETE" })
         : undefined;
     if (res?.status === 409 && attempt === 0) continue;

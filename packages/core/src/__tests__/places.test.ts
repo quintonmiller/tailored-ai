@@ -714,6 +714,36 @@ describe("shared places", () => {
     await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
     expect(await whereIs(state, owner, "host")).toBe(homeId("host"));
   });
+
+  it("draws an archived place as gone until it is brought back, and never makes a new one over it", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    const lounge = { type: PLACE_TYPE, id: "shared:lounge" };
+    await state.archive(owner, lounge, "closed for the winter");
+    expect(await whereIs(state, owner, "host")).toBe(homeId("host"));
+    expect((await readCurrent(state, owner, "host")).id).toBe(homeId("host"));
+    expect(String((await tool.execute({ action: "places" }, as("guest"))).output)).not.toMatch(/lounge/);
+    expect((await tool.execute({ action: "go", to: "lounge" }, as("guest"))).error).toMatch(/no place called/);
+    expect((await tool.execute({ action: "new", name: "lounge" }, as("guest"))).error).toBe(
+      "There's an archived place called lounge. Pick another name.",
+    );
+    expect(await state.get(owner, lounge)).toMatchObject({ version: 2, archiveReason: "closed for the winter" });
+
+    await state.unarchive(owner, lounge);
+    expect(await whereIs(state, owner, "host")).toBe("shared:lounge");
+  });
+
+  it("keeps an agent home while the record of where it went is archived", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    await state.archive(owner, { type: WHEREABOUTS_TYPE, id: "host" });
+    expect(await whereIs(state, owner, "host")).toBe(homeId("host"));
+  });
+
+  it("keeps an archived home as the agent's home", async () => {
+    const { place } = await readHome(state, owner, "host");
+    await state.archive(owner, { type: PLACE_TYPE, id: homeId("host") });
+    expect((await readHome(state, owner, "host")).place).toEqual(place);
+    expect(await state.get(owner, { type: PLACE_TYPE, id: homeId("host") })).toMatchObject({ version: 2 });
+  });
 });
 
 describe("bodies going where the talk is", () => {
@@ -994,6 +1024,14 @@ describe("bodies going where the talk is", () => {
         await presence.keep("guest", { place: homeId("guest"), until: out.until, errand: "sleep" });
         await presence.faceToFace("guest");
         expect((await visit("guest"))?.data.errand).toBe("sleep");
+      });
+
+      it("lets the body walk home to work when its talk with you is archived", async () => {
+        await presence.keep("host", out);
+        await withYou("host");
+        await state.archive(owner, { type: TALK_TYPE, id: "host" });
+        await presence.started("host");
+        expect(await visit("host")).toBeNull();
       });
 
       it("reads a talk record as face to face with you only while it lasts, and not on the phone", () => {
@@ -1892,6 +1930,14 @@ describe("homes made before rooms were drawn from a seed", () => {
     expect((await state.get(owner, ref))?.version).toBe(version);
   });
 
+  it("never draws an archived home again, which would bring it back", async () => {
+    await store(system, firstHome("assistant's room"));
+    const v1 = await state.get(owner, ref);
+    await state.archive(owner, ref, "starting over later");
+    expect((await readHome(state, owner, "assistant")).place).toEqual(v1?.data);
+    expect(await state.get(owner, ref)).toMatchObject({ version: 2, archiveReason: "starting over later" });
+  });
+
   it("never replaces a home anyone else has changed", async () => {
     // The agent added a plant to the first room.
     await store(system, firstHome("assistant's room"));
@@ -2416,6 +2462,27 @@ describe("a person changing a place on the page", () => {
     const after = (await readHome(state, person, "assistant")).place;
     expect(lamps(after)).toBe(before);
     expect(after.changes?.[0]).toMatchObject({ who: "assistant", what: expect.stringMatching(/^took back "added/) });
+  });
+
+  it("won't let the agent's undo bring back an archived room, whoever archived it", async () => {
+    const ref = { type: PLACE_TYPE, id: homeId("assistant") };
+    const agent: StateCaller = { actor: { kind: "agent", name: "assistant" } };
+    await tool.execute({ action: "add", kind: "lamp" }, as);
+    for (const who of [agent, person]) {
+      const archived = await state.archive(who, ref, "starting over later");
+      const undone = await tool.execute({ action: "undo" }, as);
+      expect(undone.success).toBe(false);
+      expect(undone.error).toMatch(/^This room is archived, so undo leaves it alone\./);
+      expect(await state.get(person, ref)).toMatchObject({
+        version: archived?.version,
+        archivedAt: expect.any(String),
+      });
+      // Restored, the last change the agent made is archiving it, which is nothing to take back either.
+      const restored = await state.unarchive(person, ref);
+      const again = await tool.execute({ action: "undo" }, as);
+      expect(again.error).toBe("The last change here archived or restored the room, which undo doesn't take back.");
+      expect((await state.get(person, ref))?.version).toBe(restored?.version);
+    }
   });
 
   it("makes a meeting room's record with the first change, as a member's first change does", async () => {

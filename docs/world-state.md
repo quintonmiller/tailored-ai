@@ -36,16 +36,18 @@ is reported by `validateConfig` rather than silently trusted.
 
 ## How agents use it
 
-Once at least one type exists, agents get one tool, `state`, with six actions:
+Once at least one type exists, agents get one tool, `state`, with eight actions:
 
 | action | does |
 |---|---|
 | `types` | what exists, each type's fields, and whether this agent can write it |
 | `get` | one record by id |
-| `query` | records matching `where`, e.g. `{"status": "active"}` or `{"priority": {"gte": 3}}` |
+| `query` | records matching `where`, e.g. `{"status": "active"}` or `{"priority": {"gte": 3}}`; `includeArchived: true` adds archived ones |
 | `put` | create a record (omit `id` for a generated one), or replace one by id |
 | `patch` | change some fields; a field set to `null` is removed |
 | `delete` | remove a record; its history is kept |
+| `archive` | retire a record, with an optional `reason`: it is kept, but queries leave it out |
+| `unarchive` | bring an archived record back |
 
 A failed write comes back as a sentence the model can act on: which field, what
 it expected, what it got. A version conflict says to read the record again.
@@ -87,7 +89,8 @@ No note records match.
   `limit` (default 10) and `scope`.
 - **What it shows:** exactly what the agent could read with the tool: its own
   scope, the rooms the turn is about, the current project, and `global`.
-  "No records match" is shown too, so the agent knows without checking.
+  Archived records are left out. "No records match" is shown too, so the
+  agent knows without checking.
 - **Size:** a query that hits its `limit` says there may be more, and the
   whole block is capped at about 2,000 tokens, with a note when it is cut.
 - **Errors:** a query that fails, such as one naming a type that does not
@@ -122,6 +125,17 @@ type of the same name.
 Ticks and buttons on a model's face write these as you, so an agent that wants
 to know subscribes to their changes or pins them to its prompt.
 
+The world draws an archived record as gone, the same way its lists leave it
+out: an archived room drops off the map and nobody is in it, an archived
+`whereabouts` or `visit` leaves the agent at home, an archived `body` or
+`wear` is not worn, and an archived model is left out of the rooms it was in.
+Restoring it puts it back. Two things stay: an agent's home room, since an
+agent always has one, and a door to an archived room, so restoring the room
+joins it up again. A change the world makes over an archived record, such as
+an agent changing how it looks, writes a fresh record over it. The place
+tool's `undo` leaves an archived room alone, since writing over it would
+bring it back.
+
 ## Scopes
 
 Each record has one scope: `global`, `agent:<name>`, `room:<ref>` or
@@ -141,10 +155,51 @@ write, or delete, only if nobody else has written since. A delete is a tombstone
 appearing, and its history keeps the removal. Erasing a record and its history
 outright is a separate admin action, never available to an agent.
 
+## Archiving
+
+Archive a record you want out of the way but not gone: a plan that finished,
+a page nobody uses. It keeps its data and history, and it is left out of
+everything that lists or loads records: `state` tool queries, pinned state,
+lists and tables on interfaces, the 3D world, and the State page. Fetching it
+by id still works, and says it is archived, when, by whom and why. A card
+bound to it shows the same as its first line.
+
+- **Asking for archived records:** `includeArchived: true` on a `state` tool
+  query, `?includeArchived=1` over HTTP, or **Show archived** on the State
+  page.
+- **Bringing it back:** `unarchive`, or **Restore** on the State page.
+- **Changing an archived record:** a `patch` is refused with a message that
+  says to unarchive it first. A `put` replaces it whole and brings it back, as
+  a `put` over a deleted record creates it again. An archived record still
+  exists, so a create with `expectedVersion: 0` is refused.
+- **Deleting:** an archived record can be deleted like any other. What an
+  agent wants gone is usually better archived; the `state` tool's `delete`
+  stays a delete.
+- **Versions:** archiving and restoring are writes: the version goes up,
+  `expectedVersion` applies, and history logs each one.
+- **Who may:** the same as for any write. An agent archives what its type's
+  `access.write` and its scopes let it change.
+- **Reading by id, in code:** `get` (and `GET /api/state/:type/:id`) returns
+  an archived record too, with `archivedAt` set. Code that reads a record by
+  id and treats it as current should check `archivedAt`, as the built-in
+  places plugin does; `query` already leaves archived records out.
+
 ## Events
 
 Every create, update and delete emits `state.changed` with the record before
-and after, the actor, and the source:
+and after, the actor, and the source. Archiving and restoring are updates
+too, so a hook or subscriber written before archiving existed keeps working.
+To tell them apart, read `lifecycle`: `"archived"` on the update that archived
+the record, with `archiveReason` when one was given, and `"unarchived"` on the
+one that brought it back (including a `put` over an archived record). Neither
+changes the data, so `before` and `after` are the same. A subscription line
+reads `plan/trip archived by planner: the trip is over`.
+
+A consumer that keeps its own copy of a type's live records, such as a page
+that read the list once and follows the stream, must drop a record on
+`lifecycle: "archived"` and add it back on `"unarchived"`. Otherwise an
+archive looks like an edit, and the copy keeps showing a record every list
+leaves out.
 
 ```yaml
 hooks:
@@ -228,11 +283,18 @@ history. A change from anywhere (an agent's tool call, a subscription, a
 plugin, another browser) appears as it happens, and the changed row is
 briefly highlighted.
 
-Edit a record as JSON, or delete it. A save carries the version you opened,
-so if an agent changed the record while you were editing, the save is
-refused rather than overwriting the agent's change. The page warns you as
-soon as that happens. Your edits are recorded as yours: actor `user`
+Edit a record as JSON, archive it, or delete it. A save carries the version
+you opened, so if an agent changed the record while you were editing, the
+save is refused rather than overwriting the agent's change. The page warns
+you as soon as that happens. Your edits are recorded as yours: actor `user`
 `owner`, source `http`.
+
+Archived records are hidden until you tick **Show archived**. Then each one is
+dimmed and marked archived, with when, by whom and why. **Archive** asks why
+(you can leave it blank). An archived record you open, from a link or right
+after archiving it, stays open with a note saying it is archived and a
+**Restore** button; restore it before editing it. History names each archive
+and restore, with the reason.
 
 ## HTTP API
 
@@ -241,17 +303,20 @@ Behind the usual bearer auth. A person through the API sees every scope.
 | route | does |
 |---|---|
 | `GET /api/state/types` | every type, with `canWrite` |
-| `GET /api/state/:type` | records; `?where=<json>&orderBy=-field&limit=&offset=&scope=` |
-| `GET /api/state/:type/:id` | one record, or 404 |
+| `GET /api/state/:type` | records; `?where=<json>&orderBy=-field&limit=&offset=&scope=`. Archived records only with `includeArchived=1` |
+| `GET /api/state/:type/:id` | one record, or 404. An archived record comes back with `archivedAt`, `archivedBy` and `archiveReason` |
 | `GET /api/state/:type/:id/history` | its changes, most recent first |
 | `GET /api/state/events` | a server-sent event stream: a `change` event carrying each `state.changed` payload as it happens; `?type=` narrows it to one type |
 | `POST /api/state/:type` | create: `{id?, scope?, data}`; `201` with the record. An `id` that exists is `409` |
 | `PUT /api/state/:type/:id` | replace the data: `{data, scope?, expectedVersion?}` |
 | `PATCH /api/state/:type/:id` | change some fields: `{changes, expectedVersion?}`; a field set to `null` is removed |
 | `DELETE /api/state/:type/:id` | delete; the history is kept. `?expectedVersion=` deletes it only while it is at that version, else `409`. `404` if there is no such record |
+| `POST /api/state/:type/:id/archive` | archive: `{reason?, expectedVersion?}`; the record as archived. `409` on a version mismatch, `404` if there is no such record. Already archived, it comes back as it is |
+| `POST /api/state/:type/:id/unarchive` | bring it back: `{expectedVersion?}`; the same answers as archive |
 
 A write that does not fit the type is `400`, with the sentence an agent would
-get. A write whose `expectedVersion` is out of date is `409`. Because
+get, and so is a `PATCH` to an archived record, or an archive in a store that
+can't archive. A write whose `expectedVersion` is out of date is `409`. Because
 `/api/state/types` and `/api/state/events` are routes, a type named `types`
 or `events` cannot be listed over HTTP; pick another name.
 
@@ -294,7 +359,33 @@ state:
 ```
 
 A provider only stores and retrieves (`get`, `query`, `put`, and optionally
-`delete`, `history`, `purge`, `watch`). Validation, access, scopes, versions
-and events are core's, so every provider gets them without implementing them.
-A provider for data that changes outside TAI implements `watch`, and core
-re-announces what it reports as `state.changed`.
+`delete`, `archive` with `unarchive`, `history`, `purge`, `watch`).
+Validation, access, scopes, versions and events are core's, so every provider
+gets them without implementing them. A provider for data that changes outside
+TAI implements `watch`, and core re-announces what it reports as
+`state.changed`.
+
+**Archiving, for a provider.** Archiving is optional. A provider without
+`archive` and `unarchive` keeps working as before, and archiving one of its
+records is refused with `The "<id>" store cannot archive <type> records, so
+<type>/<id> is unchanged.`, so a record is never reported archived while it
+stays live. A provider that implements them takes on four duties:
+
+- `archive(ref, actor, reason?, source?, expectedVersion?)` and
+  `unarchive(ref, actor, source?, expectedVersion?)` are writes: bump the
+  version, set `updatedAt` and `updatedBy`, log an `update` with
+  `lifecycle: "archived"` or `"unarchived"`, and return `{ record, previous }`,
+  or null when there is no live record.
+- `get` returns an archived record with `archivedAt`, `archivedBy` and
+  `archiveReason`.
+- `query` leaves archived records out unless `includeArchived` is set. Core
+  also drops any archived record a query returns uninvited, so a provider
+  that gets this wrong returns a short page rather than a hidden record, and
+  core logs a warning the first time it happens.
+- `put` writes the record live: one over an archived record brings it back,
+  and logs `lifecycle: "unarchived"`. A put that comes back still archived
+  fails loudly and announces nothing, rather than reporting a save that every
+  query would leave out.
+
+The SQLite provider adds its archive columns to an existing database when it
+starts, and reads every older record as live.

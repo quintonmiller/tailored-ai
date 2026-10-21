@@ -98,8 +98,11 @@ interface(action: "send", kind: "card",
 - **Staying current:** whoever changes the record (through the tool, the
   State page, another card or a plugin), the card redraws, in the web UI and
   in every Discord message it was posted as. A deleted record says so, and
-  its buttons stop. On Discord a burst of changes becomes one edit, which
-  keeps a busy record inside Discord's edit rate limit.
+  its buttons stop. An [archived](./world-state.md#archiving) record says so
+  in the card's first line, with the day and the reason, and its state
+  buttons are refused until it is unarchived. On Discord a burst of changes
+  becomes one edit, which keeps a busy record inside Discord's edit rate
+  limit.
 - **State buttons:** `patch` is written to the bound record, or to the
   button's own `ref: {type, id}` when it names one. The write is recorded as
   the person who clicked (`owner` in the web UI, `discord:<id>` on Discord),
@@ -131,6 +134,7 @@ interface(action: "send", kind: "list",
 - **The items:** one per matching record, labelled by the type's title field
   (or the id), oldest first so a tick never moves an item. `limit` defaults
   to 10 and stops at 50; past it the list says how many more there are.
+  Archived records are left off.
 - **Who sees what:** the query runs as the agent, and the list keeps the
   scopes the agent could see when it sent it. However often it is redrawn,
   it never shows a record the agent could not have read.

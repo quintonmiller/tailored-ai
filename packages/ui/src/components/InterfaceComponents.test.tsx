@@ -313,6 +313,18 @@ describe("a bound card's fields", () => {
       { label: "seen", value: "false" },
     ]);
   });
+
+  it("says first that an archived record is archived, with when and why, as core does", () => {
+    const data = { title: "Notes", seen: false };
+    const archived = { at: "2026-10-20T08:00:00.000Z", reason: "trip is over" };
+    expect(boundView({}, data, "title", {}, archived).fields).toEqual([
+      { label: "archived", value: "2026-10-20: trip is over" },
+      { label: "seen", value: "false" },
+    ]);
+    expect(boundView({}, data, "title", { fields: [] }, { at: archived.at }).fields).toEqual([
+      { label: "archived", value: "2026-10-20" },
+    ]);
+  });
 });
 
 describe("lists", () => {
