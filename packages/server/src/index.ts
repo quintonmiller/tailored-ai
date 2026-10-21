@@ -2368,6 +2368,32 @@ export function createServer(opts: ServerOptions) {
     return c.json({ types: types.map(({ def, canWrite }) => ({ ...def, canWrite })) });
   });
 
+  // Records about some text, best first, from the types that opt into search.
+  // Also before `/api/state/:type`, for the same reason as events.
+  app.get("/api/state/search", async (c) => {
+    const text = c.req.query("q")?.trim();
+    if (!text) return c.json({ error: "Say what to look for with ?q=" }, 400);
+    const types = (c.req.query("types") ?? "")
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    const limit = Number.parseInt(c.req.query("limit") ?? "", 10);
+    try {
+      const { hits, partial } = await runtime.getStateService().search(stateCaller, {
+        text,
+        ...(types.length ? { types } : {}),
+        ...(c.req.query("scope") ? { scope: c.req.query("scope") } : {}),
+        ...(limit > 0 ? { limit } : {}),
+        ...(["1", "true"].includes(c.req.query("includeArchived") ?? "") ? { includeArchived: true } : {}),
+      });
+      // `partial` names the types not read in full, so a page can say a miss there isn't proof.
+      return c.json({ hits, partial });
+    } catch (err) {
+      const { body, status } = stateFailure(err);
+      return c.json(body, status);
+    }
+  });
+
   app.get("/api/state/:type", async (c) => {
     const { type } = c.req.param();
     try {

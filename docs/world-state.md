@@ -27,6 +27,8 @@ state:
       access:              # omit for everyone
         read: ["*", user]  # `*` is every agent, `user` is a person via the UI or API
         write: [planner, user]
+      search:              # omit to keep the type out of search
+        fields: [name]     # the fields that say what a record is about
 ```
 
 Every write is checked against `schema`. Core enforces a subset of JSON Schema:
@@ -36,13 +38,16 @@ is reported by `validateConfig` rather than silently trusted.
 
 ## How agents use it
 
-Once at least one type exists, agents get one tool, `state`, with eight actions:
+Once at least one type exists, agents get one tool, `state`, with eight
+actions, and a ninth, `search`, once some type opts into
+[search](#searching):
 
 | action | does |
 |---|---|
-| `types` | what exists, each type's fields, and whether this agent can write it |
+| `types` | what exists, each type's fields, the fields search reads, and whether this agent can write it |
 | `get` | one record by id |
 | `query` | records matching `where`, e.g. `{"status": "active"}` or `{"priority": {"gte": 3}}`; `includeArchived: true` adds archived ones |
+| `search` | records about `text`, closest first, from the types that opt in; offered only while one does. See [Searching](#searching) |
 | `put` | create a record (omit `id` for a generated one), or replace one by id |
 | `patch` | change some fields; a field set to `null` is removed |
 | `delete` | remove a record; its history is kept |
@@ -105,6 +110,99 @@ a local 27B model, an agent with its plans pinned answered "which plans are
 active?" from the block with no tool call, before and after the records
 changed mid-conversation, where the same agent unpinned queried every time.
 Both answered correctly.
+
+## Searching
+
+Name the fields that say what a record is about, and agents can find records
+by what they mean, not only by an exact field match:
+
+```yaml
+state:
+  types:
+    - name: doc
+      title: title
+      search:
+        fields: [title, summary, tags, updates.text]
+```
+
+- **Which fields:** top-level (`summary`) or dotted (`owner.name`). Strings
+  and numbers are read as text, and an array or object is read through to
+  the text inside it, so `tags: [travel, lisbon]` works, and `updates.text`
+  reads the `text` of every entry in `updates`. A type without `search` is
+  never indexed or searched, and neither is one whose `fields` isn't a list
+  of names (`fields: title` rather than `fields: [title]`); TAI warns about
+  that at load.
+- **Asking:** the `state` tool's `search` action takes `text`, and optionally
+  `type` (one, several comma-separated, or none for every searchable type),
+  `scope`, `limit` (default 8) and `includeArchived`. Over HTTP it's
+  `GET /api/state/search?q=`. In code,
+  `StateService.search(caller, { text, types?, scope?, limit?, includeArchived? })`
+  returns `{ hits: { record, score, how }[], partial }`. When no type you
+  can read is searchable, a search says so instead of finding nothing.
+- **What comes back:** the closest records first, each saying how it matched
+  and when and by whom it last changed:
+
+  ```
+  2 match(es) for "hotel prices in Lisbon", closest first:
+  - doc/lisbon-hotels "Lisbon hotels" (meaning 0.82, version 3, global, updated 2026-10-19T09:12:00.000Z by trip-planner): {...}
+  - commitment/lisbon-nov "Lisbon, Nov 12-16" (words 0.67, version 7, agent:trip-planner, updated ... by trip-planner): {...}
+  ```
+
+- **Who sees what:** exactly what a `query` shows the same caller: types it
+  can read, scopes it can see, and archived records only when asked. A person
+  through the API sees every scope.
+
+### Meaning and words
+
+With embeddings on (`memory.embeddings`, the same embedder `recall` uses), a
+search matches by meaning: "somewhere to stay in Portugal" finds "Lisbon
+hotels" with no word in common. Without them, it matches words: the share of
+your query's words a record contains, rare words counting for more than
+common ones, with case and accents ignored and words like "the" left out.
+Each hit says which it was.
+
+Meaning needs each record embedded, which happens in the background:
+
+- **On a write** to a searchable record, its search text is queued to be
+  embedded, unless it hasn't changed. A write never waits for the embedder,
+  and a failing embedder never fails a write.
+- **Until then,** the record is still found, by words. So is a record whose
+  text changed since its vector was made: a vector counts only while it
+  matches the record's current text, the embedder that made it is still the
+  one configured, and it is as long as the query's. That last one catches a
+  different model answering to the same name, such as a gateway alias that
+  now points elsewhere: the next search finds those records by words and
+  embeds them again.
+- **At start and after every reload,** TAI queues each searchable record
+  that has no current vector. Change the embedding model and everything is
+  embedded again, in the background.
+- **Paced:** up to 16 records per call, at most one call a second, so a
+  backfill of thousands doesn't flood a local embedder. After three failed
+  calls in a row the queue is dropped; the next backfill or search fills it
+  again.
+- **Deleting or erasing** a record drops its vector. Archiving keeps it, so
+  restoring one costs no embedding.
+
+Vectors live in the runtime database's `state_search` table, keyed by type
+and id, with the record's scope, the embedder's model, and a hash of the text
+they were made from. The table never decides what anyone sees: a search reads
+its candidates through the store, scoped as a query is, and takes only their
+vectors from the table. So search works with any state provider.
+
+**When a search can't read everything.** A search reads a type's records and
+scores them in process, which is quick for a few thousand records per type.
+Past 5,000 it reads the 5,000 most recently updated. A store that hands back
+the same page twice (one that ignores `offset`) stops the read there, and a
+store that fails is left out when you didn't name its type, so one store
+that is down doesn't sink every search; name the type and the search fails
+with that store's error. Each of these lands the type in `partial`, which the
+tool passes on to the agent ("Not every doc record could be searched, so one
+missing here may still exist"), so a miss there isn't read as proof that no
+such record exists. Each also logs a warning once.
+
+**Scores.** Meaning scores and words scores come from different measures but
+are ranked together, so a caller that wants a cut-off should set one for
+each.
 
 ## Types that come with the 3D world
 
@@ -306,6 +404,7 @@ Behind the usual bearer auth. A person through the API sees every scope.
 | `GET /api/state/:type` | records; `?where=<json>&orderBy=-field&limit=&offset=&scope=`. Archived records only with `includeArchived=1` |
 | `GET /api/state/:type/:id` | one record, or 404. An archived record comes back with `archivedAt`, `archivedBy` and `archiveReason` |
 | `GET /api/state/:type/:id/history` | its changes, most recent first |
+| `GET /api/state/search` | records about some text, closest first: `?q=<text>&types=a,b&scope=&limit=`; `{hits: [{record, score, how}], partial: [type]}`, where `partial` names the types not read in full. Archived records only with `includeArchived=1`. `400` without `q`, for a type that isn't searchable, or when no type is |
 | `GET /api/state/events` | a server-sent event stream: a `change` event carrying each `state.changed` payload as it happens; `?type=` narrows it to one type |
 | `POST /api/state/:type` | create: `{id?, scope?, data}`; `201` with the record. An `id` that exists is `409` |
 | `PUT /api/state/:type/:id` | replace the data: `{data, scope?, expectedVersion?}` |
@@ -317,8 +416,9 @@ Behind the usual bearer auth. A person through the API sees every scope.
 A write that does not fit the type is `400`, with the sentence an agent would
 get, and so is a `PATCH` to an archived record, or an archive in a store that
 can't archive. A write whose `expectedVersion` is out of date is `409`. Because
-`/api/state/types` and `/api/state/events` are routes, a type named `types`
-or `events` cannot be listed over HTTP; pick another name.
+`/api/state/types`, `/api/state/events` and `/api/state/search` are routes, a
+type named `types`, `events` or `search` cannot be listed over HTTP or on the
+State page; TAI warns about one at load. Pick another name.
 
 ## Replacing the store
 
@@ -363,7 +463,8 @@ A provider only stores and retrieves (`get`, `query`, `put`, and optionally
 Validation, access, scopes, versions and events are core's, so every provider
 gets them without implementing them. A provider for data that changes outside
 TAI implements `watch`, and core re-announces what it reports as
-`state.changed`.
+`state.changed`. Search asks nothing more of a provider: it reads through
+`query`, with `scopes`, `includeArchived`, `orderBy`, `limit` and `offset`.
 
 **Archiving, for a provider.** Archiving is optional. A provider without
 `archive` and `unarchive` keeps working as before, and archiving one of its

@@ -2291,6 +2291,9 @@ function editDistance(a: string, b: string): number {
  * a schema keyword core does not enforce, a pattern that will not compile, a
  * name nothing can address. Each reads as working and quietly is not.
  */
+/** Names under `/api/state/` the server routes before `/api/state/:type`, so a type can't use them. */
+const ROUTE_NAMES = new Set(["types", "events", "search"]);
+
 function stateTypeWarnings(types: StateTypeDef[] | undefined): string[] {
   const warnings: string[] = [];
   const seen = new Set<string>();
@@ -2304,6 +2307,11 @@ function stateTypeWarnings(types: StateTypeDef[] | undefined): string[] {
     }
     if (seen.has(def.name)) warnings.push(`${where}: "${def.name}" is declared more than once; the last one wins.`);
     seen.add(def.name);
+    if (ROUTE_NAMES.has(def.name)) {
+      warnings.push(
+        `state type "${def.name}": /api/state/${def.name} is a route of its own, so this type's records can't be listed over HTTP or on the State page; pick another name.`,
+      );
+    }
     const schema = def.schema;
     if (schema) {
       if (schema.type !== undefined && schema.type !== "object") {
@@ -2327,6 +2335,20 @@ function stateTypeWarnings(types: StateTypeDef[] | undefined): string[] {
     }
     if (def.title && schema?.properties && !(def.title in schema.properties)) {
       warnings.push(`state type "${def.name}": title "${def.title}" is not one of its fields.`);
+    }
+    if (def.search) {
+      const fields = Array.isArray(def.search.fields) ? def.search.fields : [];
+      if (fields.length === 0) {
+        warnings.push(`state type "${def.name}": search names no fields, so the type is not searchable.`);
+      }
+      for (const field of fields) {
+        const top = typeof field === "string" ? field.split(".")[0] : "";
+        if (schema?.properties && !(top in schema.properties)) {
+          warnings.push(
+            `state type "${def.name}": search field "${field}" is not one of its fields, so it adds nothing.`,
+          );
+        }
+      }
     }
   }
   return warnings;

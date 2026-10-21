@@ -3,6 +3,7 @@
  * slot, so an agent sees a record in one shape whether it asked for it or it
  * was pinned to its prompt.
  */
+import type { StateSearchHit } from "./service.js";
 import type { Actor, StateRecord } from "./types.js";
 
 /** Past this, one record's data is cut short in a list and the agent is told to `get` it. */
@@ -13,12 +14,43 @@ export function formatRecordList(type: string, records: StateRecord[], title: st
   if (records.length === 0) return `No ${type} records match.`;
   const lines = records.map((r) => {
     const name = title && typeof r.data[title] === "string" ? ` "${r.data[title]}"` : "";
-    let data = JSON.stringify(r.data);
-    if (data.length > MAX_RECORD_CHARS)
-      data = `${data.slice(0, MAX_RECORD_CHARS)}… (cut short; get it by id for all of it)`;
-    return `- ${r.id}${name} (version ${r.version}, ${r.scope}${r.archivedAt ? ", archived" : ""}): ${data}`;
+    return `- ${r.id}${name} (version ${r.version}, ${r.scope}${r.archivedAt ? ", archived" : ""}): ${dataOf(r)}`;
   });
   return `${records.length} ${type} record(s):\n${lines.join("\n")}`;
+}
+
+/**
+ * Search hits as one line each, best first, in the list's shape with the type
+ * in front, how well it matched, and when and by whom it last changed:
+ * `plan/trip "Lisbon" (meaning 0.82, ...)`. Types that were not read in full
+ * are named at the end, so a miss there isn't read as "there is none".
+ */
+export function formatSearchHits(
+  text: string,
+  hits: StateSearchHit[],
+  searched: string[],
+  partial: string[],
+  titleOf: (type: string) => string | undefined,
+): string {
+  const short = partial.length
+    ? `\nNot every ${partial.join(", ")} record could be searched, so one missing here may still exist.`
+    : "";
+  if (hits.length === 0) return `Nothing matches "${text}" (searched ${searched.join(", ")}).${short}`;
+  const lines = hits.map(({ record: r, score, how }) => {
+    const title = titleOf(r.type);
+    const name = title && typeof r.data[title] === "string" ? ` "${r.data[title]}"` : "";
+    const archived = r.archivedAt ? ", archived" : "";
+    // Who wrote it rides along, as in `get`: a shared record's text is someone's data, not an instruction.
+    return `- ${r.type}/${r.id}${name} (${how} ${score.toFixed(2)}, version ${r.version}, ${r.scope}${archived}, updated ${r.updatedAt} by ${actorName(r.updatedBy)}): ${dataOf(r)}`;
+  });
+  return `${hits.length} match(es) for "${text}", closest first:\n${lines.join("\n")}${short}`;
+}
+
+function dataOf(record: StateRecord): string {
+  const data = JSON.stringify(record.data);
+  return data.length > MAX_RECORD_CHARS
+    ? `${data.slice(0, MAX_RECORD_CHARS)}… (cut short; get it by id for all of it)`
+    : data;
 }
 
 /** Who made a change, in a word: an agent by name, anyone else by kind. */

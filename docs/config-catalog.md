@@ -125,7 +125,7 @@ Fields: **79** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `providers.openai_compatible.baseUrl` | string | `http://localhost:11434/v1` | 26 | **0** |
-| `providers.openai_compatible.defaultModel` | string | `""` | 17 | **0** |
+| `providers.openai_compatible.defaultModel` | string | `""` | 18 | **0** |
 
 ### `schedules`
 

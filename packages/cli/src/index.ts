@@ -277,6 +277,16 @@ async function runServer(
   });
   subscriptions.start();
 
+  // World-state search: embed the searchable records that have no vector yet,
+  // in the background and paced. After the plugins, whose types count too.
+  const backfillSearch = () => {
+    runtime
+      .getStateService()
+      .backfillSearch()
+      .catch((err) => console.error("[state] Search backfill error:", (err as Error).message));
+  };
+  backfillSearch();
+
   // Hot-reload: the lifecycle manager reconciles the channel set against
   // the new config. The outbound registry then re-syncs off whatever the
   // manager produced — for every channel, not just Discord.
@@ -309,6 +319,10 @@ async function runServer(
     // Re-sync the outbound registry against the live channel set: register
     // newly-connected outbound channels, unregister ones that went away (#66).
     syncOutboundRegistry(runtime, channelManager, registeredOutbound);
+
+    // A reload may have changed the embedder, which makes every vector stale,
+    // or which types opt into search.
+    backfillSearch();
 
     // Re-arm rooms last: start() tears down every listener and timer first,
     // so a reload cannot leave a second watcher running against the old

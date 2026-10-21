@@ -571,6 +571,8 @@ export class AgentRuntime {
         getConfig: () => this.getConfig(),
         db: this.db,
         events: this.events,
+        // Through the getter, so the embedder a reload builds is the one searches use.
+        getEmbedder: () => this.getEmbedder(),
       });
     }
     return this._stateService;
