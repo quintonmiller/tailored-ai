@@ -35,13 +35,24 @@ import {
   titleOf,
 } from "./directory-records.js";
 
-/** Records shown in one section of `about` or `list` before the rest are counted. */
+/** Records shown in one section of `about` before the rest are counted. */
 const SHOWN = 10;
+/** Records a `list` reads, and shows before counting the rest. A full read is said as "at least". */
+const LIST_READ = 50;
+const LIST_SHOWN = 30;
 /** Misses shown to their agent in `about`. The directory reads one more, to know whether there are others. */
 export const MISSES_SHOWN = 5;
 
 const ok = (output: string): ToolResult => ({ success: true, output });
 const fail = (error: string): ToolResult => ({ success: false, output: "", error });
+
+/**
+ * What a tool says once the directory is turned off. A reload builds the tool
+ * set before it reloads plugins, so an agent can hold these tools for one
+ * reload after the plugin is gone.
+ */
+export const TURNED_OFF =
+  "The directory is turned off, so this tool does nothing now. It goes away at the next reload or restart.";
 
 function text(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -59,11 +70,20 @@ async function attempt(run: () => Promise<ToolResult>): Promise<ToolResult> {
   }
 }
 
-/** Lines for at most {@link SHOWN} records, then how many more there are and how to see them. */
-function capped(records: StateRecord[], line: (r: StateRecord) => string, more: string): string[] {
+/**
+ * Lines for at most {@link SHOWN} records, then how many more there are and
+ * how to see them. `full` says the read stopped at its limit, so the count is
+ * a floor.
+ */
+function capped(records: StateRecord[], line: (r: StateRecord) => string, more: string, full = false): string[] {
   const lines = records.slice(0, SHOWN).map(line);
-  if (records.length > SHOWN) lines.push(`- …and ${records.length - SHOWN} more (${more}).`);
+  if (records.length > SHOWN) lines.push(`- …and ${records.length - SHOWN}${full ? "+" : ""} more (${more}).`);
   return lines;
+}
+
+/** A count, with "+" when the read that made it stopped at its limit. */
+function count(n: number, full: boolean): string {
+  return `${n}${full ? "+" : ""}`;
 }
 
 /** A commitment in one line: id, goal, status, progress, next step and check, and how long since it moved. */
@@ -106,18 +126,19 @@ export function formatAbout(entry: AgentEntry, self: boolean, now: Date): string
   if (howToAsk) lines.push(`To ask: ${howToAsk}`);
   if (self && !entry.profile) lines.push("Write your profile with action profile, so others know what to bring you.");
 
+  const { commitments: moreWork, docs: moreDocs } = entry.full;
   lines.push(
     entry.working.length
-      ? `Working on (${entry.working.length}):`
+      ? `Working on (${count(entry.working.length, moreWork)}):`
       : "Working on: nothing shared that's open or waiting.",
   );
-  lines.push(...capped(entry.working, (r) => commitmentLine(r, now), "commitment list shows them all"));
+  lines.push(...capped(entry.working, (r) => commitmentLine(r, now), "commitment list shows more", moreWork));
   if (entry.private.length) {
-    lines.push(`Private, only you see these (${entry.private.length}):`);
-    lines.push(...capped(entry.private, (r) => commitmentLine(r, now), "commitment list shows them all"));
+    lines.push(`Private, only you see these (${count(entry.private.length, moreWork)}):`);
+    lines.push(...capped(entry.private, (r) => commitmentLine(r, now), "commitment list shows more", moreWork));
   }
-  lines.push(entry.docs.length ? `Docs (${entry.docs.length}):` : "Docs: none yet.");
-  lines.push(...capped(entry.docs, docLine, "writeup list shows them all"));
+  lines.push(entry.docs.length ? `Docs (${count(entry.docs.length, moreDocs)}):` : "Docs: none yet.");
+  lines.push(...capped(entry.docs, docLine, "writeup list shows more", moreDocs));
   if (entry.misses.length) {
     lines.push("Looked for in your area lately, with no doc or commitment to find:");
     for (const m of entry.misses.slice(0, MISSES_SHOWN)) {
@@ -187,7 +208,7 @@ export class DirectoryTool implements Tool {
         type: "string",
         enum: ["about", "search", "profile"],
         description:
-          "about: one agent's purpose, open commitments and docs. search: commitments, docs and profiles about q. profile: update your own entry.",
+          "about: one agent's purpose, open commitments and docs. search: commitments, docs and profiles about q. profile: update your own entry (to read one, use about).",
       },
       agent: { type: "string", description: "about: which agent. Default: you." },
       q: { type: "string", description: "search: what you're looking for, in a few words." },
@@ -207,6 +228,7 @@ export class DirectoryTool implements Tool {
     const me = caller.actor.name;
     const action = String(args.action ?? "").toLowerCase();
     return attempt(async () => {
+      if (!this.directory.active()) return fail(TURNED_OFF);
       if (action === "about") {
         const asked = text(args.agent) ?? me;
         const agent = asked === me ? me : await this.directory.resolve(asked);
@@ -227,6 +249,10 @@ export class DirectoryTool implements Tool {
         return ok(await this.search(caller, q, kind));
       }
       if (action === "profile") {
+        // Reading a profile is `about`; a model that asks `profile` for someone else's wants that, not a write.
+        const other = text(args.agent);
+        const reading = `To read one, use action about${other && other !== me ? ` with agent ${other}` : ""}.`;
+        if (other && other !== me) return fail(`profile changes your own entry. ${reading}`);
         const fields: { purpose?: string; takesOn?: string[]; howToAsk?: string } = {};
         const purpose = text(args.purpose);
         const takesOn = stringList(args.takesOn);
@@ -235,7 +261,9 @@ export class DirectoryTool implements Tool {
         if (takesOn?.length) fields.takesOn = takesOn;
         if (howToAsk) fields.howToAsk = howToAsk;
         if (Object.keys(fields).length === 0) {
-          return fail("profile needs at least one of `purpose`, `takesOn` or `howToAsk`.");
+          return fail(
+            `profile changes your own entry: give at least one of \`purpose\`, \`takesOn\` or \`howToAsk\`. ${reading}`,
+          );
         }
         await this.directory.saveProfile(caller, fields);
         const entry = await this.directory.entry(caller, me);
@@ -254,17 +282,20 @@ export class DirectoryTool implements Tool {
       ? `\nNot every ${found.partial.join(", ")} record could be searched, so one may still exist.`
       : "";
     const lines = found.hits.map((h) => hitLine(h, now, me));
-    const head = found.hits.length
-      ? `${found.hits.length} found for "${q}", closest first:\n${lines.join("\n")}`
-      : `Nothing found for "${q}".`;
+    const shown = found.hits.length;
+    // When more cleared the bar than are shown, the head says so, so the list isn't read as all there is.
+    const head = !shown
+      ? `Nothing found for "${q}".`
+      : found.cleared > shown
+        ? `The closest ${shown} of ${count(found.cleared, found.full)} found for "${q}"; more words or a kind narrow it:\n${lines.join("\n")}`
+        : `${shown} found for "${q}", closest first:\n${lines.join("\n")}`;
     // A miss is a question no commitment or doc answers: a profile says whose area it is, not what they know. A
     // search that couldn't read everything proves nothing is missing, so it isn't one.
-    const answered = found.hits.some((h) => h.record.type !== PROFILE_TYPE);
     const asked = kinds.some((k) => k !== PROFILE_TYPE);
     let note = "";
-    if (asked && !answered && found.partial.length === 0) {
+    if (asked && !found.answered && found.partial.length === 0) {
       try {
-        const area = await this.directory.miss(q, me, found.closest);
+        const area = await this.directory.miss(q, me, found);
         const whose = area === me ? "your own" : `${area}'s`;
         if (area)
           note = `\n${found.hits.length ? "No commitment or doc matches. " : ""}Noted as a miss in ${whose} area.`;
@@ -332,6 +363,7 @@ export class CommitmentTool implements Tool {
     const action = String(args.action ?? "").toLowerCase();
     const id = text(args.id);
     return attempt(async () => {
+      if (!this.directory.active()) return fail(TURNED_OFF);
       if (action === "open") return this.open(caller, args);
       if (action === "list") return this.list(caller, args);
       if (!COMMITMENT_ACTIONS.includes(action)) {
@@ -451,17 +483,20 @@ export class CommitmentTool implements Tool {
       return fail(`status is one of: ${[...STATUSES, "all"].join(", ")}.`);
     }
     const statuses: readonly Status[] = which === "all" ? STATUSES : which ? [which as Status] : ACTIVE;
-    const records = await this.directory.commitments(caller, agent, statuses, 50);
+    const records = await this.directory.commitments(caller, agent, statuses, LIST_READ);
     const whose = agent === me ? "Your" : `${agent}'s`;
     const label = which === "all" ? "" : ` ${which ?? "open and waiting"}`;
     if (records.length === 0) return ok(`${whose}${label} commitments: none.`);
     const now = this.directory.now();
-    const lines = records.slice(0, 30).map((r) => {
+    const full = records.length >= LIST_READ;
+    const lines = records.slice(0, LIST_SHOWN).map((r) => {
       const line = commitmentLine(r, now);
       return r.scope === `agent:${me}` ? `${line}, private` : line;
     });
-    if (records.length > 30) lines.push(`- …and more; ask for one status at a time to see the rest.`);
-    return ok(`${whose}${label} commitments (${records.length}):\n${lines.join("\n")}`);
+    if (records.length > LIST_SHOWN) {
+      lines.push(`- …and ${count(records.length - LIST_SHOWN, full)} more; ask for one status at a time to see them.`);
+    }
+    return ok(`${whose}${label} commitments (${count(records.length, full)}):\n${lines.join("\n")}`);
   }
 }
 
@@ -529,6 +564,7 @@ export class WriteupTool implements Tool {
     const id = text(args.id);
     const now = this.directory.now();
     return attempt(async () => {
+      if (!this.directory.active()) return fail(TURNED_OFF);
       if (action === "write") {
         const title = text(args.title);
         const summary = text(args.summary);
@@ -550,16 +586,21 @@ export class WriteupTool implements Tool {
         const asked = text(args.agent) ?? me;
         const agent = asked === me ? me : await this.directory.resolve(asked);
         if (!agent) return fail(`There's no agent called "${asked}".`);
-        const docs = await this.directory.docs(caller, agent, 50);
+        const docs = await this.directory.docs(caller, agent, LIST_READ);
         const whose = agent === me ? "Your" : `${agent}'s`;
         if (docs.length === 0) return ok(`${whose} docs: none.`);
-        const lines = docs.slice(0, 30).map((r) => {
+        const full = docs.length >= LIST_READ;
+        const lines = docs.slice(0, LIST_SHOWN).map((r) => {
           const summary = text(r.data.summary);
           const short = summary && summary.length > 120 ? `${summary.slice(0, 120)}…` : summary;
           return `${docLine(r)}${short ? `: ${short}` : ""}`;
         });
-        if (docs.length > 30) lines.push(`- …and ${docs.length - 30} more.`);
-        return ok(`${whose} docs (${docs.length}):\n${lines.join("\n")}`);
+        if (docs.length > LIST_SHOWN) {
+          lines.push(
+            `- …and ${count(docs.length - LIST_SHOWN, full)} more; directory search finds one by what it's about.`,
+          );
+        }
+        return ok(`${whose} docs (${count(docs.length, full)}):\n${lines.join("\n")}`);
       }
       if (!WRITEUP_ACTIONS.includes(action)) {
         return fail(`Unknown action "${args.action ?? ""}". Use one of: ${WRITEUP_ACTIONS.join(", ")}.`);

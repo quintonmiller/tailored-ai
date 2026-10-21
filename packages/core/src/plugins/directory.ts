@@ -28,7 +28,7 @@ import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { Disposer } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
-import type { StateRecord } from "../state/types.js";
+import type { StateRecord, StateTypeDef } from "../state/types.js";
 import {
   ACTIVE,
   type Bar,
@@ -50,13 +50,29 @@ export const COMMITMENTS_SLOT_ID = "directory.commitments";
 const PINNED = 10;
 /** Commitments read for the block, to show ten and count the rest. */
 const PINNED_READ = 100;
-/** The block's ceiling. Core cuts past it and says so. */
+/**
+ * The block's ceiling. Core cuts a slot past it, so the block stops adding
+ * lines before that, and the count of the rest is never what gets cut.
+ */
 const PINNED_BUDGET_TOKENS = 400;
+const PINNED_CHARS = PINNED_BUDGET_TOKENS * 4;
+/** One commitment's line at most, so one long goal can't crowd out the others. */
+const PINNED_LINE_CHARS = 400;
 
 export interface DirectoryConfig {
   pin: boolean;
   bar: Bar;
 }
+
+/**
+ * The config of the load in effect, or null once the plugin is unloaded with
+ * nothing in its place. A reload rebuilds the tool set before it reloads
+ * plugins, so agents keep the tools an older load built until the reload
+ * after. Those tools read this rather than their own load's config: a new
+ * bar applies at once, and a plugin turned off says so instead of failing
+ * against types that are gone.
+ */
+let live: DirectoryConfig | null = null;
 
 /** The plugin's config bag, with anything unusable replaced by its default and said once. */
 export function readConfig(raw: Record<string, unknown>): DirectoryConfig {
@@ -113,18 +129,45 @@ export function commitmentsSlot(directory: Directory, takesPart: (agent: string)
         ...records.filter((r) => r.data.status !== "open"),
       ];
       const now = directory.now();
-      const lines = ordered.slice(0, PINNED).map((r) => {
-        const line = commitmentLine(r, now);
-        return r.scope === `agent:${agent}` ? `${line}, private` : line;
-      });
-      if (ordered.length > PINNED) {
+      // Room for the count line, which goes last and must survive.
+      const reserve = `\n…and ${PINNED_READ}+ more; commitment list shows them.`.length;
+      const lines: string[] = [];
+      let used = 0;
+      for (const r of ordered.slice(0, PINNED)) {
+        const full = commitmentLine(r, now) + (r.scope === `agent:${agent}` ? ", private" : "");
+        const line = full.length > PINNED_LINE_CHARS ? `${full.slice(0, PINNED_LINE_CHARS - 1)}…` : full;
+        const cost = line.length + (lines.length ? 1 : 0);
+        if (lines.length > 0 && used + cost + reserve > PINNED_CHARS) break;
+        lines.push(line);
+        used += cost;
+      }
+      const rest = ordered.length - lines.length;
+      if (rest > 0) {
         // A full read means there may be more than were read, and the count says so rather than coming up short.
-        const plus = records.length === PINNED_READ ? "+" : "";
-        lines.push(`…and ${ordered.length - PINNED}${plus} more; commitment list shows them all.`);
+        const plus = records.length >= PINNED_READ ? "+" : "";
+        lines.push(`…and ${rest}${plus} more; commitment list shows them.`);
       }
       return lines.join("\n");
     },
   };
+}
+
+/**
+ * Say so when config declares a type of the same name as one of the
+ * directory's: config wins, so that declaration's `access` and `search` apply
+ * instead, and only-the-owner-changes-it no longer holds for agents writing
+ * through `state`.
+ */
+function warnReplaced(service: StateService, types: StateTypeDef[]): void {
+  for (const def of types) {
+    const declared = service.getType(def.name);
+    if (declared && declared !== def) {
+      console.warn(
+        `[directory] state.types in config declares "${def.name}", which replaces the directory's own type of that name. ` +
+          "Its access and search rules apply instead, so agents may be able to change each other's records. Rename the config type to keep the directory's.",
+      );
+    }
+  }
 }
 
 /** What the agent pages list for each agent: its profile, or its configured description, and counts. */
@@ -165,20 +208,28 @@ const plugin: Plugin = (ctx) => {
   if (!runtime) return;
   const config = readConfig(ctx.config ?? {});
   const disposers: Disposer[] = [];
+  live = config;
+  disposers.push(() => {
+    // Only ours: a newer load may already be in effect.
+    if (live === config) live = null;
+  });
 
   // The loader doesn't collect state-type registrations, so these are taken
   // back here. A reload disposes the plugin and loads it again, which
   // registers them afresh. Each load registers its own copy: a registry's
   // disposer removes an entry only while it is the very object that call
   // registered, so an older load disposed late leaves a newer load's types in.
-  for (const def of DIRECTORY_TYPES) disposers.push(ctx.stateTypes.register({ ...def }));
+  const types: StateTypeDef[] = DIRECTORY_TYPES.map((def) => ({ ...def }));
+  for (const def of types) disposers.push(ctx.stateTypes.register(def));
+  warnReplaced(runtime.getStateService(), types);
 
   const directoryFor = (getService: () => StateService) =>
     new Directory({
       getService,
       agents: () => roster(runtime),
       describe: (agent) => runtime.getAgentDefinition(agent)?.description?.trim() || undefined,
-      bar: config.bar,
+      bar: () => (live ?? config).bar,
+      active: () => live !== null,
     });
 
   ctx.tools.register("directory", (_cfg, tctx) =>
@@ -193,7 +244,7 @@ const plugin: Plugin = (ctx) => {
 
   const directory = directoryFor(() => runtime.getStateService());
 
-  // A reload clears every slot, and loads this plugin again, which puts it back.
+  // A reload disposes this load, which takes the block out, and loads the plugin again, which puts it back.
   if (config.pin) {
     const slot = commitmentsSlot(directory, (agent) => hasCommitmentTool(runtime, agent));
     registerContextSlot(slot);

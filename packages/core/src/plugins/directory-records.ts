@@ -189,6 +189,13 @@ export const DEFAULT_BAR: Bar = { meaning: 0.5, words: 0.3 };
  */
 const ATTRIBUTE_SHARE = 0.5;
 
+/** Commitments and docs `about` reads for one agent. A full read is said as "at least". */
+export const ENTRY_READ = 50;
+
+/** Hits a search reads before keeping the ones that clear the bar, and how many of those it shows. */
+const FIND_READ = 20;
+export const FIND_SHOWN = 8;
+
 /** Records read per page, and at most this many in all, when counting or listing everything. */
 const PAGE = 500;
 const SCAN_CAP = 5_000;
@@ -199,9 +206,19 @@ export const PERSON: StateCaller = { actor: { kind: "user", name: "owner" }, sou
 /** The plugin's own reads: every scope, as a person sees them, without a person's access rules. */
 const READER: StateCaller = { actor: { kind: "plugin", name: "directory" }, source: { surface: "directory" } };
 
-/** Writes made for an agent through one of the tools. The owner is in the data; the tool in the source. */
-function writer(tool: string): StateCaller {
-  return { actor: { kind: "plugin", name: "directory" }, source: { tool } };
+/**
+ * Writes made for an agent through one of the tools. The plugin is the actor,
+ * since agents can't write these types themselves; the source names the tool
+ * and the agent whose doing it was, so a subscription doesn't wake an agent
+ * for its own change.
+ */
+function writer(tool: string, agent: string): StateCaller {
+  return { actor: { kind: "plugin", name: "directory" }, source: { tool, onBehalfOf: agent } };
+}
+
+/** Whether a type, as declared now, can be searched. A config type of the same name may have left `search` out. */
+function searchable(service: StateService, type: string): boolean {
+  return (service.getType(type)?.search?.fields?.length ?? 0) > 0;
 }
 
 export interface DirectoryOptions {
@@ -210,7 +227,10 @@ export interface DirectoryOptions {
   agents: () => string[];
   /** An agent's configured description, what `about` says when it has written no profile. */
   describe: (agent: string) => string | undefined;
-  bar?: Bar;
+  /** The bar a hit must clear. Read on every search, so a reload's new values reach tools built before it. */
+  bar?: () => Bar;
+  /** False once the plugin is unloaded with nothing in its place. Tools built before then still answer, to say so. */
+  active?: () => boolean;
   now?: () => Date;
 }
 
@@ -227,14 +247,27 @@ export interface AgentEntry {
   docs: StateRecord[];
   /** Up to six misses in the agent's area in the last fortnight, newest first: only when it asked about itself. */
   misses: StateRecord[];
+  /** Which reads came back full, so the counts above are at least what they say rather than all there is. */
+  full: { commitments: boolean; docs: boolean };
 }
 
 export interface Found {
-  /** Hits that cleared the bar, best first. */
+  /** Hits that cleared the bar, best first, at most {@link FIND_SHOWN}. */
   hits: StateSearchHit[];
-  /** The closest commitment or doc, cleared or not, for a miss to name. */
-  closest?: StateSearchHit;
-  /** Types not read in full; a miss there may still exist. */
+  /** How many cleared the bar among those read, and whether the read was full, so more may have. */
+  cleared: number;
+  /** Whether a commitment or doc cleared the bar, shown or not. A profile says whose area it is, not what they know. */
+  answered: boolean;
+  full: boolean;
+  /** Commitments and docs that came closest without clearing the bar, best first, for a miss to name one. */
+  near: StateSearchHit[];
+  /**
+   * The closest profile, cleared or not, when the search settled which that
+   * is; null when it settled there is none. Absent when it couldn't (profiles
+   * weren't searched, or other hits filled the read), so a miss looks again.
+   */
+  profile?: StateSearchHit | null;
+  /** Types not read in full, or that can't be searched at all; a miss there may still exist. */
   partial: string[];
 }
 
@@ -258,9 +291,14 @@ export class Directory {
     return this.opts.describe(agent);
   }
 
+  /** Whether the plugin that built this is still loaded, or another load took its place. */
+  active(): boolean {
+    return this.opts.active?.() ?? true;
+  }
+
   /** Whether a hit is close enough to count as found. */
   clears(hit: StateSearchHit, share = 1): boolean {
-    const bar = this.opts.bar ?? DEFAULT_BAR;
+    const bar = this.opts.bar?.() ?? DEFAULT_BAR;
     return hit.score >= (hit.how === "meaning" ? bar.meaning : bar.words) * share;
   }
 
@@ -316,8 +354,8 @@ export class Directory {
     const own = `agent:${agent}`;
     const [profile, active, docs] = await Promise.all([
       this.profile(caller, agent),
-      this.commitments(caller, agent),
-      this.docs(caller, agent),
+      this.commitments(caller, agent, ACTIVE, ENTRY_READ),
+      this.docs(caller, agent, ENTRY_READ),
     ]);
     const fortnight = new Date(this.now().getTime() - 14 * 86_400_000);
     const description = this.describe(agent);
@@ -329,24 +367,37 @@ export class Directory {
       private: self ? active.filter((r) => r.scope === own) : [],
       docs,
       misses: self ? await this.misses(caller, agent, fortnight, 6) : [],
+      full: { commitments: active.length >= ENTRY_READ, docs: docs.length >= ENTRY_READ },
     };
   }
 
   /**
    * Search commitments, docs and profiles as `caller` sees them, keeping the
-   * hits that clear the bar. Kinds a config has made unsearchable are left
-   * out rather than failing the search.
+   * hits that clear the bar. A kind a config declared without `search` can't
+   * be looked through, so it counts as not read rather than as empty: the
+   * search goes on without it and notes no miss.
    */
   async find(caller: StateCaller, text: string, kinds: readonly string[] = SEARCH_KINDS): Promise<Found> {
     const service = this.service();
-    const types = kinds.filter((k) => (service.getType(k)?.search?.fields?.length ?? 0) > 0);
-    if (types.length === 0) return { hits: [], partial: [] };
-    const { hits, partial } = await service.search(caller, { text, types, limit: 20 });
-    const closest = hits.find((h) => h.record.type !== PROFILE_TYPE);
+    const types = kinds.filter((k) => searchable(service, k));
+    const unsearchable = kinds.filter((k) => !types.includes(k));
+    if (types.length === 0) {
+      return { hits: [], cleared: 0, answered: false, full: false, near: [], partial: unsearchable };
+    }
+    const { hits, partial } = await service.search(caller, { text, types, limit: FIND_READ });
+    const cleared = hits.filter((h) => this.clears(h));
+    const full = hits.length >= FIND_READ;
+    // Hits come best first, so the first profile is the closest of them all, unless the read filled up before one came.
+    const first = hits.find((h) => h.record.type === PROFILE_TYPE);
+    const profile = types.includes(PROFILE_TYPE) ? (first ?? (full ? undefined : null)) : undefined;
     return {
-      hits: hits.filter((h) => this.clears(h)).slice(0, 8),
-      ...(closest ? { closest } : {}),
-      partial,
+      hits: cleared.slice(0, FIND_SHOWN),
+      cleared: cleared.length,
+      answered: cleared.some((h) => h.record.type !== PROFILE_TYPE),
+      full,
+      near: hits.filter((h) => h.record.type !== PROFILE_TYPE && !this.clears(h)),
+      ...(profile !== undefined ? { profile } : {}),
+      partial: [...partial, ...unsearchable],
     };
   }
 
@@ -375,37 +426,49 @@ export class Directory {
   /**
    * Note that a search found nothing, against the agent whose profile is
    * closest to it, so that agent can write what was missing. One miss per
-   * query a day: asking again adds the asker to it. Returns the agent it was
-   * put down to, or undefined when no profile came close enough.
+   * query a day: asking again adds the asker to it. `found` is what the
+   * search itself saw: the closest profile, when it settled that, saves
+   * searching again, and the near hits give the miss a record to name.
+   * Returns the agent it was put down to, or undefined when no profile came
+   * close enough.
    */
-  async miss(query: string, asker: string, closest?: StateSearchHit): Promise<string | undefined> {
+  async miss(
+    query: string,
+    asker: string,
+    found: Pick<Found, "near" | "profile"> = { near: [] },
+  ): Promise<string | undefined> {
     const service = this.service();
-    if ((service.getType(PROFILE_TYPE)?.search?.fields?.length ?? 0) === 0) return undefined;
-    const { hits } = await service.search(READER, { text: query, types: [PROFILE_TYPE], limit: 1 });
-    const best = hits[0];
+    let best = found.profile;
+    if (best === undefined) {
+      if (!searchable(service, PROFILE_TYPE)) return undefined;
+      best = (await service.search(READER, { text: query, types: [PROFILE_TYPE], limit: 1 })).hits[0] ?? null;
+    }
     if (!best || !this.clears(best, ATTRIBUTE_SHARE)) return undefined;
     const owner = ownerOf(best.record) ?? best.record.id;
+    // The miss is the owner's to read, so it names only a record the owner can see too. The near hits are the
+    // asker's view: its private work, or a record in a room the owner isn't in, stays out.
+    const closest = found.near.find((h) => h.record.scope === "global" || h.record.scope === `agent:${owner}`);
     const at = this.now().toISOString();
     const id = missId(query, at);
     const ref = { type: MISS_TYPE, id };
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const existing = await service.get(READER, ref);
-      if (existing) {
-        // A person who archived it has seen it; asking again the same day doesn't bring it back.
-        if (existing.archivedAt) return ownerOf(existing);
-        const askedBy = Array.isArray(existing.data.askedBy) ? (existing.data.askedBy as string[]) : [];
-        if (!askedBy.includes(asker)) {
-          await service.patch(writer("directory"), ref, { askedBy: [...askedBy, asker] }, existing.version);
-        }
-        return ownerOf(existing);
-      }
-      const data: Record<string, unknown> = { owner, query: query.slice(0, 300), askedBy: [asker], at };
-      if (closest) data.closest = describeHit(closest).slice(0, 300);
       try {
-        await service.put(writer("directory"), { type: MISS_TYPE, id, scope: `agent:${owner}`, data }, 0);
+        if (existing) {
+          // A person who archived it has seen it; asking again the same day doesn't bring it back.
+          if (existing.archivedAt) return ownerOf(existing);
+          const askedBy = Array.isArray(existing.data.askedBy) ? (existing.data.askedBy as string[]) : [];
+          if (!askedBy.includes(asker)) {
+            await service.patch(writer("directory", asker), ref, { askedBy: [...askedBy, asker] }, existing.version);
+          }
+          return ownerOf(existing);
+        }
+        const data: Record<string, unknown> = { owner, query: query.slice(0, 300), askedBy: [asker], at };
+        if (closest) data.closest = describeHit(closest).slice(0, 300);
+        await service.put(writer("directory", asker), { type: MISS_TYPE, id, scope: `agent:${owner}`, data }, 0);
         return owner;
       } catch (err) {
-        // Someone else noted the same miss a moment ago: add to theirs.
+        // Someone else noted the same miss, or added to it, a moment ago: read it again and add to that.
         if (!(err instanceof StateConflictError)) throw err;
       }
     }
@@ -428,7 +491,7 @@ export class Directory {
       const data = { ...(existing && !existing.archivedAt ? existing.data : {}), ...fields, owner: agent };
       try {
         return await service.put(
-          writer("directory"),
+          writer("directory", agent),
           { type: PROFILE_TYPE, id: ref.id, scope: "global", data },
           existing?.version ?? 0,
         );
@@ -458,7 +521,7 @@ export class Directory {
       const id = n === 1 ? base : n <= 10 ? `${base}-${n}` : `${base}-${randomSuffix()}`;
       if (await service.get(READER, { type, id })) continue;
       try {
-        return await service.put(writer(tool), { type, id, scope, data: { ...data, owner } }, 0);
+        return await service.put(writer(tool, owner), { type, id, scope, data: { ...data, owner } }, 0);
       } catch (err) {
         if (!(err instanceof StateConflictError)) throw err;
       }
@@ -503,7 +566,12 @@ export class Directory {
         throw new StateError(`${id} is archived. A person can bring it back on the State page.`);
       }
       try {
-        return await this.service().patch(writer(tool), { type, id }, change(record), record.version);
+        return await this.service().patch(
+          writer(tool, caller.actor.name),
+          { type, id },
+          change(record),
+          record.version,
+        );
       } catch (err) {
         if (!(err instanceof StateConflictError) || attempt >= 1) throw err;
       }
@@ -514,7 +582,12 @@ export class Directory {
   async archive(caller: StateCaller, tool: string, type: string, id: string, noun: string, reason?: string) {
     const record = await this.own(caller, type, id, noun);
     if (record.archivedAt) return record;
-    const archived = await this.service().archive(writer(tool), { type, id }, reason, record.version);
+    const archived = await this.service().archive(
+      writer(tool, caller.actor.name),
+      { type, id },
+      reason,
+      record.version,
+    );
     if (!archived) throw new StateError(`There is no ${noun} "${id}".`);
     return archived;
   }

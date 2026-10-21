@@ -808,7 +808,8 @@ export const DEFAULT_DISABLED_PLUGIN_MODULES = [
   // made, not a default they inherited.
   "builtin:claude-hooks",
   // Off until asked for: it adds three tools and a prompt block to every agent
-  // that doesn't narrow its `tools:`, and records it writes other agents read.
+  // that doesn't narrow its `tools:` (and `state` too, where nothing else had
+  // declared a world-state type), and records it writes other agents read.
   // See docs/directory.md.
   "builtin:directory",
 ] as const;

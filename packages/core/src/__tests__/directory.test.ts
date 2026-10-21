@@ -18,12 +18,14 @@ import * as directoryPlugin from "../plugins/directory.js";
 import { COMMITMENTS_SLOT_ID } from "../plugins/directory.js";
 import {
   COMMITMENT_TYPE,
+  Directory,
   DOC_TYPE,
   MISS_TYPE,
   missId,
   PROFILE_TYPE,
   parseProgress,
 } from "../plugins/directory-records.js";
+import { TURNED_OFF } from "../plugins/directory-tools.js";
 import { type LoadedPlugin, loadPlugins } from "../plugins.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
 import type { Disposer } from "../registry.js";
@@ -31,6 +33,8 @@ import type { AgentRuntime } from "../runtime.js";
 import { registerStateProvider, stateTypeRegistry } from "../state/registry.js";
 import { type StateCaller, StateService } from "../state/service.js";
 import { SqliteStateProvider } from "../state/sqlite-provider.js";
+import type { StateTypeDef } from "../state/types.js";
+import type { Tool } from "../tools/interface.js";
 import { StateTool } from "../tools/state.js";
 import { toolFactoryRegistry } from "../tools/tool-factories.js";
 
@@ -84,6 +88,7 @@ let db: Database.Database;
 let service: StateService;
 let embedder: EmbeddingProvider | undefined;
 let backend: string;
+let configTypes: StateTypeDef[];
 let routes: HttpRouteRegistry;
 let events: TypedEventBus;
 let agents: Record<string, { description?: string; tools?: string[] }>;
@@ -118,12 +123,31 @@ async function unload(plugin: LoadedPlugin): Promise<void> {
   loaded = loaded.filter((p) => p !== plugin);
 }
 
-async function call(agent: string, name: string, args: Record<string, unknown>) {
+/** A tool as `createTools()` builds it from the factory registered now. */
+function build(name: string): Tool {
   const factory = toolFactoryRegistry.get(name);
   if (!factory) throw new Error(`no ${name} tool registered`);
   const [tool] = factory({} as never, { getStateService: () => service });
+  return tool;
+}
+
+async function callTool(tool: Tool, agent: string, args: Record<string, unknown>) {
   const result = await tool.execute(args, { sessionId: "s", workingDirectory: "/", env: {}, agentName: agent });
   return { ok: result.success, text: result.success ? String(result.output) : String(result.error) };
+}
+
+async function call(agent: string, name: string, args: Record<string, unknown>) {
+  return callTool(build(name), agent, args);
+}
+
+/** What `directory search` sees for an agent, before it decides on a miss. */
+async function directoryFind(agent: string, q: string) {
+  const directory = new Directory({
+    getService: () => service,
+    agents: () => Object.keys(agents),
+    describe: () => undefined,
+  });
+  return directory.find({ actor: { kind: "agent", name: agent } }, q);
 }
 
 /** A call that must succeed; its output. */
@@ -173,8 +197,9 @@ beforeEach(async () => {
   db = new Database(":memory:");
   embedder = undefined;
   backend = "sqlite";
+  configTypes = [];
   service = new StateService({
-    getConfig: () => ({ state: { backend } }),
+    getConfig: () => ({ state: { backend, types: configTypes } }),
     db,
     getEmbedder: () => embedder,
   });
@@ -225,14 +250,44 @@ describe("the directory plugin", () => {
 
   it("comes back whole after a reload, with the records it had", async () => {
     await run("planner", "commitment", { action: "open", goal: "Weekly review", doneWhen: "Notes posted" });
-    // What the CLI does on reload: the runtime clears every slot, then the plugin is disposed and loaded again.
-    clearContextSlots();
+    // What a reload does: the runtime rebuilds its tools from the factories still registered, which are this
+    // load's, and only then does the CLI dispose the plugin and load it again.
+    const kept = build("commitment");
     await unload(loaded[0]);
     await load();
     for (const type of TYPES) expect(stateTypeRegistry.has(type)).toBe(true);
     for (const tool of TOOLS) expect(toolFactoryRegistry.has(tool)).toBe(true);
     expect(await run("planner", "commitment", { action: "list" })).toContain("planner-weekly-review");
+    expect((await callTool(kept, "planner", { action: "list" })).text).toContain("planner-weekly-review");
     expect(await prompt("planner")).toContain('planner-weekly-review "Weekly review"');
+  });
+
+  it("gives tools an older load built the newest config, and says it's off once nothing replaced it", async () => {
+    await run("trip-planner", "commitment", { action: "open", goal: "Lisbon trip prep", doneWhen: "Booked" });
+    const kept = build("directory");
+    const q = "Lisbon weather forecast tomorrow";
+    expect((await callTool(kept, "writer", { action: "search", q })).text).toContain("Nothing found");
+    // A reload with a lower bar: the tool built before it uses the new one at once.
+    await unload(loaded[0]);
+    await load({ minWords: 0.1 });
+    expect((await callTool(kept, "writer", { action: "search", q })).text).toContain("trip-planner-lisbon-trip-prep");
+    // Turned off by a reload: agents still hold the tools until the next one, and each says why it does nothing.
+    const held = TOOLS.map(build);
+    await unload(loaded[0]);
+    for (const tool of held) {
+      expect(await callTool(tool, "writer", { action: "list" })).toEqual({ ok: false, text: TURNED_OFF });
+    }
+  });
+
+  it("warns when config declares a type of the same name, which then replaces the directory's", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await unload(loaded[0]);
+    configTypes = [{ name: DOC_TYPE, scope: "global", title: "title" }];
+    await load();
+    const said = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith("[directory]"));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('state.types in config declares "doc"');
+    expect(said[0]).toContain("agents may be able to change each other's records");
   });
 
   it("doesn't take away a newer load's registrations when an older one is disposed late", async () => {
@@ -260,6 +315,7 @@ describe("the directory plugin", () => {
     const ctx = { sessionId: "s", workingDirectory: "/", env: {}, agentName: "planner" };
     const read = await state.execute({ action: "get", type: COMMITMENT_TYPE, id: "planner-weekly-review" }, ctx);
     expect(read.success).toBe(true);
+    expect(read.output).toContain("by plugin for planner)");
     const write = await state.execute(
       { action: "patch", type: COMMITMENT_TYPE, id: "planner-weekly-review", data: { status: "done" } },
       ctx,
@@ -296,8 +352,9 @@ describe("commitment", () => {
       from: "a person",
     });
     expect((r?.data.updates as { text: string }[])[0].text).toBe("Opened.");
+    // The plugin writes, for the agent: a subscription reads that as the agent's own change.
     expect(r?.updatedBy).toEqual({ kind: "plugin", name: "directory" });
-    expect(r?.source).toEqual({ tool: "commitment" });
+    expect(r?.source).toEqual({ tool: "commitment", onBehalfOf: "planner" });
   });
 
   it("opens a private one in the owner's own scope, and gives a repeated goal its own id", async () => {
@@ -654,7 +711,44 @@ describe("directory about and profile", () => {
     }
     const about = await run("writer", "directory", { action: "about", agent: "planner" });
     expect(about).toContain("Working on (12):");
-    expect(about).toContain("- …and 2 more (commitment list shows them all).");
+    expect(about).toContain("- …and 2 more (commitment list shows more).");
+  });
+
+  it("says a count is at least what it read when a read stops at its limit", async () => {
+    // More than any one read takes, put straight in by a person.
+    for (let i = 1; i <= 55; i++) {
+      await service.put(PERSON, {
+        type: COMMITMENT_TYPE,
+        id: `planner-task-${i}`,
+        data: { owner: "planner", goal: `Task ${i}`, status: "open" },
+      });
+      await service.put(PERSON, {
+        type: DOC_TYPE,
+        id: `planner-note-${i}`,
+        data: { owner: "planner", title: `Lisbon note ${i}` },
+      });
+    }
+    const about = await run("writer", "directory", { action: "about", agent: "planner" });
+    expect(about).toContain("Working on (50+):");
+    expect(about).toContain("- …and 40+ more (commitment list shows more).");
+    expect(about).toContain("Docs (50+):");
+    const list = await run("writer", "commitment", { action: "list", agent: "planner" });
+    expect(list).toContain("planner's open and waiting commitments (50+):");
+    expect(list).toContain("- …and 20+ more; ask for one status at a time to see them.");
+    const docs = await run("writer", "writeup", { action: "list", agent: "planner" });
+    expect(docs).toContain("planner's docs (50+):");
+    expect(docs).toContain("- …and 20+ more;");
+    const search = await run("writer", "directory", { action: "search", q: "Lisbon note", kind: "doc" });
+    expect(search.split("\n")[0]).toBe('The closest 8 of 20+ found for "Lisbon note"; more words or a kind narrow it:');
+  });
+
+  it("points profile at about for reading someone else's", async () => {
+    expect(await refused("writer", "directory", { action: "profile", agent: "planner" })).toBe(
+      "profile changes your own entry. To read one, use action about with agent planner.",
+    );
+    // Nothing was written.
+    expect(await record(PROFILE_TYPE, "writer")).toBeNull();
+    expect(await refused("writer", "directory", { action: "profile" })).toContain("To read one, use action about.");
   });
 });
 
@@ -873,6 +967,85 @@ describe("misses", () => {
     expect(await misses()).toEqual([]);
   });
 
+  it("names only a near record the agent it's put down to can see", async () => {
+    await run("planner", "commitment", { action: "open", goal: "Party playlist", doneWhen: "Shared" });
+    // The asker's own private work comes closest, but it isn't trip-planner's to read.
+    await run("writer", "commitment", {
+      action: "open",
+      goal: "Surprise party gift",
+      doneWhen: "Bought",
+      private: true,
+    });
+    const q = "trip research budget for a surprise party";
+    const found = await directoryFind("writer", q);
+    expect(found.near.map((h) => h.record.id)).toEqual(["writer-surprise-party-gift", "planner-party-playlist"]);
+    const out = await run("writer", "directory", { action: "search", q });
+    expect(out).toContain("Noted as a miss in trip-planner's area.");
+    const [miss] = await misses();
+    expect(miss.data.closest).toContain("planner-party-playlist");
+    const asOwner: StateCaller = { actor: { kind: "agent", name: "trip-planner" } };
+    const seen = JSON.stringify([
+      await service.query(asOwner, { type: MISS_TYPE }),
+      await service.get(asOwner, { type: MISS_TYPE, id: miss.id }),
+    ]);
+    expect(seen).toContain(q);
+    expect(seen).not.toContain("writer-surprise-party-gift");
+    expect(seen).not.toContain("Surprise party gift");
+  });
+
+  it("names no near record when the only one is the asker's private work", async () => {
+    await run("writer", "commitment", { action: "open", goal: "Secret party gift", doneWhen: "Bought", private: true });
+    await run("writer", "directory", { action: "search", q: "trip budget for a surprise party" });
+    const [miss] = await misses();
+    expect(miss.data.owner).toBe("trip-planner");
+    expect(miss.data.closest).toBeUndefined();
+  });
+
+  it("adds a later asker even when someone else adds themselves at the same moment", async () => {
+    await run("writer", "directory", { action: "search", q: "how the render queue works" });
+    const patch = service.patch.bind(service);
+    vi.spyOn(service, "patch").mockImplementationOnce(async (caller, ref, data, expected) => {
+      // Another asker lands between the read and this write, so the write's version is stale.
+      await patch(PERSON, ref, { askedBy: ["writer", "render-farm"] });
+      return patch(caller, ref, data, expected);
+    });
+    const out = await run("planner", "directory", { action: "search", q: "how the render queue works" });
+    expect(out).toContain("Noted as a miss in render-farm's area.");
+    const [miss] = await misses();
+    expect(miss.data.askedBy).toEqual(["writer", "render-farm", "planner"]);
+  });
+
+  it("embeds the query once when the search already saw the closest profile", async () => {
+    const counted = fakeEmbedder();
+    const embed = vi.fn(counted.embed);
+    embedder = { ...counted, embed };
+    await service.backfillSearch();
+    await service.whenIndexed();
+    embed.mockClear();
+    const out = await run("writer", "directory", { action: "search", q: "how the render queue works" });
+    expect(out).toContain("Noted as a miss in render-farm's area.");
+    const queries = embed.mock.calls.filter(([inputs]) => inputs.includes("how the render queue works"));
+    expect(queries).toHaveLength(1);
+  });
+
+  it("looks for the closest profile itself when the search left profiles out", async () => {
+    const out = await run("writer", "directory", { action: "search", q: "how the render queue works", kind: "doc" });
+    expect(out).toBe('Nothing found for "how the render queue works".\nNoted as a miss in render-farm\'s area.');
+  });
+
+  it("notes nothing when config made a kind unsearchable, and says that kind wasn't searched", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await run("trip-planner", "commitment", { action: "open", goal: "Book hotel in Lisbon", doneWhen: "Booked" });
+    await unload(loaded[0]);
+    // A config type of the same name, declared without `search`, replaces the directory's.
+    configTypes = [{ name: COMMITMENT_TYPE, scope: "global", title: "goal" }];
+    await load();
+    const out = await run("writer", "directory", { action: "search", q: "book hotel in Lisbon" });
+    expect(out).toContain("Not every commitment record could be searched, so one may still exist.");
+    expect(out).not.toContain("Noted as a miss");
+    expect(await misses()).toEqual([]);
+  });
+
   it("notes nothing for a search that couldn't read every record", async () => {
     // A store that ignores `offset` can't be read to the end, so a search over it is partial.
     cleanup.push(
@@ -947,23 +1120,45 @@ describe("the commitments block", () => {
     for (let i = 1; i <= 13; i++) await run("planner", "commitment", { action: "open", goal: `T${i}`, doneWhen: "x" });
     const text = await prompt("planner");
     expect(text.split("\n").filter((l) => l.startsWith("- "))).toHaveLength(10);
-    expect(text).toContain("…and 3 more; commitment list shows them all.");
+    expect(text).toContain("…and 3 more; commitment list shows them.");
     expect(text).not.toContain("truncated");
   });
 
-  it("stays inside its budget, and says so when it's cut", async () => {
+  it("stops adding lines before its budget, so the count of the rest is never what's cut", async () => {
     for (let i = 1; i <= 10; i++) {
-      await run("planner", "commitment", {
+      const opened = await run("planner", "commitment", {
         action: "open",
         goal: `Task ${i} ${"with a long goal ".repeat(4)}`.trim(),
         doneWhen: "x",
         nextStep: "something that takes a while to describe properly",
+        nextCheck: "the Friday after the next planning meeting",
       });
+      const id = /^Opened (\S+):/.exec(opened)?.[1];
+      await run("planner", "commitment", { action: "update", id, progress: "drafting the second of three parts" });
     }
     const text = await prompt("planner");
-    // 400 tokens is about 1,600 characters; past it core cuts the block and marks the cut.
-    expect(text.length).toBeLessThan(1_700);
-    expect(text).toContain("[…truncated to fit this slot's budget]");
+    // 400 tokens is about 1,600 characters of body; core would cut past it and mark the cut.
+    expect(text).not.toContain("truncated");
+    const shown = text.split("\n").filter((l) => l.startsWith("- ")).length;
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(10);
+    expect(text).toContain(`…and ${10 - shown} more; commitment list shows them.`);
+  });
+
+  it("shortens one very long line rather than letting it fill the block", async () => {
+    await run("planner", "commitment", {
+      action: "open",
+      goal: "g".repeat(300),
+      doneWhen: "x",
+      nextStep: "n".repeat(300),
+      nextCheck: "c".repeat(200),
+    });
+    await run("planner", "commitment", { action: "open", goal: "Short one", doneWhen: "x" });
+    const text = await prompt("planner");
+    const lines = text.split("\n").filter((l) => l.startsWith("- "));
+    expect(lines).toHaveLength(2);
+    expect(lines.find((l) => l.includes("ggg"))).toMatch(/^.{399}…$/);
+    expect(text).not.toContain("truncated");
   });
 });
 

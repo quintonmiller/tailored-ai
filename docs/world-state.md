@@ -119,7 +119,7 @@ by what they mean, not only by an exact field match:
 ```yaml
 state:
   types:
-    - name: doc
+    - name: guide
       title: title
       search:
         fields: [title, summary, tags, updates.text]
@@ -240,7 +240,10 @@ The built-in directory plugin, when you turn it on, declares `profile`,
 `commitment`, `doc` and `miss`: what each agent is for, the work it has taken
 on, what it has written up, and searches nothing answered. All four are
 searchable. Agents read them through `state` but change their own only
-through the directory's tools; people edit any of them here. See
+through the directory's tools; people edit any of them here. A type of the
+same name in your config wins, as with any type a plugin declares, and the
+directory warns at load when one does: that declaration's `access` and
+`search` then apply, so "only the owner changes it" no longer holds. See
 [the directory](./directory.md).
 
 ## Scopes

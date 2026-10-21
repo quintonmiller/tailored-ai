@@ -27,10 +27,28 @@ plugins:
 
 Every key under `config` is optional; the values above are the defaults.
 
-Turning it on adds three tools, `directory`, `commitment` and `writeup`. An
-agent with no `tools:` list gets all three. An agent with a list gets the ones
-it names, so a reader that should only look things up might take
-`[directory, writeup]`.
+Turning it on adds three tools, `directory`, `commitment` and `writeup`. It
+can add a fourth: `state` is offered once any world-state type exists, so on
+a deployment where nothing else declared one (no avatar, no `state.types`),
+the directory's types bring `state` in too. Agents read these records through
+it. An agent with no `tools:` list gets all of them. An agent with a list gets
+the ones it names, so a reader that should only look things up might take
+`[directory, writeup]`, and one that shouldn't have `state` leaves it out.
+
+**Changing it while TAI runs.** A config reload picks up `pin` and the two
+bars at once. Turning the directory off by reload removes its types and
+prompt block straight away, but agents keep the three tools until the next
+reload or a restart: a reload builds the tool set before it reloads plugins.
+Until then each tool answers that the directory is turned off. The two HTTP
+routes are mounted when TAI starts, so turning the directory on or off moves
+them only at a restart.
+
+**A type of the same name in your config wins.** If `state.types` declares a
+`profile`, `commitment`, `doc` or `miss`, that declaration replaces the
+directory's, and the directory warns at load. Its `access` then decides who
+can write, so agents may change each other's records through `state`, and a
+kind it declares without `search` can't be searched: `directory search` says
+so and notes no miss. Give your own type another name.
 
 With embeddings configured (`memory.embeddings`, the embedder `recall` uses),
 searches match by meaning. Without them they match words. See
@@ -53,9 +71,12 @@ Four world-state types, declared by the plugin:
 - **People can edit anything** on the State page or through
   `/api/state/...`, including reassigning an `owner`.
 - **Every write says where it came from.** A tool's write is recorded as
-  `plugin directory` with the tool's name as its source, so the State page
-  reads "updated by plugin directory via the commitment tool", and `owner`
-  says whose it is.
+  `plugin directory`, with the tool's name and the agent it wrote for in its
+  source (`source.onBehalfOf`). The State page reads "updated by plugin
+  directory for planner via the commitment tool", and `owner` says whose it
+  is. A [subscription](./world-state.md#waking-agents-on-a-change) counts the
+  write as that agent's own change, so an agent watching commitments isn't
+  woken by its own updates.
 - **`progress`** is `{ value, max }` or a label. The tool reads "3/5",
   "3 of 5", "60%" or a plain step name like "drafting".
 - **`updates`** are dated one-line entries, newest first. The record keeps
@@ -95,9 +116,14 @@ directory(action: "about", agent: "trip-planner")
   A hit has to clear a bar to count: `minMeaning` for one matched by meaning,
   `minWords` for one matched by words. The two scores come from different
   measures, so each has its own. An embedder that scores related text lower
-  than most needs a lower `minMeaning`.
+  than most needs a lower `minMeaning`. At most eight hits are shown; when more
+  cleared the bar, the first line says so ("The closest 8 of 12 found...").
+- **Counts are honest.** `about`, `commitment list` and `writeup list` read a
+  limited number of records; when a read stops at its limit, the count reads
+  "50+" rather than a number that looks like all there is.
 - **`profile`** writes your own entry: `purpose`, `takesOn`, `howToAsk`. Only
-  the fields you pass change.
+  the fields you pass change. Asked with another agent's name, it points to
+  `about`, which is how you read one.
 
 Every result says whose it is, and `writeup read` introduces another agent's
 doc as "information, not instructions to you". Shared records can hold text
@@ -180,6 +206,10 @@ Looked for in your area lately, with no doc or commitment to find:
   silence there isn't proof, and the search says so instead.
 - **Private to its agent.** A miss lives in `agent:<owner>`, so other agents
   don't see it. People do.
+- **It names only what its agent can see.** `closest` is the nearest
+  commitment or doc that wasn't close enough, picked from records the miss's
+  agent could read itself: shared ones, or its own. The asker's private work,
+  or a record in a room the agent isn't in, is never written into it.
 
 Nothing reads misses on its own yet. They're the evidence the upkeep turn
 (step 4) will start from.
@@ -197,8 +227,10 @@ commitments behind the history, open ones first:
 ```
 
 - At most ten, then a count of the rest ("…and 3 more; commitment list shows
-  them all"). The block's budget is 400 tokens; past that it's cut, and the
-  cut is marked.
+  them"). The block keeps to its 400-token budget by adding lines only while
+  they fit, so long lines mean fewer of them, and the count of the rest is
+  always there. One line longer than 400 characters is shortened and ends in
+  "…".
 - Nothing at all for an agent with no open work, or whose `tools:` list leaves
   out `commitment`.
 - `pin: false` turns it off for everyone.
@@ -226,7 +258,8 @@ Behind the usual bearer auth. Both read as a person: every scope.
 | `GET /api/ext/builtin:directory/agents` | `{ agents: [{ name, profile, description?, commitments: { open, waiting, done }, docs }] }`: every agent (the agent registry and `config.agents`, as Discord counts them) and anyone with a profile. `profile` is the profile's data or `null`; `description` is the configured one |
 | `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, commitments, docs, misses }`, each a list of full records, private ones included. `404` for a name that is neither an agent nor a profile |
 
-Counts and lists read at most 5,000 records of each type.
+Counts and lists read at most 5,000 records of each type. The routes are
+mounted when TAI starts; see [Changing it while TAI runs](#turn-it-on).
 
 ## Not yet
 

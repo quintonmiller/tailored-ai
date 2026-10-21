@@ -39,5 +39,15 @@ plugins:
   `GET /api/ext/builtin:directory/agents/:name`.
 
 Turned on, an agent with no `tools:` list gets all three tools and the prompt
-block. `minMeaning` and `minWords` in the plugin's config set how close a
-search hit must be. See `docs/directory.md`.
+block, and the `state` tool too if nothing else had declared a world-state
+type, since `state` is offered once any type exists; agents read these
+records through it. Leave `state` out of an agent's `tools:` if it shouldn't
+have it. `minMeaning` and `minWords` in the plugin's config set how close a
+search hit must be. A type of the same name under `state.types` in your config
+replaces the directory's, and the directory warns at load when one does.
+Turning the directory off by a config reload leaves its three tools with
+agents until the next reload, each saying it's off; its routes come and go
+only with a restart. See `docs/directory.md`.
+
+Every write the directory's tools make names the agent it was for, so a
+subscription to commitments doesn't wake an agent for its own updates.
