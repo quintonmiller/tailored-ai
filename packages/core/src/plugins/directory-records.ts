@@ -1,8 +1,9 @@
 /**
  * The records behind the directory: what each agent is for (`profile`), the
- * work it has taken on (`commitment`), what it has written up (`doc`), and the
- * searches that found nothing (`miss`). See `docs/directory.md` and the design
- * in `docs/ownership-design.md`.
+ * work it has taken on (`commitment`), what it has written up (`doc`), the
+ * searches that found nothing (`miss`), and how its page in the web UI is
+ * laid out (`page`). See `docs/directory.md` and the design in
+ * `docs/ownership-design.md`.
  *
  * Everything here goes through the world-state service, so who sees what is
  * world state's: shared records live in `global`, private ones in the owner's
@@ -13,9 +14,11 @@
  * check ownership here and then write as the plugin, naming the tool.
  */
 import { createHash } from "node:crypto";
+import { parseOrderBy } from "../state/format.js";
 import { wordsOf } from "../state/search.js";
 import type { StateCaller, StateSearchHit, StateService } from "../state/service.js";
 import {
+  type FieldCondition,
   type JsonSchema,
   StateConflictError,
   StateError,
@@ -27,6 +30,7 @@ export const PROFILE_TYPE = "profile";
 export const COMMITMENT_TYPE = "commitment";
 export const DOC_TYPE = "doc";
 export const MISS_TYPE = "miss";
+export const PAGE_TYPE = "page";
 
 /** The kinds `directory search` looks through. Misses are signals for their owner, not answers. */
 export const SEARCH_KINDS = [COMMITMENT_TYPE, DOC_TYPE, PROFILE_TYPE] as const;
@@ -41,6 +45,42 @@ export type Autonomy = (typeof AUTONOMY)[number];
 
 /** Dated updates kept on a commitment, newest first. The record's history keeps every one. */
 export const MAX_UPDATES = 20;
+
+/** Who a commitment came from when a person handed it over on the agent's page. */
+export const FROM_PERSON = "a person";
+
+/**
+ * The sections every agent's page starts with, in this order, and what the
+ * web UI calls them. An agent reorders and hides them and adds its own, by id.
+ */
+export const PAGE_SECTIONS: Record<string, string> = {
+  about: "What I'm for",
+  working: "Working on",
+  waiting: "Waiting on you",
+  results: "Recent results",
+  docs: "Docs",
+  misses: "Questions nobody could answer",
+};
+
+/**
+ * Sections an agent can't hide: what waits on a person, and what others asked
+ * it that nobody could answer. A page that hid either would look better than
+ * the work it shows.
+ */
+export const KEPT_SECTIONS = ["waiting", "misses"];
+
+/** Sections an agent may add to its page, and the records each lists at most, and by default. */
+export const MAX_EXTRA = 6;
+export const MAX_EXTRA_LIMIT = 20;
+export const DEFAULT_EXTRA_LIMIT = 5;
+
+/** A section an agent added to its page: a titled list of the records a query of its own matches. */
+export interface PageSection {
+  id: string;
+  title: string;
+  /** As a `state` query takes it, plus the scopes the agent could see when it added it: the page shows no more. */
+  query: { type: string; where?: Record<string, unknown>; orderBy?: string; limit: number; scopes?: string[] };
+}
 
 const OWNER = { type: "string", minLength: 1, maxLength: 128, description: "The agent this belongs to." } as const;
 
@@ -122,6 +162,49 @@ export const MISS_SCHEMA: JsonSchema = {
   },
 };
 
+const SECTION_ID = { type: "string", minLength: 1, maxLength: 60 } as const;
+
+export const PAGE_SCHEMA: JsonSchema = {
+  type: "object",
+  required: ["owner"],
+  properties: {
+    owner: OWNER,
+    note: { type: "string", maxLength: 300, description: "A sentence or two for people, in the agent's own words." },
+    order: {
+      type: "array",
+      maxItems: 30,
+      items: SECTION_ID,
+      description: "Section ids, first shown first; the others follow in their usual places.",
+    },
+    hide: { type: "array", maxItems: 30, items: SECTION_ID, description: "Section ids the page leaves out." },
+    extra: {
+      type: "array",
+      maxItems: MAX_EXTRA,
+      items: {
+        type: "object",
+        required: ["id", "title", "query"],
+        properties: {
+          id: SECTION_ID,
+          title: { type: "string", minLength: 1, maxLength: 80 },
+          query: {
+            type: "object",
+            required: ["type"],
+            properties: {
+              type: { type: "string", minLength: 1, maxLength: 128 },
+              where: { type: "object" },
+              orderBy: { type: "string", maxLength: 128 },
+              limit: { type: "number", minimum: 1, maximum: MAX_EXTRA_LIMIT },
+              scopes: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+      description:
+        "Sections the agent added: each lists the records a state query matches, among the scopes the agent could see.",
+    },
+  },
+};
+
 /** People edit every one of these on the State page; agents change their own only through the directory's tools. */
 const PEOPLE_WRITE = { write: ["user"] };
 
@@ -165,6 +248,15 @@ export const DIRECTORY_TYPES: StateTypeDef[] = [
     schema: MISS_SCHEMA,
     access: PEOPLE_WRITE,
     search: { fields: ["query"] },
+  },
+  {
+    name: PAGE_TYPE,
+    description:
+      "How an agent's page in the web UI is laid out, one per agent under its name: a note in its own words, the order of its sections, the ones it hides, and the ones it added. Agents keep their own with the directory tool.",
+    scope: "global",
+    title: "note",
+    schema: PAGE_SCHEMA,
+    access: PEOPLE_WRITE,
   },
 ];
 
@@ -247,6 +339,8 @@ export interface AgentEntry {
   docs: StateRecord[];
   /** Up to six misses in the agent's area in the last fortnight, newest first: only when it asked about itself. */
   misses: StateRecord[];
+  /** Its page's layout: only when it asked about itself, and null when it has none. */
+  page?: StateRecord | null;
   /** Which reads came back full, so the counts above are at least what they say rather than all there is. */
   full: { commitments: boolean; docs: boolean };
 }
@@ -321,6 +415,12 @@ export class Directory {
     return record && !record.archivedAt ? record : null;
   }
 
+  /** An agent's page layout, kept under its name as its profile is. Null when it has none. */
+  async page(caller: StateCaller, agent: string): Promise<StateRecord | null> {
+    const record = await this.service().get(caller, { type: PAGE_TYPE, id: profileId(agent) });
+    return record && !record.archivedAt ? record : null;
+  }
+
   /** An agent's commitments the caller can see, most recently updated first. */
   async commitments(
     caller: StateCaller,
@@ -367,6 +467,7 @@ export class Directory {
       private: self ? active.filter((r) => r.scope === own) : [],
       docs,
       misses: self ? await this.misses(caller, agent, fortnight, 6) : [],
+      ...(self ? { page: await this.page(caller, agent) } : {}),
       full: { commitments: active.length >= ENTRY_READ, docs: docs.length >= ENTRY_READ },
     };
   }
@@ -480,19 +581,107 @@ export class Directory {
     caller: StateCaller,
     fields: { purpose?: string; takesOn?: string[]; howToAsk?: string },
   ): Promise<StateRecord> {
+    return this.saveOwn(caller, PROFILE_TYPE, "profile", (data) => ({ ...data, ...fields }));
+  }
+
+  /**
+   * Change an agent's page layout: `change` gets its fields as they stand, or
+   * none, and returns the new ones. It may throw a `StateError` to refuse.
+   */
+  async savePage(
+    caller: StateCaller,
+    change: (data: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<StateRecord> {
+    return this.saveOwn(caller, PAGE_TYPE, "page", change);
+  }
+
+  /**
+   * A section for the caller's page: a titled list of the records `query`
+   * matches. The query is run as the caller first, so a type it can't read or
+   * a `where` its own query would refuse is refused here, and the section
+   * keeps the scopes the caller can see, so the page never lists more than
+   * the agent could find itself. A type people can't read is refused too:
+   * the page reads as a person, and would show it as an empty list.
+   */
+  async section(
+    caller: StateCaller,
+    title: string,
+    query: { type: string; where?: Record<string, unknown>; orderBy?: string; limit?: number },
+  ): Promise<Omit<PageSection, "id">> {
+    const service = this.service();
+    try {
+      await service.query(caller, {
+        type: query.type,
+        ...(query.where ? { where: query.where as Record<string, FieldCondition> } : {}),
+        ...parseOrderBy(query.orderBy),
+        limit: 1,
+      });
+    } catch (err) {
+      // The query is the agent's own: its refusal says what to fix.
+      if (err instanceof StateError) throw new StateError(`That section's query doesn't run for you: ${err.message}`);
+      throw err;
+    }
+    if (!service.listTypes(PERSON).some((t) => t.def.name === query.type)) {
+      throw new StateError(`People can't read ${query.type} records, so your page couldn't show them.`);
+    }
+    const asked = Number.isFinite(query.limit) ? Math.floor(query.limit as number) : DEFAULT_EXTRA_LIMIT;
+    const scopes = service.visibleScopes(caller);
+    return {
+      title,
+      query: {
+        type: query.type,
+        ...(query.where ? { where: query.where } : {}),
+        ...(query.orderBy ? { orderBy: query.orderBy } : {}),
+        limit: Math.min(Math.max(1, asked), MAX_EXTRA_LIMIT),
+        ...(scopes ? { scopes } : {}),
+      },
+    };
+  }
+
+  /**
+   * A commitment a person hands an agent on its page: the agent's, shared,
+   * open, from a person, and written as the person, so the State page and
+   * the record's history say who asked. Returns the record.
+   */
+  async handOver(agent: string, fields: { goal: string; doneWhen?: string }): Promise<StateRecord> {
+    const at = this.now().toISOString();
+    const data: Record<string, unknown> = {
+      owner: agent,
+      goal: fields.goal,
+      ...(fields.doneWhen ? { doneWhen: fields.doneWhen } : {}),
+      status: "open",
+      autonomy: "suggest",
+      from: FROM_PERSON,
+      updates: [{ at, text: "Handed over by a person on this page." }],
+    };
+    return this.putNew(PERSON, COMMITMENT_TYPE, ownedId(agent, fields.goal), "global", data, fields.goal);
+  }
+
+  /**
+   * Write the caller's own record of a type that keeps one per agent under
+   * its name, as profiles and pages do: `change` gets the fields as they
+   * stand, or none, and returns the new ones. Refused when the record is
+   * another agent's; a concurrent write is retried once against the fresh one.
+   */
+  private async saveOwn(
+    caller: StateCaller,
+    type: string,
+    noun: string,
+    change: (data: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<StateRecord> {
     const agent = caller.actor.name;
     const service = this.service();
     this.checkScope(caller, "global");
-    const ref = { type: PROFILE_TYPE, id: profileId(agent) };
+    const ref = { type, id: profileId(agent) };
     for (let attempt = 0; ; attempt++) {
       const existing = await service.get(READER, ref);
       const owner = existing ? ownerOf(existing) : agent;
-      if (owner !== agent) throw new StateError(`The profile "${ref.id}" is ${owner}'s, so you can't change it.`);
-      const data = { ...(existing && !existing.archivedAt ? existing.data : {}), ...fields, owner: agent };
+      if (owner !== agent) throw new StateError(`The ${noun} "${ref.id}" is ${owner}'s, so you can't change it.`);
+      const data = { ...change(existing && !existing.archivedAt ? { ...existing.data } : {}), owner: agent };
       try {
         return await service.put(
           writer("directory", agent),
-          { type: PROFILE_TYPE, id: ref.id, scope: "global", data },
+          { type, id: ref.id, scope: "global", data },
           existing?.version ?? 0,
         );
       } catch (err) {
@@ -515,13 +704,24 @@ export class Directory {
   ): Promise<StateRecord> {
     const owner = caller.actor.name;
     this.checkScope(caller, scope);
+    return this.putNew(writer(tool, owner), type, ownedId(owner, title), scope, { ...data, owner }, title);
+  }
+
+  /** Put a new record under `base`, or the first of `base-2` … that is free. */
+  private async putNew(
+    caller: StateCaller,
+    type: string,
+    base: string,
+    scope: string,
+    data: Record<string, unknown>,
+    title: string,
+  ): Promise<StateRecord> {
     const service = this.service();
-    const base = ownedId(owner, title);
     for (let n = 1; n <= 12; n++) {
       const id = n === 1 ? base : n <= 10 ? `${base}-${n}` : `${base}-${randomSuffix()}`;
       if (await service.get(READER, { type, id })) continue;
       try {
-        return await service.put(writer(tool, owner), { type, id, scope, data: { ...data, owner } }, 0);
+        return await service.put(caller, { type, id, scope, data }, 0);
       } catch (err) {
         if (!(err instanceof StateConflictError)) throw err;
       }
@@ -640,7 +840,7 @@ export function slug(text: string, max = 40): string {
     .replace(/-+$/, "");
 }
 
-/** A profile's id: the agent's name, or a slug of it when the name isn't a valid record id. */
+/** A profile's or a page's id: the agent's name, or a slug of it when the name isn't a valid record id. */
 export function profileId(agent: string): string {
   return RECORD_ID.test(agent) ? agent : slug(agent, 100) || "agent";
 }

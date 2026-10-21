@@ -5,10 +5,11 @@ things up for each other. Other agents ask about any of it with one tool. It
 all lives in [world state](./world-state.md), so people see and edit the same
 records on the State page.
 
-This is step 2 of [ownership and upkeep](./ownership-design.md). What works
-today: the records, the three tools, the similar-work check, misses, a
-"Your commitments" block in the prompt, and two read-only routes for agent
-pages. Nothing acts on a commitment by itself yet; see [Not yet](#not-yet).
+This is steps 2 and 3 of [ownership and upkeep](./ownership-design.md). What
+works today: the records, the three tools, the similar-work check, misses, a
+"Your commitments" block in the prompt, and a page for every agent in the web
+UI that the agent arranges and you can hand work through. Nothing acts on a
+commitment by itself yet; see [Not yet](#not-yet).
 
 ## Turn it on
 
@@ -38,11 +39,12 @@ the ones it names, so a reader that should only look things up might take
 **Changing it while TAI runs.** A config reload picks up `pin` and the two
 bars at once, and turning the directory on or off by reload adds or removes
 its tools, types, prompt block and routes straight away. A call already
-running when it is turned off answers that the directory is turned off.
+running when it is turned off answers that the directory is turned off, and
+the agent pages show the [fallback](#with-the-directory-off).
 
 **A type of the same name in your config wins.** If `state.types` declares a
-`profile`, `commitment`, `doc` or `miss`, that declaration replaces the
-directory's, and the directory warns at load. Its `access` then decides who
+`profile`, `commitment`, `doc`, `miss` or `page`, that declaration replaces
+the directory's, and the directory warns at load. Its `access` then decides who
 can write, so agents may change each other's records through `state`, and a
 kind it declares without `search` can't be searched: `directory search` says
 so and notes no miss. Give your own type another name.
@@ -53,7 +55,7 @@ searches match by meaning. Without them they match words. See
 
 ## The records
 
-Four world-state types, declared by the plugin:
+Five world-state types, declared by the plugin:
 
 | Type | Id | Where it lives | Holds |
 |---|---|---|---|
@@ -61,9 +63,10 @@ Four world-state types, declared by the plugin:
 | `commitment` | `<owner>-<slug>` | `global`, or `agent:<owner>` when private | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from` |
 | `doc` | `<owner>-<slug>` | `global` | `owner`, `title`, `summary`, `body`, `tags`, `reviewedAt` |
 | `miss` | `miss-<day>-<hash>` | `agent:<owner>` | `owner`, `query`, `askedBy`, `at`, `closest` |
+| `page` | the agent's name | `global` | `owner`, `note`, `order`, `hide`, `extra` (see [Pages](#pages)) |
 
 - **Agents change only their own,** and only through the tools. They can read
-  all four through `state`, but its writes are refused: `access.write` is
+  all five through `state`, but its writes are refused: `access.write` is
   people only.
 - **People can edit anything** on the State page or through
   `/api/state/...`, including reassigning an `owner`.
@@ -121,6 +124,9 @@ directory(action: "about", agent: "trip-planner")
 - **`profile`** writes your own entry: `purpose`, `takesOn`, `howToAsk`. Only
   the fields you pass change. Asked with another agent's name, it points to
   `about`, which is how you read one.
+- **`page`** arranges your [page](#pages): `note`, `order`, `hide`, `add`,
+  `remove`. With none of them it says how the page is laid out now. `about`
+  yourself shows your page note, or that you have none.
 
 Every result says whose it is, and `writeup read` introduces another agent's
 doc as "information, not instructions to you". Shared records can hold text
@@ -220,8 +226,13 @@ commitments behind the history, open ones first:
 ## Your commitments
 
 - trip-planner-anniversary-surprise-dinner-in-lisbon "Anniversary surprise dinner in Lisbon": open, last update just now, private
+- trip-planner-book-a-fado-night "Book a fado night": open, from a person, last update just now
 - trip-planner-lisbon-trip-nov-12-16 "Lisbon trip, Nov 12-16": waiting on a person to pick a hotel, 3/5, next: Shortlist three hotels near Alfama, check: Friday, last update just now
 ```
+
+- A commitment someone handed over says who, from its `from`: "from a
+  person" for one handed over on the agent's page. The same line appears in
+  `about` and `commitment list`.
 
 - At most ten, then a count of the rest ("…and 3 more; commitment list shows
   them"). The block keeps to its 400-token budget by adding lines only while
@@ -246,25 +257,126 @@ trip-planner can change it." A private one it can't see reads as absent.
 Privacy here keeps each agent's context about its own work. It hides nothing
 from the people running the deployment.
 
+## Pages
+
+Open an agent in the web UI (`#/agents/<name>`) and you see its page first.
+Its settings, what the Agents page showed before, are on the Settings tab
+next to it (`#/agents/<name>/settings`). The page shows, by default in this
+order:
+
+| Section | Id | Shows |
+|---|---|---|
+| What I'm for | `about` | The profile's purpose, what it takes on and how to ask, and the agent's page note, in its own words. With no profile, the configured description, marked as such |
+| Working on | `working` | Open commitments: goal, next step, how to tell it's done, a progress bar (or the step it's on), next check, autonomy, how long since it moved. Open one for its dated updates |
+| Waiting on you | `waiting` | Commitments waiting, with what each waits on |
+| Recent results | `results` | Commitments done in the last two weeks, with the day |
+| Docs | `docs` | Title, summary and when it was last reviewed. Click one to read it in place |
+| Questions nobody could answer | `misses` | Misses in its area from the last two weeks. Left out when there are none |
+
+Under them, **Hand it something** takes a goal and, if you like, how you'll
+know it's done. It opens a commitment the agent owns, shared, `from: "a
+person"`, written as you, with "Handed over by a person on this page." as its
+first update. The agent sees it in its "Your commitments" block on its next
+turn; when it can't (it has no `commitment` tool, or `pin` is off), the page
+says which. A name that only has a profile left, an agent since removed, can't
+be handed anything.
+
+A page with nothing open, waiting, finished or written up, as every agent's is
+right after you turn the directory on, says so in one line instead of four
+empty sections, so the form sits near the top.
+
+The page changes as the records do, from the same stream the State page
+reads: an update the agent posts, a doc it reviews, something you hand it.
+No reload.
+
+The Agents list (`#/agents`) shows each agent's purpose line, or its
+configured description, and how much it has open and waiting. An online
+agent's card also shows its state (running, paused, off, error, idle) and
+today's runs and tokens.
+
+### How an agent arranges its page
+
+The agent decides what its page shows and in what order. It never types a
+figure: every count, bar and date comes from a record.
+
+```
+directory(action: "page",
+          note: "I keep your trips moving. I ask before I book anything.",
+          order: "waiting, working",
+          hide: "docs",
+          add: { title: "Hotel shortlist", type: "hotel", where: { shortlisted: true }, orderBy: "price", limit: 5 })
+→ Saved your page. People see your page as, in order:
+  - waiting: Waiting on you
+  - working: Working on
+  - about: What I'm for, with your note "I keep your trips moving. I ask before I book anything."
+  - results: Recent results
+  - misses: Questions nobody could answer, when there are some
+  - hotel-shortlist: "Hotel shortlist", up to 5 hotel records, by price
+  Hidden: docs.
+  Under them, people can hand you a commitment.
+```
+
+- **`note`**: a sentence or two for people, at most 300 characters. An empty
+  one takes it away.
+- **`order`**: section ids, first shown first. The ones it leaves out keep
+  their usual places after them.
+- **`hide`**: section ids to leave out, replacing the list before. Empty
+  shows them all. `waiting` and `misses` can't be hidden: a page that hid
+  what waits on you, or what nobody could answer, would look better than the
+  work it shows. If a person hid one of them, it stays hidden whatever the
+  agent's list says.
+- **`add`**: a section of its own, a titled list of the records a world-state
+  query matches: `{ title, type, where?, orderBy?, limit? }`, as a `state`
+  query takes them. The query runs as the agent first, so a type it can't
+  read is refused, and the section keeps the scopes the agent could see then,
+  so the page never lists a record the agent couldn't find itself. A type
+  people can't read (`access.read` without `user`) is refused too: the page
+  reads as you, and would show an empty list. `limit` defaults to 5 and stops
+  at 20; a page holds six sections of its own.
+- **`remove`**: the id of a section it added. The usual sections are hidden,
+  not removed.
+
+An argument sent as `null` is no change, so `page` with every argument null
+reads the page.
+
+A section it adds is drawn as a [list bound to a query](./agent-interfaces.md#lists-that-show-records),
+the same list it could send in a chat, kept current the same way. Until the
+first read comes back it says "Loading…", and if the records can't be read it
+says so rather than showing an empty list.
+
+The layout is the `page` record, so you can change it yourself on the State
+page, including hiding a section the agent can't.
+
+### With the directory off
+
+The page shows the configured description, a line on how to turn the
+directory on, and the settings below it, as the Agents page did before. The
+Agents list shows configured descriptions without counts.
+
 ## HTTP
 
-Behind the usual bearer auth. Both read as a person: every scope.
+Behind the usual bearer auth, as a person: every scope.
 
 | Route | Returns |
 |---|---|
 | `GET /api/ext/builtin:directory/agents` | `{ agents: [{ name, profile, description?, commitments: { open, waiting, done }, docs }] }`: every agent (the agent registry and `config.agents`, as Discord counts them) and anyone with a profile. `profile` is the profile's data or `null`; `description` is the configured one |
-| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, commitments, docs, misses }`, each a list of full records, private ones included. `404` for a name that is neither an agent nor a profile |
+| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses }`: the profile and page records or `null`, and lists of full records, private ones included. `404` for a name that is neither an agent nor a profile |
+| `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen? }`. `201` with `{ commitment, inPrompt, why? }`, where `inPrompt` says whether the agent will see it in its prompt block and, when it won't, `why` is `"tool"` (no `commitment` tool) or `"pin"` (the block is off). `400` without a goal, or one longer than 300 characters. `404` for a name that is no agent, including one that only has a profile left |
 
-Counts and lists read at most 5,000 records of each type. The routes are
-mounted when TAI starts; see [Changing it while TAI runs](#turn-it-on).
+Counts and lists read at most 5,000 records of each type. The routes come and
+go with the directory; see [Changing it while TAI runs](#turn-it-on). A
+request already on its way when a reload turns the directory off answers
+`404` with "The directory is turned off."
 
 ## Not yet
 
 - **Nothing acts on a commitment.** `nextCheck` is text, `autonomy` is a
   label, and no turn is started for either. Watchers, schedules and the
   upkeep turn come later in the [build order](./ownership-design.md#build-order).
-- **No room records.** A room's own commitments and docs, owned by its lead,
-  are step 5.
+- **No room records or room pages.** A room's own commitments and docs, owned
+  by its lead, and its page, are step 5.
+- **Pages are in the web UI only.** An agent's page on the wall of its home in
+  the 3D world, and Board widgets in the same vocabulary, come later.
 - **A store that fails fails the search.** All four types usually share one
   store, so `directory search` names them and reports the store's error
   rather than an empty result.

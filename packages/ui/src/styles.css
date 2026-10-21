@@ -6549,7 +6549,6 @@ select.model-entry-model {
 .agents-detail { min-width: 0; }
 .agent-overview { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 24px; }
 .agent-overview-lead { font-size: 16px; color: var(--text); margin: 8px 0 16px; }
-.agent-overview-hint { color: var(--text-muted); font-size: 14px; }
 
 .agent-detail { display: flex; flex-direction: column; gap: 20px; }
 .agent-detail-header {
@@ -6677,6 +6676,168 @@ select.model-entry-model {
 .agent-run-error { font-size: 13px; color: #c05050; }
 .agent-run-refs { font-size: 12px; color: var(--text-muted); }
 .agent-run-refs a { color: var(--text); }
+
+/* ---- Agent pages (docs/directory.md#pages) ---- */
+/* This page's older rules name --surface, --surface-alt and --text-muted, which the theme never defined; here they
+   mean what they were meant to, so the settings view and the page share one look. */
+.agents-page { --surface: var(--bg-surface); --surface-alt: var(--bg-hover); --text-muted: var(--text-dim); }
+/* Centred in a column flexbox by its auto margins, it would shrink to its content; the cards want the width. */
+.agents-page { width: 100%; }
+
+.agents-sidebar-purpose {
+  font-size: 12px; color: var(--text-dim); line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+/* Only what waits on you is amber, here as on the cards: an open count is no call to act. */
+.agents-sidebar-counts .waiting { color: var(--amber); }
+.agents-sidebar-counts > span { white-space: nowrap; }
+/* With no agent open, the cards are the list: the sidebar would only repeat them. */
+.agents-layout:not(.has-selection) { grid-template-columns: minmax(0, 1fr); }
+.agents-layout:not(.has-selection) .agents-sidebar { display: none; }
+.agent-detail-actions button {
+  background: var(--bg-hover); color: var(--text); border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+}
+.agent-detail-actions button:hover:not(:disabled) { border-color: var(--text-dim); }
+.agent-detail-actions button.danger { color: var(--red); }
+/* Between a phone and a wide screen the actions go under the name rather than squeezing it. */
+.agent-detail-header { flex-wrap: wrap; gap: 12px; }
+.agent-detail-actions { flex-wrap: wrap; }
+.agent-detail-actions button, .agent-detail-actions .agent-chat-link { white-space: nowrap; }
+
+.agent-overview { display: flex; flex-direction: column; gap: 16px; }
+.agent-overview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.agent-overview-header h1 { margin: 0; }
+.agent-overview-header .agents-new-btn { font-size: 12px; padding: 6px 12px; }
+.agent-overview-cards {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px;
+}
+.agent-overview-card {
+  display: flex; flex-direction: column; gap: 6px; height: 100%;
+  padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg); color: var(--text); text-decoration: none;
+  transition: border-color 120ms ease;
+}
+.agent-overview-card:hover, .agent-overview-card:focus-visible { border-color: var(--accent); }
+.agent-overview-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.agent-overview-name { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+.agent-overview-purpose { font-size: 13px; line-height: 1.45; color: var(--text); flex: 1; }
+.agent-overview-purpose.empty { color: var(--text-dim); font-style: italic; }
+.agent-overview-counts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.agent-overview-counts .zero { opacity: 0.55; }
+.agent-overview-counts .waiting { color: var(--amber); }
+.agent-overview-runs { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.agent-overview .agent-overview-lead { font-size: 13px; color: var(--text-dim); margin: 0; }
+
+.agent-detail-back { display: none; color: var(--text-dim); text-decoration: none; font-size: 18px; line-height: 1; padding: 2px 4px; }
+.agent-detail-back:hover { color: var(--text); }
+.agent-detail-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-top: -8px; }
+.agent-detail-tabs a {
+  padding: 8px 14px; font-size: 13px; color: var(--text-dim); text-decoration: none;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.agent-detail-tabs a:hover { color: var(--text); }
+.agent-detail-tabs a.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* Room at the end for the floating Chat button, which would otherwise sit on "Hand it over". */
+.agent-page { display: flex; flex-direction: column; gap: 16px; padding-bottom: 64px; }
+.agent-page-section > h2 { display: flex; align-items: center; gap: 8px; }
+.agent-page-quiet { padding-top: 12px; padding-bottom: 12px; }
+.agent-page-count {
+  font-size: 11px; letter-spacing: 0; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-hover); color: var(--text); font-variant-numeric: tabular-nums;
+}
+.agent-page-count.amber { background: rgba(251, 191, 36, 0.16); color: var(--amber); }
+.agent-page-waiting:has(.agent-page-item) { border-left: 3px solid var(--amber); }
+
+.agent-page-purpose { font-size: 16px; line-height: 1.5; color: var(--text); margin: 0; }
+.agent-page-hint { font-size: 12px; color: var(--text-dim); margin: 6px 0 0; }
+.agent-page-note { margin: 14px 0 0; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--bg); border-radius: 0 var(--radius) var(--radius) 0; }
+.agent-page-note blockquote { margin: 0; font-size: 14px; line-height: 1.5; color: var(--text); }
+.agent-page-note figcaption { margin-top: 4px; font-size: 11px; color: var(--text-dim); }
+.agent-page-facts { margin: 14px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; font-size: 13px; }
+.agent-page-facts > div { display: contents; }
+.agent-page-facts dt { color: var(--text-dim); padding-top: 2px; }
+.agent-page-facts dd { margin: 0; line-height: 1.5; }
+.agent-page-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.agent-page-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.agent-page-item {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  min-width: 0;
+}
+.agent-page-goal { display: flex; align-items: baseline; gap: 8px; font-weight: 600; font-size: 14px; line-height: 1.4; }
+.agent-page-goal > span:first-child, .agent-page-goal > .agent-page-done + span { overflow-wrap: anywhere; }
+.agent-page-tag {
+  font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-dim);
+}
+.agent-page-line { font-size: 13px; line-height: 1.45; color: var(--text); }
+.agent-page-label { color: var(--text-dim); margin-right: 4px; }
+.agent-page-meta { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+.agent-page-nowrap { white-space: nowrap; }
+.agent-page-progress .iface-progress { margin-top: 2px; }
+.agent-page-updates summary { cursor: pointer; font-size: 12px; color: var(--text-dim); width: max-content; }
+.agent-page-updates summary:hover { color: var(--text); }
+.agent-page-updates ol { list-style: none; margin: 6px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.agent-page-updates li { display: grid; grid-template-columns: 56px 1fr; gap: 8px; font-size: 12px; line-height: 1.45; }
+.agent-page-updates time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.agent-page-date { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.agent-page-done { color: var(--green); }
+
+.agent-page-doc-title {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  background: none; border: none; padding: 0; text-align: left; cursor: pointer;
+  font: 600 14px var(--font); color: var(--text);
+}
+.agent-page-doc-title > span:first-child { text-decoration: underline; text-decoration-color: var(--text-dim); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.agent-page-doc-title:hover > span:first-child, .agent-page-doc.open .agent-page-doc-title > span:first-child { text-decoration-color: var(--accent); }
+.agent-page-summary { font-size: 13px; line-height: 1.45; color: var(--text-dim); }
+.agent-page-doc.open { border-color: var(--accent-dim); }
+.agent-page-doc-body { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
+/* A doc's own headings are the doc's, not the page's: without this the section heading style above reaches them. */
+.agent-page-doc-body .markdown-body h1,
+.agent-page-doc-body .markdown-body h2,
+.agent-page-doc-body .markdown-body h3 {
+  display: block; margin: 12px 0 6px; font-size: 14px; font-weight: 600;
+  text-transform: none; letter-spacing: normal; color: var(--text);
+}
+.agent-page-doc-body .markdown-body > :first-child { margin-top: 0; }
+
+/* A section the agent added is a list it could send in chat, drawn here in the page's own rows. */
+.agent-page-extra .iface { margin: 0; padding: 0; border: none; background: none; }
+.agent-page-extra .iface-list { margin: 0; gap: 8px; }
+.agent-page-extra .iface-list li {
+  padding: 9px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  font-size: 14px; overflow-wrap: anywhere;
+}
+.agent-page-extra .iface-details { font-size: 13px; }
+
+.agent-page-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.agent-page-form label:first-child { grid-column: 1 / -1; }
+.agent-page-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-dim); }
+.agent-page-form input { width: 100%; }
+.agent-page-form button {
+  background: var(--accent); color: white; border: none; border-radius: var(--radius);
+  padding: 9px 16px; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.agent-page-form button:disabled { opacity: 0.5; cursor: default; }
+.agent-page-handed { display: block; margin: 10px 0 0; font-size: 13px; color: var(--green); }
+.agent-page-error { margin: 10px 0 0; font-size: 13px; color: var(--red); }
+
+@media (max-width: 800px) {
+  .agents-page { padding: 16px; }
+  /* One thing at a time on a phone: the agent cards, or one agent's page with a way back. */
+  .agents-sidebar { display: none; }
+  .agent-detail-back { display: inline-block; }
+  .agent-detail-header { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
+  .agent-detail-actions { flex-wrap: wrap; }
+  .agent-section { padding: 14px 16px; }
+  .agent-page-form { grid-template-columns: minmax(0, 1fr); }
+  .agent-page-form button { justify-self: start; }
+  .agent-overview { padding: 16px; }
+}
 
 /* Toast notifications (DUX2) */
 .toast-viewport {

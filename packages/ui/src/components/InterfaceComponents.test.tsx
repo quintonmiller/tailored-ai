@@ -390,6 +390,13 @@ describe("lists", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("reads in the order its query names, when it names one", async () => {
+    await render([{ ...listSpec, query: { type: "chore", orderBy: "-name", scopes: ["global"] } }]);
+    await act(async () => {});
+    const listed = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map((c) => c[0]);
+    expect(listed.some((u) => u.startsWith("/api/state/chore?") && u.includes("orderBy=-name"))).toBe(true);
+  });
+
   it("re-reads the list when a record of its type changes", async () => {
     await render([listSpec]);
     await act(async () => {});

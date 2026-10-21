@@ -9,7 +9,7 @@
  * The caller always comes from the tool context, so an agent can only ever
  * change its own records.
  */
-import type { StateSearchHit } from "../state/service.js";
+import type { StateCaller, StateSearchHit } from "../state/service.js";
 import { StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
@@ -23,14 +23,19 @@ import {
   type Directory,
   DOC_TYPE,
   formatProgress,
+  KEPT_SECTIONS,
   lastUpdate,
+  MAX_EXTRA,
   MAX_UPDATES,
   ownerOf,
+  PAGE_SECTIONS,
+  type PageSection,
   PROFILE_TYPE,
   parseProgress,
   SEARCH_KINDS,
   STATUSES,
   type Status,
+  slug,
   stringList,
   titleOf,
 } from "./directory-records.js";
@@ -91,6 +96,8 @@ export function commitmentLine(record: StateRecord, now: Date): string {
   const parts: string[] = [];
   const status = String(d.status ?? "open");
   parts.push(status === "waiting" && text(d.waitingOn) ? `waiting on ${text(d.waitingOn)}` : status);
+  // Who asked for it, when someone did: work a person handed over reads as theirs, not one the agent chose.
+  if (text(d.from) && text(d.from) !== ownerOf(record)) parts.push(`from ${text(d.from)}`);
   const progress = formatProgress(d.progress);
   if (progress) parts.push(progress);
   if (text(d.nextStep)) parts.push(`next: ${text(d.nextStep)}`);
@@ -124,6 +131,14 @@ export function formatAbout(entry: AgentEntry, self: boolean, now: Date): string
   const howToAsk = text(p?.howToAsk);
   if (howToAsk) lines.push(`To ask: ${howToAsk}`);
   if (self && !entry.profile) lines.push("Write your profile with action profile, so others know what to bring you.");
+  if (self && entry.page !== undefined) {
+    const note = text(entry.page?.data.note);
+    lines.push(
+      note
+        ? `Your page note, which people see: "${note}"`
+        : "Your page has no note yet; action page adds one, in your own words.",
+    );
+  }
 
   const { commitments: moreWork, docs: moreDocs } = entry.full;
   lines.push(
@@ -192,6 +207,83 @@ function similarLine(hits: StateSearchHit[], now: Date): string | undefined {
   return `Similar: ${each.join("; ")}.`;
 }
 
+/** The arguments that change a page; `page` with none of them reads it. */
+const PAGE_CHANGES = ["note", "order", "hide", "add", "remove"];
+
+/**
+ * Whether a `page` call changes anything. A null is no change: many models
+ * send one for every optional argument they don't use, and the loop passes it
+ * through.
+ */
+function changesPage(args: Record<string, unknown>): boolean {
+  return PAGE_CHANGES.some((k) => args[k] != null);
+}
+
+/** An object as a model sends one: itself, or JSON text of one. */
+function jsonObject(value: unknown): Record<string, unknown> | undefined {
+  let v = value;
+  if (typeof v === "string") {
+    try {
+      v = JSON.parse(v);
+    } catch {
+      return undefined;
+    }
+  }
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+}
+
+/** The sections a page record holds, leaving out anything a hand edit made unusable. */
+export function sectionsOf(value: unknown): PageSection[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (x): x is PageSection =>
+      !!x &&
+      typeof x === "object" &&
+      typeof (x as PageSection).id === "string" &&
+      typeof (x as PageSection).title === "string" &&
+      typeof (x as PageSection).query?.type === "string",
+  );
+}
+
+function extraIds(extra: PageSection[]): string {
+  return extra.length ? ` Yours: ${extra.map((x) => x.id).join(", ")}.` : " You haven't added any.";
+}
+
+/** The sections of a page in the order people see them, and the hidden ones apart. Mirrored by the web UI. */
+export function pageOrder(data: Record<string, unknown>): { shown: string[]; hidden: string[] } {
+  const extra = sectionsOf(data.extra).map((x) => x.id);
+  const all = [...Object.keys(PAGE_SECTIONS), ...extra];
+  const order = (stringList(data.order) ?? []).filter((id) => all.includes(id));
+  const hide = new Set(stringList(data.hide) ?? []);
+  const sorted = [...order, ...all.filter((id) => !order.includes(id))];
+  return { shown: sorted.filter((id) => !hide.has(id)), hidden: sorted.filter((id) => hide.has(id)) };
+}
+
+/** A page as its agent reads it: each section by id, in order, then what's hidden. */
+function describePage(data: Record<string, unknown>): string {
+  const extra = new Map(sectionsOf(data.extra).map((x) => [x.id, x]));
+  const note = text(data.note);
+  const { shown, hidden } = pageOrder(data);
+  const lines = ["People see your page as, in order:"];
+  for (const id of shown) {
+    const section = extra.get(id);
+    if (section) {
+      const q = section.query;
+      const order = q.orderBy ? `, by ${q.orderBy}` : "";
+      lines.push(`- ${id}: "${section.title}", up to ${q.limit} ${q.type} records${order}`);
+    } else if (id === "about") {
+      lines.push(`- about: ${PAGE_SECTIONS.about}, ${note ? `with your note "${note}"` : "with no note of yours yet"}`);
+    } else if (id === "misses") {
+      lines.push(`- misses: ${PAGE_SECTIONS.misses}, when there are some`);
+    } else {
+      lines.push(`- ${id}: ${PAGE_SECTIONS[id]}`);
+    }
+  }
+  if (hidden.length) lines.push(`Hidden: ${hidden.join(", ")}.`);
+  lines.push("Under them, people can hand you a commitment.");
+  return lines.join("\n");
+}
+
 // --------------------------------------------------------------------------
 // directory
 // --------------------------------------------------------------------------
@@ -199,15 +291,15 @@ function similarLine(hits: StateSearchHit[], now: Date): string | undefined {
 export class DirectoryTool implements Tool {
   name = "directory";
   description =
-    "What agents are for, what they're working on and what they've written up: about one agent, or search across all of them. Also keeps your own profile.";
+    "What agents are for, what they're working on and what they've written up: about one agent, or search across all of them. Also keeps your own profile and page.";
   parameters = {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["about", "search", "profile"],
+        enum: ["about", "search", "profile", "page"],
         description:
-          "about: one agent's purpose, open commitments and docs. search: commitments, docs and profiles about q. profile: update your own entry (to read one, use about).",
+          "about: one agent's purpose, open commitments and docs. search: commitments, docs and profiles about q. profile: update your own entry (to read one, use about). page: arrange your page for people: note, order, hide, add or remove a section.",
       },
       agent: { type: "string", description: "about: which agent. Default: you." },
       q: { type: "string", description: "search: what you're looking for, in a few words." },
@@ -221,10 +313,26 @@ export class DirectoryTool implements Tool {
         description: "profile: the kinds of work you take on, as a list or comma-separated.",
       },
       howToAsk: { type: "string", description: "profile: how others should hand you work." },
+      note: { type: "string", description: "page: a sentence or two for people, in your own words." },
+      order: {
+        anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }],
+        description: "page: section ids in the order to show them.",
+      },
+      hide: {
+        anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }],
+        description: "page: section ids to leave out; empty shows them all.",
+      },
+      add: {
+        anyOf: [{ type: "object" }, { type: "string" }],
+        description:
+          "page: a section listing records you could query yourself: {title, type, where?, orderBy?, limit?}.",
+      },
+      remove: { type: "string", description: "page: the id of a section you added." },
     },
     required: ["action"],
   };
-  effect = (args: Record<string, unknown>) => (args.action === "profile" ? ("write" as const) : ("read" as const));
+  effect = (args: Record<string, unknown>) =>
+    args.action === "profile" || (args.action === "page" && changesPage(args)) ? ("write" as const) : ("read" as const);
 
   constructor(private readonly directory: Directory) {}
 
@@ -274,7 +382,103 @@ export class DirectoryTool implements Tool {
         const entry = await this.directory.entry(caller, me);
         return ok(`Saved your profile. Others now see:\n${formatAbout(entry, true, this.directory.now())}`);
       }
-      return fail(`Unknown action "${args.action ?? ""}". Use about, search or profile.`);
+      if (action === "page") return this.page(caller, args);
+      return fail(`Unknown action "${args.action ?? ""}". Use about, search, profile or page.`);
+    });
+  }
+
+  /** Change the caller's page as asked, or with nothing asked, say how it's laid out now. */
+  private async page(caller: StateCaller, args: Record<string, unknown>): Promise<ToolResult> {
+    const me = caller.actor.name;
+    if (!changesPage(args)) {
+      const current = await this.directory.page(caller, me);
+      return ok(`${describePage(current?.data ?? {})}\nChange it with note, order, hide, add or remove.`);
+    }
+    // A note given empty takes it away; one too long is refused rather than cut, so the agent rewrites it.
+    const note = args.note == null ? undefined : String(args.note).trim();
+    if (note && note.length > 300)
+      return fail(`note is a sentence or two: at most 300 characters, and this is ${note.length}.`);
+    const order = args.order == null ? undefined : (stringList(args.order) ?? []);
+    const hide = args.hide == null ? undefined : (stringList(args.hide) ?? []);
+    const remove = text(args.remove);
+    const add = args.add == null ? undefined : await this.addSection(caller, args.add);
+    const record = await this.directory.savePage(caller, (data) => {
+      let extra = sectionsOf(data.extra);
+      if (remove) {
+        if (PAGE_SECTIONS[remove]) throw new StateError(`${remove} is one of the usual sections; hide it instead.`);
+        if (!extra.some((x) => x.id === remove)) {
+          throw new StateError(`Your page has no section "${remove}".${extraIds(extra)}`);
+        }
+        extra = extra.filter((x) => x.id !== remove);
+      }
+      if (add) {
+        if (extra.length >= MAX_EXTRA) {
+          throw new StateError(`Your page holds ${MAX_EXTRA} sections of your own at most; remove one first.`);
+        }
+        const taken = new Set([...Object.keys(PAGE_SECTIONS), ...extra.map((x) => x.id)]);
+        const base = slug(add.title, 40) || "section";
+        let id = base;
+        for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+        extra = [...extra, { id, ...add }];
+      }
+      const known = [...Object.keys(PAGE_SECTIONS), ...extra.map((x) => x.id)];
+      const unknown = [...(order ?? []), ...(hide ?? [])].filter((id) => !known.includes(id));
+      if (unknown.length) {
+        throw new StateError(
+          `No section called ${unknown.map((id) => `"${id}"`).join(", ")}. Sections: ${known.join(", ")}.`,
+        );
+      }
+      // A section a person hid that the agent may not hide stays hidden: the agent's list replaces only its own.
+      // Naming one of those again changes nothing, so it isn't refused.
+      const theirs = (stringList(data.hide) ?? []).filter((id) => KEPT_SECTIONS.includes(id));
+      const kept = (hide ?? []).filter((id) => KEPT_SECTIONS.includes(id) && !theirs.includes(id));
+      if (kept.length) {
+        throw new StateError(
+          `${kept.join(" and ")} stay on your page: people need to see what waits on them and what nobody could answer.`,
+        );
+      }
+      const next: Record<string, unknown> = { ...data };
+      const set = (key: string, value: unknown[] | string | undefined) => {
+        if (value === undefined) return;
+        if (value.length) next[key] = value;
+        else delete next[key];
+      };
+      set("note", note);
+      set("order", order);
+      set("hide", hide && [...hide, ...theirs.filter((id) => !hide.includes(id))]);
+      // A section taken away leaves no trace in the order or the hidden list.
+      const ids = new Set(known);
+      for (const key of ["order", "hide"]) {
+        if (Array.isArray(next[key]))
+          set(
+            key,
+            (next[key] as string[]).filter((id) => ids.has(id)),
+          );
+      }
+      set("extra", extra);
+      return next;
+    });
+    return ok(`Saved your page. ${describePage(record.data)}`);
+  }
+
+  /** The section `add` asks for, checked by running its query as the caller. */
+  private async addSection(caller: StateCaller, raw: unknown): Promise<Omit<PageSection, "id">> {
+    const example =
+      'add is a section: {"title": "Open bookings", "type": "booking", "where": {"status": "open"}, "orderBy": "-updatedAt", "limit": 5}.';
+    const input = jsonObject(raw);
+    if (!input) throw new StateError(example);
+    const title = text(input.title);
+    const type = text(input.type);
+    if (!title || !type) throw new StateError(`A section needs a title and a record type. ${example}`);
+    if (title.length > 80) throw new StateError("A section's title is a few words: at most 80 characters.");
+    const where = input.where === undefined ? undefined : jsonObject(input.where);
+    if (input.where !== undefined && !where) throw new StateError(`where is an object of conditions. ${example}`);
+    const limit = typeof input.limit === "number" ? input.limit : Number(text(input.limit) ?? Number.NaN);
+    return this.directory.section(caller, title, {
+      type,
+      ...(where ? { where } : {}),
+      ...(text(input.orderBy) ? { orderBy: text(input.orderBy) } : {}),
+      ...(Number.isFinite(limit) ? { limit } : {}),
     });
   }
 

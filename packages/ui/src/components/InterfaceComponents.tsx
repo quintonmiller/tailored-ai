@@ -190,7 +190,16 @@ interface Archived {
  * `undefined` for anything that is not a list, or before the first read.
  */
 function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined {
+  return useListRead(spec).props;
+}
+
+/**
+ * `useListItems`, and whether the newest read failed: a list drawn outside a
+ * chat has no items it was sent with to fall back on, so it says so instead.
+ */
+function useListRead(spec: ComponentSpec): { props?: Record<string, unknown>; failed: boolean } {
   const [props, setProps] = useState<Record<string, unknown> | undefined>(undefined);
+  const [failed, setFailed] = useState(false);
   const query = spec.query;
   const key = query ? JSON.stringify(query) : "";
   const base = spec.props;
@@ -202,18 +211,19 @@ function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined 
     let cancelled = false;
     const limit = Math.min(Math.max(1, query.limit ?? 10), 50);
     const load = () =>
-      // Oldest first, as core orders a list, so a tick does not move the item.
+      // In the order the query names, or oldest first as core orders a list, so a tick does not move the item.
       Promise.all([
-        fetchStateRecords(query.type, 500, { where: query.where, orderBy: "createdAt" }),
+        fetchStateRecords(query.type, 500, { where: query.where, orderBy: query.orderBy ?? "createdAt" }),
         stateTitleField(query.type),
       ])
         .then(([res, titleField]) => {
           if (cancelled) return;
           const view = kind === "table" ? tableView : listView;
           setProps(view(base, res.records, limit, query.scopes, titleField));
+          setFailed(false);
         })
         // Unreadable now: keep drawing the items it was sent with.
-        .catch(() => {});
+        .catch(() => !cancelled && setFailed(true));
     load();
     const off = subscribeStateChanges((c) => {
       if (c.type === query.type) load();
@@ -224,7 +234,7 @@ function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined 
     };
   }, [key]);
 
-  return props;
+  return { props, failed };
 }
 
 /** A table's props from its records. Mirrors `tableProps` in core's `interfaces/bind.ts`. */
@@ -322,7 +332,7 @@ function Body({ spec, open, act }: { spec: ComponentSpec; open: boolean; act: Ac
     case "card":
       return (
         <>
-          <div className="iface-card-title">{str(p.title)}</div>
+          <Title text={p.title} />
           {p.body ? <div className="iface-details">{str(p.body)}</div> : null}
           {Array.isArray(p.fields) && p.fields.length > 0 && (
             <dl className="iface-card-fields">
@@ -342,7 +352,7 @@ function Body({ spec, open, act }: { spec: ComponentSpec; open: boolean; act: Ac
       const ticks = p.check !== undefined;
       return (
         <>
-          <div className="iface-card-title">{str(p.title)}</div>
+          <Title text={p.title} />
           {items.length === 0 ? (
             <div className="iface-details">Nothing matches.</div>
           ) : (
@@ -383,7 +393,7 @@ function Body({ spec, open, act }: { spec: ComponentSpec; open: boolean; act: Ac
       const rows = (Array.isArray(p.rows) ? p.rows : []) as { id: string; cells: string[] }[];
       return (
         <>
-          <div className="iface-card-title">{str(p.title)}</div>
+          <Title text={p.title} />
           {rows.length === 0 ? (
             <div className="iface-details">Nothing matches.</div>
           ) : (
@@ -419,8 +429,8 @@ function Body({ spec, open, act }: { spec: ComponentSpec; open: boolean; act: Ac
   }
 }
 
-/** A bar for a value out of a maximum, or the steps with the current one marked. */
-function Progress({ props }: { props: Record<string, unknown> }) {
+/** A bar for a value out of a maximum, or the steps with the current one marked. Agent pages draw progress with it too. */
+export function Progress({ props }: { props: Record<string, unknown> }) {
   const steps = Array.isArray(props.steps) ? props.steps.map(str) : [];
   // Mirrors `stepsDone` in core: `done`, or a `value` sent alongside the steps.
   const at =
@@ -430,7 +440,7 @@ function Progress({ props }: { props: Record<string, unknown> }) {
     typeof props.value === "number" ? Math.max(0, Math.min(100, Math.round((props.value / max) * 100))) : null;
   return (
     <>
-      <div className="iface-card-title">{str(props.label)}</div>
+      <Title text={props.label} />
       {steps.length > 0 ? (
         <ol className="iface-steps">
           {steps.map((s, i) => (
@@ -610,4 +620,33 @@ function answeredLabel(spec: ComponentSpec, state?: ComponentState): string | nu
 
 function str(v: unknown): string {
   return typeof v === "string" ? v : "";
+}
+
+/** A component's title, left out when it has none: a page section names its list in its own heading. */
+function Title({ text }: { text: unknown }) {
+  return str(text) ? <div className="iface-card-title">{str(text)}</div> : null;
+}
+
+/**
+ * A list or table bound to a world-state query, drawn read-only and kept
+ * current, outside any chat: an agent's page shows the sections it added with
+ * it, in the same vocabulary as the lists it sends. No ticks: a page has no
+ * component on the server to answer.
+ */
+export function QueryList({ spec }: { spec: ComponentSpec }) {
+  const { props: listed, failed } = useListRead(spec);
+  // Until the first read lands there is nothing to say: "Nothing matches" would be a guess.
+  if (!listed && spec.query) {
+    return (
+      <div className={`iface iface-${spec.kind}`}>
+        <div className="iface-details">{failed ? "Couldn't read these records." : "Loading…"}</div>
+      </div>
+    );
+  }
+  const { check: _check, ...props } = listed ?? spec.props;
+  return (
+    <div className={`iface iface-${spec.kind}`}>
+      <Body spec={{ ...spec, props, actions: [] }} open={false} act={() => {}} />
+    </div>
+  );
 }

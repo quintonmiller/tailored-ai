@@ -132,9 +132,11 @@ interface(action: "send", kind: "list",
 ```
 
 - **The items:** one per matching record, labelled by the type's title field
-  (or the id), oldest first so a tick never moves an item. `limit` defaults
-  to 10 and stops at 50; past it the list says how many more there are.
-  Archived records are left off.
+  (or the id), oldest first so a tick never moves an item, or in the order
+  `orderBy` names: a field, `-` first for descending (`"-updatedAt"`,
+  `"price"`), as in a `state` query. `limit` defaults to 10 and stops at 50;
+  past it the list says how many more there are. Archived records are left
+  off.
 - **Who sees what:** the query runs as the agent, and the list keeps the
   scopes the agent could see when it sent it. However often it is redrawn,
   it never shows a record the agent could not have read.
@@ -158,7 +160,8 @@ the list was when sent.
 ## Tables
 
 A table is a list's read-only cousin: the records a query matches as rows and
-columns, filled and kept current by core the same way, with the same scopes.
+columns, filled and kept current by core the same way, with the same scopes
+and order.
 
 ```
 interface(action: "send", kind: "table",

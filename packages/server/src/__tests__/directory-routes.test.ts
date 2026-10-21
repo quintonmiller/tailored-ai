@@ -163,6 +163,48 @@ describe("the directory routes", () => {
     expect(missing.status).toBe(404);
   });
 
+  it("gives an agent's page layout with its records", async () => {
+    const app = await start();
+    const before = await app.fetch(new Request("http://t/api/ext/builtin:directory/agents/trip-planner"));
+    expect(((await before.json()) as { page: unknown }).page).toBeNull();
+    await runtime.getStateService().put(person, {
+      type: "page",
+      id: "trip-planner",
+      scope: "global",
+      data: { owner: "trip-planner", note: "I plan trips.", hide: ["docs"] },
+    });
+    const res = await app.fetch(new Request("http://t/api/ext/builtin:directory/agents/trip-planner"));
+    const body = (await res.json()) as { page: { data: Record<string, unknown> } };
+    expect(body.page.data).toEqual({ owner: "trip-planner", note: "I plan trips.", hide: ["docs"] });
+  });
+
+  it("hands an agent a commitment from its page, written as the person", async () => {
+    const app = await start();
+    const res = await app.fetch(
+      new Request("http://t/api/ext/builtin:directory/agents/planner/commitments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal: "Book the dentist", doneWhen: "On the calendar" }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { commitment, inPrompt } = (await res.json()) as { commitment: { id: string }; inPrompt: boolean };
+    expect(commitment.id).toBe("planner-book-the-dentist");
+    expect(inPrompt).toBe(true);
+    const made = await runtime.getStateService().get(person, { type: "commitment", id: "planner-book-the-dentist" });
+    expect(made?.data).toMatchObject({ owner: "planner", status: "open", from: "a person" });
+    expect(made?.updatedBy).toEqual({ kind: "user", name: "owner" });
+
+    const empty = await app.fetch(
+      new Request("http://t/api/ext/builtin:directory/agents/planner/commitments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ doneWhen: "x" }),
+      }),
+    );
+    expect(empty.status).toBe(400);
+  });
+
   it("sits behind the server's bearer token like every other API route", async () => {
     const app = await start("secret");
     expect((await app.fetch(new Request("http://t/api/ext/builtin:directory/agents"))).status).toBe(401);
@@ -170,5 +212,11 @@ describe("the directory routes", () => {
       new Request("http://t/api/ext/builtin:directory/agents", { headers: { Authorization: "Bearer secret" } }),
     );
     expect(ok.status).toBe(200);
+    const handOver = () =>
+      new Request("http://t/api/ext/builtin:directory/agents/planner/commitments", {
+        method: "POST",
+        body: JSON.stringify({ goal: "Sneak in" }),
+      });
+    expect((await app.fetch(handOver())).status).toBe(401);
   });
 });
