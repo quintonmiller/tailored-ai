@@ -13,7 +13,10 @@
  * Archiving: a backend that implements `archive` hides archived records from
  * `query`, `list` and `count` unless the caller passes `includeArchived`, and
  * marks them with `metadata.archived_at` (plus `archived_by`,
- * `archive_reason`) wherever they do come back, including `get`. A backend
+ * `archive_reason`) wherever they do come back, including `get`. An exact
+ * `wantStructured` lookup is a fetch by identity, like `get`, so it returns an
+ * archived record too, marked: the facts tool relies on that to say a fact was
+ * forgotten and to restore it when it is set again. A backend
  * with no archive leaves `archive` out and ignores `includeArchived`; callers
  * then fall back to what they did before archiving existed.
  */
@@ -153,10 +156,9 @@ export interface PreludeContext {
 
 export interface ListQuery {
   /**
-   * `global` / `project:<id>`, or `project:*` for every project at once (the
-   * Memory page with no project chosen). The built-in honours all three, and
-   * an `agent:<name>` token the way `query` does: that agent's own records
-   * plus the ones no agent owns.
+   * `global` / `project:<id>`. The built-in also honours an `agent:<name>`
+   * token the way `query` does: that agent's own records plus the ones no
+   * agent owns.
    */
   scope?: string | string[];
   tags?: string[];
@@ -165,6 +167,13 @@ export interface ListQuery {
   expiringBefore?: string;
   /** Also list archived records, marked with `metadata.archived_at`. Off by default. */
   includeArchived?: boolean;
+  /**
+   * Every project at once, global included, whatever project `scope` names:
+   * the Memory page with no project chosen. A field rather than a scope token
+   * so that a backend which doesn't know it falls back to the scope, `global`,
+   * and lists what it always did instead of nothing.
+   */
+  allProjects?: boolean;
   limit?: number;
   offset?: number;
 }

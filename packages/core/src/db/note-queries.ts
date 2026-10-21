@@ -190,9 +190,13 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
  * The expiry filter. Normalized via datetime(): TTLs are written as ISO 8601
  * strings with T/Z, while datetime('now') returns SQLite's own format (no T,
  * no Z). With archived notes in the result it applies to live notes only.
+ *
+ * A kept note never expires. `keepNote` clears its TTL, but a note kept under
+ * the old name (`archive`, which set the flag and left the TTL) may still
+ * carry one, and the sweep skipping it is no use if every reader then hides it.
  */
 function liveUnexpired(includeArchived: boolean | undefined): string {
-  const unexpired = "ttl_at IS NULL OR datetime(ttl_at) > datetime('now')";
+  const unexpired = "archival = 1 OR ttl_at IS NULL OR datetime(ttl_at) > datetime('now')";
   return includeArchived ? `(archived_at IS NOT NULL OR ${unexpired})` : `(${unexpired})`;
 }
 
@@ -310,22 +314,39 @@ export function archiveNote(
   return getNote(db, id);
 }
 
-/** Bring an archived note back exactly as it was. Null when there is no such note. */
+/**
+ * Bring an archived note back. Null when there is no such note.
+ *
+ * A TTL that has already passed is cleared, so the note stops expiring. The
+ * sweep archives notes because they expired: restoring one with its old TTL
+ * would leave it hidden from every reader (they all drop expired notes) and
+ * out of the archive view too, and the next sweep would archive it again.
+ * Asking for a note back is a stronger signal than the TTL it was written with.
+ */
 export function unarchiveNote(db: Database.Database, id: string): Note | null {
-  db.prepare("UPDATE notes SET archived_at = NULL, archived_by = NULL, archive_reason = NULL WHERE id = ?").run(id);
+  db.prepare(
+    `UPDATE notes SET archived_at = NULL, archived_by = NULL, archive_reason = NULL,
+            ttl_at = CASE WHEN ttl_at IS NOT NULL AND datetime(ttl_at) <= datetime('now') THEN NULL ELSE ttl_at END
+      WHERE id = ?`,
+  ).run(id);
   return getNote(db, id);
 }
 
 /**
- * Mark a note kept: the sweep never touches it, however old it gets. The
- * reason goes on as a `keep: <reason>` tag so the Memory page can say why.
- * Idempotent. Null when there is no such note.
+ * Mark a note kept: it never expires, so the sweep leaves it alone and no
+ * reader drops it for being past its TTL. Clearing the TTL is what makes the
+ * second half true; the sweep skipping a kept note did nothing for the readers,
+ * which hid it as soon as the TTL passed. The reason goes on as a
+ * `keep: <reason>` tag (once) so the Memory page can say why. Idempotent.
+ * Null when there is no such note.
  */
 export function keepNote(db: Database.Database, id: string, reason: string): Note | null {
-  db.prepare("UPDATE notes SET archival = 1, tags = json_insert(tags, '$[#]', ?) WHERE id = ? AND archival = 0").run(
-    `keep: ${reason}`,
-    id,
-  );
+  db.prepare(
+    `UPDATE notes SET ttl_at = NULL,
+            tags = CASE WHEN archival = 0 THEN json_insert(tags, '$[#]', ?) ELSE tags END,
+            archival = 1
+      WHERE id = ?`,
+  ).run(`keep: ${reason}`, id);
   return getNote(db, id);
 }
 

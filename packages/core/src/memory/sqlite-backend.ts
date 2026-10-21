@@ -87,10 +87,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
 
   async write(content: MemoryContent, hint: MemoryHint = {}): Promise<{ id: string }> {
     const kind = hint.kind ?? "note";
-    const parsed = parseScope(hint.scope);
-    // `project:*` is a read scope; a write with it lands in global.
-    const projectId = parsed.projectId ?? null;
-    const agent = parsed.agent;
+    const { projectId, agent } = parseScope(hint.scope);
 
     // Structural supersession: drop the prior record before writing the new
     // one. The contract leaves interpretation to the backend; SQLite's
@@ -180,7 +177,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
       const key = str(s.key);
       if (category && key) {
         // A fetch by identity: an archived fact comes back marked, not absent.
-        const fact = findFact(this.db, category, str(s.entity) ?? "", key, projectId ?? null);
+        const fact = findFact(this.db, category, str(s.entity) ?? "", key, projectId);
         return fact ? [factFragment(fact)] : [];
       }
     }
@@ -341,12 +338,13 @@ export class SqliteMemoryBackend implements MemoryBackend {
   async prelude(context: PreludeContext): Promise<string> {
     const { projectId, agent } = parseScope(context.scope);
     if (!agent) return "";
-    const scope: CoreMemoryScope = { agent, project_id: projectId ?? null };
+    const scope: CoreMemoryScope = { agent, project_id: projectId };
     return renderCoreMemory(getCoreMemory(this.db, scope));
   }
 
   async list(query: ListQuery): Promise<MemoryFragment[]> {
-    const { projectId, agent } = parseScope(query.scope);
+    const { agent } = parseScope(query.scope);
+    const projectId = listProject(query);
     const kind = query.kind ?? "note";
     const includeArchived = query.includeArchived === true;
 
@@ -371,7 +369,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
       return chunks.map((c) => ({
         text: c.content,
         id: `chunk:${c.id}`,
-        metadata: { kind: "chunk", source: c.source },
+        metadata: { kind: "chunk", source: c.source, ...archiveMetadata(c) },
       }));
     }
 
@@ -438,7 +436,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
   }
 
   async count(query: ListQuery = {}): Promise<number> {
-    const { projectId } = parseScope(query.scope);
+    const projectId = listProject(query);
     const kind = query.kind ?? "note";
     const includeArchived = query.includeArchived === true;
 
@@ -477,28 +475,28 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
-/**
- * `projectId` is null for global (the default), an id for one project, and
- * undefined for `project:*`, which reads across every project at once.
- */
 function parseScope(scope: string | string[] | undefined): {
-  projectId: string | null | undefined;
+  projectId: string | null;
   agent: string | undefined;
   sessionId: string | undefined;
 } {
   if (!scope) return { projectId: null, agent: undefined, sessionId: undefined };
   const parts = Array.isArray(scope) ? scope : scope.split(/\s+/);
-  let projectId: string | null | undefined = null;
+  let projectId: string | null = null;
   let agent: string | undefined;
   let sessionId: string | undefined;
   for (const part of parts) {
     if (part === "global") continue;
-    if (part === "project:*") projectId = undefined;
-    else if (part.startsWith("project:")) projectId = part.slice("project:".length) || null;
+    if (part.startsWith("project:")) projectId = part.slice("project:".length) || null;
     else if (part.startsWith("agent:")) agent = part.slice("agent:".length) || undefined;
     else if (part.startsWith("session:")) sessionId = part.slice("session:".length) || undefined;
   }
   return { projectId, agent, sessionId };
+}
+
+/** The project a list or count reads: undefined (every project) for `allProjects`, else the scope's. */
+function listProject(query: ListQuery): string | null | undefined {
+  return query.allProjects ? undefined : parseScope(query.scope).projectId;
 }
 
 function parseId(id: string): { kind: string; rest: string } | null {
@@ -528,14 +526,21 @@ function noteFragment(note: Note, extra: Record<string, unknown> = {}): MemoryFr
   };
 }
 
-/** The archive stamp, only on archived records, so a live record's metadata is unchanged. */
+/**
+ * The archive stamp, only on archived records, so a live record's metadata is
+ * unchanged. A chunk carries its source note's stamp, when that note is archived.
+ */
 function archiveMetadata(row: {
-  archived_at: string | null;
-  archived_by: string | null;
-  archive_reason: string | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }): Record<string, unknown> {
   if (!row.archived_at) return {};
-  return { archived_at: row.archived_at, archived_by: row.archived_by, archive_reason: row.archive_reason };
+  return {
+    archived_at: row.archived_at,
+    archived_by: row.archived_by ?? null,
+    archive_reason: row.archive_reason ?? null,
+  };
 }
 
 function factFragment(fact: Fact, extra: Record<string, unknown> = {}): MemoryFragment {
@@ -570,6 +575,7 @@ function chunkFragment(chunk: MemoryChunk, extra: Record<string, unknown> = {}):
       created_at: chunk.created_at,
       project_id: chunk.project_id,
       ...chunk.metadata,
+      ...archiveMetadata(chunk),
       ...extra,
     },
   };

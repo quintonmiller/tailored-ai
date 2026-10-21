@@ -178,12 +178,13 @@ export interface PreludeContext {
 }
 
 export interface ListQuery {
-  scope?: string | string[];                          // also `project:*` (every project); `agent:<name>` = own + unowned
+  scope?: string | string[];                          // `agent:<name>` = own + unowned
   tags?: string[];
   kind?: string;
   pinned?: boolean;
   expiringBefore?: string;
   includeArchived?: boolean;
+  allProjects?: boolean;                              // every project, global included, whatever `scope` names
   limit?: number;
   offset?: number;
 }
@@ -200,13 +201,27 @@ promises three things:
   `includeArchived`, and `get` always — its `metadata` carries `archived_at`,
   plus `archived_by` and `archive_reason` when known. A live record carries no
   such keys.
+- An exact `wantStructured` lookup in `query` is a fetch by identity, like
+  `get`, so it returns an archived record too, marked. The facts tool relies on
+  it: `facts get` says a fact was forgotten, and `facts set` says it restored
+  one. A backend that hides archived records from this lookup makes `facts get`
+  answer that there is no such fact.
 - Archiving an archived record succeeds and keeps the first stamp.
+- `archive` returns false only for a record it can't archive. The tools then
+  treat the record as still live: `forget` falls back to `delete` and says the
+  delete was for good, or reports that it failed; `recall archive` reports that
+  it failed. Nothing reports a hide that didn't happen.
 
 A backend written before archiving existed leaves both verbs out and ignores
 `includeArchived`, and nothing breaks: `recall forget` and `facts forget` fall
 back to `delete` and say in their reply that the delete was for good; `recall
 archive` / `unarchive` refuse; the HTTP archive routes answer `501`. Nothing
 reports a hide that didn't happen.
+
+"Every project" (the Memory page with no project chosen) travels as
+`allProjects: true` beside a `global` scope, not as a scope token, so a backend
+that doesn't know the field lists global records, as it always did, rather
+than reading a literal project and listing nothing.
 
 Owner scoping rides the same open `scope` string: with an `agent:<name>`
 token, the built-in's `query` and `list` return that agent's notes plus

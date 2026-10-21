@@ -10,6 +10,7 @@ import {
   incrementNoteRef,
   keepNote,
   listNotes,
+  unarchiveNote,
 } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
@@ -294,9 +295,65 @@ describe("runMemorySweep", () => {
     const past = new Date(Date.now() - 1000).toISOString();
     const kept = createNote(db, { content: "the door code", project_id: "p", ttl_at: past, importance: 0.1 });
     keepNote(db, kept.id, "needed every visit");
+    // Kept under the old name: `archive` set the flag and left the TTL.
+    const old = createNote(db, { content: "the bin day", project_id: "p", ttl_at: past, importance: 0.1 });
+    db.prepare("UPDATE notes SET archival = 1 WHERE id = ?").run(old.id);
+
     const report = runMemorySweep(db);
     expect(report.archivedExpired).toBe(0);
     expect(getNote(db, kept.id)).toMatchObject({ kept: true, archived_at: null });
+    expect(getNote(db, old.id)).toMatchObject({ kept: true, archived_at: null });
+  });
+
+  // Keeping a note has to keep it readable too. The sweep skipping it was no
+  // use while every reader dropped it the moment its TTL passed.
+  it("a kept note never expires, so every reader still has it after its TTL", async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const kept = createNote(db, {
+      content: "the gate code is 4471",
+      ttl_at: new Date(Date.now() + 1000).toISOString(),
+    });
+    keepNote(db, kept.id, "needed every visit");
+    expect(getNote(db, kept.id)?.ttl_at).toBeNull();
+    // A note kept under the old name still has its TTL; it reads as unexpired.
+    const old = createNote(db, { content: "the gate is stiff", ttl_at: past });
+    db.prepare("UPDATE notes SET archival = 1 WHERE id = ?").run(old.id);
+
+    const ids = [kept.id, old.id].sort();
+    expect(
+      listNotes(db, { excludeExpired: true })
+        .map((n) => n.id)
+        .sort(),
+    ).toEqual(ids);
+    expect((await backend.list({})).map((f) => f.id?.slice("note:".length)).sort()).toEqual(ids);
+    const q = await new RecallTool(db).execute({ action: "query", query: "gate", limit: 10 }, makeCtx());
+    expect(q.output).toContain(kept.id);
+    expect(q.output).toContain(old.id);
+  });
+
+  // The sweep archives notes because they expired. Restoring one with its old
+  // TTL left it hidden from every reader and out of the archive view, and the
+  // next sweep archived it again.
+  it("a note the sweep archived, once restored, is back for good", async () => {
+    const swept = createNote(db, {
+      content: "compare ferry times",
+      ttl_at: new Date(Date.now() - 1000).toISOString(),
+    });
+    expect(runMemorySweep(db).archivedExpired).toBe(1);
+    expect(await backend.unarchive(`note:${swept.id}`)).toBe(true);
+
+    expect(getNote(db, swept.id)).toMatchObject({ archived_at: null, ttl_at: null });
+    expect((await backend.list({})).map((f) => f.id)).toContain(`note:${swept.id}`);
+    const q = await new RecallTool(db).execute({ action: "query", query: "ferry" }, makeCtx());
+    expect(q.output).toContain(swept.id);
+    expect(runMemorySweep(db).archivedExpired).toBe(0);
+  });
+
+  it("restoring keeps a TTL that hasn't passed", () => {
+    const ttl = new Date(Date.now() + 86_400_000).toISOString();
+    const n = createNote(db, { content: "x", ttl_at: ttl });
+    archiveNote(db, n.id);
+    expect(unarchiveNote(db, n.id)?.ttl_at).toBe(ttl);
   });
 
   it("leaves an archived note's stamp alone on the next sweep", () => {
@@ -385,6 +442,14 @@ describe("RecallTool promote action", () => {
     await tool.execute({ action: "promote", id: n.id }, makeCtx());
     const reidx = await tool.execute({ action: "promote", id: n.id, force: true }, makeCtx());
     expect(reidx.output).toMatch(/promoted note_/);
+  });
+
+  it("takes the note:<id> form query shows for a promoted note", async () => {
+    const tool = new RecallTool(db, { getEmbedder: () => toyEmbedder() });
+    const n = createNote(db, { content: "promote me", project_id: "p" });
+    const res = await tool.execute({ action: "promote", id: `note:${n.id}` }, makeCtx());
+    expect(res.output).toMatch(/promoted note:note_[a-f0-9]{8} → \d+ chunks/);
+    expect(listChunksBySource(db, `note:${n.id}`).length).toBeGreaterThan(0);
   });
 
   it("returns no-note marker for unknown id", async () => {

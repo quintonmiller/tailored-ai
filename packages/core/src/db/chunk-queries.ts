@@ -11,6 +11,14 @@ export interface MemoryChunk {
   embed_model: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
+  /**
+   * The source note's archive stamp. A chunk has no archive state of its own,
+   * so this is set only on a chunk of an archived note, which only a read with
+   * `includeArchived` returns: it comes back marked like the note would.
+   */
+  archived_at?: string;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }
 
 export interface MemoryChunkInput {
@@ -31,6 +39,10 @@ interface ChunkRow {
   embed_model: string | null;
   metadata: string;
   created_at: string;
+  /** Joined from the source note by the visibility reads; absent elsewhere. */
+  note_archived_at?: string | null;
+  note_archived_by?: string | null;
+  note_archive_reason?: string | null;
 }
 
 function rowToChunk(row: ChunkRow): MemoryChunk {
@@ -49,8 +61,22 @@ function rowToChunk(row: ChunkRow): MemoryChunk {
     embed_model: row.embed_model,
     metadata,
     created_at: row.created_at,
+    ...(row.note_archived_at
+      ? {
+          archived_at: row.note_archived_at,
+          archived_by: row.note_archived_by ?? null,
+          archive_reason: row.note_archive_reason ?? null,
+        }
+      : {}),
   };
 }
+
+/** What a chunk read selects: the chunk, plus its source note's archive stamp. */
+const VISIBLE_COLUMNS =
+  "c.*, n.archived_at AS note_archived_at, n.archived_by AS note_archived_by, n.archive_reason AS note_archive_reason";
+
+/** The source note of a chunk promoted from one; no row for a KB chunk or a deleted note. */
+const NOTE_JOIN = "LEFT JOIN notes n ON substr(c.source, 1, 5) = 'note:' AND n.id = substr(c.source, 6)";
 
 export function createChunk(db: Database.Database, input: MemoryChunkInput): MemoryChunk {
   const id = `mc_${randomUUID().slice(0, 8)}`;
@@ -63,8 +89,11 @@ export function createChunk(db: Database.Database, input: MemoryChunkInput): Mem
   return getChunk(db, id)!;
 }
 
+/** One chunk by id, whatever its note's state, marked when that note is archived. */
 export function getChunk(db: Database.Database, id: string): MemoryChunk | null {
-  const row = db.prepare("SELECT * FROM memory_chunks WHERE id = ?").get(id) as ChunkRow | undefined;
+  const row = db.prepare(`SELECT ${VISIBLE_COLUMNS} FROM memory_chunks c ${NOTE_JOIN} WHERE c.id = ?`).get(id) as
+    | ChunkRow
+    | undefined;
   return row ? rowToChunk(row) : null;
 }
 
@@ -121,9 +150,7 @@ function visibleChunks(v: ChunkVisibility, extra: string[] = []): { sql: string;
     params.push(v.agent);
   }
   return {
-    sql: `FROM memory_chunks c
-          LEFT JOIN notes n ON substr(c.source, 1, 5) = 'note:' AND n.id = substr(c.source, 6)
-          WHERE ${clauses.join(" AND ")}`,
+    sql: `FROM memory_chunks c ${NOTE_JOIN} WHERE ${clauses.join(" AND ")}`,
     params,
   };
 }
@@ -149,7 +176,7 @@ export function listChunks(
 ): MemoryChunk[] {
   const { sql, params } = visibleChunks(opts);
   const rows = db
-    .prepare(`SELECT c.* ${sql} ORDER BY c.created_at DESC, c.rowid DESC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT ${VISIBLE_COLUMNS} ${sql} ORDER BY c.created_at DESC, c.rowid DESC LIMIT ? OFFSET ?`)
     .all(...params, opts.limit ?? 100, opts.offset ?? 0) as ChunkRow[];
   return rows.map(rowToChunk);
 }
@@ -175,7 +202,7 @@ export function semanticSearch(
   const minScore = opts.minScore ?? 0;
 
   const { sql, params } = visibleChunks(opts, ["c.embedding IS NOT NULL"]);
-  const rows = db.prepare(`SELECT c.* ${sql}`).all(...params) as ChunkRow[];
+  const rows = db.prepare(`SELECT ${VISIBLE_COLUMNS} ${sql}`).all(...params) as ChunkRow[];
 
   const hits: ChunkSearchHit[] = [];
   for (const row of rows) {

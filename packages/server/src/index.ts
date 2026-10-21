@@ -766,14 +766,16 @@ export function createServer(opts: ServerOptions) {
     // notes-table sizes; revisit if a remote backend ships paginated list.
     //
     // ?project=global → global notes only. Omitted → every project, which is
-    // `project:*`: a scope with no project token means global to a backend,
-    // so leaving it out used to show only global notes.
+    // `allProjects`: a scope with no project token means global to a backend,
+    // so leaving it out used to show only global notes. A backend that
+    // doesn't know the field still gets `global` and lists what it used to.
     const scope = buildScope({
-      projectId: project === undefined ? "*" : project === "global" ? undefined : project,
+      projectId: project === "global" ? undefined : project,
       agent: agent || undefined,
     });
     const fragments = await backend.list({
       scope,
+      allProjects: project === undefined,
       kind: "note",
       tags: tag ? [tag] : undefined,
       includeArchived,

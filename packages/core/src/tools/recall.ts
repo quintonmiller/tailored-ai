@@ -15,7 +15,7 @@ import { formatHits, recallQueryAsync, type Tier } from "./recall-query.js";
  *   - note       Write a new short-term note. Tags / TTL / importance optional.
  *   - list       Plain unranked list of recent notes.
  *   - promote    Index a note for semantic search.
- *   - keep       Exempt a note from the TTL sweep (reason required).
+ *   - keep       Make a note never expire (reason required).
  *   - archive    Hide a note; `forget` is the same thing. Reversible.
  *   - unarchive  Bring an archived note back.
  *
@@ -37,7 +37,7 @@ export class RecallTool implements Tool {
         type: "string",
         enum: ["query", "note", "list", "promote", "keep", "archive", "forget", "unarchive"],
         description:
-          "query: ranked search. note: write prose. list: show recent notes. promote: clone a note into long-term semantic memory. keep: never sweep this note (needs reason). archive or forget: hide a note; unarchive brings it back.",
+          "query: ranked search. note: write prose. list: show recent notes. promote: clone a note into long-term semantic memory. keep: this note never expires (needs reason). archive or forget: hide a note; unarchive brings it back.",
       },
       query: {
         type: "string",
@@ -217,7 +217,7 @@ export class RecallTool implements Tool {
       };
     }
     const force = args.force === true;
-    const result = await promoteNote(this.db, embedder, id, {
+    const result = await promoteNote(this.db, embedder, bareNoteId(id), {
       force,
       model: this.embedModel,
     });
@@ -307,9 +307,7 @@ export class RecallTool implements Tool {
     }
     const reason = (typeof args.reason === "string" && args.reason.trim()) || defaultReason;
     const backend = await this.getMemoryBackend!();
-    // Accept both the prefixed id we return today (`note:<id>`) and the bare
-    // SQLite note id older sessions may still reference.
-    const candidates = id.startsWith("note:") ? [id] : [`note:${id}`, id];
+    const { candidates, found } = await findNote(backend, id);
 
     if (!backend.archive) {
       if (action === "archive" || !backend.delete) {
@@ -329,7 +327,18 @@ export class RecallTool implements Tool {
         return { success: true, output: `archived ${id}${why} — action=unarchive brings it back` };
       }
     }
-    return { success: true, output: `(no note with id ${id})` };
+    if (!found) return { success: true, output: `(no note with id ${id})` };
+    // The note is there but this backend won't archive it. `forget` still has
+    // to make it go, as it did before archiving existed; `archive` says it
+    // failed rather than let the agent think the note is hidden.
+    if (action === "forget" && backend.delete) {
+      for (const candidate of candidates) {
+        if (await backend.delete(candidate)) {
+          return { success: true, output: `deleted ${id} for good (this memory backend couldn't archive it)` };
+        }
+      }
+    }
+    return { success: false, output: "", error: `the active memory backend couldn't ${action} ${id}` };
   }
 
   private async unarchive(args: Record<string, unknown>): Promise<ToolResult> {
@@ -341,10 +350,11 @@ export class RecallTool implements Tool {
     if (!backend.unarchive) {
       return { success: false, output: "", error: "the active memory backend can't unarchive notes" };
     }
-    const candidates = id.startsWith("note:") ? [id] : [`note:${id}`, id];
+    const { candidates, found } = await findNote(backend, id);
     for (const candidate of candidates) {
       if (await backend.unarchive(candidate)) return { success: true, output: `restored ${id}` };
     }
+    if (found) return { success: false, output: "", error: `the active memory backend couldn't restore ${id}` };
     return { success: true, output: `(no note with id ${id})` };
   }
 
@@ -362,13 +372,13 @@ export class RecallTool implements Tool {
           "reason is required for action=keep — one short line on why this note is worth keeping forever. Forces selectivity.",
       };
     }
-    const note = keepNote(this.db, id, reason);
+    const note = keepNote(this.db, bareNoteId(id), reason);
     if (!note) {
       return { success: false, output: "", error: `no note with id ${id}` };
     }
     // Keeping doesn't unhide: say so rather than let the agent think it's back.
     const hidden = note.archived_at ? " It is archived; action=unarchive brings it back." : "";
-    return { success: true, output: `kept ${id} — "${reason}"; the sweep will leave it alone.${hidden}` };
+    return { success: true, output: `kept ${id} — "${reason}"; it no longer expires.${hidden}` };
   }
 
   private async list(
@@ -394,6 +404,32 @@ export class RecallTool implements Tool {
     }
     return { success: true, output: fragments.map(formatNoteFragment).join("\n") };
   }
+}
+
+/**
+ * The ids a note may go by in the backend: the prefixed one we hand out
+ * (`note:<id>`), then the bare SQLite id older sessions may still hold.
+ * `found` is true only when the backend's `get` confirmed the note exists.
+ * Otherwise every form stays a candidate, as before this lookup existed: a
+ * backend with no `get`, or one whose `get` doesn't cover notes, can't say.
+ */
+async function findNote(backend: MemoryBackend, id: string): Promise<{ candidates: string[]; found: boolean }> {
+  const forms = id.startsWith("note:") ? [id] : [`note:${id}`, id];
+  if (backend.get) {
+    for (const form of forms) {
+      if (await backend.get(form)) return { candidates: [form], found: true };
+    }
+  }
+  return { candidates: forms, found: false };
+}
+
+/**
+ * The SQLite note id, for the actions that go to SQLite directly. `query`
+ * shows a promoted note's chunk as `note:<id>`, and the other actions take
+ * that form, so a model that copies it gets the same answer here.
+ */
+function bareNoteId(id: string): string {
+  return id.startsWith("note:") ? id.slice("note:".length) : id;
 }
 
 function scopeStr(projectId: string | null, agentName?: string | null, sessionId?: string | null): string {

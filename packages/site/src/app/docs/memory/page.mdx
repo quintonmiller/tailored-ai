@@ -34,9 +34,11 @@ Four tools touch these stores:
 - **`core_memory`**: append, replace, read, or clear sections of the
   always-injected core memory text. Smaller surface, narrower purpose.
 - **`recall`**: structured tier. Short notes with tags and timestamps,
-  surfaced by embedding similarity. Verbs: `note`, `query`, `search`,
-  `list`, `delete`.
-- **`facts`**: typed structured facts. `set`, `get`, `delete`, `query`.
+  surfaced by keyword and embedding similarity. Verbs: `note`, `query`,
+  `list`, `promote`, `keep` (never expires), `archive` or `forget` (hide,
+  restorably), `unarchive`.
+- **`facts`**: typed structured facts. `set`, `get`, `list`, `search`,
+  `forget` (hide; setting the key again restores it).
 
 ### Usage
 
@@ -79,10 +81,12 @@ Treat it as the agent's working scratchpad.
 
 The autopilot worker runs two background jobs against memory:
 
-- **Memory sweep**, daily at 03:14 local. Walks `notes`. Expires anything
-  past its TTL (default 30 days) unless it's been read recently. Promotes
-  frequently-referenced notes into `chunks`. Logs to the agent log:
-  `[autopilot] Memory sweep: extended N, deleted N, remaining notes=…,
+- **Memory sweep**, daily at 03:14 local. Walks `notes`. Archives
+  anything past its TTL (default 14 days) unless it's kept or has
+  importance 0.8 or more; a note read often gets its TTL extended first.
+  Archived means hidden, not deleted: `recall(action="unarchive")` or the
+  Memory page's Restore brings a note back. Logs to the agent log:
+  `[autopilot] Memory sweep: extended N, archived N, remaining notes=…,
   chunks=…`.
 - **Promotion**, inline. Whenever a note is searched-and-returned, its
   access timestamp gets bumped. The sweep uses that for keep/discard.
@@ -120,8 +124,9 @@ POST /api/memory/search
 GET  /api/memory/chunks/:id
 ```
 
-The web UI's Memory page shows recent notes, lets you delete, and
-exposes search.
+The web UI's Memory page shows recent notes and facts, lets you archive,
+restore or delete them, and exposes search. "Show archived" lists what
+agents and the sweep archived, with when and why.
 
 ## Embedding provider
 

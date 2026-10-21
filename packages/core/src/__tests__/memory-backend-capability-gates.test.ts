@@ -6,8 +6,11 @@
 
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { findFact } from "../db/fact-queries.js";
+import { createNote, getNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import type { MemoryBackend } from "../memory/interface.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import { CoreMemoryTool } from "../tools/core-memory.js";
 import { FactsTool } from "../tools/facts.js";
 import type { ToolContext } from "../tools/interface.js";
@@ -121,6 +124,61 @@ describe("Phase 3: tool capability gating", () => {
       expect(res.success).toBe(true);
       expect(res.output).toMatch(/deleted person:alice\/city for good/);
       expect(deleted).toEqual(["fact:f1"]);
+    });
+  });
+
+  // A backend may archive some records and not others: `archive` returns false
+  // for one it can't. `forget` must not answer "nothing to forget" and leave
+  // the record live; it deletes when it can and says it failed when it can't.
+  describe("a backend whose archive refuses a record that exists", () => {
+    function refusingBackend(withDelete: boolean): MemoryBackend {
+      const inner = new SqliteMemoryBackend(db);
+      return {
+        id: "refusing",
+        write: (c, h) => inner.write(c, h),
+        query: (q) => inner.query(q),
+        get: (id) => inner.get(id),
+        archive: async () => false,
+        unarchive: async () => false,
+        ...(withDelete ? { delete: (id: string) => inner.delete(id) } : {}),
+      };
+    }
+
+    it("FactsTool.forget deletes it instead, and says so", async () => {
+      const tool = new FactsTool(db, { getMemoryBackend: async () => refusingBackend(true) });
+      await tool.execute({ action: "set", category: "person", entity: "alice", key: "city", value: "Lisbon" }, ctx());
+      const res = await tool.execute({ action: "forget", category: "person", entity: "alice", key: "city" }, ctx());
+      expect(res.success).toBe(true);
+      expect(res.output).toMatch(/deleted person:alice\/city for good/);
+      expect(findFact(db, "person", "alice", "city", null)).toBeNull();
+    });
+
+    it("FactsTool.forget errors when it can't delete either, leaving nothing claimed", async () => {
+      const tool = new FactsTool(db, { getMemoryBackend: async () => refusingBackend(false) });
+      await tool.execute({ action: "set", category: "person", entity: "alice", key: "city", value: "Lisbon" }, ctx());
+      const res = await tool.execute({ action: "forget", category: "person", entity: "alice", key: "city" }, ctx());
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch(/couldn't forget person:alice\/city/);
+    });
+
+    it("RecallTool.forget deletes it instead; archive and unarchive say they failed", async () => {
+      const tool = new RecallTool(db, { getMemoryBackend: async () => refusingBackend(true) });
+      const a = createNote(db, { content: "a" });
+      const archived = await tool.execute({ action: "archive", id: a.id }, ctx());
+      expect(archived.success).toBe(false);
+      expect(archived.error).toMatch(/couldn't archive/);
+      const restored = await tool.execute({ action: "unarchive", id: a.id }, ctx());
+      expect(restored.success).toBe(false);
+      expect(restored.error).toMatch(/couldn't restore/);
+      expect(getNote(db, a.id)).not.toBeNull();
+
+      const forgot = await tool.execute({ action: "forget", id: a.id }, ctx());
+      expect(forgot.success).toBe(true);
+      expect(forgot.output).toMatch(/deleted .* for good/);
+      expect(getNote(db, a.id)).toBeNull();
+      // A note that isn't there is still a plain "no note".
+      const missing = await tool.execute({ action: "archive", id: "note_nope" }, ctx());
+      expect(missing.output).toMatch(/no note with id/);
     });
   });
 

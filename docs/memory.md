@@ -11,7 +11,7 @@ Design: [memory-tiers.md](./memory-tiers.md). This doc captures the implementati
 - Note IDs: `note_<8-char-uuid>` format
 - Tags stored as JSON arrays, filtered via SQLite `json_each()`
 - TTLs stored as ISO 8601; compared via `datetime(ttl_at) > datetime('now')` to normalize formats
-- Default TTL: 14 days. Kept notes, and notes with `importance >= 0.8`, survive sweeps
+- Default TTL: 14 days. A kept note never expires (`keep` clears its TTL); notes with `importance >= 0.8` survive sweeps
 - Daily sweep schedule: `autopilot.memorySweepCron` (default `"14 3 * * *"`; empty string disables)
 - Project-scoped by default: `recall` reads and writes the session's active project (plus global notes, when reading) unless told otherwise; pass `project_id: "global"` for cross-project notes. It used to fall back to global when `project_id` was left out
 - `query` action accepts `tier: any|short|long` to scope retrieval to one tier
@@ -23,7 +23,10 @@ stays out of everything that loads context or searches — the pinned and
 relevance tiers of injection, `recall` `query` and `list`, semantic search,
 the `facts` tool's `list` and `search`, the briefing, the session summarizer's
 `recent_summary`, an exploratory agent's tick notes, auto-promotion, and the
-HTTP lists and counts. `unarchive` brings it back exactly as it was.
+HTTP lists and counts. `unarchive` brings it back as it was, except that a TTL
+which has already passed is cleared: otherwise a note the sweep archived would
+come back still expired, hidden from every reader, and be archived again by the
+next sweep.
 
 - **What agents remove, they archive.** `recall action="forget"` archives the
   note (reason `forgotten`, stamped with the agent's name) and tells the agent
@@ -38,8 +41,11 @@ HTTP lists and counts. `unarchive` brings it back exactly as it was.
 - **Chunks follow their note.** A chunk promoted from a note surfaces only
   while that note exists and is live: archive the note and its chunks drop out
   of semantic search; restore it and they're back. The rule is a join on the
-  note, so it can't drift. KB chunks are unaffected. An archived note is never
-  auto-promoted, and `promote` refuses one.
+  note, so it can't drift. A chunk of an archived note that `includeArchived`
+  brings back carries the note's `archived_at`, `archived_by` and
+  `archive_reason`, so recall prints it as archived too. KB chunks are
+  unaffected. An archived note is never auto-promoted, and `promote` refuses
+  one.
 - **Asking for archived.** `includeArchived: true` on `listNotes`,
   `listPinnedNotes`, `listFacts`, `semanticSearch`, `countChunks`, the recall
   tool's `query` and `list`, the facts tool's `list` and `search`, and
@@ -47,17 +53,20 @@ HTTP lists and counts. `unarchive` brings it back exactly as it was.
   with `archived_at`, `archived_by` and `archive_reason`. Fetching one item by
   id — `getNote`, `GET /api/memory/notes/:id`, `facts get`,
   `GET /api/facts/:category/:entity/:key` — works on an archived item and says
-  it's archived.
+  it's archived. So does the backend's exact `wantStructured` lookup, which is
+  how `facts get` and `facts set` see a forgotten fact.
 
 Storage: `archived_at` (NULL means live), `archived_by` and `archive_reason`
 on `notes` and `facts`, the same three columns rooms use. Partial indexes over
 live rows (`idx_notes_live`, `idx_facts_live`) serve the default reads.
 
 **`keep` is not `archive`.** `recall action="keep"` (reason required) marks a
-note kept: the sweep never archives it. Before this, that action was called
-`archive` and set `notes.archival = 1`, which nothing read — a "kept" note was
-swept like any other. The column still holds the flag (exposed as `Note.kept`),
-and any old row with `archival = 1` reads as kept, never as hidden.
+note kept: it never expires. `keep` clears the note's TTL, so the sweep leaves
+it alone and no reader drops it for being past its TTL. Before this, that
+action was called `archive` and set `notes.archival = 1`, which nothing read —
+a "kept" note was swept like any other. The column still holds the flag
+(exposed as `Note.kept`), and any old row with `archival = 1` reads as kept,
+never as hidden, and as unexpired even if it still carries a TTL.
 
 Core memory and the markdown memory files have no archive: core memory is
 small, always loaded and edited in place.

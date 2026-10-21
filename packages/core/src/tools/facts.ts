@@ -239,11 +239,16 @@ export class FactsTool implements Tool {
         output: removed ? `deleted ${label} for good (this memory backend can't archive)` : "(no fact to forget)",
       };
     }
-    const archived = await backend.archive(fragment.id, { by: context.agentName, reason: "forgotten" });
-    return {
-      success: true,
-      output: archived ? `forgot ${label} — set it again to restore it` : "(no fact to forget)",
-    };
+    if (await backend.archive(fragment.id, { by: context.agentName, reason: "forgotten" })) {
+      return { success: true, output: `forgot ${label} — set it again to restore it` };
+    }
+    // The fact is there (the lookup just found it) but this backend won't
+    // archive it. `forget` still has to make it go, as it did before archiving
+    // existed, or it would stay in every prompt while the agent thought it gone.
+    if (backend.delete && (await backend.delete(fragment.id))) {
+      return { success: true, output: `deleted ${label} for good (this memory backend couldn't archive it)` };
+    }
+    return { success: false, output: "", error: `the active memory backend couldn't forget ${label}` };
   }
 
   private async search(

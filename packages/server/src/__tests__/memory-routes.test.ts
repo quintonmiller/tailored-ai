@@ -22,6 +22,7 @@ import {
   initDatabase,
   listNotes,
   type MemoryBackend,
+  type MemoryListQuery,
   newSession,
   recordTokenUsage,
   registerMemoryBackendFactory,
@@ -142,6 +143,33 @@ describe("GET /api/memory/notes", () => {
 
     const alpha = await call("GET", "/api/memory/notes?project=alpha");
     expect((alpha.json as unknown as NoteJson[]).map((n) => n.content).sort()).toEqual(["everywhere", "in alpha"]);
+  });
+
+  // "Every project" travels as a field an older backend can ignore. Had it
+  // been a scope token, a backend that reads `project:<id>` literally would
+  // look for a project named "*" and the Memory page would show nothing.
+  it("a backend that doesn't know allProjects still lists global notes, as it used to", async () => {
+    const seen: MemoryListQuery[] = [];
+    registerMemoryBackendFactory("no-all-projects-test", (runtime) => {
+      const inner = new SqliteMemoryBackend(runtime.db);
+      const backend: MemoryBackend = {
+        id: "no-all-projects-test",
+        write: (c, h) => inner.write(c, h),
+        query: (q) => inner.query(q),
+        list: ({ allProjects: _ignored, ...q }) => {
+          seen.push(q);
+          return inner.list(q);
+        },
+      };
+      return backend;
+    });
+    start(buildConfig({ backend: { provider: "no-all-projects-test" } } as AgentConfig["memory"]));
+    createNote(db, { content: "in alpha", project_id: "alpha" });
+    createNote(db, { content: "everywhere" });
+
+    const res = await call("GET", "/api/memory/notes");
+    expect((res.json as unknown as NoteJson[]).map((n) => n.content)).toEqual(["everywhere"]);
+    expect(seen[0]?.scope).toBe("global");
   });
 
   it("leaves archived notes out unless includeArchived=1, which marks them", async () => {

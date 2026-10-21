@@ -262,6 +262,34 @@ describe("RecallTool", () => {
     expect(live.output).toBe("(no notes)");
   });
 
+  // Keyword and semantic hits for one note don't collapse, so the archived
+  // note's chunk is printed beside it: it has to say archived as well.
+  it("query with includeArchived prints a chunk of an archived note as archived", async () => {
+    const embedder = {
+      id: "toy",
+      name: "toy",
+      defaultModel: "toy",
+      defaultDim: 2,
+      embed: async (inputs: string[]) => ({
+        vectors: inputs.map(() => new Float32Array([1, 0])),
+        model: "toy",
+        dim: 2,
+      }),
+    };
+    const tool = new RecallTool(db, { getEmbedder: () => embedder });
+    const n = createNote(db, { content: "the plan for the harbour" });
+    createChunk(db, {
+      source: `note:${n.id}`,
+      content: "the plan for the harbour",
+      embedding: new Float32Array([1, 0]),
+    });
+    archiveNote(db, n.id);
+
+    // "zebra" matches nothing by keyword, so the only hit is the chunk.
+    const res = await tool.execute({ action: "query", query: "zebra", includeArchived: true }, makeCtx());
+    expect(res.output).toMatch(new RegExp(`note:${n.id} \\(archived \\d{4}-\\d{2}-\\d{2}\\)`));
+  });
+
   it("a chunk whose note is gone never surfaces, even with includeArchived", () => {
     const vec = new Float32Array([1, 0]);
     createChunk(db, { source: "note:note_gone", content: "orphan", project_id: "p", embedding: vec });
@@ -413,6 +441,14 @@ describe("RecallTool", () => {
       const res = await tool.execute({ action: "keep", reason: "x" }, makeCtx());
       expect(res.success).toBe(false);
       expect(res.error).toMatch(/id is required/);
+    });
+
+    it("takes the note:<id> form that archive takes and query shows", async () => {
+      const tool = new RecallTool(db);
+      const created = createNote(db, { content: "x" });
+      const res = await tool.execute({ action: "keep", id: `note:${created.id}`, reason: "y" }, makeCtx());
+      expect(res.success).toBe(true);
+      expect(getNote(db, created.id)?.kept).toBe(true);
     });
 
     it("errors on unknown id", async () => {

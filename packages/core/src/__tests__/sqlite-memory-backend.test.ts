@@ -269,6 +269,32 @@ describe("SqliteMemoryBackend — archive", () => {
     ]);
   });
 
+  // A chunk has no archive state of its own, but when includeArchived brings
+  // back a chunk of an archived note it must say so, or recall prints the
+  // archived note's text as live memory next to the marked note.
+  it("a chunk of an archived note comes back marked: query, list and get", async () => {
+    const { id } = await backend.write({ text: "promoted note" }, { scope: "project:p" });
+    const vector = Float32Array.from([1, 0, 0]);
+    const chunk = await backend.write(
+      { text: "promoted note" },
+      { kind: "chunk", scope: "project:p", vector, sourceUri: id },
+    );
+    expect((await backend.get(chunk.id))?.metadata).not.toHaveProperty("archived_at");
+
+    await backend.archive(id, { by: "planner", reason: "superseded" });
+    const stamp = { archived_by: "planner", archive_reason: "superseded" };
+    const hits = await backend.query({ vector, scope: "project:p", includeArchived: true, limit: 10 });
+    const hit = hits.find((h) => h.metadata?.source === id);
+    expect(hit?.metadata).toMatchObject(stamp);
+    expect(typeof hit?.metadata?.archived_at).toBe("string");
+    const listed = await backend.list({ kind: "chunk", scope: "project:p", includeArchived: true });
+    expect(listed[0]?.metadata).toMatchObject(stamp);
+    expect((await backend.get(chunk.id))?.metadata).toMatchObject(stamp);
+
+    await backend.unarchive(id);
+    expect((await backend.get(chunk.id))?.metadata).not.toHaveProperty("archived_at");
+  });
+
   it("delete is a real delete and takes the note's chunks with it", async () => {
     const { id } = await backend.write({ text: "gone" }, { scope: "project:p" });
     await backend.write({ text: "gone" }, { kind: "chunk", scope: "project:p", sourceUri: id });
@@ -279,18 +305,22 @@ describe("SqliteMemoryBackend — archive", () => {
   });
 });
 
-describe("SqliteMemoryBackend — project:* scope", () => {
+describe("SqliteMemoryBackend — allProjects", () => {
   it("lists and counts across every project, where no project token means global", async () => {
     await backend.write({ text: "in a" }, { scope: "project:a" });
     await backend.write({ text: "in b" }, { scope: "project:b" });
     await backend.write({ text: "global" }, { scope: "global" });
-    expect((await backend.list({ scope: "project:*" })).map((h) => h.text).sort()).toEqual(["global", "in a", "in b"]);
-    expect(await backend.count({ scope: "project:*" })).toBe(3);
+    const every = { scope: "global", allProjects: true };
+    expect((await backend.list(every)).map((h) => h.text).sort()).toEqual(["global", "in a", "in b"]);
+    expect(await backend.count(every)).toBe(3);
     expect((await backend.list({ scope: "global" })).map((h) => h.text)).toEqual(["global"]);
   });
 
-  it("a write with project:* lands in global rather than nowhere", async () => {
-    const { id } = await backend.write({ text: "stray" }, { scope: "project:*" });
-    expect(getNote(db, id.slice("note:".length))?.project_id).toBeNull();
+  it("wins over a project in the scope, and keeps the agent token", async () => {
+    await backend.write({ text: "planner's" }, { scope: "project:a agent:planner" });
+    await backend.write({ text: "writer's" }, { scope: "project:b agent:writer" });
+    await backend.write({ text: "nobody's" }, { scope: "global" });
+    const listed = await backend.list({ scope: "project:a agent:planner", allProjects: true });
+    expect(listed.map((h) => h.text).sort()).toEqual(["nobody's", "planner's"]);
   });
 });
