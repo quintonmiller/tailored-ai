@@ -47,12 +47,11 @@ const ok = (output: string): ToolResult => ({ success: true, output });
 const fail = (error: string): ToolResult => ({ success: false, output: "", error });
 
 /**
- * What a tool says once the directory is turned off. A reload builds the tool
- * set before it reloads plugins, so an agent can hold these tools for one
- * reload after the plugin is gone.
+ * What a tool says once the directory is turned off. A reload takes the tools
+ * away with the plugin, so only a call already running when it went answers
+ * this.
  */
-export const TURNED_OFF =
-  "The directory is turned off, so this tool does nothing now. It goes away at the next reload or restart.";
+export const TURNED_OFF = "The directory is turned off, so this tool does nothing now.";
 
 function text(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
