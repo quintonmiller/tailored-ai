@@ -1642,6 +1642,12 @@ export interface MemoryNote {
   ref_count: number;
   created_at: string;
   ttl_at: string | null;
+  /** Never swept (`recall action="keep"`). */
+  kept?: boolean;
+  /** Set while the note is archived: hidden from agents until restored. */
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }
 
 export interface MemoryRecallHit {
@@ -1650,10 +1656,18 @@ export interface MemoryRecallHit {
   score: number;
   snippet: string;
   createdAt: string;
+  archivedAt?: string;
 }
 
 export interface MemoryStats {
-  counts: { notes: number; facts: number; sessionSummaries: number; chunks: number };
+  counts: {
+    notes: number;
+    facts: number;
+    sessionSummaries: number;
+    chunks: number;
+    archivedNotes?: number;
+    archivedFacts?: number;
+  };
   topReferenced: Array<{
     id: string;
     content: string;
@@ -1677,6 +1691,9 @@ export interface FactRow {
   project_id: string | null;
   created_at: string;
   updated_at: string;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }
 
 export function fetchFacts(params: {
@@ -1684,17 +1701,39 @@ export function fetchFacts(params: {
   category?: string;
   search?: string;
   limit?: number;
+  includeArchived?: boolean;
 }): Promise<{ facts: FactRow[] }> {
   const qs = new URLSearchParams();
   if (params.project_id !== undefined && params.project_id !== null) qs.set("project_id", params.project_id);
   if (params.category) qs.set("category", params.category);
   if (params.search) qs.set("search", params.search);
   if (params.limit) qs.set("limit", String(params.limit));
+  if (params.includeArchived) qs.set("includeArchived", "1");
   return fetch(`/api/facts${qs.toString() ? `?${qs}` : ""}`).then((r) => r.json());
 }
 
 export function deleteFact(id: string): Promise<{ ok: boolean }> {
   return fetch(`/api/facts/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => r.json());
+}
+
+/** POST to an archive/unarchive route, throwing on anything but success. */
+function postArchive<T>(path: string, body?: { reason?: string }): Promise<T> {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  });
+}
+
+export function archiveFact(id: string, reason?: string): Promise<FactRow> {
+  return postArchive(`/api/facts/${encodeURIComponent(id)}/archive`, { reason });
+}
+
+export function unarchiveFact(id: string): Promise<FactRow> {
+  return postArchive(`/api/facts/${encodeURIComponent(id)}/unarchive`);
 }
 
 export function fetchMemoryNotes(params: {
@@ -1703,6 +1742,7 @@ export function fetchMemoryNotes(params: {
   search?: string;
   agent?: string;
   limit?: number;
+  includeArchived?: boolean;
 }): Promise<MemoryNote[]> {
   const qs = new URLSearchParams();
   if (params.project !== undefined && params.project !== null) qs.set("project", params.project);
@@ -1710,7 +1750,16 @@ export function fetchMemoryNotes(params: {
   if (params.search) qs.set("search", params.search);
   if (params.agent) qs.set("agent", params.agent);
   if (params.limit) qs.set("limit", String(params.limit));
+  if (params.includeArchived) qs.set("includeArchived", "1");
   return fetch(`/api/memory/notes?${qs}`).then((r) => r.json());
+}
+
+export function archiveMemoryNote(id: string, reason?: string): Promise<MemoryNote> {
+  return postArchive(`/api/memory/notes/${encodeURIComponent(id)}/archive`, { reason });
+}
+
+export function unarchiveMemoryNote(id: string): Promise<MemoryNote> {
+  return postArchive(`/api/memory/notes/${encodeURIComponent(id)}/unarchive`);
 }
 
 export function fetchMemoryStats(project?: string | "global" | null): Promise<MemoryStats> {
@@ -1786,7 +1835,7 @@ export function promoteMemoryNote(
 }
 
 export function runMemorySweepHttp(): Promise<{
-  deletedExpired: number;
+  archivedExpired: number;
   extendedTtl: number;
   remainingNotes: number;
   totalChunks: number;

@@ -18,7 +18,11 @@ export interface SummarizeSessionOptions {
   force?: boolean;
   /** Override TTL on the resulting note. Default 30 days. Pass 0 for no TTL. */
   ttlDays?: number;
-  /** Author of the summary. Default null (system). */
+  /**
+   * Whose summary this is. Recall then treats it like any of that agent's
+   * notes: theirs, not every agent's. Callers that know the session's agent
+   * pass `sessionAgent(db, sessionId)`. Default null (unowned, visible to all).
+   */
   agent?: string | null;
   /** Extra tags to add alongside `session-summary`. */
   tags?: string[];
@@ -56,9 +60,12 @@ export async function summarizeSession(
   if (messages.length < MIN_MESSAGES_TO_SUMMARIZE) return null;
 
   if (!opts.force) {
+    // An archived summary still counts: someone hid it, or the sweep retired
+    // it, and writing a fresh one would quietly undo that.
     const existing = listNotes(db, {
       session_id: sessionId,
       tag: SESSION_SUMMARY_TAG,
+      includeArchived: true,
       limit: 1,
     });
     if (existing.length > 0) return null;
@@ -111,6 +118,12 @@ export interface SweepIdleSessionsOptions {
   limit?: number;
   /** Forwarded to summarizeSession. */
   summarize?: SummarizeSessionOptions;
+  /**
+   * Who owns each session's summary, looked up per session; overrides
+   * `summarize.agent`. Pass `(id) => sessionAgent(db, id)` to give each
+   * summary to the agent that ran the session. Null leaves it unowned.
+   */
+  agentFor?: (sessionId: string) => string | null;
 }
 
 export interface SweepResult {
@@ -151,7 +164,8 @@ export async function sweepIdleSessions(
 
   for (const s of candidates) {
     try {
-      const res = await summarizeSession(db, s.id, provider, model, opts.summarize);
+      const summarize = opts.agentFor ? { ...opts.summarize, agent: opts.agentFor(s.id) } : opts.summarize;
+      const res = await summarizeSession(db, s.id, provider, model, summarize);
       if (res) out.summarized.push(res);
       else out.skipped.push(s.id);
     } catch (err) {

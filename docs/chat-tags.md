@@ -69,7 +69,7 @@ A week later when the user asks *"should I drive to the office or take transit?"
 ### Discipline rules
 
 - **Don't save** questions, hypotheticals, jokes, one-off task instructions, or anything already in memory. The agent may `recall(action:"query")` first if unsure.
-- **When in doubt, lower importance.** Unused notes get reaped naturally — `sweepExpiredNotes` deletes any note with `importance < 0.8` past its `ttl_at`.
+- **When in doubt, lower importance.** Unused notes get reaped naturally — `sweepExpiredNotes` archives (hides, restorably) any note with `importance < 0.8` past its `ttl_at` that isn't kept.
 - **Pinned is precious.** Reserve 0.95 + "pinned" for rules that should apply on every turn regardless of topic. The injection budget caps pinned at ~4 notes / 200 tokens; over-pinning crowds it.
 
 ### How recall stays bounded
@@ -94,5 +94,5 @@ A week later when the user asks *"should I drive to the office or take transit?"
 ### Curation
 
 - Manual: pin/unpin from the Memory page; agents can also `recall(action: "note", ...)` with the right tags.
-- Automatic: low-importance preferences TTL out in 14 days (`sweepExpiredNotes` keeps `importance >= 0.8`).
+- Automatic: low-importance preferences are archived 14 days on, when their TTL passes (`sweepExpiredNotes` skips kept notes and `importance >= 0.8`); `recall action="unarchive"` or the Memory page's Restore brings one back.
 - Future: a consolidation cron job could LLM-merge duplicate prefs into single rules.

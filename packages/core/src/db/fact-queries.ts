@@ -19,6 +19,10 @@ export interface Fact {
   project_id: string | null;
   created_at: string;
   updated_at: string;
+  /** When the fact was archived (hidden), or null while it is live. */
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
 }
 
 export interface FactInput {
@@ -45,8 +49,15 @@ export interface FactQuery {
    * project view sees its own facts + global ones.
    */
   includeGlobal?: boolean;
+  /** Also return archived facts. Off by default: archived means hidden. */
+  includeArchived?: boolean;
 }
 
+/**
+ * Set a fact. Setting the key of an archived fact restores it with the new
+ * value: the lookup deliberately includes archived rows, both because the key
+ * is unique and because saying it again is the plainest way to mean it again.
+ */
 export function upsertFact(db: Database.Database, input: FactInput): Fact {
   const entity = input.entity ?? "";
   const projectId = input.project_id ?? null;
@@ -62,7 +73,8 @@ export function upsertFact(db: Database.Database, input: FactInput): Fact {
   if (existing) {
     db.prepare(
       `UPDATE facts
-       SET value = ?, asof = ?, source = ?, confidence = ?, updated_at = datetime('now')
+       SET value = ?, asof = ?, source = ?, confidence = ?, updated_at = datetime('now'),
+           archived_at = NULL, archived_by = NULL, archive_reason = NULL
        WHERE id = ?`,
     ).run(
       input.value,
@@ -97,6 +109,11 @@ export function getFact(db: Database.Database, id: string): Fact | null {
   return row ?? null;
 }
 
+/**
+ * The fact at (category, entity, key), archived or not: this is a fetch by
+ * identity, so an archived fact comes back carrying its `archived_at` rather
+ * than looking absent. Lists and searches leave archived facts out.
+ */
 export function findFact(
   db: Database.Database,
   category: string,
@@ -146,6 +163,7 @@ export function listFacts(db: Database.Database, q: FactQuery = {}): Fact[] {
     const term = `%${q.search}%`;
     params.push(term, term, term, term);
   }
+  if (!q.includeArchived) clauses.push("archived_at IS NULL");
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = q.limit && q.limit > 0 ? `LIMIT ${Math.floor(q.limit)}` : "";
@@ -158,6 +176,29 @@ export function deleteFact(db: Database.Database, id: string): boolean {
   return res.changes > 0;
 }
 
+/**
+ * Hide a fact without deleting it. Idempotent: an archived fact keeps its
+ * first stamp. Returns the fact, or null when there is no such fact.
+ */
+export function archiveFact(
+  db: Database.Database,
+  id: string,
+  opts: { by?: string | null; reason?: string | null } = {},
+): Fact | null {
+  db.prepare(
+    `UPDATE facts SET archived_at = datetime('now'), archived_by = ?, archive_reason = ?
+      WHERE id = ? AND archived_at IS NULL`,
+  ).run(opts.by ?? null, opts.reason ?? null, id);
+  return getFact(db, id);
+}
+
+/** Bring an archived fact back. Null when there is no such fact. */
+export function unarchiveFact(db: Database.Database, id: string): Fact | null {
+  db.prepare("UPDATE facts SET archived_at = NULL, archived_by = NULL, archive_reason = NULL WHERE id = ?").run(id);
+  return getFact(db, id);
+}
+
+/** Delete the fact at (category, entity, key) for good. A person's delete; the `facts` tool archives. */
 export function forgetFact(
   db: Database.Database,
   category: string,

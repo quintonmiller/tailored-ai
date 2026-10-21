@@ -17,8 +17,9 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { newSession } from "../agent/session.js";
 import { SESSION_SUMMARY_TAG } from "../agent/summarize-session.js";
+import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemorySection } from "../db/core-memory-queries.js";
-import { createNote, listNotes } from "../db/note-queries.js";
+import { archiveNote, createNote, listNotes } from "../db/note-queries.js";
 import { saveMessage } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createPluginContext } from "../plugin-context.js";
@@ -130,6 +131,22 @@ describe("session-summarizer — sweep behavior", () => {
     expect(row?.content).toContain("owner asked about taxes");
   });
 
+  it("gives each summary to the agent that ran its session", async () => {
+    const { provider } = countingProvider("planned the move");
+    const runtime = makeRuntime(provider);
+    const planned = seedIdleSession({ key: "web:a", idleMinutes: 200 });
+    recordTokenUsage(db, { sessionId: planned.id, agent: "planner", promptTokens: 1, completionTokens: 1 });
+    seedIdleSession({ key: "web:b", idleMinutes: 200 });
+
+    await new SessionSummarizer({ runtime, config: { idleMinutes: 120 } }).runSweep();
+
+    const owners = listNotes(db, { tag: SESSION_SUMMARY_TAG }).map((n) => n.agent);
+    expect(owners.sort()).toEqual(["planner", null].sort());
+    // planner's summary is not composed into the default agent's recent_summary.
+    const row = getCoreMemorySection(db, { agent: "default", project_id: null }, "recent_summary");
+    expect(row?.content.split("\n")).toHaveLength(1);
+  });
+
   it("does not summarize sessions newer than idleMinutes", async () => {
     const { provider, calls } = countingProvider();
     const runtime = makeRuntime(provider);
@@ -231,6 +248,14 @@ describe("composeRecentSummary — composition + capping", () => {
     const out = composeRecentSummary(db, null, { count: 2, maxBytes: 600 });
     const lines = out.split("\n");
     expect(lines).toEqual(["- newest", "- middle"]);
+  });
+
+  it("leaves archived summaries out", () => {
+    seedSummaryNote("kept");
+    seedSummaryNote("retired");
+    const retired = listNotes(db, { tag: SESSION_SUMMARY_TAG }).find((n) => n.content === "retired")!;
+    archiveNote(db, retired.id, { by: "sweep", reason: "expired" });
+    expect(composeRecentSummary(db, null, { count: 3, maxBytes: 600 })).toBe("- kept");
   });
 
   it("hard-caps to maxBytes, dropping whole summaries from the tail", () => {

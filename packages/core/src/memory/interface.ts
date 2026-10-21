@@ -2,13 +2,23 @@
  * Memory backend interface — see docs/memory-storage-registry.md for the
  * full design and the library survey that motivated the verb-based shape.
  *
- * Two required verbs (write / query), six optional capabilities (delete,
- * prelude, list, get, count, close). Flat — no sub-objects. Callers
- * narrow optionals via `if (backend.list)`.
+ * Two required verbs (write / query), eight optional capabilities (delete,
+ * archive, unarchive, prelude, list, get, count, close). Flat — no
+ * sub-objects. Callers narrow optionals via `if (backend.list)`.
  *
  * Lifecycle (ref-counts, TTL, sweep, promotion) is private to backends.
  * Semantic supersession is expressed structurally via MemoryHint.supersedes
  * — never in prose.
+ *
+ * Archiving: a backend that implements `archive` hides archived records from
+ * `query`, `list` and `count` unless the caller passes `includeArchived`, and
+ * marks them with `metadata.archived_at` (plus `archived_by`,
+ * `archive_reason`) wherever they do come back, including `get`. An exact
+ * `wantStructured` lookup is a fetch by identity, like `get`, so it returns an
+ * archived record too, marked: the facts tool relies on that to say a fact was
+ * forgotten and to restore it when it is set again. A backend
+ * with no archive leaves `archive` out and ignores `includeArchived`; callers
+ * then fall back to what they did before archiving existed.
  */
 
 export interface MemoryContent {
@@ -105,6 +115,12 @@ export interface QueryContext {
   /** Tag filter — AND across all tags. */
   tags?: string[];
   /**
+   * Also return archived records, marked with `metadata.archived_at`. Off by
+   * default: an archived record is hidden from recall and injection. A
+   * backend that can't archive ignores it.
+   */
+  includeArchived?: boolean;
+  /**
    * Exact-match filter on `structured` payload fields. Used by
    * FactsTool to express "find the fact with category=X entity=Y key=Z".
    * Backends that don't index structured data should ignore and let
@@ -139,13 +155,34 @@ export interface PreludeContext {
 }
 
 export interface ListQuery {
+  /**
+   * `global` / `project:<id>`. The built-in also honours an `agent:<name>`
+   * token the way `query` does: that agent's own records plus the ones no
+   * agent owns.
+   */
   scope?: string | string[];
   tags?: string[];
   kind?: string;
   pinned?: boolean;
   expiringBefore?: string;
+  /** Also list archived records, marked with `metadata.archived_at`. Off by default. */
+  includeArchived?: boolean;
+  /**
+   * Every project at once, global included, whatever project `scope` names:
+   * the Memory page with no project chosen. A field rather than a scope token
+   * so that a backend which doesn't know it falls back to the scope, `global`,
+   * and lists what it always did instead of nothing.
+   */
+  allProjects?: boolean;
   limit?: number;
   offset?: number;
+}
+
+/** Who archived a record and why, for `archive`. Both free text. */
+export interface ArchiveOptions {
+  /** An agent's name, `sweep`, or `owner` for a person through the API. */
+  by?: string;
+  reason?: string;
 }
 
 /**
@@ -180,6 +217,18 @@ export interface MemoryBackend {
    * when something was removed.
    */
   delete?(id: string): Promise<boolean>;
+
+  /**
+   * Hide a record without deleting it: it leaves `query`, `list` and `count`
+   * until `unarchive`, and `get` still returns it marked archived. This is
+   * what an agent's "forget" does, so the agent's mistakes can be undone.
+   * Returns false when there is no such record or it can't be archived;
+   * archiving an archived record returns true and keeps its first stamp.
+   */
+  archive?(id: string, opts?: ArchiveOptions): Promise<boolean>;
+
+  /** Bring an archived record back. Returns false when there is no such record. */
+  unarchive?(id: string): Promise<boolean>;
 
   /**
    * Text the backend wants prepended to every prompt (identity /

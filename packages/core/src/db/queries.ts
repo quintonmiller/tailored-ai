@@ -228,6 +228,20 @@ export function deleteSession(db: Database.Database, sessionId: string): boolean
   return res.changes > 0;
 }
 
+/**
+ * The agent a session belongs to, when that's known: the one named agent whose
+ * model calls it recorded. Sessions don't store an agent, but every call the
+ * loop makes lands in `token_usage` with one. Null when no named agent ran
+ * the session, or when more than one did, since then it belongs to nobody in
+ * particular and guessing would hide it from the others.
+ */
+export function sessionAgent(db: Database.Database, sessionId: string): string | null {
+  const rows = db
+    .prepare("SELECT DISTINCT agent FROM token_usage WHERE session_id = ? AND agent IS NOT NULL LIMIT 2")
+    .all(sessionId) as { agent: string }[];
+  return rows.length === 1 ? rows[0].agent : null;
+}
+
 /** Count messages in a session (cheap, used for size-based summary importance). */
 export function countSessionMessages(db: Database.Database, sessionId: string): number {
   const row = db.prepare("SELECT COUNT(*) AS c FROM messages WHERE session_id = ?").get(sessionId) as { c: number };

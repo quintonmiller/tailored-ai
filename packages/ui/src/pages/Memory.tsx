@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  archiveFact,
+  archiveMemoryNote,
   deleteFact,
   deleteMemoryNote,
   type FactRow,
@@ -12,6 +14,8 @@ import {
   type MemoryStats,
   promoteMemoryNote,
   runMemorySweepHttp,
+  unarchiveFact,
+  unarchiveMemoryNote,
   updateMemoryNote,
 } from "../api";
 import { useActiveProject } from "../hooks/useActiveProject";
@@ -24,6 +28,7 @@ export function Memory() {
   const [recallQuery, setRecallQuery] = useState("");
   const [recallHits, setRecallHits] = useState<MemoryRecallHit[] | null>(null);
   const [filterTag, setFilterTag] = useState<string>("");
+  const [showArchived, setShowArchived] = useState(false);
   const [busy, setBusy] = useState(false);
   const activeProject = useActiveProject();
 
@@ -35,6 +40,7 @@ export function Memory() {
       tag: filterTag || undefined,
       search: search || undefined,
       limit: 100,
+      includeArchived: showArchived,
     })
       .then(setNotes)
       .catch(() => {});
@@ -45,15 +51,36 @@ export function Memory() {
       project_id: projectParam ?? undefined,
       search: search || undefined,
       limit: 200,
+      includeArchived: showArchived,
     })
       .then((r) => setFacts(r.facts))
       .catch(() => {});
-  }, [projectParam, filterTag, search]);
+  }, [projectParam, filterTag, search, showArchived]);
 
   async function handleDeleteFact(id: string) {
-    if (!confirm(`Delete fact ${id}?`)) return;
+    if (!confirm(`Delete fact ${id} for good? Archive it instead to keep a copy you can restore.`)) return;
     await deleteFact(id);
     reload();
+  }
+
+  /** Archive or restore a note or fact; asks for an optional reason on the way out. */
+  async function handleArchive(kind: "note" | "fact", id: string, restore: boolean) {
+    let reason: string | undefined;
+    if (!restore) {
+      const answer = prompt(`Why archive this ${kind}? (optional)`);
+      if (answer === null) return;
+      reason = answer.trim() || undefined;
+    }
+    setBusy(true);
+    try {
+      if (kind === "note") await (restore ? unarchiveMemoryNote(id) : archiveMemoryNote(id, reason));
+      else await (restore ? unarchiveFact(id) : archiveFact(id, reason));
+      reload();
+    } catch (e) {
+      alert(`${restore ? "Restore" : "Archive"} failed: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -74,7 +101,7 @@ export function Memory() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm(`Delete note ${id}?`)) return;
+    if (!confirm(`Delete note ${id} for good? Archive it instead to keep a copy you can restore.`)) return;
     await deleteMemoryNote(id);
     reload();
   }
@@ -104,12 +131,12 @@ export function Memory() {
   }
 
   async function handleSweep() {
-    if (!confirm("Run memory sweep now? Expired low-importance notes will be deleted.")) return;
+    if (!confirm("Run memory sweep now? Expired low-importance notes will be archived.")) return;
     setBusy(true);
     try {
       const r = await runMemorySweepHttp();
       alert(
-        `Swept: extended ${r.extendedTtl}, deleted ${r.deletedExpired}. ` +
+        `Swept: extended ${r.extendedTtl}, archived ${r.archivedExpired}. ` +
           `Remaining: ${r.remainingNotes} notes, ${r.totalChunks} chunks.`,
       );
       reload();
@@ -124,12 +151,23 @@ export function Memory() {
     return Array.from(s).sort();
   }, [notes]);
 
-  const { pinnedNotes, otherNotes } = useMemo(() => {
+  const { pinnedNotes, otherNotes, archivedNotes } = useMemo(() => {
     const p: MemoryNote[] = [];
     const o: MemoryNote[] = [];
-    for (const n of notes) (isPinned(n) ? p : o).push(n);
-    return { pinnedNotes: p, otherNotes: o };
+    const a: MemoryNote[] = [];
+    for (const n of notes) (n.archived_at ? a : isPinned(n) ? p : o).push(n);
+    return { pinnedNotes: p, otherNotes: o, archivedNotes: a };
   }, [notes]);
+  const liveNoteCount = notes.length - archivedNotes.length;
+  const archivedCount = stats ? (stats.counts.archivedNotes ?? 0) + (stats.counts.archivedFacts ?? 0) : null;
+  const noteRowProps = {
+    showPromote: !!stats?.embeddingsEnabled,
+    busy,
+    onDelete: handleDelete,
+    onPromote: handlePromote,
+    onTogglePin: handleTogglePin,
+    onArchive: (n: MemoryNote) => handleArchive("note", n.id, !!n.archived_at),
+  };
 
   return (
     <div className="memory-page">
@@ -144,7 +182,7 @@ export function Memory() {
             className="btn-ghost memory-sweep-btn"
             onClick={handleSweep}
             disabled={busy}
-            title="Delete expired low-importance notes"
+            title="Archive expired low-importance notes"
           >
             Run sweep
           </button>
@@ -223,7 +261,7 @@ export function Memory() {
       )}
 
       <section className="memory-notes">
-        <h2>Notes ({notes.length})</h2>
+        <h2>Notes ({liveNoteCount})</h2>
         <div className="memory-filters">
           <input
             type="text"
@@ -240,6 +278,10 @@ export function Memory() {
               </option>
             ))}
           </select>
+          <label className="memory-archived-toggle" title="Archived notes and facts are hidden from agents">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            Show archived{archivedCount ? ` (${archivedCount})` : ""}
+          </label>
         </div>
         {notes.length === 0 && <div className="memory-empty">No notes match.</div>}
         {pinnedNotes.length > 0 && (
@@ -247,16 +289,7 @@ export function Memory() {
             <h3 className="memory-section-label">Pinned preferences</h3>
             <ul className="memory-note-list">
               {pinnedNotes.map((n) => (
-                <NoteRow
-                  key={n.id}
-                  note={n}
-                  pinned
-                  showPromote={!!stats?.embeddingsEnabled}
-                  busy={busy}
-                  onDelete={handleDelete}
-                  onPromote={handlePromote}
-                  onTogglePin={handleTogglePin}
-                />
+                <NoteRow key={n.id} note={n} pinned {...noteRowProps} />
               ))}
             </ul>
           </>
@@ -266,16 +299,17 @@ export function Memory() {
             {pinnedNotes.length > 0 && <h3 className="memory-section-label">Notes</h3>}
             <ul className="memory-note-list">
               {otherNotes.map((n) => (
-                <NoteRow
-                  key={n.id}
-                  note={n}
-                  pinned={false}
-                  showPromote={!!stats?.embeddingsEnabled}
-                  busy={busy}
-                  onDelete={handleDelete}
-                  onPromote={handlePromote}
-                  onTogglePin={handleTogglePin}
-                />
+                <NoteRow key={n.id} note={n} pinned={false} {...noteRowProps} />
+              ))}
+            </ul>
+          </>
+        )}
+        {archivedNotes.length > 0 && (
+          <>
+            <h3 className="memory-section-label">Archived — hidden from agents</h3>
+            <ul className="memory-note-list">
+              {archivedNotes.map((n) => (
+                <NoteRow key={n.id} note={n} pinned={false} {...noteRowProps} />
               ))}
             </ul>
           </>
@@ -291,7 +325,7 @@ export function Memory() {
           </p>
           <ul className="memory-fact-list">
             {facts.map((f) => (
-              <li key={f.id} className="memory-fact">
+              <li key={f.id} className={`memory-fact${f.archived_at ? " memory-fact-archived" : ""}`}>
                 <div className="memory-fact-key">
                   <span className="memory-fact-category">{f.category}</span>
                   {f.entity && <span className="memory-fact-entity">/ {f.entity}</span>}
@@ -304,6 +338,14 @@ export function Memory() {
                   {f.source && <span title="source">via {f.source}</span>}
                   <button
                     type="button"
+                    className="memory-fact-archive"
+                    onClick={() => handleArchive("fact", f.id, !!f.archived_at)}
+                    disabled={busy}
+                  >
+                    {f.archived_at ? "Restore" : "Archive"}
+                  </button>
+                  <button
+                    type="button"
                     className="memory-fact-delete"
                     onClick={() => handleDeleteFact(f.id)}
                     disabled={busy}
@@ -312,6 +354,11 @@ export function Memory() {
                     ×
                   </button>
                 </div>
+                {f.archived_at && (
+                  <div className="memory-fact-stamp">
+                    <ArchivedStamp at={f.archived_at} by={f.archived_by} reason={f.archive_reason} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -323,6 +370,22 @@ export function Memory() {
 
 function isPinned(n: MemoryNote): boolean {
   return n.tags.includes("pinned") || (n.importance ?? 0) >= 0.95;
+}
+
+/** "Archived 2d ago by sweep: expired" — when, who, and why, as far as they're known. */
+function ArchivedStamp({ at, by, reason }: { at: string; by?: string | null; reason?: string | null }) {
+  return (
+    <span className="memory-archived-stamp" title={at}>
+      Archived {relTime(sqliteToIso(at))}
+      {by ? ` by ${by}` : ""}
+      {reason ? `: ${reason}` : ""}
+    </span>
+  );
+}
+
+/** SQLite's `datetime('now')` has no zone; it is UTC, so say so before parsing. */
+function sqliteToIso(t: string): string {
+  return /[zZ]|[+-]\d\d:?\d\d$/.test(t) ? t : `${t.replace(" ", "T")}Z`;
 }
 
 function relTime(iso: string | null): string {
@@ -350,6 +413,7 @@ function NoteRow({
   onDelete,
   onPromote,
   onTogglePin,
+  onArchive,
 }: {
   note: MemoryNote;
   pinned: boolean;
@@ -358,15 +422,26 @@ function NoteRow({
   onDelete: (id: string) => void;
   onPromote: (id: string) => void;
   onTogglePin: (n: MemoryNote) => void;
+  onArchive: (n: MemoryNote) => void;
 }) {
+  const archived = !!n.archived_at;
   return (
-    <li className={`memory-note${pinned ? " memory-note-pinned" : ""}`}>
+    <li className={`memory-note${pinned ? " memory-note-pinned" : ""}${archived ? " memory-note-archived" : ""}`}>
       <div className="memory-note-content">{n.content}</div>
       <div className="memory-note-meta">
-        <span className="memory-note-date">{relTime(n.created_at)}</span>
+        {n.archived_at ? (
+          <ArchivedStamp at={n.archived_at} by={n.archived_by} reason={n.archive_reason} />
+        ) : (
+          <span className="memory-note-date">{relTime(n.created_at)}</span>
+        )}
         {pinned && (
           <span className="memory-pin-badge" title="Always injected into system prompt">
             📌 pinned
+          </span>
+        )}
+        {n.kept && (
+          <span className="memory-kept-badge" title="Kept: the nightly sweep never archives it">
+            kept
           </span>
         )}
         {n.tags.map((t) => (
@@ -376,8 +451,19 @@ function NoteRow({
         ))}
       </div>
       <div className="memory-note-actions">
-        <button type="button" className="btn-secondary" onClick={() => onTogglePin(n)} disabled={busy}>
-          {pinned ? "Unpin" : "Pin"}
+        {!archived && (
+          <button type="button" className="btn-secondary" onClick={() => onTogglePin(n)} disabled={busy}>
+            {pinned ? "Unpin" : "Pin"}
+          </button>
+        )}
+        <button
+          type="button"
+          className={archived ? "btn-secondary" : "btn-ghost"}
+          onClick={() => onArchive(n)}
+          disabled={busy}
+          title={archived ? "Bring it back where agents can recall it" : "Hide it from agents; you can restore it"}
+        >
+          {archived ? "Restore" : "Archive"}
         </button>
         <button type="button" className="btn-ghost" onClick={() => onDelete(n.id)} disabled={busy}>
           Delete
@@ -407,7 +493,7 @@ function NoteRow({
           <dt>References</dt>
           <dd>{n.ref_count}×</dd>
         </dl>
-        {showPromote && (
+        {showPromote && !archived && (
           <button type="button" className="btn-secondary" onClick={() => onPromote(n.id)} disabled={busy}>
             Promote to long-term
           </button>

@@ -456,10 +456,12 @@ export {
 } from "./db/autopilot-queries.js";
 export {
   type ChunkSearchHit,
+  type ChunkVisibility,
   countChunks,
   createChunk,
   deleteChunksBySource,
   getChunk,
+  listChunks,
   listChunksBySource,
   type MemoryChunk,
   type MemoryChunkInput,
@@ -520,11 +522,13 @@ export {
 } from "./db/exploratory-queries.js";
 export type { Fact, FactInput, FactQuery } from "./db/fact-queries.js";
 export {
+  archiveFact,
   deleteFact,
   findFact,
   forgetFact,
   getFact,
   listFacts,
+  unarchiveFact,
   upsertFact,
 } from "./db/fact-queries.js";
 export {
@@ -540,14 +544,17 @@ export {
 } from "./db/form-queries.js";
 export type { Note, NoteInput, NotePatch, NoteQuery, PinnedNotesQuery } from "./db/note-queries.js";
 export {
+  archiveNote,
   createNote,
   deleteNote,
   extendNoteTtl,
   getNote,
   incrementNoteRef,
+  keepNote,
   listNotes,
   listPinnedNotes,
   sweepExpiredNotes,
+  unarchiveNote,
   updateNote,
 } from "./db/note-queries.js";
 export type { Project, ProjectQueryFilter, ProjectQueryResult, ProjectWithCounts } from "./db/project-queries.js";
@@ -569,6 +576,7 @@ export {
   getSessionMessages,
   listSessions,
   saveMessage,
+  sessionAgent,
   updateSessionMeta,
 } from "./db/queries.js";
 export type { PauseScope, RunKind, RuntimeSettings } from "./db/runtime-settings-queries.js";
@@ -723,6 +731,7 @@ export {
   withComponentText,
 } from "./media/turn.js";
 export type {
+  ArchiveOptions as MemoryArchiveOptions,
   ListQuery as MemoryListQuery,
   MemoryBackend,
   MemoryContent,

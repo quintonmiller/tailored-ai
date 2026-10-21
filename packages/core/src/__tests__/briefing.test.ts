@@ -7,7 +7,7 @@ import {
   generateBriefing,
 } from "../briefing.js";
 import type { AgentConfig } from "../config.js";
-import { createNote } from "../db/note-queries.js";
+import { archiveNote, createNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createProjectTask, updateProjectTask } from "../db/task-queries.js";
 import { createWorkflowRun, updateWorkflowRun } from "../db/workflow-queries.js";
@@ -92,6 +92,18 @@ describe("assembleBriefingContext", () => {
     expect(ctx).toContain("nightly");
     expect(ctx).toContain("morning-digest");
     expect(ctx).toContain("migration plan");
+  });
+
+  it("leaves archived session summaries out", () => {
+    createNote(db, { content: "Talked about the garden", tags: ["session-summary"] });
+    const gone = createNote(db, { content: "Talked about the old car", tags: ["session-summary"] });
+    archiveNote(db, gone.id, { by: "sweep", reason: "expired" });
+    const ctx = assembleBriefingContext(
+      makeRuntime(buildConfig(), async () => ({}) as never),
+      24,
+    );
+    expect(ctx).toContain("garden");
+    expect(ctx).not.toContain("old car");
   });
 
   it("caps each list at 5 items and the total context length", () => {

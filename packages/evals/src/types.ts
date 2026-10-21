@@ -88,9 +88,8 @@ export interface MemorySeed {
   /**
    * Whose note it is. Defaults to unowned, which every agent can see.
    *
-   * Note that `listNotes` has no agent filter, so an owned note is still
-   * readable by the `recall` tool from any agent; ownership narrows the
-   * *injected* set, not the searchable one.
+   * An owned note is that agent's alone: injection, the `recall` tool and
+   * semantic search all leave it out for any other named agent.
    */
   agent?: string;
 }

@@ -11,6 +11,14 @@ export interface MemoryChunk {
   embed_model: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
+  /**
+   * The source note's archive stamp. A chunk has no archive state of its own,
+   * so this is set only on a chunk of an archived note, which only a read with
+   * `includeArchived` returns: it comes back marked like the note would.
+   */
+  archived_at?: string;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }
 
 export interface MemoryChunkInput {
@@ -31,6 +39,10 @@ interface ChunkRow {
   embed_model: string | null;
   metadata: string;
   created_at: string;
+  /** Joined from the source note by the visibility reads; absent elsewhere. */
+  note_archived_at?: string | null;
+  note_archived_by?: string | null;
+  note_archive_reason?: string | null;
 }
 
 function rowToChunk(row: ChunkRow): MemoryChunk {
@@ -49,8 +61,22 @@ function rowToChunk(row: ChunkRow): MemoryChunk {
     embed_model: row.embed_model,
     metadata,
     created_at: row.created_at,
+    ...(row.note_archived_at
+      ? {
+          archived_at: row.note_archived_at,
+          archived_by: row.note_archived_by ?? null,
+          archive_reason: row.note_archive_reason ?? null,
+        }
+      : {}),
   };
 }
+
+/** What a chunk read selects: the chunk, plus its source note's archive stamp. */
+const VISIBLE_COLUMNS =
+  "c.*, n.archived_at AS note_archived_at, n.archived_by AS note_archived_by, n.archive_reason AS note_archive_reason";
+
+/** The source note of a chunk promoted from one; no row for a KB chunk or a deleted note. */
+const NOTE_JOIN = "LEFT JOIN notes n ON substr(c.source, 1, 5) = 'note:' AND n.id = substr(c.source, 6)";
 
 export function createChunk(db: Database.Database, input: MemoryChunkInput): MemoryChunk {
   const id = `mc_${randomUUID().slice(0, 8)}`;
@@ -63,8 +89,11 @@ export function createChunk(db: Database.Database, input: MemoryChunkInput): Mem
   return getChunk(db, id)!;
 }
 
+/** One chunk by id, whatever its note's state, marked when that note is archived. */
 export function getChunk(db: Database.Database, id: string): MemoryChunk | null {
-  const row = db.prepare("SELECT * FROM memory_chunks WHERE id = ?").get(id) as ChunkRow | undefined;
+  const row = db.prepare(`SELECT ${VISIBLE_COLUMNS} FROM memory_chunks c ${NOTE_JOIN} WHERE c.id = ?`).get(id) as
+    | ChunkRow
+    | undefined;
   return row ? rowToChunk(row) : null;
 }
 
@@ -78,19 +107,88 @@ export function deleteChunksBySource(db: Database.Database, source: string): num
   return db.prepare("DELETE FROM memory_chunks WHERE source = ?").run(source).changes;
 }
 
-export function countChunks(db: Database.Database, projectId?: string | null): number {
-  if (projectId === undefined) {
-    const r = db.prepare("SELECT COUNT(*) AS c FROM memory_chunks").get() as { c: number };
-    return r.c;
+/**
+ * Which chunks a read may see. A chunk promoted from a note (`source` is
+ * `note:<id>`) follows that note: it surfaces only while the note exists and
+ * is live, and, given an `agent`, only when the note is that agent's or no
+ * agent's. Chunks from anywhere else (a KB file) are shared and unaffected.
+ */
+export interface ChunkVisibility {
+  /** undefined = every project, null = global only, id = that project. */
+  projectId?: string | null;
+  /**
+   * With a project id, also see global chunks (`project_id IS NULL`), the way
+   * the keyword tier reads a project's notes plus global ones. KB files are
+   * indexed global, so without this a project session's semantic search never
+   * reaches them.
+   */
+  includeGlobal?: boolean;
+  /**
+   * Leave out chunks of notes another agent owns, the same rule recall
+   * applies to the notes themselves: promoting a note into the search index
+   * must not make it readable by every agent in the project.
+   */
+  agent?: string;
+  /** Also see chunks of archived notes. A deleted note's chunks never surface. */
+  includeArchived?: boolean;
+}
+
+/**
+ * The FROM and WHERE for a chunk read under {@link ChunkVisibility}. The note
+ * filter is a join on the note itself rather than a copy of its state on the
+ * chunk, so archiving, restoring or deleting a note can't leave its chunks
+ * saying something else.
+ */
+function visibleChunks(v: ChunkVisibility, extra: string[] = []): { sql: string; params: unknown[] } {
+  const clauses = [...extra];
+  const params: unknown[] = [];
+  if (v.projectId !== undefined) {
+    if (v.projectId === null) {
+      clauses.push("c.project_id IS NULL");
+    } else if (v.includeGlobal) {
+      clauses.push("(c.project_id = ? OR c.project_id IS NULL)");
+      params.push(v.projectId);
+    } else {
+      clauses.push("c.project_id = ?");
+      params.push(v.projectId);
+    }
   }
-  const r = db
-    .prepare(
-      projectId === null
-        ? "SELECT COUNT(*) AS c FROM memory_chunks WHERE project_id IS NULL"
-        : "SELECT COUNT(*) AS c FROM memory_chunks WHERE project_id = ?",
-    )
-    .get(...(projectId === null ? [] : [projectId])) as { c: number };
+  const live = v.includeArchived ? "n.id IS NOT NULL" : "n.id IS NOT NULL AND n.archived_at IS NULL";
+  clauses.push(`(substr(c.source, 1, 5) != 'note:' OR (${live}))`);
+  if (v.agent) {
+    clauses.push("(n.id IS NULL OR n.agent IS NULL OR n.agent = ?)");
+    params.push(v.agent);
+  }
+  return {
+    sql: `FROM memory_chunks c ${NOTE_JOIN} WHERE ${clauses.join(" AND ")}`,
+    params,
+  };
+}
+
+/**
+ * How many chunks can surface: chunks of archived or deleted notes are left
+ * out unless `includeArchived` (which still leaves out a deleted note's).
+ */
+export function countChunks(
+  db: Database.Database,
+  projectId?: string | null,
+  opts: Omit<ChunkVisibility, "projectId"> = {},
+): number {
+  const { sql, params } = visibleChunks({ ...opts, projectId });
+  const r = db.prepare(`SELECT COUNT(*) AS c ${sql}`).get(...params) as { c: number };
   return r.c;
+}
+
+/** Newest-first page of the chunks a read may see. */
+export function listChunks(
+  db: Database.Database,
+  opts: ChunkVisibility & { limit?: number; offset?: number } = {},
+): MemoryChunk[] {
+  const { sql, params } = visibleChunks(opts);
+  const rows = db
+    .prepare(`SELECT ${VISIBLE_COLUMNS} ${sql} ORDER BY c.created_at DESC, c.rowid DESC LIMIT ? OFFSET ?`)
+    .all(...params, opts.limit ?? 100, opts.offset ?? 0) as ChunkRow[];
+  return rows.map(rowToChunk);
 }
 
 export interface ChunkSearchHit {
@@ -99,29 +197,22 @@ export interface ChunkSearchHit {
 }
 
 /**
- * Brute-force cosine search across all chunks in scope. Acceptable up to a
- * few thousand chunks; revisit when the corpus grows past ~10k.
+ * Brute-force cosine search across the chunks a read may see (see
+ * {@link ChunkVisibility}): a chunk promoted from a note follows that note's
+ * owner and archive state, so promoting a note into the index doesn't make it
+ * public, and archiving it hides what was promoted from it too. Acceptable up
+ * to a few thousand chunks; revisit when the corpus grows past ~10k.
  */
 export function semanticSearch(
   db: Database.Database,
   query: Float32Array,
-  opts: { projectId?: string | null; limit?: number; minScore?: number } = {},
+  opts: ChunkVisibility & { limit?: number; minScore?: number } = {},
 ): ChunkSearchHit[] {
   const limit = opts.limit ?? 5;
   const minScore = opts.minScore ?? 0;
 
-  const clauses: string[] = ["embedding IS NOT NULL"];
-  const params: unknown[] = [];
-  if (opts.projectId !== undefined) {
-    if (opts.projectId === null) {
-      clauses.push("project_id IS NULL");
-    } else {
-      clauses.push("project_id = ?");
-      params.push(opts.projectId);
-    }
-  }
-  const where = `WHERE ${clauses.join(" AND ")}`;
-  const rows = db.prepare(`SELECT * FROM memory_chunks ${where}`).all(...params) as ChunkRow[];
+  const { sql, params } = visibleChunks(opts, ["c.embedding IS NOT NULL"]);
+  const rows = db.prepare(`SELECT ${VISIBLE_COLUMNS} ${sql}`).all(...params) as ChunkRow[];
 
   const hits: ChunkSearchHit[] = [];
   for (const row of rows) {

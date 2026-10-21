@@ -2,8 +2,8 @@ import type Database from "better-sqlite3";
 import {
   countChunks,
   createChunk,
-  deleteChunksBySource,
   getChunk,
+  listChunks,
   type MemoryChunk,
   semanticSearch,
 } from "../db/chunk-queries.js";
@@ -17,17 +17,29 @@ import {
   renderCoreMemory,
   setCoreMemory,
 } from "../db/core-memory-queries.js";
-import { deleteFact, type Fact, type FactQuery, findFact, getFact, listFacts, upsertFact } from "../db/fact-queries.js";
 import {
+  archiveFact,
+  deleteFact,
+  type Fact,
+  type FactQuery,
+  findFact,
+  getFact,
+  listFacts,
+  unarchiveFact,
+  upsertFact,
+} from "../db/fact-queries.js";
+import {
+  archiveNote,
   createNote,
   deleteNote,
   getNote,
   listNotes,
   listPinnedNotes,
   type Note,
-  type NoteQuery,
+  unarchiveNote,
 } from "../db/note-queries.js";
 import type {
+  ArchiveOptions,
   ListQuery,
   MemoryBackend,
   MemoryContent,
@@ -58,6 +70,10 @@ import {
  * Ids returned to callers are prefixed with the table-of-origin so
  * `delete(id)` / `get(id)` can route without a sniffing lookup:
  *   `note:<id>`, `fact:<id>`, `chunk:<id>`, `prelude:<agent>/<section>[/<project>]`.
+ *
+ * Notes and facts can be archived. A chunk promoted from a note follows that
+ * note (see `ChunkVisibility`), so it has no archive state of its own, and
+ * core memory (prelude) is edited in place rather than archived.
  *
  * Phase 1 keeps the adapter functionally complete enough that a plugin
  * author can register a backend and exercise every verb. Phase 2 routes
@@ -152,6 +168,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
   async query(context: QueryContext): Promise<MemoryFragment[]> {
     const { projectId, agent } = parseScope(context.scope);
     const limit = context.limit ?? 5;
+    const includeArchived = context.includeArchived === true;
 
     // Exact structured lookup first — the FactsTool's "find this triplet" path.
     if (context.wantStructured) {
@@ -159,6 +176,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
       const category = str(s.category);
       const key = str(s.key);
       if (category && key) {
+        // A fetch by identity: an archived fact comes back marked, not absent.
         const fact = findFact(this.db, category, str(s.entity) ?? "", key, projectId);
         return fact ? [factFragment(fact)] : [];
       }
@@ -170,7 +188,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
     // metadata.pinned=true so the agent layer can render them in their
     // own block. SQLite-specific concept; other backends may omit.
     if (context.includePrelude) {
-      const pinned = listPinnedNotes(this.db, { project_id: projectId, agent, limit });
+      const pinned = listPinnedNotes(this.db, { project_id: projectId, agent, limit, includeArchived });
       for (const note of pinned) fragments.push(noteFragment(note, { pinned: true }));
     }
     const pinnedIds = new Set(fragments.filter((f) => f.metadata?.pinned).map((f) => f.id ?? ""));
@@ -192,6 +210,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
           includeUnowned: true,
           excludeExpired: true,
           includeGlobal: projectId !== null,
+          includeArchived,
           limit: 500,
         });
         for (const n of notes) {
@@ -205,6 +224,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
         const facts = listFacts(this.db, {
           project_id: projectId,
           includeGlobal: projectId !== null,
+          includeArchived,
           limit: 1000,
         });
         for (const f of facts) {
@@ -225,7 +245,18 @@ export class SqliteMemoryBackend implements MemoryBackend {
     const semanticHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
     if (context.vector) {
       const minScore = context.minImportance ?? 0;
-      const hits = semanticSearch(this.db, context.vector, { projectId, limit, minScore });
+      // Chunks follow their source note's owner, the same rule as the keyword
+      // tier above, so a promoted note stays as private as it was. A project
+      // reads its own chunks plus global ones, also like the keyword tier:
+      // KB files are indexed global, and recall defaults to the active project.
+      const hits = semanticSearch(this.db, context.vector, {
+        projectId,
+        includeGlobal: projectId !== null,
+        agent,
+        limit,
+        minScore,
+        includeArchived,
+      });
       for (const hit of hits) {
         const frag = chunkFragment(hit.chunk, {
           tier: "long",
@@ -284,6 +315,35 @@ export class SqliteMemoryBackend implements MemoryBackend {
     }
   }
 
+  async archive(id: string, opts: ArchiveOptions = {}): Promise<boolean> {
+    const parsed = parseId(id);
+    if (!parsed) return false;
+    const stamp = { by: opts.by ?? null, reason: opts.reason ?? null };
+    switch (parsed.kind) {
+      case "note":
+        return archiveNote(this.db, parsed.rest, stamp) !== null;
+      case "fact":
+        return archiveFact(this.db, parsed.rest, stamp) !== null;
+      default:
+        // Chunks follow their note and core memory is edited in place; neither
+        // has an archive, so refuse rather than report a hide that didn't happen.
+        return false;
+    }
+  }
+
+  async unarchive(id: string): Promise<boolean> {
+    const parsed = parseId(id);
+    if (!parsed) return false;
+    switch (parsed.kind) {
+      case "note":
+        return unarchiveNote(this.db, parsed.rest) !== null;
+      case "fact":
+        return unarchiveFact(this.db, parsed.rest) !== null;
+      default:
+        return false;
+    }
+  }
+
   async prelude(context: PreludeContext): Promise<string> {
     const { projectId, agent } = parseScope(context.scope);
     if (!agent) return "";
@@ -292,56 +352,57 @@ export class SqliteMemoryBackend implements MemoryBackend {
   }
 
   async list(query: ListQuery): Promise<MemoryFragment[]> {
-    const { projectId } = parseScope(query.scope);
+    const { agent } = parseScope(query.scope);
+    const projectId = listProject(query);
     const kind = query.kind ?? "note";
+    const includeArchived = query.includeArchived === true;
 
     if (kind === "fact") {
       const factQuery: FactQuery = {
         project_id: projectId,
         limit: query.limit,
         includeGlobal: projectId !== null,
+        includeArchived,
       };
       return listFacts(this.db, factQuery).map((f) => factFragment(f));
     }
 
     if (kind === "chunk") {
-      const limit = query.limit ?? 100;
-      const offset = query.offset ?? 0;
-      const rows = this.db
-        .prepare(
-          projectId === null
-            ? "SELECT * FROM memory_chunks WHERE project_id IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?"
-            : "SELECT * FROM memory_chunks WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        )
-        .all(...(projectId === null ? [limit, offset] : [projectId, limit, offset])) as Array<{
-        id: string;
-        content: string;
-        source: string;
-      }>;
-      return rows.map((r) => ({
-        text: r.content,
-        id: `chunk:${r.id}`,
-        metadata: { kind: "chunk", source: r.source },
+      const chunks = listChunks(this.db, {
+        projectId,
+        includeGlobal: projectId !== null,
+        agent,
+        includeArchived,
+        limit: query.limit,
+        offset: query.offset,
+      });
+      return chunks.map((c) => ({
+        text: c.content,
+        id: `chunk:${c.id}`,
+        metadata: { kind: "chunk", source: c.source, ...archiveMetadata(c) },
       }));
     }
 
     if (kind === "prelude") {
       // List every section row for the scope. Without an agent, return [].
-      const { agent } = parseScope(query.scope);
       if (!agent) return [];
-      return getCoreMemory(this.db, { agent, project_id: projectId }).map((row) => ({
+      return getCoreMemory(this.db, { agent, project_id: projectId ?? null }).map((row) => ({
         text: row.content,
         id: `prelude:${row.agent}/${row.section}${row.project_id ? `/${row.project_id}` : ""}`,
         metadata: { kind: "prelude", section: row.section, updated_at: row.updated_at },
       }));
     }
 
-    // Default: notes
+    // Default: notes. An `agent:` token scopes them the way `query` does: that
+    // agent's own notes plus unowned ones. No token keeps the view of all.
     const notes = listNotes(this.db, {
       project_id: projectId,
+      agent,
+      includeUnowned: true,
       tag: query.tags?.[0],
       excludeExpired: true,
       includeGlobal: projectId !== null,
+      includeArchived,
       limit: query.limit,
     });
     return notes.map((n) => noteFragment(n));
@@ -385,34 +446,31 @@ export class SqliteMemoryBackend implements MemoryBackend {
   }
 
   async count(query: ListQuery = {}): Promise<number> {
-    const { projectId } = parseScope(query.scope);
+    const projectId = listProject(query);
     const kind = query.kind ?? "note";
+    const includeArchived = query.includeArchived === true;
 
-    if (kind === "chunk") return countChunks(this.db, projectId);
-
-    if (kind === "fact") {
-      const r = this.db
-        .prepare(
-          projectId === null
-            ? "SELECT COUNT(*) AS c FROM facts WHERE project_id IS NULL"
-            : "SELECT COUNT(*) AS c FROM facts WHERE project_id = ? OR project_id IS NULL",
-        )
-        .get(...(projectId === null ? [] : [projectId])) as { c: number };
-      return r.c;
-    }
+    if (kind === "chunk") return countChunks(this.db, projectId, { includeArchived });
 
     if (kind === "prelude") {
       const r = this.db.prepare("SELECT COUNT(*) AS c FROM core_memory").get() as { c: number };
       return r.c;
     }
 
-    const r = this.db
-      .prepare(
-        projectId === null
-          ? "SELECT COUNT(*) AS c FROM notes WHERE project_id IS NULL"
-          : "SELECT COUNT(*) AS c FROM notes WHERE project_id = ?",
-      )
-      .get(...(projectId === null ? [] : [projectId])) as { c: number };
+    // Facts count their project plus globals, the way they are listed; notes
+    // count their project alone.
+    const table = kind === "fact" ? "facts" : "notes";
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (projectId === null) {
+      clauses.push("project_id IS NULL");
+    } else if (projectId !== undefined) {
+      clauses.push(kind === "fact" ? "(project_id = ? OR project_id IS NULL)" : "project_id = ?");
+      params.push(projectId);
+    }
+    if (!includeArchived) clauses.push("archived_at IS NULL");
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const r = this.db.prepare(`SELECT COUNT(*) AS c FROM ${table} ${where}`).get(...params) as { c: number };
     return r.c;
   }
 
@@ -446,6 +504,11 @@ function parseScope(scope: string | string[] | undefined): {
   return { projectId, agent, sessionId };
 }
 
+/** The project a list or count reads: undefined (every project) for `allProjects`, else the scope's. */
+function listProject(query: ListQuery): string | null | undefined {
+  return query.allProjects ? undefined : parseScope(query.scope).projectId;
+}
+
 function parseId(id: string): { kind: string; rest: string } | null {
   const idx = id.indexOf(":");
   if (idx <= 0) return null;
@@ -465,8 +528,28 @@ function noteFragment(note: Note, extra: Record<string, unknown> = {}): MemoryFr
       ttl_at: note.ttl_at,
       project_id: note.project_id,
       agent: note.agent,
+      session_id: note.session_id,
+      kept: note.kept,
+      ...archiveMetadata(note),
       ...extra,
     },
+  };
+}
+
+/**
+ * The archive stamp, only on archived records, so a live record's metadata is
+ * unchanged. A chunk carries its source note's stamp, when that note is archived.
+ */
+function archiveMetadata(row: {
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
+}): Record<string, unknown> {
+  if (!row.archived_at) return {};
+  return {
+    archived_at: row.archived_at,
+    archived_by: row.archived_by ?? null,
+    archive_reason: row.archive_reason ?? null,
   };
 }
 
@@ -485,6 +568,7 @@ function factFragment(fact: Fact, extra: Record<string, unknown> = {}): MemoryFr
       project_id: fact.project_id,
       created_at: fact.created_at,
       updated_at: fact.updated_at,
+      ...archiveMetadata(fact),
       ...extra,
     },
   };
@@ -501,6 +585,7 @@ function chunkFragment(chunk: MemoryChunk, extra: Record<string, unknown> = {}):
       created_at: chunk.created_at,
       project_id: chunk.project_id,
       ...chunk.metadata,
+      ...archiveMetadata(chunk),
       ...extra,
     },
   };

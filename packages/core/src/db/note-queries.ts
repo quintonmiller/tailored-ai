@@ -17,6 +17,16 @@ export interface Note {
   ref_count: number;
   created_at: string;
   ttl_at: string | null;
+  /**
+   * Never swept: set by `recall action="keep"`. Stored in the `archival`
+   * column, which is named for an older meaning and is NOT the archive.
+   */
+  kept: boolean;
+  /** When the note was archived (hidden), or null while it is live. */
+  archived_at: string | null;
+  /** Who archived it: an agent's name, `sweep`, or `owner` for a person. */
+  archived_by: string | null;
+  archive_reason: string | null;
 }
 
 export interface NoteInput {
@@ -42,7 +52,12 @@ export interface NoteQuery {
   tag?: string;
   search?: string;
   limit?: number;
-  /** When true, exclude notes whose ttl_at has passed. */
+  /**
+   * When true, exclude live notes whose ttl_at has passed. Archived notes
+   * that `includeArchived` asks for come back regardless: the sweep archives
+   * notes because they expired, so filtering those by expiry would hide every
+   * one of them from the archive view.
+   */
   excludeExpired?: boolean;
   /**
    * When true AND project_id is a specific project id, also return notes
@@ -51,6 +66,8 @@ export interface NoteQuery {
    * + global ones, since global preferences/facts apply everywhere.
    */
   includeGlobal?: boolean;
+  /** Also return archived notes. Off by default: archived means hidden. */
+  includeArchived?: boolean;
 }
 
 interface NoteRow {
@@ -64,6 +81,10 @@ interface NoteRow {
   ref_count: number;
   created_at: string;
   ttl_at: string | null;
+  archival: number;
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
 }
 
 function rowToNote(row: NoteRow): Note {
@@ -74,7 +95,8 @@ function rowToNote(row: NoteRow): Note {
   } catch {
     // tolerate malformed JSON
   }
-  return { ...row, tags };
+  const { archival, ...rest } = row;
+  return { ...rest, tags, kept: archival === 1 };
 }
 
 export function createNote(db: Database.Database, input: NoteInput): Note {
@@ -149,11 +171,8 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
     clauses.push("content LIKE ?");
     params.push(`%${q.search}%`);
   }
-  if (q.excludeExpired) {
-    // Normalize via datetime() — TTLs are written as ISO 8601 strings with T/Z,
-    // while datetime('now') returns SQLite's own format (no T, no Z).
-    clauses.push("(ttl_at IS NULL OR datetime(ttl_at) > datetime('now'))");
-  }
+  if (q.excludeExpired) clauses.push(liveUnexpired(q.includeArchived));
+  if (!q.includeArchived) clauses.push("archived_at IS NULL");
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = q.limit && q.limit > 0 ? `LIMIT ${Math.floor(q.limit)}` : "";
@@ -165,6 +184,20 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
   // gives us deterministic newest-first ordering at sub-second precision.
   const sql = `SELECT * FROM notes ${where} ORDER BY created_at DESC, rowid DESC ${limit}`;
   return (db.prepare(sql).all(...params) as NoteRow[]).map(rowToNote);
+}
+
+/**
+ * The expiry filter. Normalized via datetime(): TTLs are written as ISO 8601
+ * strings with T/Z, while datetime('now') returns SQLite's own format (no T,
+ * no Z). With archived notes in the result it applies to live notes only.
+ *
+ * A kept note never expires. `keepNote` clears its TTL, but a note kept under
+ * the old name (`archive`, which set the flag and left the TTL) may still
+ * carry one, and the sweep skipping it is no use if every reader then hides it.
+ */
+function liveUnexpired(includeArchived: boolean | undefined): string {
+  const unexpired = "archival = 1 OR ttl_at IS NULL OR datetime(ttl_at) > datetime('now')";
+  return includeArchived ? `(archived_at IS NOT NULL OR ${unexpired})` : `(${unexpired})`;
 }
 
 /**
@@ -185,6 +218,8 @@ export interface PinnedNotesQuery {
   limit?: number;
   pinnedImportance?: number;
   excludeExpired?: boolean;
+  /** Also return archived notes. Off by default: an archived note never injects. */
+  includeArchived?: boolean;
 }
 
 export function listPinnedNotes(db: Database.Database, q: PinnedNotesQuery = {}): Note[] {
@@ -207,10 +242,9 @@ export function listPinnedNotes(db: Database.Database, q: PinnedNotesQuery = {})
   const pinnedImportance = q.pinnedImportance ?? 0.95;
   clauses.push("(EXISTS (SELECT 1 FROM json_each(notes.tags) WHERE json_each.value = 'pinned') OR importance >= ?)");
   params.push(pinnedImportance);
-  if (q.excludeExpired !== false) {
-    // Default ON — expired pinned notes shouldn't keep injecting.
-    clauses.push("(ttl_at IS NULL OR datetime(ttl_at) > datetime('now'))");
-  }
+  // Default ON — expired pinned notes shouldn't keep injecting.
+  if (q.excludeExpired !== false) clauses.push(liveUnexpired(q.includeArchived));
+  if (!q.includeArchived) clauses.push("archived_at IS NULL");
   const where = `WHERE ${clauses.join(" AND ")}`;
   const limit = q.limit && q.limit > 0 ? `LIMIT ${Math.floor(q.limit)}` : "LIMIT 10";
   const sql = `SELECT * FROM notes ${where}
@@ -247,20 +281,87 @@ export function updateNote(db: Database.Database, id: string, patch: NotePatch):
   return getNote(db, id);
 }
 
+/**
+ * Delete a note for good, with the search chunks promoted from it. Without the
+ * chunks going too, a deleted note stayed findable by semantic search under
+ * its old text. This is a person's delete; agents and the sweep archive.
+ */
 export function deleteNote(db: Database.Database, id: string): boolean {
-  const res = db.prepare("DELETE FROM notes WHERE id = ?").run(id);
-  return res.changes > 0;
+  return db.transaction(() => {
+    const res = db.prepare("DELETE FROM notes WHERE id = ?").run(id);
+    if (res.changes > 0) db.prepare("DELETE FROM memory_chunks WHERE source = ?").run(`note:${id}`);
+    return res.changes > 0;
+  })();
+}
+
+/**
+ * Hide a note without deleting it. It drops out of recall, injection and
+ * lists, and so do the chunks promoted from it, until {@link unarchiveNote}.
+ *
+ * Idempotent: archiving an archived note leaves its original stamp, so "when
+ * and why did this go?" keeps its first answer. Returns the note (archived
+ * either way), or null when there is no such note.
+ */
+export function archiveNote(
+  db: Database.Database,
+  id: string,
+  opts: { by?: string | null; reason?: string | null } = {},
+): Note | null {
+  db.prepare(
+    `UPDATE notes SET archived_at = datetime('now'), archived_by = ?, archive_reason = ?
+      WHERE id = ? AND archived_at IS NULL`,
+  ).run(opts.by ?? null, opts.reason ?? null, id);
+  return getNote(db, id);
+}
+
+/**
+ * Bring an archived note back. Null when there is no such note.
+ *
+ * A TTL that has already passed is cleared, so the note stops expiring. The
+ * sweep archives notes because they expired: restoring one with its old TTL
+ * would leave it hidden from every reader (they all drop expired notes) and
+ * out of the archive view too, and the next sweep would archive it again.
+ * Asking for a note back is a stronger signal than the TTL it was written with.
+ */
+export function unarchiveNote(db: Database.Database, id: string): Note | null {
+  db.prepare(
+    `UPDATE notes SET archived_at = NULL, archived_by = NULL, archive_reason = NULL,
+            ttl_at = CASE WHEN ttl_at IS NOT NULL AND datetime(ttl_at) <= datetime('now') THEN NULL ELSE ttl_at END
+      WHERE id = ?`,
+  ).run(id);
+  return getNote(db, id);
+}
+
+/**
+ * Mark a note kept: it never expires, so the sweep leaves it alone and no
+ * reader drops it for being past its TTL. Clearing the TTL is what makes the
+ * second half true; the sweep skipping a kept note did nothing for the readers,
+ * which hid it as soon as the TTL passed. The reason goes on as a
+ * `keep: <reason>` tag (once) so the Memory page can say why. Idempotent.
+ * Null when there is no such note.
+ */
+export function keepNote(db: Database.Database, id: string, reason: string): Note | null {
+  db.prepare(
+    `UPDATE notes SET ttl_at = NULL,
+            tags = CASE WHEN archival = 0 THEN json_insert(tags, '$[#]', ?) ELSE tags END,
+            archival = 1
+      WHERE id = ?`,
+  ).run(`keep: ${reason}`, id);
+  return getNote(db, id);
 }
 
 /**
  * Increment a note's ref_count. Used as the auto-promotion signal — every
  * time a note is surfaced by recall, this ticks up. Returns the new count
- * (or null if the note doesn't exist).
+ * (or null if the note doesn't exist or is archived).
+ *
+ * An archived note only surfaces when someone asks for archived notes, which
+ * is a look back rather than use, so it neither counts nor gets promoted.
  */
 export function incrementNoteRef(db: Database.Database, id: string): number | null {
-  const res = db.prepare("UPDATE notes SET ref_count = ref_count + 1 WHERE id = ? RETURNING ref_count").get(id) as
-    | { ref_count: number }
-    | undefined;
+  const res = db
+    .prepare("UPDATE notes SET ref_count = ref_count + 1 WHERE id = ? AND archived_at IS NULL RETURNING ref_count")
+    .get(id) as { ref_count: number } | undefined;
   return res?.ref_count ?? null;
 }
 
@@ -276,14 +377,22 @@ export function extendNoteTtl(db: Database.Database, id: string, extraDays: numb
   return newTtl;
 }
 
-/** Delete notes whose ttl_at has passed unless importance >= keepThreshold. */
+/**
+ * Archive notes whose ttl_at has passed, unless they are kept or their
+ * importance is at least `keepImportance`. Returns how many were archived.
+ *
+ * Archived, not deleted: `archived_by` is `sweep` and the reason `expired`,
+ * so an expired note someone still wanted can be found and brought back.
+ */
 export function sweepExpiredNotes(db: Database.Database, keepImportance = 0.8): number {
   const res = db
     .prepare(
-      `DELETE FROM notes
+      `UPDATE notes SET archived_at = datetime('now'), archived_by = 'sweep', archive_reason = 'expired'
        WHERE ttl_at IS NOT NULL
          AND datetime(ttl_at) <= datetime('now')
-         AND (importance IS NULL OR importance < ?)`,
+         AND (importance IS NULL OR importance < ?)
+         AND archival = 0
+         AND archived_at IS NULL`,
     )
     .run(keepImportance);
   return res.changes;

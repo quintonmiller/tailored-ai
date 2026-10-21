@@ -8,7 +8,7 @@ import {
   summarizeSession,
   sweepIdleSessions,
 } from "../agent/summarize-session.js";
-import { listNotes } from "../db/note-queries.js";
+import { archiveNote, listNotes } from "../db/note-queries.js";
 import { deleteSession, findIdleSessions, saveMessage } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
 import type { AIProvider } from "../providers/interface.js";
@@ -111,6 +111,18 @@ describe("summarizeSession", () => {
     const forced = await summarizeSession(db, session.id, stubProvider("third"), "m", { force: true });
     expect(forced).not.toBeNull();
     expect(listNotes(db, { tag: SESSION_SUMMARY_TAG }).length).toBe(2);
+  });
+
+  it("an archived summary still counts, so the session is not summarized again", async () => {
+    const session = newSession(db, "m", "p");
+    seedConversation(session.id, 8);
+    const first = await summarizeSession(db, session.id, stubProvider("first"), "m");
+    archiveNote(db, first!.noteId, { by: "sweep", reason: "expired" });
+
+    expect(await summarizeSession(db, session.id, stubProvider("second"), "m")).toBeNull();
+    expect(listNotes(db, { tag: SESSION_SUMMARY_TAG, includeArchived: true })).toHaveLength(1);
+    // And the archived one is not what the session's summary reads as.
+    expect(getSessionSummary(db, session.id)).toBeNull();
   });
 
   it("returns null when the summarizer produces empty output", async () => {

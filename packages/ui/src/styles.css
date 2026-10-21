@@ -6428,10 +6428,14 @@ select.model-entry-model {
 }
 .memory-filters {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
+/* Wraps on a phone instead of setting the page's width to the row's. */
 .memory-filters input {
-  flex: 1;
+  flex: 1 1 180px;
+  min-width: 0;
 }
 .memory-note {
   border: 1px solid var(--border);
@@ -7559,6 +7563,55 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   border-radius: 3px;
 }
 .memory-fact-delete:hover { color: #c25656; background: var(--bg-hover); }
+.memory-fact-archive {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.memory-fact-archive:hover { color: var(--text); background: var(--bg-hover); }
+
+/* Archived notes and facts: still listed when asked for, visibly out of play. */
+.memory-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.memory-note-archived,
+.memory-fact-archived {
+  border-style: dashed;
+  background: transparent;
+}
+.memory-note-archived .memory-note-content,
+.memory-fact-archived .memory-fact-value {
+  color: var(--text-muted);
+}
+.memory-archived-stamp {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+/* A fact's stamp gets its own line, so a long reason can't squeeze the value. */
+.memory-fact-stamp {
+  grid-column: 1 / -1;
+  margin-top: -6px;
+}
+.memory-kept-badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
 
 /* ── Trusted-actions (Actions page) ─────────────────────────────────── */
 

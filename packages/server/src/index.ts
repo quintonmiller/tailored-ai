@@ -129,6 +129,7 @@ import {
   StateConflictError,
   StateError,
   type Suggestions,
+  sessionAgent,
   setSecret,
   speakable,
   speechStages,
@@ -299,10 +300,27 @@ function fragmentToNote(fragment: MemoryFragment): Record<string, unknown> {
     ttl_at: typeof md.ttl_at === "string" ? md.ttl_at : null,
     project_id: typeof md.project_id === "string" ? md.project_id : null,
     agent: typeof md.agent === "string" ? md.agent : null,
-    // session_id isn't in the SQLite noteFragment metadata today; callers
-    // that want it should `getNote` directly. Surface as null for shape parity.
     session_id: typeof md.session_id === "string" ? md.session_id : null,
+    kept: md.kept === true,
+    ...archiveFields(md),
   };
+}
+
+/** The archive stamp as the API gives it: null on a live record, whatever the backend sent. */
+function archiveFields(md: Record<string, unknown>): Record<string, string | null> {
+  return {
+    archived_at: typeof md.archived_at === "string" ? md.archived_at : null,
+    archived_by: typeof md.archived_by === "string" ? md.archived_by : null,
+    archive_reason: typeof md.archive_reason === "string" ? md.archive_reason : null,
+  };
+}
+
+/** Who a person's archive through the API is stamped with, matching the state routes' caller. */
+const OWNER = "owner";
+
+/** `?includeArchived=1` (or `true`) on a list route. */
+function wantsArchived(raw: string | undefined): boolean {
+  return raw === "1" || raw === "true";
 }
 
 /**
@@ -324,6 +342,7 @@ function fragmentToFact(fragment: MemoryFragment): Record<string, unknown> {
     project_id: typeof md.project_id === "string" ? md.project_id : null,
     created_at: typeof md.created_at === "string" ? md.created_at : null,
     updated_at: typeof md.updated_at === "string" ? md.updated_at : null,
+    ...archiveFields(md),
   };
 }
 
@@ -708,7 +727,12 @@ export function createServer(opts: ServerOptions) {
     let noteId: string | null = null;
     if (wantSummary) {
       try {
-        const result = await summarizeSession(runtime.db, id, runtime.getProvider(), runtime.getModel(), { force });
+        // The summary belongs to the session's agent when one ran it, so it
+        // stays as private in recall as the conversation was.
+        const result = await summarizeSession(runtime.db, id, runtime.getProvider(), runtime.getModel(), {
+          force,
+          agent: sessionAgent(runtime.db, id),
+        });
         if (result) noteId = result.noteId;
       } catch (err) {
         console.error("[server] session summary failed:", (err as Error).message);
@@ -731,8 +755,7 @@ export function createServer(opts: ServerOptions) {
     const agent = c.req.query("agent");
     const limitParam = c.req.query("limit");
     const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
-    // ?project=global → un-scoped (null). Omitted → no project filter.
-    const projectFilter = project === undefined ? undefined : project === "global" ? null : project;
+    const includeArchived = wantsArchived(c.req.query("includeArchived"));
     const backend = await runtime.getMemoryBackend();
     if (!backend.list) {
       return c.json({ error: "list not supported by the active memory backend" }, 501);
@@ -741,14 +764,21 @@ export function createServer(opts: ServerOptions) {
     // We over-fetch and filter client-side on the agent metadata; for
     // `search` we substring-match the fragment text. Cheap for the typical
     // notes-table sizes; revisit if a remote backend ships paginated list.
+    //
+    // ?project=global → global notes only. Omitted → every project, which is
+    // `allProjects`: a scope with no project token means global to a backend,
+    // so leaving it out used to show only global notes. A backend that
+    // doesn't know the field still gets `global` and lists what it used to.
     const scope = buildScope({
-      projectId: typeof projectFilter === "string" ? projectFilter : undefined,
+      projectId: project === "global" ? undefined : project,
       agent: agent || undefined,
     });
     const fragments = await backend.list({
       scope,
+      allProjects: project === undefined,
       kind: "note",
       tags: tag ? [tag] : undefined,
+      includeArchived,
       limit: search || agent ? Math.max(limit, 500) : limit,
     });
     let notes = fragments.map(fragmentToNote);
@@ -803,6 +833,37 @@ export function createServer(opts: ServerOptions) {
       if (fragment) return c.json(fragmentToNote(fragment), 201);
     }
     return c.json({ id: stripIdPrefix(id, "note") }, 201);
+  });
+
+  // Archive and unarchive go through the backend, so a plugin store that can
+  // archive gets the same routes, and one that can't says so with a 501
+  // rather than a success that left the note live.
+  app.post("/api/memory/notes/:id/archive", async (c) => {
+    const { id } = c.req.param();
+    const body = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
+    const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : undefined;
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.archive) {
+      return c.json({ error: "archive not supported by the active memory backend" }, 501);
+    }
+    const ok =
+      (await backend.archive(`note:${id}`, { by: OWNER, reason })) ||
+      (await backend.archive(id, { by: OWNER, reason }));
+    if (!ok) return c.json({ error: "note not found" }, 404);
+    const fragment = backend.get ? ((await backend.get(`note:${id}`)) ?? (await backend.get(id))) : null;
+    return c.json(fragment ? fragmentToNote(fragment) : { id, archived: true });
+  });
+
+  app.post("/api/memory/notes/:id/unarchive", async (c) => {
+    const { id } = c.req.param();
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.unarchive) {
+      return c.json({ error: "unarchive not supported by the active memory backend" }, 501);
+    }
+    const ok = (await backend.unarchive(`note:${id}`)) || (await backend.unarchive(id));
+    if (!ok) return c.json({ error: "note not found" }, 404);
+    const fragment = backend.get ? ((await backend.get(`note:${id}`)) ?? (await backend.get(id))) : null;
+    return c.json(fragment ? fragmentToNote(fragment) : { id, archived: false });
   });
 
   app.get("/api/memory/notes/:id", async (c) => {
@@ -875,7 +936,8 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: "delete not supported by the active memory backend" }, 501);
     }
     // Try the prefixed form (canonical for SQLite), fall back to bare id
-    // for backends that don't use the kind-prefix convention.
+    // for backends that don't use the kind-prefix convention. A person's
+    // delete is for good, and takes the note's search chunks with it.
     const ok = (await backend.delete(`note:${id}`)) || (await backend.delete(id));
     if (!ok) return c.json({ error: "note not found" }, 404);
     return c.json({ deleted: true });
@@ -895,6 +957,7 @@ export function createServer(opts: ServerOptions) {
     const body = (await c.req.json<{ force?: boolean }>().catch(() => ({}))) as { force?: boolean };
     const result = await promoteNote(runtime.db, embedder, id, { force: body.force === true });
     if (!result) return c.json({ error: "note not found" }, 404);
+    if (result.archived) return c.json({ error: "note is archived — unarchive it before promoting" }, 409);
     return c.json(result);
   });
 
@@ -916,6 +979,7 @@ export function createServer(opts: ServerOptions) {
         limit,
         embedder,
         embedModel: runtime.getConfig().memory?.embeddings?.model,
+        includeArchived: wantsArchived(c.req.query("includeArchived")),
       },
       runtime.db,
     );
@@ -923,8 +987,8 @@ export function createServer(opts: ServerOptions) {
   });
 
   // Stats stays SQLite-direct: analytics over SQLite-specific shape
-  // (ref_count, archival tag filter, chunk count) that isn't part of the
-  // MemoryBackend contract.
+  // (ref_count, chunk count) that isn't part of the MemoryBackend contract.
+  // Every count is of live records; archived ones are counted on their own.
   app.get("/api/memory/stats", (c) => {
     const project = c.req.query("project");
     const projectFilter = project === undefined ? undefined : project === "global" ? null : project;
@@ -937,6 +1001,12 @@ export function createServer(opts: ServerOptions) {
       includeGlobal: typeof projectFilter === "string",
     });
     const summaries = liveNotes.filter((n) => n.tags.includes(SESSION_SUMMARY_TAG));
+    const archivedNotes = listNotes(runtime.db, {
+      project_id: projectFilter,
+      includeArchived: true,
+      limit: 10_000,
+      includeGlobal: typeof projectFilter === "string",
+    }).filter((n) => n.archived_at !== null).length;
     const chunks = countChunks(runtime.db, projectFilter as string | null | undefined);
     // Facts live in a separate table — count them so the stats tile reflects
     // reality when the agent has been writing facts instead of notes.
@@ -945,6 +1015,12 @@ export function createServer(opts: ServerOptions) {
       limit: 10_000,
       includeGlobal: typeof projectFilter === "string",
     });
+    const archivedFacts = listFacts(runtime.db, {
+      project_id: projectFilter as string | null | undefined,
+      includeArchived: true,
+      limit: 10_000,
+      includeGlobal: typeof projectFilter === "string",
+    }).filter((f) => f.archived_at !== null).length;
 
     // Most-referenced (live) notes.
     const topReferenced = [...liveNotes]
@@ -966,6 +1042,8 @@ export function createServer(opts: ServerOptions) {
         facts: facts.length,
         sessionSummaries: summaries.length,
         chunks,
+        archivedNotes,
+        archivedFacts,
       },
       topReferenced,
       embeddingsEnabled: !!embedder,
@@ -974,7 +1052,8 @@ export function createServer(opts: ServerOptions) {
   });
 
   // Sweep stays SQLite-direct: lifecycle operation (TTL eviction, ref-count
-  // decay) owned by the SQLite backend's internal tables.
+  // decay) owned by the SQLite backend's internal tables. It archives expired
+  // notes rather than deleting them; the report says how many.
   app.post("/api/memory/sweep", (c) => {
     const report = runMemorySweep(runtime.db);
     return c.json(report);
@@ -2478,6 +2557,7 @@ export function createServer(opts: ServerOptions) {
     const entity = c.req.query("entity");
     const key = c.req.query("key");
     const search = c.req.query("search");
+    const includeArchived = wantsArchived(c.req.query("includeArchived"));
 
     const backend = await runtime.getMemoryBackend();
     if (!backend.list) {
@@ -2490,6 +2570,7 @@ export function createServer(opts: ServerOptions) {
     const fragments = await backend.list({
       scope,
       kind: "fact",
+      includeArchived,
       limit: needsClientFilter ? Math.max(limit ?? 100, 1000) : limit,
     });
     let facts = fragments.map(fragmentToFact);
@@ -2570,6 +2651,34 @@ export function createServer(opts: ServerOptions) {
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }
+  });
+
+  app.post("/api/facts/:id/archive", async (c) => {
+    const { id } = c.req.param();
+    const body = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
+    const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : undefined;
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.archive) {
+      return c.json({ error: "archive not supported by the active memory backend" }, 501);
+    }
+    const ok =
+      (await backend.archive(`fact:${id}`, { by: OWNER, reason })) ||
+      (await backend.archive(id, { by: OWNER, reason }));
+    if (!ok) return c.json({ error: "Fact not found" }, 404);
+    const fragment = backend.get ? ((await backend.get(`fact:${id}`)) ?? (await backend.get(id))) : null;
+    return c.json(fragment ? fragmentToFact(fragment) : { id, archived: true });
+  });
+
+  app.post("/api/facts/:id/unarchive", async (c) => {
+    const { id } = c.req.param();
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.unarchive) {
+      return c.json({ error: "unarchive not supported by the active memory backend" }, 501);
+    }
+    const ok = (await backend.unarchive(`fact:${id}`)) || (await backend.unarchive(id));
+    if (!ok) return c.json({ error: "Fact not found" }, 404);
+    const fragment = backend.get ? ((await backend.get(`fact:${id}`)) ?? (await backend.get(id))) : null;
+    return c.json(fragment ? fragmentToFact(fragment) : { id, archived: false });
   });
 
   app.delete("/api/facts/:id", async (c) => {

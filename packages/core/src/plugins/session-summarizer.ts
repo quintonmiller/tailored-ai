@@ -28,7 +28,7 @@ import type Database from "better-sqlite3";
 import { SESSION_SUMMARY_TAG, sweepIdleSessions } from "../agent/summarize-session.js";
 import { type CoreMemoryRow, getCoreMemorySection, setCoreMemory } from "../db/core-memory-queries.js";
 import { listNotes } from "../db/note-queries.js";
-import { getSession } from "../db/queries.js";
+import { getSession, sessionAgent } from "../db/queries.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
@@ -52,7 +52,9 @@ const DEFAULTS = {
  * Agent the seeded `recent_summary` is keyed by. Sessions don't store an
  * agent, and an anonymous chat (Discord DM, fresh CLI) runs as the
  * `"default"` agent — that's the scope `agent/loop.ts` reads core memory
- * with. Writing here lands exactly where the next turn reads it.
+ * with. Writing here lands exactly where the next turn reads it. It is
+ * composed from this agent's summaries and unowned ones, never from another
+ * named agent's.
  */
 const FALLBACK_AGENT = "default";
 
@@ -121,10 +123,14 @@ export class SessionSummarizer {
     if (this.running) return;
     this.running = true;
     try {
-      const result = await sweepIdleSessions(this.runtime.db, this.runtime.getProvider(), this.runtime.getModel(), {
+      const db = this.runtime.db;
+      const result = await sweepIdleSessions(db, this.runtime.getProvider(), this.runtime.getModel(), {
         idleMinutes: this.cfg.idleMinutes,
         keyPrefixes: this.cfg.keyPrefixes,
         limit: this.cfg.maxPerSweep,
+        // A summary belongs to the agent that ran the session, so recall keeps
+        // it as private as the conversation was.
+        agentFor: (id) => sessionAgent(db, id),
       });
 
       // Silent when nothing was summarized (the common steady state).
@@ -203,10 +209,14 @@ export function composeRecentSummary(
   projectId: string | null,
   opts: { count: number; maxBytes: number },
 ): string {
-  // Newest-first; listNotes orders by created_at DESC, rowid DESC.
+  // Newest-first; listNotes orders by created_at DESC, rowid DESC. Only the
+  // fallback agent's summaries and unowned ones: another agent's summary in
+  // this always-injected section would be narrated as this agent's own past.
   const notes = listNotes(db, {
     tag: SESSION_SUMMARY_TAG,
     project_id: projectId,
+    agent: FALLBACK_AGENT,
+    includeUnowned: true,
     limit: opts.count,
     excludeExpired: true,
   });

@@ -192,3 +192,135 @@ describe("SqliteMemoryBackend — list and count", () => {
     expect(sections).toEqual(["active_threads", "persona"]);
   });
 });
+
+describe("SqliteMemoryBackend — archive", () => {
+  it("archive hides a note from query, list and count; get still returns it, marked", async () => {
+    const { id } = await backend.write({ text: "the boat leaves at noon" }, { scope: "project:p" });
+    await backend.write({ text: "the boat is blue" }, { scope: "project:p" });
+
+    expect(await backend.archive(id, { by: "assistant", reason: "trip cancelled" })).toBe(true);
+
+    const hits = await backend.query({ freeText: "boat", scope: "project:p" });
+    expect(hits.map((h) => h.id)).not.toContain(id);
+    const listed = await backend.list({ scope: "project:p" });
+    expect(listed.map((h) => h.id)).not.toContain(id);
+    expect(await backend.count({ scope: "project:p" })).toBe(1);
+
+    const got = await backend.get(id);
+    expect(got?.metadata).toMatchObject({
+      archived_by: "assistant",
+      archive_reason: "trip cancelled",
+    });
+    expect(typeof got?.metadata?.archived_at).toBe("string");
+
+    // includeArchived brings it back everywhere, marked.
+    const all = await backend.query({ freeText: "boat", scope: "project:p", includeArchived: true });
+    expect(all.find((h) => h.id === id)?.metadata?.archived_at).toBeTruthy();
+    expect((await backend.list({ scope: "project:p", includeArchived: true })).map((h) => h.id)).toContain(id);
+    expect(await backend.count({ scope: "project:p", includeArchived: true })).toBe(2);
+  });
+
+  it("a live record carries no archive keys at all", async () => {
+    const { id } = await backend.write({ text: "live" });
+    const got = await backend.get(id);
+    expect(got?.metadata).not.toHaveProperty("archived_at");
+    expect(got?.metadata?.kept).toBe(false);
+  });
+
+  it("unarchive restores; both verbs refuse unknown ids, chunks and core memory", async () => {
+    const { id } = await backend.write({ text: "x" });
+    await backend.archive(id);
+    expect(await backend.unarchive(id)).toBe(true);
+    expect((await backend.list({})).map((h) => h.id)).toContain(id);
+
+    expect(await backend.archive("note:note_nope")).toBe(false);
+    expect(await backend.unarchive("note:note_nope")).toBe(false);
+    const chunk = await backend.write({ text: "c" }, { kind: "chunk" });
+    expect(await backend.archive(chunk.id)).toBe(false);
+    expect(await backend.archive("prelude:tester/persona")).toBe(false);
+    expect(await backend.archive("garbage")).toBe(false);
+  });
+
+  it("archives facts: gone from list, search and count; fetched by key it comes back marked", async () => {
+    const { id } = await backend.write(
+      { text: "Lisbon", structured: { category: "person", entity: "alice", key: "city" } },
+      { kind: "fact" },
+    );
+    await backend.archive(id, { by: "assistant", reason: "forgotten" });
+    expect(await backend.list({ kind: "fact" })).toHaveLength(0);
+    expect(await backend.count({ kind: "fact" })).toBe(0);
+    expect((await backend.query({ freeText: "alice" })).filter((h) => h.metadata?.kind === "fact")).toHaveLength(0);
+    const byKey = await backend.query({ wantStructured: { category: "person", entity: "alice", key: "city" } });
+    expect(byKey[0]?.metadata?.archive_reason).toBe("forgotten");
+    expect(await backend.list({ kind: "fact", includeArchived: true })).toHaveLength(1);
+  });
+
+  it("archived note chunks leave semantic results; KB chunks stay", async () => {
+    const { id } = await backend.write({ text: "promoted note" }, { scope: "project:p" });
+    const vector = Float32Array.from([1, 0, 0]);
+    await backend.write({ text: "promoted note" }, { kind: "chunk", scope: "project:p", vector, sourceUri: id });
+    await backend.write({ text: "kb page" }, { kind: "chunk", scope: "project:p", vector, sourceUri: "kb:a.md" });
+    await backend.archive(id);
+    const hits = await backend.query({ vector, scope: "project:p", limit: 10 });
+    expect(hits.map((h) => h.metadata?.source)).toEqual(["kb:a.md"]);
+    expect(await backend.count({ kind: "chunk", scope: "project:p" })).toBe(1);
+    expect((await backend.list({ kind: "chunk", scope: "project:p" })).map((h) => h.metadata?.source)).toEqual([
+      "kb:a.md",
+    ]);
+  });
+
+  // A chunk has no archive state of its own, but when includeArchived brings
+  // back a chunk of an archived note it must say so, or recall prints the
+  // archived note's text as live memory next to the marked note.
+  it("a chunk of an archived note comes back marked: query, list and get", async () => {
+    const { id } = await backend.write({ text: "promoted note" }, { scope: "project:p" });
+    const vector = Float32Array.from([1, 0, 0]);
+    const chunk = await backend.write(
+      { text: "promoted note" },
+      { kind: "chunk", scope: "project:p", vector, sourceUri: id },
+    );
+    expect((await backend.get(chunk.id))?.metadata).not.toHaveProperty("archived_at");
+
+    await backend.archive(id, { by: "planner", reason: "superseded" });
+    const stamp = { archived_by: "planner", archive_reason: "superseded" };
+    const hits = await backend.query({ vector, scope: "project:p", includeArchived: true, limit: 10 });
+    const hit = hits.find((h) => h.metadata?.source === id);
+    expect(hit?.metadata).toMatchObject(stamp);
+    expect(typeof hit?.metadata?.archived_at).toBe("string");
+    const listed = await backend.list({ kind: "chunk", scope: "project:p", includeArchived: true });
+    expect(listed[0]?.metadata).toMatchObject(stamp);
+    expect((await backend.get(chunk.id))?.metadata).toMatchObject(stamp);
+
+    await backend.unarchive(id);
+    expect((await backend.get(chunk.id))?.metadata).not.toHaveProperty("archived_at");
+  });
+
+  it("delete is a real delete and takes the note's chunks with it", async () => {
+    const { id } = await backend.write({ text: "gone" }, { scope: "project:p" });
+    await backend.write({ text: "gone" }, { kind: "chunk", scope: "project:p", sourceUri: id });
+    expect(await backend.delete(id)).toBe(true);
+    expect(await backend.get(id)).toBeNull();
+    const left = db.prepare("SELECT COUNT(*) AS c FROM memory_chunks WHERE source = ?").get(id) as { c: number };
+    expect(left.c).toBe(0);
+  });
+});
+
+describe("SqliteMemoryBackend — allProjects", () => {
+  it("lists and counts across every project, where no project token means global", async () => {
+    await backend.write({ text: "in a" }, { scope: "project:a" });
+    await backend.write({ text: "in b" }, { scope: "project:b" });
+    await backend.write({ text: "global" }, { scope: "global" });
+    const every = { scope: "global", allProjects: true };
+    expect((await backend.list(every)).map((h) => h.text).sort()).toEqual(["global", "in a", "in b"]);
+    expect(await backend.count(every)).toBe(3);
+    expect((await backend.list({ scope: "global" })).map((h) => h.text)).toEqual(["global"]);
+  });
+
+  it("wins over a project in the scope, and keeps the agent token", async () => {
+    await backend.write({ text: "planner's" }, { scope: "project:a agent:planner" });
+    await backend.write({ text: "writer's" }, { scope: "project:b agent:writer" });
+    await backend.write({ text: "nobody's" }, { scope: "global" });
+    const listed = await backend.list({ scope: "project:a agent:planner", allProjects: true });
+    expect(listed.map((h) => h.text).sort()).toEqual(["nobody's", "planner's"]);
+  });
+});

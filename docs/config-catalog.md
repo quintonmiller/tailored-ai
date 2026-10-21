@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 41 | 134 |
+| `agents` | object | {} | 41 | 135 |
 
 ### `autopilot`
 
@@ -155,7 +155,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `suggestions.count` | number | `4` | 18 | 1 |
+| `suggestions.count` | number | `4` | 19 | 1 |
 | `suggestions.enabled` | boolean | `false` | 46 | 1 |
 | `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 27 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |

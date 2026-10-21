@@ -2,7 +2,16 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { promoteNote, recordNoteHit, runMemorySweep } from "../agent/memory-promotion.js";
 import { countChunks, createChunk, listChunksBySource } from "../db/chunk-queries.js";
-import { createNote, extendNoteTtl, getNote, incrementNoteRef, listNotes } from "../db/note-queries.js";
+import {
+  archiveNote,
+  createNote,
+  extendNoteTtl,
+  getNote,
+  incrementNoteRef,
+  keepNote,
+  listNotes,
+  unarchiveNote,
+} from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
@@ -114,6 +123,14 @@ describe("promoteNote", () => {
   it("returns null for a missing note", async () => {
     expect(await promoteNote(db, toyEmbedder(), "note_nope")).toBeNull();
   });
+
+  it("refuses an archived note, indexing nothing", async () => {
+    const n = createNote(db, { content: "important content", project_id: "p" });
+    archiveNote(db, n.id);
+    const res = await promoteNote(db, toyEmbedder(), n.id);
+    expect(res).toMatchObject({ archived: true, chunkCount: 0 });
+    expect(listChunksBySource(db, `note:${n.id}`)).toHaveLength(0);
+  });
 });
 
 describe("recordNoteHit", () => {
@@ -174,6 +191,25 @@ describe("recordNoteHit", () => {
 
   it("returns null for missing notes without throwing", () => {
     expect(recordNoteHit(db, "note_nope")).toBeNull();
+  });
+
+  it("never counts or auto-promotes an archived note", async () => {
+    const n = createNote(db, { content: "x", project_id: "p" });
+    archiveNote(db, n.id);
+    let onPromoteFired = false;
+    expect(
+      recordNoteHit(db, n.id, {
+        embedder: toyEmbedder(),
+        threshold: 1,
+        onPromote: () => {
+          onPromoteFired = true;
+        },
+      }),
+    ).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onPromoteFired).toBe(false);
+    expect(getNote(db, n.id)?.ref_count).toBe(0);
+    expect(listChunksBySource(db, `note:${n.id}`)).toHaveLength(0);
   });
 });
 
@@ -242,16 +278,93 @@ describe("runMemorySweep", () => {
     expect(report.extendedTtl).toBe(0);
   });
 
-  it("deletes expired low-importance notes (delegates to sweepExpiredNotes)", () => {
+  it("archives expired low-importance notes instead of deleting them", () => {
     const past = new Date(Date.now() - 1000).toISOString();
-    createNote(db, { content: "garbage", project_id: "p", ttl_at: past, importance: 0.2 });
+    const garbage = createNote(db, { content: "garbage", project_id: "p", ttl_at: past, importance: 0.2 });
     createNote(db, { content: "keep", project_id: "p", ttl_at: past, importance: 0.9 });
     const report = runMemorySweep(db);
-    expect(report.deletedExpired).toBe(1);
+    expect(report.archivedExpired).toBe(1);
+    expect(report.remainingNotes).toBe(1);
     expect(listNotes(db, {}).length).toBe(1);
+    // Still there, hidden, and stamped so a person can see why.
+    expect(listNotes(db, { includeArchived: true }).length).toBe(2);
+    expect(getNote(db, garbage.id)).toMatchObject({ archived_by: "sweep", archive_reason: "expired" });
   });
 
-  it("extends-then-deletes so referenced-but-stale notes survive", () => {
+  it("never touches a kept note, however expired and unimportant", () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const kept = createNote(db, { content: "the door code", project_id: "p", ttl_at: past, importance: 0.1 });
+    keepNote(db, kept.id, "needed every visit");
+    // Kept under the old name: `archive` set the flag and left the TTL.
+    const old = createNote(db, { content: "the bin day", project_id: "p", ttl_at: past, importance: 0.1 });
+    db.prepare("UPDATE notes SET archival = 1 WHERE id = ?").run(old.id);
+
+    const report = runMemorySweep(db);
+    expect(report.archivedExpired).toBe(0);
+    expect(getNote(db, kept.id)).toMatchObject({ kept: true, archived_at: null });
+    expect(getNote(db, old.id)).toMatchObject({ kept: true, archived_at: null });
+  });
+
+  // Keeping a note has to keep it readable too. The sweep skipping it was no
+  // use while every reader dropped it the moment its TTL passed.
+  it("a kept note never expires, so every reader still has it after its TTL", async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const kept = createNote(db, {
+      content: "the gate code is 4471",
+      ttl_at: new Date(Date.now() + 1000).toISOString(),
+    });
+    keepNote(db, kept.id, "needed every visit");
+    expect(getNote(db, kept.id)?.ttl_at).toBeNull();
+    // A note kept under the old name still has its TTL; it reads as unexpired.
+    const old = createNote(db, { content: "the gate is stiff", ttl_at: past });
+    db.prepare("UPDATE notes SET archival = 1 WHERE id = ?").run(old.id);
+
+    const ids = [kept.id, old.id].sort();
+    expect(
+      listNotes(db, { excludeExpired: true })
+        .map((n) => n.id)
+        .sort(),
+    ).toEqual(ids);
+    expect((await backend.list({})).map((f) => f.id?.slice("note:".length)).sort()).toEqual(ids);
+    const q = await new RecallTool(db).execute({ action: "query", query: "gate", limit: 10 }, makeCtx());
+    expect(q.output).toContain(kept.id);
+    expect(q.output).toContain(old.id);
+  });
+
+  // The sweep archives notes because they expired. Restoring one with its old
+  // TTL left it hidden from every reader and out of the archive view, and the
+  // next sweep archived it again.
+  it("a note the sweep archived, once restored, is back for good", async () => {
+    const swept = createNote(db, {
+      content: "compare ferry times",
+      ttl_at: new Date(Date.now() - 1000).toISOString(),
+    });
+    expect(runMemorySweep(db).archivedExpired).toBe(1);
+    expect(await backend.unarchive(`note:${swept.id}`)).toBe(true);
+
+    expect(getNote(db, swept.id)).toMatchObject({ archived_at: null, ttl_at: null });
+    expect((await backend.list({})).map((f) => f.id)).toContain(`note:${swept.id}`);
+    const q = await new RecallTool(db).execute({ action: "query", query: "ferry" }, makeCtx());
+    expect(q.output).toContain(swept.id);
+    expect(runMemorySweep(db).archivedExpired).toBe(0);
+  });
+
+  it("restoring keeps a TTL that hasn't passed", () => {
+    const ttl = new Date(Date.now() + 86_400_000).toISOString();
+    const n = createNote(db, { content: "x", ttl_at: ttl });
+    archiveNote(db, n.id);
+    expect(unarchiveNote(db, n.id)?.ttl_at).toBe(ttl);
+  });
+
+  it("leaves an archived note's stamp alone on the next sweep", () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    const n = createNote(db, { content: "old", project_id: "p", ttl_at: past });
+    archiveNote(db, n.id, { by: "assistant", reason: "wrong" });
+    expect(runMemorySweep(db).archivedExpired).toBe(0);
+    expect(getNote(db, n.id)).toMatchObject({ archived_by: "assistant", archive_reason: "wrong" });
+  });
+
+  it("extends-then-archives so referenced-but-stale notes survive", () => {
     const past = new Date(Date.now() - 1000).toISOString();
     const refed = createNote(db, {
       content: "popular but expired",
@@ -265,9 +378,9 @@ describe("runMemorySweep", () => {
 
     const report = runMemorySweep(db);
     expect(report.extendedTtl).toBe(1);
-    // The extend ran first, so the delete sweep finds nothing expired.
-    expect(report.deletedExpired).toBe(0);
-    expect(getNote(db, refed.id)).not.toBeNull();
+    // The extend ran first, so the sweep finds nothing expired.
+    expect(report.archivedExpired).toBe(0);
+    expect(getNote(db, refed.id)?.archived_at).toBeNull();
   });
 
   it("reports remainingNotes + totalChunks counts", () => {
@@ -276,6 +389,17 @@ describe("runMemorySweep", () => {
     createChunk(db, { source: "x", content: "c", project_id: "p" });
     const report = runMemorySweep(db);
     expect(report.remainingNotes).toBe(2);
+    expect(report.totalChunks).toBe(1);
+  });
+
+  it("counts only live notes, and only chunks that can still surface", () => {
+    const a = createNote(db, { content: "a", project_id: "p" });
+    createNote(db, { content: "b", project_id: "p" });
+    createChunk(db, { source: `note:${a.id}`, content: "a", project_id: "p" });
+    createChunk(db, { source: "kb:guide.md", content: "kb", project_id: "p" });
+    archiveNote(db, a.id);
+    const report = runMemorySweep(db);
+    expect(report.remainingNotes).toBe(1);
     expect(report.totalChunks).toBe(1);
   });
 });
@@ -318,6 +442,14 @@ describe("RecallTool promote action", () => {
     await tool.execute({ action: "promote", id: n.id }, makeCtx());
     const reidx = await tool.execute({ action: "promote", id: n.id, force: true }, makeCtx());
     expect(reidx.output).toMatch(/promoted note_/);
+  });
+
+  it("takes the note:<id> form query shows for a promoted note", async () => {
+    const tool = new RecallTool(db, { getEmbedder: () => toyEmbedder() });
+    const n = createNote(db, { content: "promote me", project_id: "p" });
+    const res = await tool.execute({ action: "promote", id: `note:${n.id}` }, makeCtx());
+    expect(res.output).toMatch(/promoted note:note_[a-f0-9]{8} → \d+ chunks/);
+    expect(listChunksBySource(db, `note:${n.id}`).length).toBeGreaterThan(0);
   });
 
   it("returns no-note marker for unknown id", async () => {

@@ -67,7 +67,7 @@ storage modules. They live in the *agent layer*, not the storage layer —
 important for the design below.
 
 SQL features the SQLite layer actually uses:
-- JSON1 (`json_each` for tag filtering, `json_insert` for archival flag).
+- JSON1 (`json_each` for tag filtering, `json_insert` for the `keep: <reason>` tag).
 - Triggers (`trg_facts_updated_at`, audit append-only).
 - Float32 blobs for embeddings + in-process cosine sweep.
 - `ON DELETE CASCADE` on `notes → sessions` and `chunks → projects`.
@@ -83,7 +83,7 @@ context goes through the registry. Operational state stays in SQLite.
 
 ## The interface
 
-Two required verbs. Six optional methods. One lifecycle hook. Flat — no
+Two required verbs. Eight optional methods. One lifecycle hook. Flat — no
 sub-objects.
 
 ```ts
@@ -105,6 +105,12 @@ export interface MemoryBackend {
    *  cleanup. Optional in the type system so backends that genuinely
    *  can't expose deletion (rare) aren't forced to lie. */
   delete?(id: string): Promise<boolean>;
+
+  /** Hide a record without deleting it; `unarchive` restores it. See
+   *  "Archiving" below. Returns false when there is no such record or it
+   *  can't be archived. */
+  archive?(id: string, opts?: { by?: string; reason?: string }): Promise<boolean>;
+  unarchive?(id: string): Promise<boolean>;
 
   /** Text the backend wants prepended to every prompt (identity / always-
    *  injected state). Backends with no concept of persistent identity
@@ -157,6 +163,7 @@ export interface QueryContext {
   wantStructured?: Record<string, unknown>;           // exact-match hint (e.g. fact lookup)
   minImportance?: number;
   includePrelude?: boolean;                           // include always-injected items in results
+  includeArchived?: boolean;                          // also return archived records, marked
   limit?: number;
 }
 
@@ -171,15 +178,60 @@ export interface PreludeContext {
 }
 
 export interface ListQuery {
-  scope?: string | string[];
+  scope?: string | string[];                          // `agent:<name>` = own + unowned
   tags?: string[];
   kind?: string;
   pinned?: boolean;
   expiringBefore?: string;
+  includeArchived?: boolean;
+  allProjects?: boolean;                              // every project, global included, whatever `scope` names
   limit?: number;
   offset?: number;
 }
 ```
+
+### Archiving
+
+`archive` and `unarchive` are optional. A backend that implements them
+promises three things:
+
+- `query`, `list` and `count` leave archived records out unless the caller
+  passes `includeArchived: true`.
+- Wherever an archived record does come back — those calls with
+  `includeArchived`, and `get` always — its `metadata` carries `archived_at`,
+  plus `archived_by` and `archive_reason` when known. A live record carries no
+  such keys.
+- An exact `wantStructured` lookup in `query` is a fetch by identity, like
+  `get`, so it returns an archived record too, marked. The facts tool relies on
+  it: `facts get` says a fact was forgotten, and `facts set` says it restored
+  one. A backend that hides archived records from this lookup makes `facts get`
+  answer that there is no such fact.
+- Archiving an archived record succeeds and keeps the first stamp.
+- `archive` returns false only for a record it can't archive. The tools then
+  treat the record as still live: `forget` falls back to `delete` and says the
+  delete was for good, or reports that it failed; `recall archive` reports that
+  it failed. Nothing reports a hide that didn't happen.
+
+A backend written before archiving existed leaves both verbs out and ignores
+`includeArchived`, and nothing breaks: `recall forget` and `facts forget` fall
+back to `delete` and say in their reply that the delete was for good; `recall
+archive` / `unarchive` refuse; the HTTP archive routes answer `501`. Nothing
+reports a hide that didn't happen.
+
+"Every project" (the Memory page with no project chosen) travels as
+`allProjects: true` beside a `global` scope, not as a scope token, so a backend
+that doesn't know the field lists global records, as it always did, rather
+than reading a literal project and listing nothing.
+
+Owner scoping rides the same open `scope` string: with an `agent:<name>`
+token, the built-in's `query` and `list` return that agent's notes plus
+unowned ones, and its semantic tier drops chunks promoted from another
+agent's notes. A backend that ignores the token returns everything, which is
+what it did before.
+
+The built-in archives notes and facts. A chunk promoted from a note follows
+that note rather than carrying its own state, and core memory is edited in
+place, so `archive` returns false for both.
 
 ### Why this shape and not the noun-based one
 
