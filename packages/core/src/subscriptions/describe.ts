@@ -19,8 +19,10 @@ export function describeEvent(event: string, payload: unknown): string {
 }
 
 function describeStateChange(c: StateChange): string {
-  const who =
+  const actor =
     c.actor.kind === "agent" ? c.actor.name : c.actor.kind === "user" ? "a person" : `${c.actor.kind} ${c.actor.name}`;
+  const forAgent = c.source?.onBehalfOf;
+  const who = forAgent && forAgent !== c.actor.name ? `${actor} for ${forAgent}` : actor;
   const via = c.source?.surface ? ` (${c.source.surface})` : "";
   const ref = `${c.type}/${c.id}`;
   if (c.op === "delete") return `${ref} deleted by ${who}${via}`;

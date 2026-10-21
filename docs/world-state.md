@@ -294,7 +294,10 @@ bound to it shows the same as its first line.
 ## Events
 
 Every create, update and delete emits `state.changed` with the record before
-and after, the actor, and the source. Archiving and restoring are updates
+and after, the actor, and the source. A plugin that writes for an agent, as
+the directory's tools do, stays the actor and names the agent in
+`source.onBehalfOf`; the change is then that agent's own to subscriptions, and
+reads `commitment/x updated by plugin directory for planner`. Archiving and restoring are updates
 too, so a hook or subscriber written before archiving existed keeps working.
 To tell them apart, read `lifecycle`: `"archived"` on the update that archived
 the record, with `archiveReason` when one was given, and `"unarchived"` on the
@@ -365,8 +368,9 @@ ref> }` runs it in that room, through the room's own turn order and hourly
 ceiling, and the agent can `pass`.
 
 **Brakes.**
-- An agent is not told about changes it made itself, unless the subscription
-  sets `includeOwn: true`.
+- An agent is not told about changes it made itself, including ones a plugin
+  made for it (`source.onBehalfOf`), unless the subscription sets
+  `includeOwn: true`.
 - Session wakes share the rooms' hourly ceiling (`rooms.maxWakesPerHour`), per
   agent; room wakes use the room's.
 - A wake refused by a ceiling or by pausing agents is held and retried every

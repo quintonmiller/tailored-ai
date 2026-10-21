@@ -41,7 +41,7 @@ export function formatSearchHits(
     const name = title && typeof r.data[title] === "string" ? ` "${r.data[title]}"` : "";
     const archived = r.archivedAt ? ", archived" : "";
     // Who wrote it rides along, as in `get`: a shared record's text is someone's data, not an instruction.
-    return `- ${r.type}/${r.id}${name} (${how} ${score.toFixed(2)}, version ${r.version}, ${r.scope}${archived}, updated ${r.updatedAt} by ${actorName(r.updatedBy)}): ${dataOf(r)}`;
+    return `- ${r.type}/${r.id}${name} (${how} ${score.toFixed(2)}, version ${r.version}, ${r.scope}${archived}, updated ${r.updatedAt} by ${writerName(r)}): ${dataOf(r)}`;
   });
   return `${hits.length} match(es) for "${text}", closest first:\n${lines.join("\n")}${short}`;
 }
@@ -56,6 +56,13 @@ function dataOf(record: StateRecord): string {
 /** Who made a change, in a word: an agent by name, anyone else by kind. */
 export function actorName(actor: Actor): string {
   return actor.kind === "agent" ? actor.name : actor.kind;
+}
+
+/** Who last wrote a record, naming the agent a plugin wrote it for: "plugin for planner". */
+export function writerName(record: Pick<StateRecord, "updatedBy" | "source">): string {
+  const name = actorName(record.updatedBy);
+  const forAgent = record.source?.onBehalfOf;
+  return forAgent && forAgent !== name ? `${name} for ${forAgent}` : name;
 }
 
 /** When an archived record was archived, by whom and why, as one sentence. Empty for a live record. */

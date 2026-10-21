@@ -238,9 +238,7 @@ function TypePanel({
                   <td className="dim">{r.scope}</td>
                   <td className="num">{r.version}</td>
                   <td className="dim" title={r.archiveReason}>
-                    {r.archivedAt
-                      ? archivedLabel(r, "archived")
-                      : `${relativeTime(r.updatedAt)} · ${actorLabel(r.updatedBy)}`}
+                    {r.archivedAt ? archivedLabel(r, "archived") : `${relativeTime(r.updatedAt)} · ${writerLabel(r)}`}
                   </td>
                 </tr>
               ))}
@@ -374,7 +372,7 @@ function RecordPanel({
             {record.archivedAt && <span className="state-chip state-chip-archived">archived</span>}
             <span>version {record.version}</span>
             <span>
-              updated {relativeTime(record.updatedAt)} by {actorLabel(record.updatedBy)}
+              updated {relativeTime(record.updatedAt)} by {writerLabel(record)}
               {record.source?.surface ? ` via ${record.source.surface}` : ""}
               {record.source?.tool ? ` via the ${record.source.tool} tool` : ""}
             </span>
@@ -568,6 +566,12 @@ function actorLabel(a: StateActor): string {
         ? "you"
         : a.name
       : `${a.kind} ${a.name}`;
+}
+
+/** Who last wrote a record, naming the agent a plugin wrote it for. */
+function writerLabel(r: Pick<StateRecordInfo, "updatedBy" | "source">): string {
+  const forAgent = r.source?.onBehalfOf;
+  return forAgent ? `${actorLabel(r.updatedBy)} for ${forAgent}` : actorLabel(r.updatedBy);
 }
 
 function relativeTime(iso: string): string {

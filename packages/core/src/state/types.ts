@@ -24,6 +24,15 @@ export interface Source {
   tool?: string;
   surface?: string;
   interfaceId?: string;
+  /**
+   * The agent a plugin or the system wrote for, when the write was that
+   * agent's doing but went through a caller with more reach than the agent
+   * has. The actor stays the plugin, so access is the plugin's; this says
+   * whose change it was, so a subscription doesn't wake an agent for its own
+   * change and a line describing it can name the agent. A provider stores it
+   * with the rest of the source; one that drops it loses only that.
+   */
+  onBehalfOf?: string;
 }
 
 export interface StateRef {
