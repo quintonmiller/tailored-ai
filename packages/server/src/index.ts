@@ -474,8 +474,7 @@ export function createServer(opts: ServerOptions) {
   //
   // Plugin routes registered with `auth: "none"` (e.g. the trusted-actions
   // executor callback) are exempt from the server bearer check — they do
-  // their own auth. Compiled from the route registry into method + path
-  // matchers; `:param` segments become wildcards. Checked against the
+  // their own auth. See `isAuthExempt` below.
   /**
    * Security headers on every response.
    *
@@ -4871,8 +4870,12 @@ export function createServer(opts: ServerOptions) {
   if (uiDist && existsSync(uiDist)) {
     app.use("/*", serveStatic({ root: uiDist }));
 
-    // SPA fallback: serve index.html for non-API routes so client-side routing works
+    // SPA fallback: serve index.html for non-API routes so client-side routing works.
+    // An API path nothing answered is not found: a page there would answer a
+    // caller expecting JSON with 200 and HTML, as a plugin route a reload took
+    // away (or an absolute one, outside `/api/ext/`) otherwise would.
     app.get("*", (c) => {
+      if (c.req.path.startsWith("/api/")) return c.json({ error: "not_found" }, 404);
       const indexPath = resolve(uiDist, "index.html");
       if (existsSync(indexPath)) {
         const html = readFileSync(indexPath, "utf-8");

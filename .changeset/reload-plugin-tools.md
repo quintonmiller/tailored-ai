@@ -22,12 +22,21 @@ What changes for a deployment:
   `/api/ext/<plugin>/` and auth works as before, including `auth: "none"`
   routes, which are exempt (or not) from the reload that adds (or removes)
   them.
-- A plugin turned off by reload takes its world-state types and providers and
-  its interface component kinds with it. These were the registrations a
-  plugin's teardown missed, so they stayed until a restart.
+- A request to a plugin route that is gone, or to any `/api/` path nothing
+  serves, is answered `404 {"error":"not_found"}`. Before, a GET got the web
+  UI's page with a 200, so a caller expecting JSON failed to parse it.
+- A plugin turned off by reload takes its world-state types, the registration
+  of any world-state provider it adds, and its interface component kinds with
+  it. These were the registrations a plugin's teardown missed, so they stayed
+  until a restart. A world-state provider already built keeps serving until a
+  restart; no runtime plugin registers one today.
 - A built-in tool that depends on what plugins registered follows them too:
   `state`, which is offered once any world-state type exists, appears and goes
   with the types.
+- A plugin that throws partway through loading no longer leaves behind what it
+  registered before the throw. Before, its tools and routes stayed, and if it
+  had registered a route, every later reload failed to load it again (the
+  route was already registered), even once its config was fixed.
 
 For code that embeds core:
 
@@ -40,6 +49,8 @@ For code that embeds core:
   it also rebuilds and removes rather than only adding.
 - `reload()` no longer destroys a tool instance its factory handed back again,
   which stayed in use.
+- `loadPlugins` undoes a plugin's registrations when its `register(ctx)`
+  throws, before recording the failure.
 - `HttpRouteRegistry` has a `version` that changes with the route set, and the
   server's `mountPluginHttpRoutes` serves the registry as it is at each
   request. `ToolRegistry` gains `remove(tool)`.

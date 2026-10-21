@@ -14,7 +14,14 @@
  * doesn't re-check auth — it only translates the request/response shapes.
  */
 
-import type { AgentRuntime, HttpMethod, HttpRouteRegistry, ResolvedHttpRoute, TaiHttpRequest } from "@tailored-ai/core";
+import {
+  type AgentRuntime,
+  HTTP_ROUTE_NAMESPACE,
+  type HttpMethod,
+  type HttpRouteRegistry,
+  type ResolvedHttpRoute,
+  type TaiHttpRequest,
+} from "@tailored-ai/core";
 import type { Context, Hono } from "hono";
 import { TrieRouter } from "hono/router/trie-router";
 
@@ -66,8 +73,9 @@ function compiledFrom<T>(registry: HttpRouteRegistry, compile: (routes: readonly
  * handler is served the new handler, all without a restart.
  *
  * Call after the core routes and the auth middleware are in place, before the
- * SPA fallback: a core route still wins, a plugin route wins over the static
- * index, and a request no plugin route matches falls through to what follows.
+ * SPA fallback: a core route still wins, and a plugin route wins over the
+ * static index. A request under `/api/ext/` that no plugin route matches is
+ * answered 404; any other falls through to what follows.
  * Matching uses Hono's own router, so `:param` paths work as they did when each
  * route was added to the app.
  */
@@ -83,8 +91,12 @@ export function mountPluginHttpRoutes(app: Hono, runtime: AgentRuntime): void {
     // A TrieRouter always answers in the `[handler, params]` shape.
     const [matches] = router().match(method, c.req.path) as [[ResolvedHttpRoute, Record<string, string>][]];
     const first = matches[0];
-    if (!first) return next();
-    return respond(c, first[0], first[1]);
+    if (first) return respond(c, first[0], first[1]);
+    // The namespace is the plugins' own, so a path in it that no plugin serves
+    // now, such as one a reload took away, is not found. Passed on, a GET
+    // would reach the web UI's index page and answer 200 with HTML.
+    if (c.req.path.startsWith(`${HTTP_ROUTE_NAMESPACE}/`)) return c.json({ error: "not_found" }, 404);
+    return next();
   });
 }
 
@@ -127,21 +139,31 @@ async function respond(c: Context, route: ResolvedHttpRoute, params: Record<stri
   return c.newResponse(payload, (res.status ?? 200) as 200, headers);
 }
 
-/** Percent-decode params the way `c.req.param()` does, leaving one that won't decode as it came. */
+/**
+ * Percent-decode params the way `c.req.param()` does. A value that won't
+ * decode whole has each run of valid escapes decoded and the bad ones left as
+ * they came, as Hono does.
+ */
 function decodeParams(params: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(params)) {
-    if (!v.includes("%")) {
-      out[k] = v;
-      continue;
-    }
-    try {
-      out[k] = decodeURIComponent(v);
-    } catch {
-      out[k] = v;
-    }
+    out[k] = v.includes("%") ? decodeParam(v) : v;
   }
   return out;
+}
+
+function decodeParam(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        return run;
+      }
+    });
+  }
 }
 
 /** Lowercase header keys so handlers can read them case-insensitively. */

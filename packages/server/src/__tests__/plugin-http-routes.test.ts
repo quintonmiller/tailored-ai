@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -206,7 +206,9 @@ describe("plugin HTTP routes after the server is built", () => {
     expect(JSON.parse(r.text)).toEqual({ late: true });
 
     runtime.getHttpRoutes().deregister("GET", mountPath);
-    expect((await call(app, "GET", "/api/ext/demo/late")).status).toBe(404);
+    const gone = await call(app, "GET", "/api/ext/demo/late");
+    // Answered by the plugin mount itself, in the API's own shape, whatever is mounted after it.
+    expect({ status: gone.status, body: JSON.parse(gone.text) }).toEqual({ status: 404, body: { error: "not_found" } });
   });
 
   it("answers HEAD off a GET route and hands a handler decoded params", async () => {
@@ -224,9 +226,48 @@ describe("plugin HTTP routes after the server is built", () => {
     // An encoded slash stays encoded through Hono's path decoding; the param is decoded, as `c.req.param()` does.
     const got = await call(app, "GET", "/api/ext/demo/items/a%2Fb%20c");
     expect(JSON.parse(got.text)).toEqual({ id: "a/b c", method: "GET" });
+    // A bad escape is left as it came, and the good ones around it still decode.
+    const bad = await call(app, "GET", "/api/ext/demo/items/a%2Fb%ZZ");
+    expect(JSON.parse(bad.text)).toEqual({ id: "a/b%ZZ", method: "GET" });
     const head = await app.fetch(new Request("http://t/api/ext/demo/items/x", { method: "HEAD" }));
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
+  });
+
+  it("answers 404, not the web UI's page, for a plugin route that is gone", async () => {
+    const ui = join(tmpDir, "ui");
+    mkdirSync(ui);
+    writeFileSync(join(ui, "index.html"), "<html>the app</html>");
+    const runtime = makeRuntime(buildConfig());
+    const { app } = createServer({ runtime, uiProvider: { id: "test", staticDir: ui } });
+    const routes = runtime.getHttpRoutes();
+    const namespaced = routes.register(
+      { method: "GET", path: "gone", handler: async () => ({ json: "here" }) },
+      "demo",
+    );
+    const absolute = routes.register({
+      method: "GET",
+      path: "/api/legacy/gone",
+      absolute: true,
+      handler: async () => ({ json: "here" }),
+    });
+    expect(JSON.parse((await call(app, "GET", "/api/ext/demo/gone")).text)).toBe("here");
+
+    routes.deregister("GET", namespaced);
+    routes.deregister("GET", absolute);
+
+    for (const path of ["/api/ext/demo/gone", "/api/legacy/gone", "/api/ext/never-registered"]) {
+      const r = await call(app, "GET", path);
+      expect({ path, status: r.status, body: JSON.parse(r.text) }).toEqual({
+        path,
+        status: 404,
+        body: { error: "not_found" },
+      });
+    }
+    // Pages outside the API still get the app, for client-side routing.
+    const page = await call(app, "GET", "/chat");
+    expect(page.status).toBe(200);
+    expect(page.text).toContain("the app");
   });
 
   it("leaves core routes to win over a plugin route at the same path", async () => {

@@ -186,6 +186,11 @@ without the plugin author writing an uninstall path. The plugin's own disposer
 runs first — it may still need what it registered while shutting down — and the
 registrations come out last-in-first-out.
 
+A plugin whose `register(ctx)` throws partway has what it registered before the
+throw undone by `loadPlugins` itself, since a failed load has no `stop` for the
+host to call. Its tools and routes don't outlive the failure, and the next
+reload can load it cleanly rather than colliding with its own leftovers.
+
 Ignoring the return value is fine and changes nothing; the contract is there for
 whoever owns a lifecycle.
 
@@ -203,8 +208,8 @@ now fails for any view on the context that the collector doesn't wrap.
 
 ### Runtime plugins across a reload
 
-Runtime-context plugins (the `builtin:*` set, places and the directory among
-them, and trusted-actions) load after the runtime exists, because they need
+Runtime-context plugins (the `builtin:*` set, places among them, and
+trusted-actions) load after the runtime exists, because they need
 `ctx.runtime`. On every reload the CLI disposes them and loads them again
 against the new config. Two things have to follow that second load, and both
 used to be fixed at what the first one did:
@@ -222,8 +227,10 @@ used to be fixed at what the first one did:
    registry (MCP tools) are left alone. A replaced or removed tool is
    destroyed as `reload()` destroys its own, unless its factory handed the
    same instance back, which neither path destroys. An agent mid-turn gets the
-   new set on its next round, because the loop re-resolves its tools; a call
-   already running finishes on the instance it started on.
+   new set on its next round, because the loop re-resolves its tools. A call
+   already running keeps the instance it started on, but that instance's
+   `destroy()` runs at once rather than when the call settles, so a tool with
+   a destroy hook (the browser) can fail a call in flight during a reload.
 2. **HTTP routes.** See [Plugin HTTP Routes](#plugin-http-routes): the server
    serves the route registry as it is at each request, and the plugin's
    collected disposers take its old routes out of it.
@@ -231,8 +238,13 @@ used to be fixed at what the first one did:
 A host embedding core that reloads runtime plugins itself should do the same:
 dispose them, load them, then call `syncToolFactories()`. Between the dispose
 and the sync there is a window of a few milliseconds where a request can miss a
-route and a tool call can reach a plugin mid-reload; the tool set and routes are
-whole again once the load finishes.
+route (and is answered 404) and a tool call can reach a plugin mid-reload; the
+tool set and routes are whole again once the load finishes.
+
+One thing doesn't follow yet: a world-state provider's registration goes with
+its plugin, but `StateService` keeps each provider it has built for the life of
+the process, so one already in use keeps serving until a restart. No runtime
+plugin registers a state provider today.
 
 ## Event dispatch modes
 
@@ -489,7 +501,7 @@ Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam
 - **Namespace**: plugin routes mount under `/api/ext/<plugin-id>/…` so they can never shadow a core route. The loader bakes the plugin's module id in as the default prefix; `mount("admin", …)` nests under `/api/ext/<plugin-id>/admin/…`.
 - **Auth**: `auth: "token"` (default) puts the route behind the server's `server.authToken` bearer check like every other `/api/*` route. `auth: "none"` exempts it — for a webhook/callback called by a service (not a browser) that authenticates with its own secret. The exemption is matched against the concrete request path in the server's auth middleware.
 - **Absolute escape hatch**: `absolute: true` opts a descriptor out of the namespace and mounts it at the verbatim `path` (which must start with `/`). Reserved for first-party packages preserving a legacy path the UI or an external service already calls — a deliberate, reviewed exception, not a default. The trusted-actions package uses it to keep `/api/trusted-actions/*` working (see [docs/trusted-actions.md](./trusted-actions.md)).
-- **Server side** (`packages/server/src/http-routes.ts`): after building the Hono app and the auth middleware, `mountPluginHttpRoutes(app, runtime)` adds one middleware, before the SPA static fallback, that matches each request against the registry as it is then (with Hono's own router, rebuilt only when `version` moves) and adapts the matching descriptor. Hono can't unmount a route, so this is how a reload that turns a plugin on, off, or changes its handlers takes effect without a restart. A core route still wins over a plugin route at the same path, and a request no plugin route matches falls through to the static UI. The auth middleware's `auth: "none"` exemptions are read from the live registry the same way, so a webhook a reload adds is reachable at once and its path is gated again once it is gone.
+- **Server side** (`packages/server/src/http-routes.ts`): after building the Hono app and the auth middleware, `mountPluginHttpRoutes(app, runtime)` adds one middleware, before the SPA static fallback, that matches each request against the registry as it is then (with Hono's own router, rebuilt only when `version` moves) and adapts the matching descriptor. Hono can't unmount a route, so this is how a reload that turns a plugin on, off, or changes its handlers takes effect without a restart. A core route still wins over a plugin route at the same path. A request under `/api/ext/` that no plugin route matches, such as one to a route a reload took away, is answered `404 {"error":"not_found"}`; any other falls through to the static UI, whose page fallback likewise answers 404 for an `/api/` path rather than the web UI's page. The auth middleware's `auth: "none"` exemptions are read from the live registry the same way, so a webhook a reload adds is reachable at once and its path is gated again once it is gone.
 
 ## Plugin Slash Commands
 

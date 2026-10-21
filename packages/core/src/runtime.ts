@@ -414,8 +414,10 @@ export class AgentRuntime {
    * name keeps it. A tool that is replaced or removed is destroyed, as
    * `reload()` destroys the tools it rebuilds, unless the factory handed the
    * same instance back. An agent mid-turn sees the new set on its next round,
-   * since the loop re-resolves its tools each round; a call already running
-   * finishes on the instance it started on.
+   * since the loop re-resolves its tools each round. A call already running
+   * keeps the instance it started on, but that instance's destroy() runs at
+   * once, not when the call settles, so a tool with a destroy hook (the
+   * browser) can fail a call in flight during a reload, as it could before.
    */
   syncToolFactories(): ToolFactorySync {
     const produced =

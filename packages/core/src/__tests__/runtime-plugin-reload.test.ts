@@ -88,6 +88,8 @@ function probePlugin(ctx: PluginContext) {
     ctx.stateTypes.register({ name: "probe_record", description: "A probe record." } as never);
   }
   ctx.http.register({ method: "GET", path: "hello", handler: () => ({ json: { greeting } }) });
+  // A plugin that fails partway, after its tool and route are already in.
+  if (ctx.config.fail === true) throw new Error("probe failed after registering");
 }
 
 const importer = async (name: string) => {
@@ -313,6 +315,26 @@ describe("a reload replaces what runtime plugins registered", () => {
 
     await tai.reload(config({ enabled: false }));
     expect(hello()).toHaveLength(0);
+  });
+
+  it("leaves nothing of a plugin that throws partway through loading, and loads it cleanly once fixed", async () => {
+    const tai = start(config({ config: { greeting: "broken", fail: true, stateType: true } }));
+    const hello = () =>
+      tai.runtime
+        .getHttpRoutes()
+        .list()
+        .filter((r) => r.mountPath === "/api/ext/probe-plugin/hello");
+
+    expect((await tai.load()).added).not.toContain("probe");
+    expect(tai.tool("probe")).toBeUndefined();
+    expect(hello()).toHaveLength(0);
+    expect(stateTypeRegistry.has("probe_record")).toBe(false);
+
+    // Fixed by a reload: it loads, rather than colliding with its own leftovers.
+    expect((await tai.reload(config({ config: { greeting: "fixed" } }))).added).toEqual(["probe"]);
+    expect(await say(tai.tool("probe"))).toBe("fixed");
+    expect(hello()).toHaveLength(1);
+    expect(await hello()[0].handler({} as never)).toEqual({ json: { greeting: "fixed" } });
   });
 
   it("takes out the world-state types of a plugin a reload turns off", async () => {

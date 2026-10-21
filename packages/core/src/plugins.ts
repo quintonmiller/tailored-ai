@@ -134,14 +134,19 @@ function composeStop(
         console.warn(`[plugins] ${moduleName}: disposer threw: ${(err as Error).message}`);
       }
     }
-    for (let i = registered.length - 1; i >= 0; i--) {
-      try {
-        registered[i]();
-      } catch (err) {
-        console.warn(`[plugins] ${moduleName}: unregister threw: ${(err as Error).message}`);
-      }
-    }
+    unregisterAll(moduleName, registered);
   };
+}
+
+/** Undo a plugin's registrations, last first. One that throws is logged and the rest still run. */
+function unregisterAll(moduleName: string, registered: Disposer[]): void {
+  for (let i = registered.length - 1; i >= 0; i--) {
+    try {
+      registered[i]();
+    } catch (err) {
+      console.warn(`[plugins] ${moduleName}: unregister threw: ${(err as Error).message}`);
+    }
+  }
 }
 
 /**
@@ -184,7 +189,8 @@ function composeStop(
  * **Disposers**: a `register(ctx)` plugin may return a teardown function, and
  * every registration it makes through `ctx` yields one of its own. Both are
  * composed onto {@link LoadedPlugin.stop} so the host can undo a plugin as a
- * unit on shutdown / reload.
+ * unit on shutdown / reload. A plugin whose `register(ctx)` throws has what it
+ * registered before the throw undone at once, so a failed load leaves nothing.
  */
 export async function loadPlugins(
   config: AgentConfig,
@@ -268,6 +274,12 @@ export async function loadPlugins(
         results.push({ module: moduleName, ok: true, shape: "side-effect", meta, warnings });
       }
     } catch (err) {
+      // A plugin that throws partway through `register()` has already put
+      // some of itself in place. A failed load has no `stop` for the host to
+      // call, so undo those here: otherwise its tools and routes outlive the
+      // failure, and the next load collides with them (a route registered
+      // twice throws), so the plugin could never load again.
+      unregisterAll(moduleName, registered);
       const message = (err as Error).message;
       console.warn(`[plugins] failed to load ${moduleName}: ${message} — continuing without it`);
       results.push({ module: moduleName, ok: false, error: message });
