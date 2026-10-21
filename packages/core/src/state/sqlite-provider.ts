@@ -8,7 +8,8 @@
  *
  * History is an append-only log beside the records. A delete is a tombstone —
  * the row stays, marked deleted, and the removal is logged — so a record's
- * history survives it. `purge` is the hard delete, for an admin.
+ * history survives it. `purge` is the hard delete, for an admin. An archived
+ * record is a live row with `archived_at` set, which queries skip unless asked.
  */
 import type Database from "better-sqlite3";
 import {
@@ -44,6 +45,9 @@ interface RecordRow {
   updated_by: string;
   source: string | null;
   deleted: number;
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
 }
 
 interface ChangeRow {
@@ -57,6 +61,8 @@ interface ChangeRow {
   actor: string;
   source: string | null;
   at: string;
+  lifecycle: StateChange["lifecycle"] | null;
+  archive_reason: string | null;
 }
 
 export class SqliteStateProvider implements StateProvider {
@@ -96,6 +102,21 @@ export class SqliteStateProvider implements StateProvider {
       );
       CREATE INDEX IF NOT EXISTS idx_state_changes_ref ON state_changes(type, id, seq);
     `);
+    // Archiving came later. Added in place, so a store from before it reads
+    // every record as live, with nothing for anyone to run.
+    for (const ddl of [
+      "ALTER TABLE state_records ADD COLUMN archived_at TEXT",
+      "ALTER TABLE state_records ADD COLUMN archived_by TEXT",
+      "ALTER TABLE state_records ADD COLUMN archive_reason TEXT",
+      "ALTER TABLE state_changes ADD COLUMN lifecycle TEXT",
+      "ALTER TABLE state_changes ADD COLUMN archive_reason TEXT",
+    ]) {
+      try {
+        db.exec(ddl);
+      } catch {
+        // The column is already there.
+      }
+    }
   }
 
   async get(ref: StateRef): Promise<StateRecord | null> {
@@ -106,6 +127,7 @@ export class SqliteStateProvider implements StateProvider {
   async query(q: StateQuery): Promise<StateRecord[]> {
     const clauses = ["type = ?", "deleted = 0"];
     const params: unknown[] = [q.type];
+    if (!q.includeArchived) clauses.push("archived_at IS NULL");
 
     if (q.scopes) {
       if (q.scopes.length === 0) return [];
@@ -148,7 +170,8 @@ export class SqliteStateProvider implements StateProvider {
            ON CONFLICT(type, id) DO UPDATE SET
              scope = excluded.scope, data = excluded.data, version = excluded.version,
              created_at = excluded.created_at, updated_at = excluded.updated_at,
-             updated_by = excluded.updated_by, source = excluded.source, deleted = 0`,
+             updated_by = excluded.updated_by, source = excluded.source, deleted = 0,
+             archived_at = NULL, archived_by = NULL, archive_reason = NULL`,
         )
         .run(
           write.type,
@@ -173,6 +196,9 @@ export class SqliteStateProvider implements StateProvider {
         actor: write.actor,
         source: write.source,
         at,
+        // A put writes the whole record, archive state included, so one over
+        // an archived record brings it back.
+        ...(live?.archived_at ? { lifecycle: "unarchived" as const } : {}),
       });
 
       const record = toRecord(this.row(write) as RecordRow);
@@ -209,6 +235,25 @@ export class SqliteStateProvider implements StateProvider {
     })();
   }
 
+  async archive(
+    ref: StateRef,
+    actor: Actor,
+    reason?: string,
+    source?: Source,
+    expectedVersion?: number,
+  ): Promise<StateWriteResult | null> {
+    return this.setArchived(ref, { reason }, actor, source, expectedVersion);
+  }
+
+  async unarchive(
+    ref: StateRef,
+    actor: Actor,
+    source?: Source,
+    expectedVersion?: number,
+  ): Promise<StateWriteResult | null> {
+    return this.setArchived(ref, null, actor, source, expectedVersion);
+  }
+
   async history(ref: StateRef, opts: HistoryOptions = {}): Promise<StateChange[]> {
     const limit = Math.min(Math.max(1, Math.floor(opts.limit ?? DEFAULT_LIMIT)), MAX_LIMIT);
     const rows = this.db
@@ -225,6 +270,58 @@ export class SqliteStateProvider implements StateProvider {
     })();
   }
 
+  /** Archive (`archive` given) or bring back (null) a live record: a write of its own, data unchanged. */
+  private setArchived(
+    ref: StateRef,
+    archive: { reason?: string } | null,
+    actor: Actor,
+    source: Source | undefined,
+    expectedVersion: number | undefined,
+  ): StateWriteResult | null {
+    return this.db.transaction((): StateWriteResult | null => {
+      const live = this.row(ref);
+      if (!live || live.deleted) return null;
+      if (expectedVersion !== undefined && expectedVersion !== live.version)
+        throw new StateConflictError(ref, expectedVersion, live.version);
+      const at = this.now().toISOString();
+      const version = live.version + 1;
+      const reason = archive?.reason || undefined;
+      this.db
+        .prepare(
+          `UPDATE state_records SET version = ?, updated_at = ?, updated_by = ?, source = ?,
+             archived_at = ?, archived_by = ?, archive_reason = ?
+           WHERE type = ? AND id = ?`,
+        )
+        .run(
+          version,
+          at,
+          JSON.stringify(actor),
+          source ? JSON.stringify(source) : null,
+          archive ? at : null,
+          archive ? JSON.stringify(actor) : null,
+          reason ?? null,
+          ref.type,
+          ref.id,
+        );
+      const data = JSON.parse(live.data);
+      this.log({
+        type: ref.type,
+        id: ref.id,
+        scope: live.scope,
+        op: "update",
+        before: data,
+        after: data,
+        version,
+        actor,
+        source,
+        at,
+        lifecycle: archive ? "archived" : "unarchived",
+        ...(reason ? { archiveReason: reason } : {}),
+      });
+      return { record: toRecord(this.row(ref) as RecordRow), previous: toRecord(live) };
+    })();
+  }
+
   private row(ref: StateRef): RecordRow | undefined {
     return this.db.prepare("SELECT * FROM state_records WHERE type = ? AND id = ?").get(ref.type, ref.id) as
       | RecordRow
@@ -234,8 +331,8 @@ export class SqliteStateProvider implements StateProvider {
   private log(change: StateChange): void {
     this.db
       .prepare(
-        `INSERT INTO state_changes (type, id, scope, op, before, after, version, actor, source, at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO state_changes (type, id, scope, op, before, after, version, actor, source, at, lifecycle, archive_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         change.type,
@@ -248,6 +345,8 @@ export class SqliteStateProvider implements StateProvider {
         JSON.stringify(change.actor),
         change.source ? JSON.stringify(change.source) : null,
         change.at,
+        change.lifecycle ?? null,
+        change.archiveReason ?? null,
       );
   }
 }
@@ -263,6 +362,13 @@ function toRecord(row: RecordRow): StateRecord {
     updatedAt: row.updated_at,
     updatedBy: JSON.parse(row.updated_by),
     ...(row.source ? { source: JSON.parse(row.source) } : {}),
+    ...(row.archived_at
+      ? {
+          archivedAt: row.archived_at,
+          ...(row.archived_by ? { archivedBy: JSON.parse(row.archived_by) } : {}),
+          ...(row.archive_reason ? { archiveReason: row.archive_reason } : {}),
+        }
+      : {}),
   };
 }
 
@@ -278,6 +384,8 @@ function toChange(row: ChangeRow): StateChange {
     actor: JSON.parse(row.actor),
     ...(row.source ? { source: JSON.parse(row.source) } : {}),
     at: row.at,
+    ...(row.lifecycle ? { lifecycle: row.lifecycle } : {}),
+    ...(row.archive_reason ? { archiveReason: row.archive_reason } : {}),
   };
 }
 

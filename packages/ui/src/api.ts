@@ -1915,6 +1915,10 @@ export interface StateRecordInfo {
   updatedAt: string;
   updatedBy: StateActor;
   source?: { tool?: string; surface?: string; interfaceId?: string };
+  /** Set while the record is archived: kept, but left out of lists unless asked for. */
+  archivedAt?: string;
+  archivedBy?: StateActor;
+  archiveReason?: string;
 }
 
 export interface StateChangeInfo {
@@ -1928,6 +1932,9 @@ export interface StateChangeInfo {
   actor: StateActor;
   source?: { tool?: string; surface?: string; interfaceId?: string };
   at: string;
+  /** On the update that archived the record or brought it back. */
+  lifecycle?: "archived" | "unarchived";
+  archiveReason?: string;
 }
 
 export function fetchStateTypes(): Promise<{ types: StateTypeInfo[] }> {
@@ -1937,11 +1944,12 @@ export function fetchStateTypes(): Promise<{ types: StateTypeInfo[] }> {
 export function fetchStateRecords(
   type: string,
   limit = 200,
-  opts: { where?: Record<string, unknown>; orderBy?: string } = {},
+  opts: { where?: Record<string, unknown>; orderBy?: string; includeArchived?: boolean } = {},
 ): Promise<{ records: StateRecordInfo[] }> {
   const filter = opts.where ? `&where=${encodeURIComponent(JSON.stringify(opts.where))}` : "";
   const order = opts.orderBy ? `&orderBy=${encodeURIComponent(opts.orderBy)}` : "";
-  return jsonFetch(`/api/state/${encodeURIComponent(type)}?limit=${limit}${filter}${order}`);
+  const archived = opts.includeArchived ? "&includeArchived=1" : "";
+  return jsonFetch(`/api/state/${encodeURIComponent(type)}?limit=${limit}${filter}${order}${archived}`);
 }
 
 export function fetchStateRecord(type: string, id: string): Promise<StateRecordInfo> {
@@ -1985,4 +1993,23 @@ export function replaceStateRecord(
 
 export function deleteStateRecord(type: string, id: string): Promise<StateRecordInfo> {
   return stateWrite("DELETE", `/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}`);
+}
+
+/** Archive a record: kept, with its history, but left out of lists and agents' queries until it is restored. */
+export function archiveStateRecord(
+  type: string,
+  id: string,
+  reason: string | undefined,
+  expectedVersion: number,
+): Promise<StateRecordInfo> {
+  return stateWrite("POST", `/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}/archive`, {
+    ...(reason ? { reason } : {}),
+    expectedVersion,
+  });
+}
+
+export function unarchiveStateRecord(type: string, id: string, expectedVersion: number): Promise<StateRecordInfo> {
+  return stateWrite("POST", `/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}/unarchive`, {
+    expectedVersion,
+  });
 }

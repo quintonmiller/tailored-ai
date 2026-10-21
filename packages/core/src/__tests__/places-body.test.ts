@@ -400,6 +400,17 @@ describe("the body tool", () => {
     expect((await body("planner")).spot).toEqual({ place: homeId("planner"), item: "model", name: "by the bookcase" });
   });
 
+  it("reads an archived body record as nothing chosen, and a change starts afresh over it", async () => {
+    await changeBody(state, owner, "planner", { color: "#2a8a8a", size: 1.2 });
+    await state.archive(owner, { type: BODY_TYPE, id: "planner" }, "back to how it was");
+    expect(String((await tool.execute({ action: "look" }, as("planner"))).output)).toMatch(/in your own colour/);
+    await changeBody(state, owner, "planner", { size: 0.9 });
+    const record = await state.get(owner, { type: BODY_TYPE, id: "planner" });
+    expect(record?.data).toEqual({ size: 0.9 });
+    expect(record?.archivedAt).toBeUndefined();
+    expect(record?.version).toBe(3);
+  });
+
   it("is for agents with a body", async () => {
     const out = await tool.execute({ action: "look" }, as("ghost"));
     expect(out).toEqual({ success: false, output: "", error: "You have no body to see or change." });

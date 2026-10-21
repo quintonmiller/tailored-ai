@@ -3,7 +3,8 @@
  * the title, every other field as a line, or only the fields its binding
  * names, and one as its text when the binding names a `body`. Rebuilt from
  * the record whenever a surface redraws it, so the card says what is true
- * now, not what was true when it was sent.
+ * now, not what was true when it was sent. An archived record says so in its
+ * first line, so a card never shows one as current.
  */
 import type { BoundRecord } from "../content/types.js";
 import type { StateCaller, StateService } from "../state/service.js";
@@ -30,10 +31,13 @@ export function boundCardProps(
         ? props.title
         : `${record.type} ${record.id}`;
   const keys = show.fields ?? Object.keys(record.data).filter((key) => key !== titleField && key !== show.body);
-  const fields = keys
-    .filter((key) => record.data[key] !== undefined)
-    .slice(0, MAX_CARD_FIELDS)
-    .map((key) => ({ label: key, value: fieldText(record.data[key]) }));
+  const archived = archivedField(record);
+  const fields = [
+    ...(archived ? [archived] : []),
+    ...keys
+      .filter((key) => record.data[key] !== undefined)
+      .map((key) => ({ label: key, value: fieldText(record.data[key]) })),
+  ].slice(0, MAX_CARD_FIELDS);
   const body = show.body && record.data[show.body] != null ? fieldText(record.data[show.body]) : undefined;
   // The agent's other props pass through, so the kind's schema still catches
   // a typo instead of it vanishing; its fields give way to the record's, and
@@ -43,6 +47,13 @@ export function boundCardProps(
 }
 
 const fieldText = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
+
+/** An archived record's first line on a card: when, and why if the archiver said. */
+function archivedField(record: StateRecord): { label: string; value: string } | undefined {
+  if (!record.archivedAt) return undefined;
+  const day = record.archivedAt.slice(0, 10);
+  return { label: "archived", value: record.archiveReason ? `${day}: ${record.archiveReason}` : day };
+}
 
 /** Records a list shows when its agent names no `limit`. Small: every one is a button on Discord. */
 const DEFAULT_LIST_LIMIT = 10;

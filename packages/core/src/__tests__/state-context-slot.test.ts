@@ -70,6 +70,17 @@ const put = (type: string, data: Record<string, unknown>, scope = "global", id?:
   service.put(system, { type, data, scope, ...(id ? { id } : {}) });
 
 describe("state context slot", () => {
+  it("leaves archived records out of the prompt", async () => {
+    await put("plan", { name: "Trip", status: "active" }, "global", "trip");
+    await put("plan", { name: "Move", status: "active" }, "global", "move");
+    await service.archive(system, { type: "plan", id: "move" }, "moved already");
+
+    const text = await render([{ type: "plan", where: { status: "active" } }]);
+    expect(text).toContain("1 plan record(s)");
+    expect(text).toContain('- trip "Trip"');
+    expect(text).not.toContain("Move");
+  });
+
   it("renders the records a query matches, under a line naming the query", async () => {
     await put("plan", { name: "Trip", status: "active" }, "global", "trip");
     await put("plan", { name: "Move", status: "draft" }, "global", "move");

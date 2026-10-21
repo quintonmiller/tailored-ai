@@ -96,6 +96,47 @@ describe("state tool", () => {
     expect((await run({ action: "query", type: "plan" })).output).toBe("No plan records match.");
   });
 
+  it("archives a record out of queries, finds it again on request, and brings it back", async () => {
+    await run({ action: "put", type: "plan", id: "trip", data: { name: "Trip" } });
+    await run({ action: "put", type: "plan", id: "move", data: { name: "Move" } });
+
+    const archived = await run({ action: "archive", type: "plan", id: "trip", reason: "the trip is over" });
+    expect(archived.output).toBe('Archived plan/trip. Queries leave it out now; action "unarchive" brings it back.');
+    expect((await run({ action: "query", type: "plan" })).output).toBe(
+      '1 plan record(s):\n- move "Move" (version 1, room:local:eng): {"name":"Move"}',
+    );
+    const all = await run({ action: "query", type: "plan", includeArchived: true, orderBy: "id" });
+    expect(all.output).toBe(
+      [
+        "2 plan record(s):",
+        '- move "Move" (version 1, room:local:eng): {"name":"Move"}',
+        '- trip "Trip" (version 2, room:local:eng, archived): {"name":"Trip"}',
+      ].join("\n"),
+    );
+    const got = await run({ action: "get", type: "plan", id: "trip" });
+    expect(got.output).toMatch(/\nArchived \S+ by planner: the trip is over Action "unarchive" brings it back\.\n/);
+
+    expect((await run({ action: "unarchive", type: "plan", id: "trip" })).output).toBe(
+      "plan/trip is back (version 3).",
+    );
+    expect((await run({ action: "query", type: "plan" })).output).toContain("2 plan record(s)");
+  });
+
+  it("asks for an id to archive, and says when there is nothing to archive", async () => {
+    expect((await run({ action: "archive", type: "plan" })).error).toBe("archive needs the record's `id`.");
+    expect((await run({ action: "unarchive", type: "plan", id: "nope" })).error).toBe(
+      'There is no plan record with id "nope" to unarchive.',
+    );
+  });
+
+  it("tells an agent patching an archived record how to change it", async () => {
+    await run({ action: "put", type: "plan", id: "trip", data: { name: "Trip" } });
+    await run({ action: "archive", type: "plan", id: "trip" });
+    expect((await run({ action: "patch", type: "plan", id: "trip", data: { status: "done" } })).error).toBe(
+      "plan/trip is archived. Unarchive it before changing it.",
+    );
+  });
+
   it("accepts data and conditions sent as JSON strings, as small models often do", async () => {
     const res = await run({ action: "put", type: "plan", id: "trip", data: '{"name": "Trip"}' });
     expect(res.success).toBe(true);
@@ -125,7 +166,7 @@ describe("state tool", () => {
       'Say which type with `type`. Use action "types" to see what exists.',
     );
     expect((await run({ action: "fly" })).error).toBe(
-      'Unknown action "fly". Use one of: types, get, query, put, patch, delete.',
+      'Unknown action "fly". Use one of: types, get, query, put, patch, delete, archive, unarchive.',
     );
     expect((await run({ action: "get", type: "plans", id: "x" })).error).toBe(
       'There is no state type called "plans". Types you can use: ledger, plan.',

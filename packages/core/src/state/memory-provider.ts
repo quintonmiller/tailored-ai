@@ -76,6 +76,7 @@ export class MemoryStateProvider implements StateProvider {
     const live = [...this.slots.values()]
       .filter((s) => !s.deleted && s.record.type === q.type)
       .map((s) => s.record)
+      .filter((r) => q.includeArchived || !r.archivedAt)
       .filter((r) => !q.scopes || q.scopes.includes(r.scope))
       .filter((r) => conditions.every((test) => test(r.data)));
     // `id` breaks ties, ascending, so a page boundary never shows the same record twice.
@@ -120,6 +121,9 @@ export class MemoryStateProvider implements StateProvider {
       actor: write.actor,
       ...(write.source ? { source: write.source } : {}),
       at,
+      // The record a put writes carries no archive fields, so one over an
+      // archived record brings it back.
+      ...(live?.archivedAt ? { lifecycle: "unarchived" as const } : {}),
     });
     const copy = structuredClone(record);
     return live ? { record: copy, previous: structuredClone(live) } : { record: copy };
@@ -149,6 +153,25 @@ export class MemoryStateProvider implements StateProvider {
     return structuredClone(removed);
   }
 
+  async archive(
+    ref: StateRef,
+    actor: Actor,
+    reason?: string,
+    source?: Source,
+    expectedVersion?: number,
+  ): Promise<StateWriteResult | null> {
+    return this.setArchived(ref, { reason }, actor, source, expectedVersion);
+  }
+
+  async unarchive(
+    ref: StateRef,
+    actor: Actor,
+    source?: Source,
+    expectedVersion?: number,
+  ): Promise<StateWriteResult | null> {
+    return this.setArchived(ref, null, actor, source, expectedVersion);
+  }
+
   async history(ref: StateRef, opts: HistoryOptions = {}): Promise<StateChange[]> {
     const limit = Math.min(Math.max(1, Math.floor(opts.limit ?? DEFAULT_LIMIT)), MAX_LIMIT);
     return structuredClone((this.slots.get(key(ref))?.changes ?? []).slice(0, limit));
@@ -156,6 +179,48 @@ export class MemoryStateProvider implements StateProvider {
 
   async purge(ref: StateRef): Promise<boolean> {
     return this.slots.delete(key(ref));
+  }
+
+  /** Archive (`archive` given) or bring back (null) a live record: a write of its own, data unchanged. */
+  private setArchived(
+    ref: StateRef,
+    archive: { reason?: string } | null,
+    actor: Actor,
+    source: Source | undefined,
+    expectedVersion: number | undefined,
+  ): StateWriteResult | null {
+    const slot = this.slots.get(key(ref));
+    if (!slot || slot.deleted) return null;
+    const previous = slot.record;
+    if (expectedVersion !== undefined && expectedVersion !== previous.version)
+      throw new StateConflictError(ref, expectedVersion, previous.version);
+    const at = this.now().toISOString();
+    const version = previous.version + 1;
+    const reason = archive?.reason || undefined;
+    const { archivedAt: _at, archivedBy: _by, archiveReason: _why, source: _source, ...rest } = previous;
+    slot.record = {
+      ...rest,
+      version,
+      updatedAt: at,
+      updatedBy: actor,
+      ...(source ? { source } : {}),
+      ...(archive ? { archivedAt: at, archivedBy: actor, ...(reason ? { archiveReason: reason } : {}) } : {}),
+    };
+    this.log(slot, {
+      type: ref.type,
+      id: ref.id,
+      scope: previous.scope,
+      op: "update",
+      before: previous.data,
+      after: previous.data,
+      version,
+      actor,
+      ...(source ? { source } : {}),
+      at,
+      lifecycle: archive ? "archived" : "unarchived",
+      ...(reason ? { archiveReason: reason } : {}),
+    });
+    return { record: structuredClone(slot.record), previous: structuredClone(previous) };
   }
 
   private log(slot: Slot, change: StateChange): void {

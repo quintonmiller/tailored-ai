@@ -137,6 +137,15 @@ describe("sending a list", () => {
     expect((redrawn.items as { id: string }[]).map((i) => i.id)).not.toContain("secret");
   });
 
+  it("leaves archived records off the list, when it is sent and when it is redrawn", async () => {
+    await state.archive(system, { type: "chore", id: "bins" }, "no bins any more");
+    const { spec } = await sendChores();
+    expect((spec.props.items as { id: string }[]).map((i) => i.id)).toEqual(["dishes", "plants"]);
+    await state.archive(system, { type: "chore", id: "plants" });
+    const redrawn = await listProps(state, system, spec.props, spec.query as never);
+    expect((redrawn.items as { id: string }[]).map((i) => i.id)).toEqual(["dishes"]);
+  });
+
   it("refuses a list with no records to show, and a check with no field", async () => {
     const noBind = await run({ action: "send", kind: "list", props: { title: "Chores" } });
     expect(noBind.error).toContain("give `bind` with the record type");
@@ -202,6 +211,12 @@ describe("ticking an item", () => {
       data: { name: "Hidden", done: false },
     });
     await expect(tick(spec.id, "secret")).rejects.toThrow("That item is no longer on this list.");
+  });
+
+  it("refuses an item archived since the list was sent", async () => {
+    const { spec } = await sendChores();
+    await state.archive(system, { type: "chore", id: "dishes" });
+    await expect(tick(spec.id, "dishes")).rejects.toThrow("That item is no longer on this list.");
   });
 
   it("is refused once the list is closed", async () => {

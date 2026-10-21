@@ -38,6 +38,19 @@ describe("describeEvent", () => {
     );
   });
 
+  it("says when a record was archived, and why, or brought back", () => {
+    const same = { before: { name: "Trip" }, after: { name: "Trip" } };
+    expect(
+      describeEvent("state.changed", { ...base, ...same, lifecycle: "archived", archiveReason: "trip is over" }),
+    ).toBe("plan/trip archived by a person (web): trip is over");
+    expect(describeEvent("state.changed", { ...base, ...same, lifecycle: "unarchived" })).toBe(
+      "plan/trip unarchived by a person (web)",
+    );
+    expect(describeEvent("state.changed", { ...base, ...same, after: { name: "New" }, lifecycle: "unarchived" })).toBe(
+      "plan/trip unarchived by a person (web): name: Trip → New",
+    );
+  });
+
   it("caps how many fields and how much of each value it shows", () => {
     const before = Object.fromEntries("abcdefg".split("").map((k) => [k, 0]));
     const after = Object.fromEntries("abcdefg".split("").map((k) => [k, "x".repeat(60)]));

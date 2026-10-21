@@ -66,6 +66,7 @@ export interface StatePutInput {
   data: Record<string, unknown>;
 }
 
+/** `includeArchived` brings back archived records, which a query otherwise leaves out. */
 export type StateQueryInput = Omit<StateQuery, "scopes"> & {
   /** Narrow to one scope. Omitted means every scope the caller can see. */
   scope?: string;
@@ -117,6 +118,7 @@ export class StateService {
     return scopes;
   }
 
+  /** One record by id. An archived record is returned too, with `archivedAt` saying so. */
   async get(caller: StateCaller, ref: StateRef): Promise<StateRecord | null> {
     const def = this.requireType(caller, ref.type, "read");
     const record = await (await this.providerFor(def)).get(ref);
@@ -134,7 +136,11 @@ export class StateService {
       scopes = [input.scope];
     }
     const { scope: _scope, ...rest } = input;
-    return (await this.providerFor(def)).query({ ...rest, scopes });
+    const records = await (await this.providerFor(def)).query({ ...rest, scopes });
+    // A store that archives but ignores the flag still never puts an archived
+    // record in front of a caller that didn't ask: a page comes back short
+    // instead.
+    return input.includeArchived ? records : records.filter((r) => !r.archivedAt);
   }
 
   /**
@@ -174,7 +180,9 @@ export class StateService {
    * Change some fields of an existing record. Top-level merge: a field set to
    * `null` is removed. Without `expectedVersion` a concurrent write is
    * retried once against the fresh record, which is safe because a patch
-   * names exactly the fields it changes.
+   * names exactly the fields it changes. An archived record is refused: a
+   * patch edits the record as it stands, and bringing it back is `unarchive`'s
+   * to say.
    */
   async patch(
     caller: StateCaller,
@@ -188,6 +196,9 @@ export class StateService {
     for (let attempt = 0; ; attempt++) {
       const existing = await provider.get(ref);
       if (!existing || !this.canSee(caller, existing.scope)) throw new StateError(noRecord(ref));
+      if (existing.archivedAt) {
+        throw new StateError(`${ref.type}/${ref.id} is archived. Unarchive it before changing it.`);
+      }
       const data = this.checkData(def, mergePatch(existing.data, changes), ref.id);
       try {
         return await this.write(
@@ -233,6 +244,27 @@ export class StateService {
     return removed;
   }
 
+  /**
+   * Archive a record: kept, with its data and history, but left out of
+   * queries — and so of pinned state, lists and the world — until it is
+   * unarchived. Null when there is no such record the caller can see. Already
+   * archived, it is returned as it is. Announced as an `update` with
+   * `lifecycle: "archived"`, so consumers that predate archiving keep working.
+   */
+  async archive(
+    caller: StateCaller,
+    ref: StateRef,
+    reason?: string,
+    expectedVersion?: number,
+  ): Promise<StateRecord | null> {
+    return this.setArchived(caller, ref, true, reason, expectedVersion);
+  }
+
+  /** Bring an archived record back. Null when there is none the caller can see; a live record is returned as it is. */
+  async unarchive(caller: StateCaller, ref: StateRef, expectedVersion?: number): Promise<StateRecord | null> {
+    return this.setArchived(caller, ref, false, undefined, expectedVersion);
+  }
+
   async history(caller: StateCaller, ref: StateRef, opts?: HistoryOptions): Promise<StateChange[]> {
     const def = this.requireType(caller, ref.type, "read");
     const provider = await this.providerFor(def);
@@ -264,6 +296,54 @@ export class StateService {
         // A provider that failed to build or to close has nothing left to release.
       }
     }
+  }
+
+  private async setArchived(
+    caller: StateCaller,
+    ref: StateRef,
+    archive: boolean,
+    reason: string | undefined,
+    expectedVersion: number | undefined,
+  ): Promise<StateRecord | null> {
+    const def = this.requireType(caller, ref.type, "write");
+    const provider = await this.providerFor(def);
+    // Refused outright rather than reported as done: a store that can't
+    // archive would otherwise leave the record live in every query.
+    if (!provider.archive || !provider.unarchive) {
+      throw new StateError(`The "${provider.id}" store cannot archive ${def.name} records. Delete it instead.`);
+    }
+    const existing = await provider.get(ref);
+    if (!existing || !this.canSee(caller, existing.scope)) return null;
+    if (expectedVersion !== undefined && expectedVersion !== existing.version)
+      throw new StateConflictError(ref, expectedVersion, existing.version);
+    if (!!existing.archivedAt === archive) return existing;
+    const why = reason?.trim() || undefined;
+    const result = archive
+      ? await provider.archive(ref, caller.actor, why, caller.source, expectedVersion)
+      : await provider.unarchive(ref, caller.actor, caller.source, expectedVersion);
+    if (!result) return null;
+    if (!!result.record.archivedAt !== archive) {
+      // The store said it did it and didn't. Better a loud failure than a
+      // record everyone believes is archived turning up in every query.
+      throw new Error(
+        `The "${provider.id}" store reported ${def.name}/${ref.id} ${archive ? "archived" : "unarchived"}, but it is not.`,
+      );
+    }
+    this.emit({
+      type: result.record.type,
+      id: result.record.id,
+      scope: result.record.scope,
+      op: "update",
+      before: result.previous?.data ?? result.record.data,
+      after: result.record.data,
+      version: result.record.version,
+      actor: caller.actor,
+      ...(caller.source ? { source: caller.source } : {}),
+      at: result.record.updatedAt,
+      lifecycle: archive ? "archived" : "unarchived",
+      ...(archive && result.record.archiveReason ? { archiveReason: result.record.archiveReason } : {}),
+    });
+    return result.record;
   }
 
   private config(): StateConfig {
@@ -355,6 +435,8 @@ export class StateService {
       actor: caller.actor,
       ...(caller.source ? { source: caller.source } : {}),
       at: result.record.updatedAt,
+      // A put over an archived record brings it back, and says so.
+      ...(result.previous?.archivedAt && !result.record.archivedAt ? { lifecycle: "unarchived" as const } : {}),
     });
     return result.record;
   }

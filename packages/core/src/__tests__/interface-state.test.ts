@@ -128,6 +128,23 @@ describe("boundCardProps", () => {
     });
   });
 
+  it("says first that an archived record is archived, with when and why", () => {
+    const archived = {
+      ...record({ name: "Lisbon", nights: 4 }),
+      archivedAt: "2026-10-20T08:00:00.000Z",
+      archivedBy: system.actor,
+      archiveReason: "trip is over",
+    };
+    expect(boundCardProps({}, archived, "name").fields).toEqual([
+      { label: "archived", value: "2026-10-20: trip is over" },
+      { label: "nights", value: "4" },
+    ]);
+    const { archiveReason: _why, ...noReason } = archived;
+    expect(boundCardProps({}, noReason, "name", { fields: [] }).fields).toEqual([
+      { label: "archived", value: "2026-10-20" },
+    ]);
+  });
+
   it("falls back to the agent's title, then to the record's type and id", () => {
     expect(boundCardProps({ title: "Mine" }, record({ status: "draft" }), undefined).title).toBe("Mine");
     expect(boundCardProps({}, record({ status: "draft" }), undefined).title).toBe("plan trip");
@@ -226,6 +243,12 @@ describe("pressing a state button", () => {
     await expect(press(spec.id, "a1")).rejects.toThrow("This was closed by the agent.");
   });
 
+  it("is refused on an archived record, saying how to change it", async () => {
+    const spec = card();
+    await state.archive(system, { type: "plan", id: "trip" });
+    await expect(press(spec.id, "a1")).rejects.toThrow("plan/trip is archived. Unarchive it before changing it.");
+  });
+
   it("is refused where state is not available", async () => {
     const spec = card();
     await expect(press(spec.id, "a1", {} as never)).rejects.toThrow("state is not available here");
@@ -248,6 +271,14 @@ describe("the interface tool and bound cards", () => {
       type: "text",
       text: `Sent card ${spec.id}. Its state buttons write the record directly; no message comes back to you.`,
     });
+  });
+
+  it("shows an archived record as archived, not as current", async () => {
+    await state.archive(system, { type: "plan", id: "trip" }, "trip is over");
+    const res = await run({ action: "send", kind: "card", bind: { type: "plan", id: "trip" } });
+    expect(res.success).toBe(true);
+    const fields = sentSpec(res.output).props.fields as { label: string; value: string }[];
+    expect(fields[0]).toEqual({ label: "archived", value: expect.stringMatching(/^\d{4}-\d\d-\d\d: trip is over$/) });
   });
 
   it("accepts bind as the JSON text small models send", async () => {

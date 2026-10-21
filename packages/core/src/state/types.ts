@@ -46,6 +46,14 @@ export interface StateRecord {
   updatedAt: string;
   updatedBy: Actor;
   source?: Source;
+  /**
+   * Set while the record is archived: kept, with its data and history, but
+   * left out of queries unless they ask for it. Belongs to the record, not its
+   * data, so a type's schema never sees it. Absent means live.
+   */
+  archivedAt?: string;
+  archivedBy?: Actor;
+  archiveReason?: string;
 }
 
 /**
@@ -76,6 +84,8 @@ export interface StateQuery {
   orderBy?: { field: string; direction?: "asc" | "desc" };
   limit?: number;
   offset?: number;
+  /** Archived records too. Left out by default, because a query loads what is current. */
+  includeArchived?: boolean;
 }
 
 export interface StateWrite {
@@ -101,6 +111,15 @@ export interface StateChange {
   actor: Actor;
   source?: Source;
   at: string;
+  /**
+   * Set on the update that archived the record or brought it back. The op
+   * stays `update`, so a consumer written before archiving existed keeps
+   * working; one that cares reads this. An archive changes no data, so its
+   * `before` and `after` are the same.
+   */
+  lifecycle?: "archived" | "unarchived";
+  /** Why it was archived, on an `archived` change, when the archiver said. */
+  archiveReason?: string;
 }
 
 export interface HistoryOptions {
@@ -124,15 +143,19 @@ export interface StateWriteResult {
  */
 export interface StateProvider {
   readonly id: string;
-  /** A live record, or null when absent or deleted. */
+  /** A live record, or null when absent or deleted. An archived record is returned, with its archive fields. */
   get(ref: StateRef): Promise<StateRecord | null>;
-  /** Live records only. */
+  /** Live records only, and archived ones only when `includeArchived` is set. */
   query(q: StateQuery): Promise<StateRecord[]>;
   /**
    * Create or replace. `expectedVersion` makes the write conditional: `0`
    * means the record must not exist yet, any other number means the live
    * record must be at exactly that version. A mismatch throws
    * {@link StateConflictError}. Undefined writes unconditionally.
+   *
+   * A put writes the whole record, and the record it writes is not archived:
+   * one over an archived record brings it back, as one over a deleted record
+   * creates it again, and its history entry says `lifecycle: "unarchived"`.
    */
   put(write: StateWrite, expectedVersion?: number): Promise<StateWriteResult>;
   /**
@@ -144,6 +167,27 @@ export interface StateProvider {
    * less tightly.
    */
   delete?(ref: StateRef, actor: Actor, source?: Source, expectedVersion?: number): Promise<StateRecord | null>;
+  /**
+   * Archive a live record: it keeps its data and history, `get` still returns
+   * it with `archivedAt`, `archivedBy` and `archiveReason` set, and `query`
+   * leaves it out unless asked. A write like any other: the version goes up by
+   * one, `updatedAt`/`updatedBy` change, and history logs an `update` with
+   * `lifecycle: "archived"`. Returns what was written, or null when there is
+   * no live record. `expectedVersion` as for `delete`.
+   *
+   * Optional, with `unarchive`. Core refuses to archive in a store that lacks
+   * either, rather than report success and leave the record live; a store
+   * without them keeps every other part of this contract as it was.
+   */
+  archive?(
+    ref: StateRef,
+    actor: Actor,
+    reason?: string,
+    source?: Source,
+    expectedVersion?: number,
+  ): Promise<StateWriteResult | null>;
+  /** Bring an archived record back, the same kind of write as `archive`, logged with `lifecycle: "unarchived"`. */
+  unarchive?(ref: StateRef, actor: Actor, source?: Source, expectedVersion?: number): Promise<StateWriteResult | null>;
   /** Most recent first. */
   history?(ref: StateRef, opts?: HistoryOptions): Promise<StateChange[]>;
   /** Erase a record and its history outright. An admin action, never the default delete. */

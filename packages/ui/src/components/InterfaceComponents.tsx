@@ -114,7 +114,7 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
           listed
             ? { ...spec, props: listed }
             : bound.data
-              ? { ...spec, props: boundView(spec.props, bound.data, bound.titleField, spec.bind) }
+              ? { ...spec, props: boundView(spec.props, bound.data, bound.titleField, spec.bind, bound.archived) }
               : spec
         }
         open={open}
@@ -142,9 +142,11 @@ type Act = (action: ActionSpec, value?: unknown, shown?: string) => void;
  * The record a bound card shows, kept current: fetched once, then replaced by
  * every change the state stream reports for it. `null` once it is deleted;
  * `undefined` for a card that is not bound, or before the first read.
+ * `archived` says when and why while the record is archived.
  */
 function useBoundRecord(bind: ComponentSpec["bind"]) {
   const [data, setData] = useState<Record<string, unknown> | null | undefined>(undefined);
+  const [archived, setArchived] = useState<Archived | undefined>(undefined);
   const [titleField, setTitleField] = useState<string | undefined>(undefined);
   const type = bind?.type;
   const id = bind?.id;
@@ -153,13 +155,19 @@ function useBoundRecord(bind: ComponentSpec["bind"]) {
     if (!type || !id) return;
     let cancelled = false;
     fetchStateRecord(type, id)
-      .then((r) => !cancelled && setData(r.data))
+      .then((r) => {
+        if (cancelled) return;
+        setData(r.data);
+        setArchived(r.archivedAt ? { at: r.archivedAt, reason: r.archiveReason } : undefined);
+      })
       // Unreadable now: keep drawing it as it was sent.
       .catch(() => {});
     stateTitleField(type).then((t) => !cancelled && setTitleField(t));
     const off = subscribeStateChanges((c) => {
       if (c.type !== type || c.id !== id) return;
       setData(c.op === "delete" ? null : (c.after ?? null));
+      // Only an archive leaves a record archived: a patch refuses one, and a put brings it back.
+      setArchived(c.lifecycle === "archived" ? { at: c.at, reason: c.archiveReason } : undefined);
     });
     return () => {
       cancelled = true;
@@ -167,7 +175,13 @@ function useBoundRecord(bind: ComponentSpec["bind"]) {
     };
   }, [type, id]);
 
-  return { data, titleField, set: setData };
+  return { data, archived, titleField, set: setData };
+}
+
+/** When a bound card's record was archived, and why. */
+interface Archived {
+  at: string;
+  reason?: string;
 }
 
 /**
@@ -270,19 +284,22 @@ export function boundView(
   data: Record<string, unknown>,
   titleField: string | undefined,
   show: { fields?: string[]; body?: string } = {},
+  archived?: Archived,
 ): Record<string, unknown> {
   const named = titleField ? data[titleField] : undefined;
   const text = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
   const keys = show.fields ?? Object.keys(data).filter((key) => key !== titleField && key !== show.body);
   const body = show.body && data[show.body] != null ? text(data[show.body]) : undefined;
+  // An archived record says so first, so the card never shows it as current.
+  const day = archived?.at.slice(0, 10);
   return {
     ...props,
     title: typeof named === "string" && named.trim() ? named : props.title,
     ...(body ? { body } : {}),
-    fields: keys
-      .filter((key) => data[key] !== undefined)
-      .slice(0, 20)
-      .map((key) => ({ label: key, value: text(data[key]) })),
+    fields: [
+      ...(archived ? [{ label: "archived", value: archived.reason ? `${day}: ${archived.reason}` : day }] : []),
+      ...keys.filter((key) => data[key] !== undefined).map((key) => ({ label: key, value: text(data[key]) })),
+    ].slice(0, 20),
   };
 }
 

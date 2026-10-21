@@ -1,5 +1,5 @@
 import { WAKE_ROOMS_KEY } from "../rooms/keys.js";
-import { formatRecordList, parseOrderBy } from "../state/format.js";
+import { actorName, archivedLine, formatRecordList, parseOrderBy } from "../state/format.js";
 import type { StateCaller, StateService, StateTypeView } from "../state/service.js";
 import { type FieldCondition, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import { summarizeFields } from "../state/validate.js";
@@ -9,9 +9,9 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 const DEFAULT_LIMIT = 20;
 
 /**
- * World state for an agent: one tool, six actions.
+ * World state for an agent: one tool, eight actions.
  *
- * One tool rather than six because every tool costs attention and history
+ * One tool rather than eight because every tool costs attention and history
  * budget, and that cost is steepest on the small local models TAI has to
  * work well on. For the same reason output is compact — field summaries
  * rather than JSON Schema, one line per record — and every failure is a
@@ -29,14 +29,15 @@ export class StateTool implements Tool {
     properties: {
       action: {
         type: "string",
-        enum: ["types", "get", "query", "put", "patch", "delete"],
+        enum: ["types", "get", "query", "put", "patch", "delete", "archive", "unarchive"],
         description:
-          "types: what exists. get: one record. query: records matching `where`. put: create, or replace by id. patch: change some fields. delete: remove it (its history is kept).",
+          "types: what exists. get: one record. query: records matching `where`. put: create, or replace by id. patch: change some fields. delete: remove it (its history is kept). archive: retire it, kept but left out of queries. unarchive: bring it back.",
       },
       type: { type: "string", description: 'Record type, e.g. "plan". Required except for types.' },
       id: {
         type: "string",
-        description: "Record id. Required for get, patch and delete. For put, omit it to create a new record.",
+        description:
+          "Record id. Required for get, patch, delete, archive and unarchive. For put, omit it to create a new record.",
       },
       data: {
         type: "object",
@@ -57,6 +58,8 @@ export class StateTool implements Tool {
           'query: field to sort by, "-" first for descending (e.g. "-priority"). Default: most recently updated.',
       },
       limit: { type: "number", description: `query: at most this many records. Default ${DEFAULT_LIMIT}.` },
+      includeArchived: { type: "boolean", description: "query: include archived records." },
+      reason: { type: "string", description: "archive: why, in a few words." },
       expectedVersion: {
         type: "number",
         description: "put or patch: write only if the record is still at this version.",
@@ -78,8 +81,8 @@ export class StateTool implements Tool {
 
     try {
       if (action === "types") return ok(formatTypes(service.listTypes(caller)));
-      if (!["get", "query", "put", "patch", "delete"].includes(action)) {
-        return fail(`Unknown action "${args.action}". Use one of: types, get, query, put, patch, delete.`);
+      if (!ACTIONS.includes(action)) {
+        return fail(`Unknown action "${args.action}". Use one of: types, ${ACTIONS.join(", ")}.`);
       }
       if (!type) return fail(`Say which type with \`type\`. Use action "types" to see what exists.`);
       const title = service.getType(type)?.title;
@@ -98,6 +101,7 @@ export class StateTool implements Tool {
             ...(where ? { where: where as Record<string, FieldCondition> } : {}),
             ...parseOrderBy(args.orderBy),
             limit: typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : DEFAULT_LIMIT,
+            ...(args.includeArchived === true || args.includeArchived === "true" ? { includeArchived: true } : {}),
           });
           return ok(formatRecordList(type, records, title));
         }
@@ -118,6 +122,21 @@ export class StateTool implements Tool {
           const record = await service.patch(caller, { type, id }, changes, expectedVersion);
           return ok(`Updated ${record.type}/${record.id} (version ${record.version}).`);
         }
+        case "archive": {
+          if (!id) return fail("archive needs the record's `id`.");
+          const reason = typeof args.reason === "string" ? args.reason : undefined;
+          const archived = await service.archive(caller, { type, id }, reason, expectedVersion);
+          return archived
+            ? ok(`Archived ${type}/${id}. Queries leave it out now; action "unarchive" brings it back.`)
+            : fail(`There is no ${type} record with id "${id}" to archive.`);
+        }
+        case "unarchive": {
+          if (!id) return fail("unarchive needs the record's `id`.");
+          const restored = await service.unarchive(caller, { type, id }, expectedVersion);
+          return restored
+            ? ok(`${type}/${id} is back (version ${restored.version}).`)
+            : fail(`There is no ${type} record with id "${id}" to unarchive.`);
+        }
         default: {
           if (!id) return fail("delete needs the record's `id`.");
           const removed = await service.delete(caller, { type, id });
@@ -135,6 +154,9 @@ export class StateTool implements Tool {
     }
   }
 }
+
+/** Every action but `types`, which needs no record type. */
+const ACTIONS = ["get", "query", "put", "patch", "delete", "archive", "unarchive"];
 
 function callerFrom(context: ToolContext): StateCaller {
   return agentStateCaller(context, "state");
@@ -198,9 +220,10 @@ function formatTypes(views: StateTypeView[]): string {
 }
 
 function formatRecord(record: StateRecord): string {
-  const by = record.updatedBy.kind === "agent" ? record.updatedBy.name : record.updatedBy.kind;
+  const archived = archivedLine(record);
   return (
-    `${record.type}/${record.id} (version ${record.version}, scope ${record.scope}, updated ${record.updatedAt} by ${by})\n` +
+    `${record.type}/${record.id} (version ${record.version}, scope ${record.scope}, updated ${record.updatedAt} by ${actorName(record.updatedBy)})\n` +
+    (archived ? `${archived} Action "unarchive" brings it back.\n` : "") +
     JSON.stringify(record.data)
   );
 }

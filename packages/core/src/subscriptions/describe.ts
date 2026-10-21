@@ -25,18 +25,22 @@ function describeStateChange(c: StateChange): string {
   const ref = `${c.type}/${c.id}`;
   if (c.op === "delete") return `${ref} deleted by ${who}${via}`;
   if (c.op === "create") return clip(`${ref} created by ${who}${via}: ${compact(c.after ?? {})}`, MAX_LINE_CHARS);
+  if (c.lifecycle === "archived")
+    return clip(`${ref} archived by ${who}${via}${c.archiveReason ? `: ${c.archiveReason}` : ""}`, MAX_LINE_CHARS);
 
   const before = c.before ?? {};
   const after = c.after ?? {};
   const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
     (k) => JSON.stringify(before[k]) !== JSON.stringify(after[k]),
   );
-  if (keys.length === 0) return `${ref} saved by ${who}${via}, unchanged`;
+  const verb = c.lifecycle === "unarchived" ? "unarchived" : "updated";
+  if (keys.length === 0)
+    return verb === "unarchived" ? `${ref} unarchived by ${who}${via}` : `${ref} saved by ${who}${via}, unchanged`;
 
   // Fields are added only while they fit, so the count of what was left out
   // always survives: an agent told "+3 more" knows to look, one whose line was
   // simply cut off does not.
-  const prefix = `${ref} updated by ${who}${via}: `;
+  const prefix = `${ref} ${verb} by ${who}${via}: `;
   const reserve = keys.length > 1 ? "; +99 more".length : 0;
   const parts: string[] = [];
   let used = prefix.length;

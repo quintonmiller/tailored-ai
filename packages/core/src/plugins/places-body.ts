@@ -628,10 +628,12 @@ export async function changeBody(
   const ref = { type: BODY_TYPE, id: agent };
   for (let attempt = 0; ; attempt++) {
     const found = await service.get(caller, ref).catch(() => null);
-    const next = bodyWith((found?.data ?? {}) as BodyData, change);
+    // An archived body record is not in effect, so a change starts from nothing and writes over it, at its version.
+    const live = found && !found.archivedAt ? found : null;
+    const next = bodyWith((live?.data ?? {}) as BodyData, change);
     try {
       if (!Object.keys(next).length) {
-        if (found) await service.delete(caller, ref, found.version);
+        if (live) await service.delete(caller, ref, live.version);
       } else {
         await service.put(
           caller,
@@ -751,14 +753,15 @@ export class BodyTool implements Tool {
     }
   }
 
+  /** The body as drawn: an archived record is not in effect, so it reads as nothing chosen. */
   private async read(service: StateService, caller: StateCaller, agent: string): Promise<BodyData> {
     const found = await service.get(caller, { type: BODY_TYPE, id: agent }).catch(() => null);
-    return (found?.data ?? {}) as BodyData;
+    return (found && !found.archivedAt ? found.data : {}) as BodyData;
   }
 
   private async legacy(service: StateService, caller: StateCaller, agent: string): Promise<unknown> {
     const found = await service.get(caller, { type: WEAR_TYPE, id: agent }).catch(() => null);
-    return found?.data.wear;
+    return found?.archivedAt ? undefined : found?.data.wear;
   }
 
   private async look(service: StateService, caller: StateCaller, agent: string): Promise<string> {
