@@ -136,6 +136,7 @@ For a personal install with Discord + web sessions, `keyPrefixes: ["discord:", "
 
 - `EmbeddingProvider` (`packages/core/src/providers/embedding.ts`) — small interface mirroring `AIProvider` but producing dense float vectors. `OpenAICompatibleEmbeddingProvider` hits `/v1/embeddings` for vLLM/Ollama/LM Studio/hosted OpenAI.
 - Config: `memory.embeddings.{enabled, baseUrl, apiKey, model, dim}` (default off — opt in per project/runtime). `memory.chunks.{maxChunkChars, overlap}` for indexer parameters.
+- The same embedder powers world-state search by meaning ([world-state.md](./world-state.md#searching)), which keeps its vectors in its own `state_search` table rather than `memory_chunks`, so a searchable record never surfaces in anyone's recall.
 - `runtime.getEmbedder()` exposes the configured provider; `createEmbedder(config)` is the factory.
 - Vector storage: `memory_chunks.embedding` is a SQLite BLOB; encoded via `vectorToBlob` / decoded via `blobToVector`. Float32Array round-trips losslessly.
 - `chunk-queries.ts`: `createChunk`, `listChunksBySource`, `deleteChunksBySource`, `semanticSearch(db, queryVec, {projectId, limit, minScore})`. Brute-force cosine; acceptable up to ~10k chunks before needing sqlite-vss.

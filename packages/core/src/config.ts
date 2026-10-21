@@ -2328,6 +2328,20 @@ function stateTypeWarnings(types: StateTypeDef[] | undefined): string[] {
     if (def.title && schema?.properties && !(def.title in schema.properties)) {
       warnings.push(`state type "${def.name}": title "${def.title}" is not one of its fields.`);
     }
+    if (def.search) {
+      const fields = Array.isArray(def.search.fields) ? def.search.fields : [];
+      if (fields.length === 0) {
+        warnings.push(`state type "${def.name}": search names no fields, so the type is not searchable.`);
+      }
+      for (const field of fields) {
+        const top = typeof field === "string" ? field.split(".")[0] : "";
+        if (schema?.properties && !(top in schema.properties)) {
+          warnings.push(
+            `state type "${def.name}": search field "${field}" is not one of its fields, so it adds nothing.`,
+          );
+        }
+      }
+    }
   }
   return warnings;
 }

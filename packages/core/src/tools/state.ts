@@ -1,5 +1,5 @@
 import { WAKE_ROOMS_KEY } from "../rooms/keys.js";
-import { actorName, archivedLine, formatRecordList, parseOrderBy } from "../state/format.js";
+import { actorName, archivedLine, formatRecordList, formatSearchHits, parseOrderBy } from "../state/format.js";
 import type { StateCaller, StateService, StateTypeView } from "../state/service.js";
 import { type FieldCondition, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import { summarizeFields } from "../state/validate.js";
@@ -7,11 +7,14 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 /** A query's default page. Small, because every record lands in the prompt. */
 const DEFAULT_LIMIT = 20;
+/** A search's default number of hits, smaller still: it should find the few that matter. */
+const SEARCH_LIMIT = 8;
+const ALL_ACTIONS = ["types", "get", "query", "search", "put", "patch", "delete", "archive", "unarchive"];
 
 /**
- * World state for an agent: one tool, eight actions.
+ * World state for an agent: one tool, nine actions.
  *
- * One tool rather than eight because every tool costs attention and history
+ * One tool rather than nine because every tool costs attention and history
  * budget, and that cost is steepest on the small local models TAI has to
  * work well on. For the same reason output is compact — field summaries
  * rather than JSON Schema, one line per record — and every failure is a
@@ -29,11 +32,16 @@ export class StateTool implements Tool {
     properties: {
       action: {
         type: "string",
-        enum: ["types", "get", "query", "put", "patch", "delete", "archive", "unarchive"],
+        enum: ALL_ACTIONS,
         description:
-          "types: what exists. get: one record. query: records matching `where`. put: create, or replace by id. patch: change some fields. archive: retire it, kept but left out of queries; better than delete for anything that may matter again. unarchive: bring it back. delete: remove it (its history is kept).",
+          "types: what exists. get: one record. query: records matching `where`. search: records about `text`, closest first. put: create, or replace by id. patch: change some fields. archive: retire it, kept but left out of queries; better than delete for anything that may matter again. unarchive: bring it back. delete: remove it (its history is kept).",
       },
-      type: { type: "string", description: 'Record type, e.g. "plan". Required except for types.' },
+      type: {
+        type: "string",
+        description:
+          'Record type, e.g. "plan". Required except for types and search; search takes one, several comma-separated, or none for every searchable type.',
+      },
+      text: { type: "string", description: "search: what to look for, in a few words." },
       id: {
         type: "string",
         description:
@@ -50,15 +58,18 @@ export class StateTool implements Tool {
       scope: {
         type: "string",
         description:
-          'Optional. Where a new record goes, or the one scope to query: "global", "agent:<name>", "room:<ref>".',
+          'Optional. Where a new record goes, or the one scope to query or search: "global", "agent:<name>", "room:<ref>".',
       },
       orderBy: {
         type: "string",
         description:
           'query: field to sort by, "-" first for descending (e.g. "-priority"). Default: most recently updated.',
       },
-      limit: { type: "number", description: `query: at most this many records. Default ${DEFAULT_LIMIT}.` },
-      includeArchived: { type: "boolean", description: "query: include archived records." },
+      limit: {
+        type: "number",
+        description: `query or search: at most this many records. Default ${DEFAULT_LIMIT}, or ${SEARCH_LIMIT} for search.`,
+      },
+      includeArchived: { type: "boolean", description: "query or search: include archived records." },
       reason: { type: "string", description: "archive: why, in a few words." },
       expectedVersion: {
         type: "number",
@@ -81,8 +92,9 @@ export class StateTool implements Tool {
 
     try {
       if (action === "types") return ok(formatTypes(service.listTypes(caller)));
+      if (action === "search") return await search(service, caller, args, scope);
       if (!ACTIONS.includes(action)) {
-        return fail(`Unknown action "${args.action}". Use one of: types, ${ACTIONS.join(", ")}.`);
+        return fail(`Unknown action "${args.action}". Use one of: ${ALL_ACTIONS.join(", ")}.`);
       }
       if (!type) return fail(`Say which type with \`type\`. Use action "types" to see what exists.`);
       const title = service.getType(type)?.title;
@@ -158,8 +170,46 @@ export class StateTool implements Tool {
   }
 }
 
-/** Every action but `types`, which needs no record type. */
+/** Every action but `types` and `search`, which need no record type. */
 const ACTIONS = ["get", "query", "put", "patch", "delete", "archive", "unarchive"];
+
+async function search(
+  service: StateService,
+  caller: StateCaller,
+  args: Record<string, unknown>,
+  scope: string | undefined,
+): Promise<ToolResult> {
+  const text = typeof args.text === "string" ? args.text.trim() : "";
+  if (!text) return fail('search needs `text`: what to look for, e.g. "hotel prices in Lisbon".');
+  // `types` isn't in the schema, but a model that sends it means the same as `type`.
+  const types = listArg(args.type ?? args.types);
+  const searchable = service
+    .listTypes(caller)
+    .filter((v) => v.def.search?.fields?.length)
+    .map((v) => v.def.name);
+  if (types.length === 0 && searchable.length === 0) {
+    return fail(
+      'None of the types you can read are searchable. Use action "query" to filter records by field instead.',
+    );
+  }
+  const hits = await service.search(caller, {
+    text,
+    ...(types.length ? { types } : {}),
+    ...(scope ? { scope } : {}),
+    limit: typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : SEARCH_LIMIT,
+    ...(args.includeArchived === true || args.includeArchived === "true" ? { includeArchived: true } : {}),
+  });
+  return ok(formatSearchHits(text, hits, types.length ? types : searchable, (t) => service.getType(t)?.title));
+}
+
+/** A list of names from an array, or from one string with commas between them. */
+function listArg(value: unknown): string[] {
+  const items = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+  return items
+    .filter((v): v is string => typeof v === "string")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
 
 function callerFrom(context: ToolContext): StateCaller {
   return agentStateCaller(context, "state");
@@ -214,6 +264,7 @@ function formatTypes(views: StateTypeView[]): string {
     .map(({ def, canWrite }) => {
       const lines = [`- ${def.name}${def.description ? `: ${def.description}` : ""}`];
       lines.push(`  fields: ${summarizeFields(def.schema)}`);
+      if (def.search?.fields?.length) lines.push(`  searchable by: ${def.search.fields.join(", ")}`);
       lines.push(
         `  new records go in ${where[def.scope ?? "global"]}; you can ${canWrite ? "read and write" : "only read"}`,
       );

@@ -14,6 +14,8 @@ export {
   type StateConfig,
   type StatePutInput,
   type StateQueryInput,
+  type StateSearchHit,
+  type StateSearchInput,
   StateService,
   type StateServiceOptions,
   type StateTypeView,

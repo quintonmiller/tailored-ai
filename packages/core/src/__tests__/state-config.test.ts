@@ -74,4 +74,27 @@ describe("state config", () => {
       'state: `types.0.access.read` must be an array, got the string "*".',
     ]);
   });
+
+  it("accepts search fields, and flags ones that search nothing", () => {
+    const schema = { type: "object", properties: { title: { type: "string" }, owner: { type: "object" } } };
+    expect(
+      stateWarnings({ state: { types: [{ name: "doc", schema, search: { fields: ["title", "owner.name"] } }] } }),
+    ).toEqual([]);
+    expect(
+      stateWarnings({
+        state: {
+          types: [
+            { name: "doc", schema, search: { fields: ["title", "body"] } },
+            { name: "note", search: { fields: [] } },
+          ],
+        },
+      }),
+    ).toEqual([
+      'state type "doc": search field "body" is not one of its fields, so it adds nothing.',
+      'state type "note": search names no fields, so the type is not searchable.',
+    ]);
+    expect(findShapeIssues(config({ state: { types: [{ name: "doc", search: { fields: "title" } }] } }))).toEqual([
+      'state: `types.0.search.fields` must be an array, got the string "title".',
+    ]);
+  });
 });

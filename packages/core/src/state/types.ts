@@ -263,6 +263,14 @@ export interface StateTypeDef {
    * or HTTP API. Omitted means everyone, agents and people alike.
    */
   access?: { read?: string[]; write?: string[] };
+  /**
+   * Makes records of this type findable by `StateService.search`. `fields`
+   * names the data fields whose text is searched: top-level (`summary`) or
+   * dotted (`owner.name`). Strings and numbers are read as text, and an array
+   * or object is read through to the strings and numbers inside it. A type
+   * without `search` is never indexed or searched.
+   */
+  search?: { fields: string[] };
 }
 
 /** A version mismatch on a conditional write. */

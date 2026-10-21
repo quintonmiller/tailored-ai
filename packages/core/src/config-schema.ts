@@ -283,6 +283,7 @@ const StateTypeSchema = z.object({
   provider: z.string().optional(),
   providerOptions: z.record(z.unknown()).optional(),
   access: z.object({ read: z.array(z.string()).optional(), write: z.array(z.string()).optional() }).optional(),
+  search: z.object({ fields: z.array(z.string()) }).optional(),
 });
 
 /** `live:` — the speech stages are open strings resolved through their registries; their options are opaque. */

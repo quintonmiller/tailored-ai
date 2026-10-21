@@ -171,7 +171,7 @@ describe("state tool", () => {
       'Say which type with `type`. Use action "types" to see what exists.',
     );
     expect((await run({ action: "fly" })).error).toBe(
-      'Unknown action "fly". Use one of: types, get, query, put, patch, delete, archive, unarchive.',
+      'Unknown action "fly". Use one of: types, get, query, search, put, patch, delete, archive, unarchive.',
     );
     expect((await run({ action: "get", type: "plans", id: "x" })).error).toBe(
       'There is no state type called "plans". Types you can use: ledger, plan.',
@@ -185,6 +185,87 @@ describe("state tool", () => {
     await run({ action: "put", type: "plan", id: "trip", data: { name: "Trip" } });
     const stranger = await run({ action: "get", type: "plan", id: "trip" }, context("reviewer", ""));
     expect(stranger.error).toBe('There is no plan record with id "trip".');
+  });
+});
+
+describe("state tool search", () => {
+  const searchConfig: { state: StateConfig } = {
+    state: {
+      backend: "sqlite",
+      types: [
+        { name: "doc", title: "title", search: { fields: ["title", "summary"] } },
+        { name: "commitment", title: "goal", scope: "agent", search: { fields: ["goal"] } },
+        { name: "plan", title: "name" },
+      ],
+    },
+  };
+  let service: StateService;
+  let tool: StateTool;
+  const run = (args: Record<string, unknown>, ctx = context()) => tool.execute(args, ctx);
+
+  beforeEach(() => {
+    service = new StateService({ getConfig: () => searchConfig, db: new Database(":memory:") });
+    tool = new StateTool(() => service);
+  });
+
+  afterEach(async () => {
+    await service.close();
+  });
+
+  it("lists matches closest first, one line each, saying how each matched", async () => {
+    await run({
+      action: "put",
+      type: "doc",
+      id: "hotels",
+      data: { title: "Hotel shortlist", summary: "Lisbon, old town" },
+    });
+    await run({ action: "put", type: "doc", id: "prefs", data: { title: "Travel preferences", summary: "Hotels" } });
+    await run({ action: "put", type: "plan", id: "trip", data: { name: "Hotel in Lisbon" } });
+
+    const res = await run({ action: "search", text: "hotel in Lisbon" });
+    expect(res.success).toBe(true);
+    const lines = res.output.split("\n");
+    expect(lines[0]).toBe('2 match(es) for "hotel in Lisbon", closest first:');
+    expect(lines[1]).toMatch(
+      /^- doc\/hotels "Hotel shortlist" \(words 1\.00, version 1, global, updated \S+ by planner\): \{"title":"Hotel shortlist","summary":"Lisbon, old town"\}$/,
+    );
+    expect(lines[2]).toMatch(/^- doc\/prefs "Travel preferences" \(words 0\.\d\d, /);
+  });
+
+  it("narrows to the types named, comma-separated or as a list", async () => {
+    await run({ action: "put", type: "doc", id: "d", data: { title: "Hotel in Lisbon" } });
+    await run({ action: "put", type: "commitment", id: "c", data: { goal: "Book a hotel in Lisbon" } });
+    expect((await run({ action: "search", text: "hotel", type: "commitment" })).output).toContain("commitment/c");
+    expect((await run({ action: "search", text: "hotel", type: "commitment" })).output).not.toContain("doc/d");
+    expect((await run({ action: "search", text: "hotel", type: "doc, commitment" })).output).toContain("2 match(es)");
+    expect((await run({ action: "search", text: "hotel", types: ["doc"] })).output).toContain("1 match(es)");
+  });
+
+  it("says what it searched when nothing matches, and what is missing or unsearchable", async () => {
+    expect((await run({ action: "search", text: "hotel" })).output).toBe(
+      'Nothing matches "hotel" (searched commitment, doc).',
+    );
+    expect((await run({ action: "search" })).error).toBe(
+      'search needs `text`: what to look for, e.g. "hotel prices in Lisbon".',
+    );
+    expect((await run({ action: "search", text: "hotel", type: "plan" })).error).toBe(
+      "plan records are not searchable. Searchable types: commitment, doc.",
+    );
+  });
+
+  it("tells an agent when nothing it can read is searchable", async () => {
+    const plain = new StateService({ getConfig: () => config, db: new Database(":memory:") });
+    const plainTool = new StateTool(() => plain);
+    expect((await plainTool.execute({ action: "search", text: "hotel" }, context())).error).toBe(
+      'None of the types you can read are searchable. Use action "query" to filter records by field instead.',
+    );
+    await plain.close();
+  });
+
+  it("shows which fields a type is searchable by", async () => {
+    expect((await run({ action: "types" })).output).toContain(
+      "- doc\n  fields: any fields\n  searchable by: title, summary\n",
+    );
   });
 });
 
