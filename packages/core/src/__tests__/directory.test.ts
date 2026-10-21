@@ -627,6 +627,19 @@ describe("directory about and profile", () => {
     expect(r?.data.takesOn).toEqual(["trip research", "itineraries", "bookings with approval"]);
     expect(r?.scope).toBe("global");
 
+    // The loop validates arguments before the tool sees them and refuses a
+    // string for a bare `type: "array"` (it lifts only a string without
+    // commas). So the comma form above reaches the tool only because the
+    // schema takes a string as well as a list.
+    const takesOn = (build("directory").parameters as { properties: Record<string, Record<string, unknown>> })
+      .properties.takesOn;
+    expect(takesOn.type).toBeUndefined();
+    expect(takesOn.anyOf).toContainEqual({ type: "string" });
+    const tags = (build("writeup").parameters as { properties: Record<string, Record<string, unknown>> }).properties
+      .tags;
+    expect(tags.type).toBeUndefined();
+    expect(tags.anyOf).toContainEqual({ type: "string" });
+
     await run("trip-planner", "directory", { action: "profile", purpose: "Plans trips." });
     const about = await run("planner", "directory", { action: "about", agent: "trip-planner" });
     expect(about).toContain("trip-planner: Plans trips.");

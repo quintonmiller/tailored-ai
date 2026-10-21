@@ -214,7 +214,13 @@ export class DirectoryTool implements Tool {
       q: { type: "string", description: "search: what you're looking for, in a few words." },
       kind: { type: "string", enum: [...SEARCH_KINDS], description: "search: only this kind of record." },
       purpose: { type: "string", description: "profile: what you're for, in a sentence or two." },
-      takesOn: { type: "array", items: { type: "string" }, description: "profile: the kinds of work you take on." },
+      // A list, or one string with commas: a model writes either, and the
+      // comma form plainly means several kinds of work. With a bare `array`
+      // type, validation refused the string before the tool could split it.
+      takesOn: {
+        anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }],
+        description: "profile: the kinds of work you take on, as a list or comma-separated.",
+      },
       howToAsk: { type: "string", description: "profile: how others should hand you work." },
     },
     required: ["action"],
@@ -546,7 +552,11 @@ export class WriteupTool implements Tool {
       title: { type: "string", description: "write or update: a short title." },
       summary: { type: "string", description: "write or update: a line or two on what it covers." },
       body: { type: "string", description: "write or update: the doc itself." },
-      tags: { type: "array", items: { type: "string" }, description: "write or update: a few words to find it by." },
+      // A list or a comma-separated string, for the reason `takesOn` gives.
+      tags: {
+        anyOf: [{ type: "array", items: { type: "string" } }, { type: "string" }],
+        description: "write or update: a few words to find it by, as a list or comma-separated.",
+      },
       agent: { type: "string", description: "list: whose. Default: you." },
       reason: { type: "string", description: "archive: why, in a few words." },
     },
