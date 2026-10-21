@@ -49,7 +49,7 @@ export class InterfaceTool implements Tool {
       bind: {
         type: "object",
         description:
-          "card: show a state record {type, id, fields?: the fields to show, body?: one to show as its text}. list, table: show the records {type, where?, limit?} match. All stay current as records change.",
+          "card: show a state record {type, id, fields?: the fields to show, body?: one to show as its text}. list, table: show the records {type, where?, orderBy?, limit?} match. All stay current as records change.",
       },
       id: { type: "string", description: "update and close: the component's id." },
       expiresInMinutes: { type: "number", description: "send: stop taking answers after this many minutes." },
@@ -305,7 +305,7 @@ function liftCheck(props: Record<string, unknown>, check: unknown): Record<strin
   return { ...props, check: typeof check === "string" ? objectArg(check, "check") : check };
 }
 
-/** A list's `{type, where?, limit?}`, accepted as an object or JSON text. */
+/** A list's `{type, where?, orderBy?, limit?}`, accepted as an object or JSON text. */
 function queryArg(value: unknown): ListQuery {
   const q = objectArg(value, "bind");
   if (!q || typeof q.type !== "string" || !q.type) {
@@ -317,6 +317,7 @@ function queryArg(value: unknown): ListQuery {
   return {
     type: q.type,
     ...(where ? { where } : {}),
+    ...(typeof q.orderBy === "string" && q.orderBy.trim() ? { orderBy: q.orderBy.trim() } : {}),
     ...(typeof q.limit === "number" && q.limit > 0 ? { limit: Math.floor(q.limit) } : {}),
   };
 }

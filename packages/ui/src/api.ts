@@ -2062,3 +2062,66 @@ export function unarchiveStateRecord(type: string, id: string, expectedVersion: 
     expectedVersion,
   });
 }
+
+// --- The directory: what agents are for and own (docs/directory.md) ---
+//
+// Served by the `builtin:directory` plugin when it is on. With it off its
+// routes are not mounted, and the server's page fallback answers them with
+// the UI itself rather than JSON, so every read here says "off" as `null`.
+
+/** One agent as the agent list shows it. */
+export interface DirectoryAgentSummary {
+  name: string;
+  /** The profile's fields, or null when the agent hasn't written one. */
+  profile: { owner?: string; purpose?: string; takesOn?: string[]; howToAsk?: string } | null;
+  /** The configured description, when there is one. */
+  description?: string;
+  commitments: { open: number; waiting: number; done: number };
+  docs: number;
+}
+
+/** One agent's records, as its page draws them: private ones included, since a person sees everything. */
+export interface DirectoryAgent {
+  name: string;
+  profile: StateRecordInfo | null;
+  description?: string;
+  /** How the agent laid its page out, or null when it hasn't. */
+  page: StateRecordInfo | null;
+  commitments: StateRecordInfo[];
+  docs: StateRecordInfo[];
+  misses: StateRecordInfo[];
+}
+
+const DIRECTORY = "/api/ext/builtin:directory";
+
+/** A directory read: null when the directory is off (404, or a page where JSON should be). */
+async function directoryRead<T>(path: string): Promise<T | null> {
+  const res = await fetch(`${DIRECTORY}/${path}`);
+  if (res.status === 404) return null;
+  const json = (await res.json().catch(() => undefined)) as (T & { error?: string }) | undefined;
+  if (json === undefined) return null;
+  if (!res.ok) throw new Error(json.error ?? `${res.status} ${res.statusText}`);
+  return json;
+}
+
+/** Every agent with its purpose and counts, or null when the directory is off. */
+export async function fetchDirectoryAgents(): Promise<DirectoryAgentSummary[] | null> {
+  const res = await directoryRead<{ agents: DirectoryAgentSummary[] }>("agents");
+  return res ? res.agents : null;
+}
+
+/** One agent's profile, page, commitments, docs and misses, or null when the directory is off. */
+export function fetchDirectoryAgent(name: string): Promise<DirectoryAgent | null> {
+  return directoryRead<DirectoryAgent>(`agents/${encodeURIComponent(name)}`);
+}
+
+/**
+ * Hand an agent something: a commitment it owns, from you. `inPrompt` says
+ * whether it will see it in its "Your commitments" block next turn.
+ */
+export async function handToAgent(
+  name: string,
+  input: { goal: string; doneWhen?: string },
+): Promise<{ commitment: StateRecordInfo; inPrompt: boolean }> {
+  return stateWrite("POST", `${DIRECTORY}/agents/${encodeURIComponent(name)}/commitments`, input);
+}

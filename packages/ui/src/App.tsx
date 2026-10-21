@@ -29,7 +29,7 @@ import "./styles.css";
 type Route =
   | { page: "dashboard" }
   | { page: "board" }
-  | { page: "agents"; agentName?: string }
+  | { page: "agents"; agentName?: string; view?: "settings" }
   | { page: "projects"; projectId?: string; tab?: "tasks" | "documents"; taskId?: string; docId?: string }
   | { page: "tasks"; taskId?: string; status?: string }
   | { page: "chat"; sessionKey?: string; sessionId?: string }
@@ -116,7 +116,7 @@ function parseHash(): Route {
   }
   if (hash.startsWith("/agents")) {
     const parts = hash.split("?")[0].split("/");
-    return { page: "agents", agentName: parts[2] || undefined };
+    return { page: "agents", agentName: parts[2] || undefined, view: parts[3] === "settings" ? "settings" : undefined };
   }
   if (hash.startsWith("/board")) {
     return { page: "board" };
@@ -326,7 +326,7 @@ function AppShell({
           {route.page === "projects" && (
             <Projects projectId={route.projectId} tab={route.tab} taskId={route.taskId} docId={route.docId} />
           )}
-          {route.page === "agents" && <Agents agentName={route.agentName} />}
+          {route.page === "agents" && <Agents agentName={route.agentName} view={route.view} />}
           {route.page === "tasks" && <Tasks taskId={route.taskId} initialStatus={route.status} />}
           {route.page === "chat" && <Chat sessionKey={route.sessionKey} sessionId={route.sessionId} />}
           {route.page === "tools" && <Tools />}

@@ -3,12 +3,14 @@ import {
   type AgentDefinitionPatch,
   type AgentInfo,
   createAgent,
+  type DirectoryAgentSummary,
   deleteAgent,
   disableExploratoryAgent,
   type ExploratoryActivity,
   type ExploratoryAgent,
   type ExploratoryRun,
   fetchAgents,
+  fetchDirectoryAgents,
   fetchExploratoryAgents,
   fetchExploratoryRun,
   fetchExploratoryRuns,
@@ -28,10 +30,61 @@ import {
   type TaskCommentWithTask,
   updateAgent,
 } from "../api";
+import { AgentPage, DirectoryOff } from "../components/AgentPage";
 import { describeError, useToast } from "../components/Toast";
+import { subscribeStateChanges } from "../lib/state-events";
 
 interface AgentsPageProps {
   agentName?: string;
+  /** `settings` opens an agent on its configuration and activity rather than its page. */
+  view?: "settings";
+}
+
+/** The record types the agent list counts: a change to one re-reads it. */
+const LISTED_TYPES = new Set(["profile", "commitment", "doc"]);
+
+/**
+ * Every agent's purpose and counts from the directory, kept current from the
+ * state stream. undefined while loading, null when the directory is off.
+ */
+function useDirectory(): DirectoryAgentSummary[] | null | undefined {
+  const [agents, setAgents] = useState<DirectoryAgentSummary[] | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    let latest = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => {
+      const seq = ++latest;
+      fetchDirectoryAgents()
+        .then((a) => !cancelled && seq === latest && setAgents(a))
+        // Unreadable now, which isn't the same as off: keep what was there, and the list works without it.
+        .catch(() => {});
+    };
+    load();
+    const off = subscribeStateChanges((c) => {
+      if (!LISTED_TYPES.has(c.type)) return;
+      clearTimeout(timer);
+      timer = setTimeout(load, 120);
+    });
+    return () => {
+      cancelled = true;
+      off();
+      clearTimeout(timer);
+    };
+  }, []);
+  return agents;
+}
+
+/** "2 open · 1 waiting", or nothing when there's neither. */
+function workCounts(summary: DirectoryAgentSummary | undefined): string {
+  if (!summary) return "";
+  const { open, waiting } = summary.commitments;
+  return [open && `${open} open`, waiting && `${waiting} waiting`].filter(Boolean).join(" · ");
+}
+
+/** An agent's purpose line: its profile's, or its configured description. */
+function purposeOf(summary: DirectoryAgentSummary | undefined, info: AgentInfo): string | undefined {
+  return summary?.profile?.purpose?.trim() || summary?.description?.trim() || info.description?.trim() || undefined;
 }
 
 interface CombinedAgent {
@@ -40,8 +93,9 @@ interface CombinedAgent {
   watcher: ExploratoryAgent | null;
 }
 
-export function Agents({ agentName }: AgentsPageProps) {
+export function Agents({ agentName, view }: AgentsPageProps) {
   const [agents, setAgents] = useState<CombinedAgent[] | null>(null);
+  const directory = useDirectory();
   const [activity, setActivity] = useState<ExploratoryActivity | null>(null);
   const [exploratoryEnabled, setExploratoryEnabled] = useState<boolean>(false);
   const [err, setErr] = useState<string | null>(null);
@@ -95,10 +149,11 @@ export function Agents({ agentName }: AgentsPageProps) {
   }
 
   const selected = agentName ? agents.find((a) => a.name === agentName) : null;
+  const summaryOf = (name: string) => directory?.find((d) => d.name === name);
 
   return (
     <div className="agents-page">
-      <div className="agents-layout">
+      <div className={`agents-layout${selected ? " has-selection" : ""}`}>
         <aside className="agents-sidebar">
           <header className="agents-sidebar-header">
             <h2>Agents</h2>
@@ -128,14 +183,20 @@ export function Agents({ agentName }: AgentsPageProps) {
                       : (a.watcher.last_tick_status ?? "idle")
                 : "static";
               const isActive = a.name === agentName;
+              const summary = summaryOf(a.name);
+              const purpose = purposeOf(summary, a.info);
+              const counts = workCounts(summary);
               return (
                 <li key={a.name}>
                   <a href={`#/agents/${a.name}`} className={`agents-sidebar-item ${isActive ? "active" : ""}`}>
                     <span className={`agent-state state-${status}`}>{status}</span>
                     <div className="agents-sidebar-meta">
                       <div className="agents-sidebar-name">{a.name}</div>
+                      {purpose && <div className="agents-sidebar-purpose">{purpose}</div>}
                       <div className="agents-sidebar-sub">
-                        {a.watcher ? (
+                        {counts ? (
+                          <span className="agents-sidebar-counts">{counts}</span>
+                        ) : a.watcher ? (
                           <>
                             {a.watcher.runs_today} runs · {a.watcher.tokens_today.toLocaleString()} tok
                           </>
@@ -154,6 +215,8 @@ export function Agents({ agentName }: AgentsPageProps) {
           {selected ? (
             <AgentDetail
               agent={selected}
+              view={view}
+              directoryOn={directory !== null}
               activity={activity?.agentName === selected.name ? activity : null}
               exploratoryEnabled={exploratoryEnabled}
               onAction={reload}
@@ -171,7 +234,12 @@ export function Agents({ agentName }: AgentsPageProps) {
               }}
             />
           ) : (
-            <AgentOverview agents={agents} activity={activity} />
+            <AgentOverview
+              agents={agents}
+              activity={activity}
+              directory={directory}
+              onNew={() => setEditor({ mode: "create" })}
+            />
           )}
         </section>
       </div>
@@ -193,11 +261,58 @@ export function Agents({ agentName }: AgentsPageProps) {
   );
 }
 
-function AgentOverview({ agents, activity }: { agents: CombinedAgent[]; activity: ExploratoryActivity | null }) {
+function AgentOverview({
+  agents,
+  activity,
+  directory,
+  onNew,
+}: {
+  agents: CombinedAgent[];
+  activity: ExploratoryActivity | null;
+  directory: DirectoryAgentSummary[] | null | undefined;
+  onNew: () => void;
+}) {
   const watchers = agents.filter((a) => a.watcher);
   return (
     <div className="agent-overview">
-      <h1>Agents</h1>
+      <header className="agent-overview-header">
+        <h1>Agents</h1>
+        <button type="button" className="agents-new-btn" onClick={onNew}>
+          + New
+        </button>
+      </header>
+      <ul className="agent-overview-cards">
+        {agents.map((a) => {
+          const summary = directory?.find((d) => d.name === a.name);
+          const purpose = purposeOf(summary, a.info);
+          const c = summary?.commitments;
+          return (
+            <li key={a.name}>
+              <a href={`#/agents/${a.name}`} className="agent-overview-card">
+                <span className="agent-overview-name">{a.name}</span>
+                <span className={`agent-overview-purpose${purpose ? "" : " empty"}`}>
+                  {purpose ?? "No description yet."}
+                </span>
+                {c && (
+                  <span className="agent-overview-counts">
+                    <span className={c.open ? "" : "zero"}>{c.open} open</span>
+                    <span className={c.waiting ? "waiting" : "zero"}>{c.waiting} waiting</span>
+                    <span className={summary.docs ? "" : "zero"}>
+                      {summary.docs} doc{summary.docs === 1 ? "" : "s"}
+                    </span>
+                  </span>
+                )}
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+      {directory === null && (
+        <p className="agent-page-hint">
+          Turn on the directory (<code>builtin:directory</code> under <code>plugins</code>) to see what each agent is
+          working on.
+        </p>
+      )}
       <p className="agent-overview-lead">
         {activity ? (
           <>
@@ -211,15 +326,14 @@ function AgentOverview({ agents, activity }: { agents: CombinedAgent[]; activity
           </>
         )}
       </p>
-      <p className="agent-overview-hint">
-        Pick an agent on the left to see its config, recent activity, and (for online agents) live runs.
-      </p>
     </div>
   );
 }
 
 function AgentDetail({
   agent,
+  view,
+  directoryOn,
   activity,
   exploratoryEnabled,
   onAction,
@@ -227,6 +341,8 @@ function AgentDetail({
   onDelete,
 }: {
   agent: CombinedAgent;
+  view?: "settings";
+  directoryOn: boolean;
   activity: ExploratoryActivity | null;
   exploratoryEnabled: boolean;
   onAction: () => void;
@@ -246,16 +362,68 @@ function AgentDetail({
           : (w.last_tick_status ?? "idle")
     : "static";
 
+  const header = (
+    <AgentDetailHeader
+      agent={agent}
+      status={status}
+      paused={!!paused}
+      onAction={onAction}
+      onEdit={onEdit}
+      onDelete={onDelete}
+    />
+  );
+  const settings = <AgentSettings agent={agent} activity={activity} exploratoryEnabled={exploratoryEnabled} />;
+
+  // With the directory off there is no page to show: the description, how to turn it on, and the settings as before.
+  if (!directoryOn) {
+    return (
+      <div className="agent-detail">
+        {header}
+        <DirectoryOff description={agent.info.description} />
+        {settings}
+      </div>
+    );
+  }
+
+  // As the sidebar links it: the router reads the name back as written.
+  const base = `#/agents/${agent.name}`;
   return (
     <div className="agent-detail">
-      <AgentDetailHeader
-        agent={agent}
-        status={status}
-        paused={!!paused}
-        onAction={onAction}
-        onEdit={onEdit}
-        onDelete={onDelete}
-      />
+      {header}
+      <nav className="agent-detail-tabs" aria-label={`${agent.name} views`}>
+        <a
+          href={base}
+          className={view !== "settings" ? "active" : ""}
+          aria-current={view !== "settings" ? "page" : undefined}
+        >
+          Page
+        </a>
+        <a
+          href={`${base}/settings`}
+          className={view === "settings" ? "active" : ""}
+          aria-current={view === "settings" ? "page" : undefined}
+        >
+          Settings
+        </a>
+      </nav>
+      {view === "settings" ? settings : <AgentPage name={agent.name} description={agent.info.description} />}
+    </div>
+  );
+}
+
+/** An agent's configuration and activity: what its page showed before it had one, one click away now. */
+function AgentSettings({
+  agent,
+  activity,
+  exploratoryEnabled,
+}: {
+  agent: CombinedAgent;
+  activity: ExploratoryActivity | null;
+  exploratoryEnabled: boolean;
+}) {
+  const w = agent.watcher;
+  return (
+    <>
       <AgentConfigCard info={agent.info} hasWatcher={!!w} />
       {w ? (
         <>
@@ -283,7 +451,7 @@ function AgentDetail({
           <AgentStaticActivity name={agent.name} exploratoryEnabled={exploratoryEnabled} />
         </>
       )}
-    </div>
+    </>
   );
 }
 
@@ -321,6 +489,9 @@ function AgentDetailHeader({
   return (
     <header className="agent-detail-header">
       <div className="agent-detail-title">
+        <a href="#/agents" className="agent-detail-back" aria-label="All agents">
+          ←
+        </a>
         <span className={`agent-state agent-state-lg state-${status}`}>{status}</span>
         <h1>{agent.name}</h1>
       </div>

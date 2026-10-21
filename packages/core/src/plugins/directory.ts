@@ -4,11 +4,12 @@
  * Off by default; turn it on with `{ module: "builtin:directory", enabled: true }`.
  * See `docs/directory.md`, and `docs/ownership-design.md` for where it's going.
  *
- * It brings four record types (`profile`, `commitment`, `doc`, `miss`), three
- * tools (`directory`, `commitment`, `writeup`), a "Your commitments" block in
- * the prompt of every agent that has the `commitment` tool, and two read-only
- * routes for the agent pages. It registers through the same seams a
- * third-party plugin would, and core knows nothing about it.
+ * It brings five record types (`profile`, `commitment`, `doc`, `miss`,
+ * `page`), three tools (`directory`, `commitment`, `writeup`), a "Your
+ * commitments" block in the prompt of every agent that has the `commitment`
+ * tool, and the routes the agent pages in the web UI read and hand work over
+ * through. It registers through the same seams a third-party plugin would,
+ * and core knows nothing about it.
  *
  * Config (`plugins: [{ module: builtin:directory, config: {...} }]`):
  *   - `pin` (default true): the prompt block. `false` leaves it out.
@@ -28,7 +29,7 @@ import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { Disposer } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
-import type { StateRecord, StateTypeDef } from "../state/types.js";
+import { StateError, type StateRecord, type StateTypeDef } from "../state/types.js";
 import {
   ACTIVE,
   type Bar,
@@ -39,9 +40,9 @@ import {
   DOC_TYPE,
   MISS_TYPE,
   ownerOf,
+  PAGE_TYPE,
   PERSON,
   PROFILE_TYPE,
-  profileId,
 } from "./directory-records.js";
 import { CommitmentTool, commitmentLine, DirectoryTool, WriteupTool } from "./directory-tools.js";
 
@@ -256,22 +257,29 @@ const plugin: Plugin = (ctx) => {
     });
   }
 
+  // A reload that turns the directory off takes these routes away, but a request already on its way answers this,
+  // the way a running tool call does, and the agent pages fall back to the configured description.
+  const off = (): TaiHttpResponse => ({ status: 404, json: { error: "The directory is turned off." } });
+
   ctx.http.register({
     method: "GET",
     path: "agents",
-    handler: async (): Promise<TaiHttpResponse> => ({ json: { agents: await agentSummaries(directory) } }),
+    handler: async (): Promise<TaiHttpResponse> =>
+      directory.active() ? { json: { agents: await agentSummaries(directory) } } : off(),
   });
 
   ctx.http.register({
     method: "GET",
     path: "agents/:name",
     handler: async (req): Promise<TaiHttpResponse> => {
+      if (!directory.active()) return off();
       const name = req.params.name ?? "";
       const agent = await directory.resolve(name);
       if (!agent) return { status: 404, json: { error: `There's no agent called "${name}".` } };
       const where = { owner: agent };
-      const [profile, commitments, docs, misses] = await Promise.all([
-        runtime.getStateService().get(PERSON, { type: PROFILE_TYPE, id: profileId(agent) }),
+      const [profile, page, commitments, docs, misses] = await Promise.all([
+        directory.profile(PERSON, agent),
+        directory.page(PERSON, agent),
         directory.all(COMMITMENT_TYPE, where),
         directory.all(DOC_TYPE, where),
         directory.all(MISS_TYPE, where),
@@ -280,13 +288,43 @@ const plugin: Plugin = (ctx) => {
       return {
         json: {
           name: agent,
-          profile: profile && !profile.archivedAt ? profile : null,
+          profile,
           ...(description ? { description } : {}),
+          page,
           commitments,
           docs,
           misses,
         },
       };
+    },
+  });
+
+  // A person handing an agent something from its page: a commitment the agent owns, from them.
+  ctx.http.register({
+    method: "POST",
+    path: "agents/:name/commitments",
+    handler: async (req): Promise<TaiHttpResponse> => {
+      if (!directory.active()) return off();
+      const name = req.params.name ?? "";
+      const agent = await directory.resolve(name);
+      if (!agent) return { status: 404, json: { error: `There's no agent called "${name}".` } };
+      const body = await req.json<Record<string, unknown>>().catch(() => null);
+      const field = (key: string) => (typeof body?.[key] === "string" ? (body[key] as string).trim() : "");
+      const goal = field("goal");
+      const doneWhen = field("doneWhen");
+      if (!goal) return { status: 400, json: { error: "Say what you're handing over in `goal`." } };
+      if (goal.length > 300)
+        return { status: 400, json: { error: "Keep the goal to one line: 300 characters at most." } };
+      if (doneWhen.length > 500) return { status: 400, json: { error: "Keep done-when to 500 characters at most." } };
+      try {
+        const commitment = await directory.handOver(agent, { goal, ...(doneWhen ? { doneWhen } : {}) });
+        // Whether the agent will see it behind its history next turn, so the page can say so honestly.
+        const inPrompt = (live ?? config).pin && hasCommitmentTool(runtime, agent);
+        return { status: 201, json: { commitment, inPrompt } };
+      } catch (err) {
+        if (err instanceof StateError) return { status: 400, json: { error: err.message } };
+        throw err;
+      }
     },
   });
 
@@ -298,7 +336,7 @@ const plugin: Plugin = (ctx) => {
 export const meta: PluginMeta = {
   name: "Directory",
   description:
-    "What agents are for, the work they've taken on and what they've written up: profile, commitment and doc records, the directory, commitment and writeup tools, and a commitments block in the prompt.",
+    "What agents are for, the work they've taken on and what they've written up: profile, commitment, doc and page records, the directory, commitment and writeup tools, a commitments block in the prompt, and the routes behind agent pages.",
   registers: [
     { kind: "tool", id: "directory" },
     { kind: "tool", id: "commitment" },
@@ -307,6 +345,7 @@ export const meta: PluginMeta = {
     { kind: "stateType", id: COMMITMENT_TYPE },
     { kind: "stateType", id: DOC_TYPE },
     { kind: "stateType", id: MISS_TYPE },
+    { kind: "stateType", id: PAGE_TYPE },
     { kind: "httpRoutes", id: "builtin:directory" },
   ],
 };

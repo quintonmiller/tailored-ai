@@ -7,6 +7,7 @@
  * first line, so a card never shows one as current.
  */
 import type { BoundRecord } from "../content/types.js";
+import { parseOrderBy } from "../state/format.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import type { FieldCondition, StateRecord } from "../state/types.js";
 import { MAX_LIST_ITEMS } from "./kinds.js";
@@ -63,6 +64,8 @@ const SCOPED_READ_LIMIT = 500;
 export interface ListQuery {
   type: string;
   where?: Record<string, unknown>;
+  /** A field to sort by, `-` first for descending, as in a `state` query. Oldest first when unset. */
+  orderBy?: string;
   limit?: number;
   /** When set, only records in these scopes: what the agent could see when it sent the list. */
   scopes?: string[];
@@ -139,9 +142,10 @@ export function queriedProps(
 }
 
 /**
- * The records a query-bound component shows: matching, among its scopes,
- * oldest first so an edit never moves a row (the default order, most
- * recently updated first, would send each ticked item to the top).
+ * The records a query-bound component shows: matching, among its scopes, in
+ * the order the query names, or oldest first so an edit never moves a row
+ * (the store's default, most recently updated first, would send each ticked
+ * item to the top).
  */
 async function readQuery(state: StateService, caller: StateCaller, query: ListQuery) {
   const limit = Math.min(Math.max(1, Math.floor(query.limit ?? DEFAULT_LIST_LIMIT)), MAX_LIST_ITEMS);
@@ -149,7 +153,7 @@ async function readQuery(state: StateService, caller: StateCaller, query: ListQu
   const found = await state.query(caller, {
     type: query.type,
     ...(query.where ? { where: query.where as Record<string, FieldCondition> } : {}),
-    orderBy: { field: "createdAt", direction: "asc" },
+    orderBy: parseOrderBy(query.orderBy).orderBy ?? { field: "createdAt", direction: "asc" },
     limit: scopes ? SCOPED_READ_LIMIT : limit + 1,
   });
   const visible = scopes ? found.filter((r) => scopes.has(r.scope)) : found;

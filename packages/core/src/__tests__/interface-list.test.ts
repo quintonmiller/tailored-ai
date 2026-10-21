@@ -118,6 +118,14 @@ describe("sending a list", () => {
     expect(spec.fallback).toContain("…and 1 more.");
   });
 
+  it("keeps the order `orderBy` names, and redraws in it", async () => {
+    const { spec } = await sendChores({ bind: { type: "chore", orderBy: "-createdAt", limit: 2 } });
+    expect((spec.props.items as { id: string }[]).map((i) => i.id)).toEqual(["plants", "bins"]);
+    expect(spec.query).toMatchObject({ type: "chore", orderBy: "-createdAt", limit: 2 });
+    const byName = await listProps(state, system, { title: "Chores" }, { type: "chore", orderBy: "-name" });
+    expect((byName.items as { id: string }[]).map((i) => i.id)).toEqual(["plants", "bins", "dishes"]);
+  });
+
   it("shows only what the agent could read, and remembers those scopes for later redraws", async () => {
     await state.put(system, { type: "chore", id: "secret", scope: "agent:someone-else", data: { name: "Hidden" } });
     await state.put(system, { type: "chore", id: "here", scope: "room:local:eng", data: { name: "Room chore" } });

@@ -43,8 +43,12 @@ export interface ComponentSpec {
    * `body`, when named, as its text.
    */
   bind?: { type: string; id: string; fields?: string[]; body?: string };
-  /** The world-state query a list shows, kept current as records of its type change. */
-  query?: { type: string; where?: Record<string, unknown>; limit?: number; scopes?: string[] };
+  /**
+   * The world-state query a list shows, kept current as records of its type
+   * change: in `orderBy` order (a field, `-` first for descending), or oldest
+   * first.
+   */
+  query?: { type: string; where?: Record<string, unknown>; orderBy?: string; limit?: number; scopes?: string[] };
 }
 
 export type ContentPart =
