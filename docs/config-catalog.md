@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 41 | 135 |
+| `agents` | object | {} | 44 | 138 |
 
 ### `autopilot`
 
@@ -68,7 +68,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `context.directory` | string | `./data/context` | 5 | 1 |
+| `context.directory` | string | `./data/context` | 8 | 1 |
 | `context.kbDirectory` | string | `./data/kb` | 1 | 1 |
 | `context.warnTokens` | number | `4000` | 2 | 2 |
 
@@ -110,7 +110,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 87 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 88 |
 
 ### `prompts`
 
@@ -196,7 +196,7 @@ Fields: **79** · with no read site found: **0**
 | `tools.facts.enabled` | boolean | `true` | 46 | 1 |
 | `tools.interface.enabled` | boolean | `true` | 46 | 1 |
 | `tools.memory.enabled` | boolean | `true` | 46 | 1 |
-| `tools.projects.directory` | string | `./data/projects` | 5 | 2 |
+| `tools.projects.directory` | string | `./data/projects` | 8 | 2 |
 | `tools.projects.enabled` | boolean | `true` | 46 | 1 |
 | `tools.read.enabled` | boolean | `true` | 46 | 1 |
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |

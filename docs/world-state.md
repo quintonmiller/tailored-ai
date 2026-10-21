@@ -234,6 +234,15 @@ an agent changing how it looks, writes a fresh record over it. The place
 tool's `undo` leaves an archived room alone, since writing over it would
 bring it back.
 
+## Types that come with the directory
+
+The built-in directory plugin, when you turn it on, declares `profile`,
+`commitment`, `doc` and `miss`: what each agent is for, the work it has taken
+on, what it has written up, and searches nothing answered. All four are
+searchable. Agents read them through `state` but change their own only
+through the directory's tools; people edit any of them here. See
+[the directory](./directory.md).
+
 ## Scopes
 
 Each record has one scope: `global`, `agent:<name>`, `room:<ref>` or

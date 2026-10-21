@@ -807,6 +807,10 @@ export const DEFAULT_DISABLED_PLUGIN_MODULES = [
   // boundary, and one this removes. Enabling it should be a decision somebody
   // made, not a default they inherited.
   "builtin:claude-hooks",
+  // Off until asked for: it adds three tools and a prompt block to every agent
+  // that doesn't narrow its `tools:`, and records it writes other agents read.
+  // See docs/directory.md.
+  "builtin:directory",
 ] as const;
 
 export interface AgentConfig {
