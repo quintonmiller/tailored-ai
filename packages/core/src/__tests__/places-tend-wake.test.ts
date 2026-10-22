@@ -184,6 +184,11 @@ describe("a tend through the waker", () => {
   });
 
   it("is skipped at the agent's hourly ceiling, saying why, and tried again at its next time", async () => {
+    // The fake clock starts at the real time. With the planner's tend under two
+    // minutes off, it would come round before the other wake could go first, so
+    // start just after it instead: its next one is then an hour away.
+    const soon = nextTend("planner", 60 * MINUTE, Date.now());
+    if (soon - Date.now() < 2 * MINUTE) vi.setSystemTime(soon + 1000);
     const runtime = await start(1);
     await busyDay(runtime);
     // The planner's one wake for the hour goes on something else, just before its tend comes round.
