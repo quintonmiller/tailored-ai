@@ -21,6 +21,9 @@
  * is switched off is skipped, not saved up. A turn whose evidence is the same
  * as when the agent's last upkeep finished is skipped too: nothing changed.
  *
+ * An agent that leads a room looks after the room's records in the same
+ * turn, under a section of their own, by the same rules.
+ *
  * The turn runs in the agent's own `upkeep:<agent>` session, with a small
  * budget of tool rounds. What it changed is counted afterwards from the
  * history of the agent's records, never from what the agent says it did, and
@@ -48,6 +51,7 @@ import {
   titleOf,
   UPKEEP_SESSIONS,
 } from "./directory-records.js";
+import { type RoomInfo, roomOwner } from "./directory-rooms.js";
 import { parseTend, parseTime, type TendSettings } from "./places-tend.js";
 
 /** Upkeep as configured: when it runs by itself, and the bars its evidence is counted against. */
@@ -273,6 +277,8 @@ export function docItems(at: {
   now: Date;
   days: UpkeepDays;
   first: boolean;
+  /** Whose area the misses are in, in words: "your" by default, or a room's. */
+  area?: string;
 }): Item[] {
   const items: Item[] = [];
   for (const d of at.docs) {
@@ -305,7 +311,7 @@ export function docItems(at: {
     const askedBy = stringList(m.data.askedBy) ?? [];
     items.push({
       keys: [`miss:${m.id}`],
-      line: `- Looked for in your area, with no doc or commitment to find: "${clip(text(m.data.query) ?? "")}"${askedBy.length ? `, asked by ${list(askedBy)}` : ""}`,
+      line: `- Looked for in ${at.area ?? "your"} area, with no doc or commitment to find: "${clip(text(m.data.query) ?? "")}"${askedBy.length ? `, asked by ${list(askedBy)}` : ""}`,
     });
   }
   return items;
@@ -314,10 +320,20 @@ export function docItems(at: {
 /**
  * The agent's page: no note for people, or a note written before its newest
  * work (a commitment or doc it took on or wrote, or a commitment it finished).
+ * For a room's page, `room` names it, and `page` is the room's profile, which
+ * holds its note.
  */
-export function pageItems(page: StateRecord | null, work: StateRecord[], now: Date): Item[] {
+export function pageItems(page: StateRecord | null, work: StateRecord[], now: Date, room?: RoomInfo): Item[] {
+  const key = room ? `page:${roomOwner(room.ref)}` : "page";
   const note = text(page?.data.note);
-  if (!page || !note) return [{ keys: ["page:note"], line: "- Your page has no note for people." }];
+  if (!page || !note) {
+    return [
+      {
+        keys: [`${key}:note`],
+        line: room ? `- The ${room.name} room's page has no note for people.` : "- Your page has no note for people.",
+      },
+    ];
+  }
   const noteAt = parseTime(text(page.data.noteAt) ?? page.updatedAt);
   let newest: { at: number; record: StateRecord } | undefined;
   for (const r of work) {
@@ -331,8 +347,8 @@ export function pageItems(page: StateRecord | null, work: StateRecord[], now: Da
   const when = ago === 0 ? "today" : `${plural(ago, "day")} ago`;
   return [
     {
-      keys: [`page:old:${newest.record.id}`],
-      line: `- Your page note was written before your newest work: ${newest.record.type} ${newest.record.id} "${clip(titleOf(newest.record) ?? "")}", ${when}.`,
+      keys: [`${key}:old:${newest.record.id}`],
+      line: `- ${room ? `The ${room.name} room's page note was written before its` : "Your page note was written before your"} newest work: ${newest.record.type} ${newest.record.id} "${clip(titleOf(newest.record) ?? "")}", ${when}.`,
     },
   ];
 }
@@ -533,12 +549,18 @@ export function upkeepMessage(at: {
   /** The tools the agent has, of those upkeep names. */
   tools: string[];
   maxRounds: number;
+  /** The rooms the agent leads, by name, whose records it looks after too. */
+  rooms?: string[];
 }): string {
   const shown = at.sections.filter((s) => s.items.length);
+  const rooms = at.rooms ?? [];
+  const led = rooms.length
+    ? `, and the ${rooms.length === 1 ? `${rooms[0]} room` : `rooms ${list(rooms)}`} you lead`
+    : "";
   const lines = [
     at.since
-      ? `Time to look after what you own. Counted from your records since your last upkeep on ${at.since.slice(0, 10)}:`
-      : "Time to look after what you own: your commitments, docs, page and notes. Counted from your records:",
+      ? `Time to look after what you own${led}. Counted from your records since your last upkeep on ${at.since.slice(0, 10)}:`
+      : `Time to look after what you own: your commitments, docs, page and notes${led}. Counted from your records:`,
   ];
   for (const section of shown) {
     lines.push("", section.title);
@@ -548,9 +570,14 @@ export function upkeepMessage(at: {
   }
   if (!shown.length) lines.push("", "Nothing you own stands out right now.");
   const uses = TOOL_USES.filter(([tool]) => at.tools.includes(tool)).map(([, use]) => use);
+  // A room's records go by their ids like the agent's own; only something new for a room, or its note, needs its name.
+  const roomUse =
+    rooms.length && uses.length
+      ? "For a room's, pass room with its name to write something new or its page note. "
+      : "";
   lines.push(
     "",
-    `${uses.length ? `Tidy what needs it with the tools you have: ${uses.join("; ")}. ` : ""}Retiring something means archiving it: nothing is deleted, and a person can bring it back. You have up to ${plural(at.maxRounds, "round")} of tool calls for this. Leave what's in order as it is.`,
+    `${uses.length ? `Tidy what needs it with the tools you have: ${uses.join("; ")}. ` : ""}${roomUse}Retiring something means archiving it: nothing is deleted, and a person can bring it back. You have up to ${plural(at.maxRounds, "round")} of tool calls for this. Leave what's in order as it is.`,
     "Nobody reads a reply here; what you change is what people see.",
   );
   return lines.join("\n");
@@ -620,6 +647,8 @@ export interface Found {
   vectors?: Map<string, Float32Array>;
   /** Set when the embedder was asked and didn't answer: pairs only meaning would find may be missing. */
   meaningMissed?: true;
+  /** The rooms the agent leads, by name, each with a section of its own. */
+  rooms: string[];
 }
 
 /** Notes read for one upkeep: enough for any agent that keeps its notes tidy. */
@@ -698,6 +727,14 @@ export class Upkeep {
       notes = await this.notes(agent, has("core_memory"), at.reuse);
       sections.push({ title: "Your notes", items: notes.items });
     }
+    // The rooms it leads, each by the same rules as its own records.
+    const led = await directory.ledBy(agent);
+    for (const room of led) {
+      sections.push({
+        title: `The ${room.name} room, which you lead`,
+        items: await this.roomItems(room, at.since, has),
+      });
+    }
     // Core memory is only worth naming when what loads every turn is over its budget.
     const loaded = sections.some((s) => s.items.some((i) => i.keys.includes(LOADED)));
     return {
@@ -706,7 +743,40 @@ export class Upkeep {
       tools: tools.filter((t) => t !== "core_memory" || loaded),
       ...(notes?.vectors?.size ? { vectors: notes.vectors } : {}),
       ...(notes?.missed ? { meaningMissed: true as const } : {}),
+      rooms: led.map((r) => r.name),
     };
+  }
+
+  /**
+   * What needs a look among a room's own records, for its lead: commitments,
+   * docs and misses in its area since `since`, and its page note, which its
+   * profile holds. Each kind only when the lead has the tool to act on it.
+   * Reads aren't counted for a room's docs: only its members can read them.
+   */
+  private async roomItems(room: RoomInfo, since: string | undefined, has: (tool: string) => boolean): Promise<Item[]> {
+    const directory = this.directory;
+    const now = directory.now();
+    const { days } = this.opts.settings;
+    const owner = { owner: roomOwner(room.ref) };
+    const [commitments, docs, profile] = await Promise.all([
+      directory.all(COMMITMENT_TYPE, owner),
+      directory.all(DOC_TYPE, owner),
+      directory.roomProfile(room),
+    ]);
+    const items: Item[] = [];
+    if (has("commitment")) items.push(...commitmentItems(commitments, now, days, await this.waitingSince(commitments)));
+    if (has("writeup")) {
+      const from = since ? parseTime(since) : now.getTime() - FIRST_MISSES_DAYS * DAY_MS;
+      const misses = (await directory.all(MISS_TYPE, owner)).filter((m) => {
+        const asked = parseTime(text(m.data.at) ?? m.createdAt);
+        return Number.isFinite(asked) && asked >= from;
+      });
+      items.push(
+        ...docItems({ docs, misses, reads: {}, readsAtLast: {}, now, days, first: !since, area: "the room's" }),
+      );
+    }
+    if (has("directory")) items.push(...pageItems(profile, [...commitments, ...docs], now, room));
+    return items;
   }
 
   /**
@@ -843,9 +913,11 @@ export class Upkeep {
       updated: new Set(),
       closed: new Set(),
     };
+    // Its own records, and those of the rooms it leads, which its turn looks after too.
+    const owners = [agent, ...(await directory.ledBy(agent)).map((r) => roomOwner(r.ref))];
     try {
       for (const type of OWNED_TYPES) {
-        const records = await directory.all(type, { owner: agent }, true);
+        const records = (await Promise.all(owners.map((owner) => directory.all(type, { owner }, true)))).flat();
         for (const r of records) {
           if (parseTime(r.updatedAt) < from) continue;
           for (const change of await service.history(PERSON, { type, id: r.id }, { limit: 50 })) {
@@ -910,6 +982,7 @@ export class Upkeep {
         ...(since ? { since } : {}),
         tools: before.tools,
         maxRounds: this.opts.settings.maxRounds,
+        rooms: before.rooms,
       });
       const session = this.opts.session(agent);
       UPKEEP_SESSIONS.add(session.id);

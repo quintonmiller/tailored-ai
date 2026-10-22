@@ -58,7 +58,7 @@ const QUIET: Record<string, string> = {
 };
 
 /** The time, moved on every minute, so ages and the two-week cut-off keep up with a page left open. */
-function useNow(): Date {
+export function useNow(): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60_000);
@@ -103,7 +103,9 @@ export function AgentPage({ name, description }: { name: string; description?: s
       if (!PAGE_TYPES.has(c.type)) return;
       // Its own records, or one just reassigned to or from it.
       const mine = c.after?.owner === name || c.before?.owner === name || (c.type === "page" && c.id === name);
-      if (!mine) return;
+      // A room's profile carries a person's choice of lead, which can make this agent a room's lead or not.
+      const room = c.type === "profile" && (typeof c.after?.room === "string" || typeof c.before?.room === "string");
+      if (!mine && !room) return;
       clearTimeout(timer);
       timer = setTimeout(load, SETTLE_MS);
     });
@@ -176,7 +178,7 @@ function PageBody({ agent, reload }: { agent: DirectoryAgent; reload: () => void
             ) : (
               <ul className="agent-page-list">
                 {groups.working.map((r) => (
-                  <Working key={r.id} record={r} agent={agent.name} now={now} reload={reload} />
+                  <Working key={r.id} record={r} agent={agent.name} now={now} reload={reload} rooms={agent.rooms} />
                 ))}
               </ul>
             )}
@@ -267,11 +269,11 @@ function Section({ id, count, tone, children }: { id: string; count?: number; to
   );
 }
 
-function text(v: unknown): string | undefined {
+export function text(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
 
-function list(v: unknown): string[] {
+export function list(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()) : [];
 }
 
@@ -281,6 +283,7 @@ function About({ agent }: { agent: DirectoryAgent }) {
   const takesOn = list(p?.takesOn);
   const howToAsk = text(p?.howToAsk);
   const note = text(agent.page?.data.note);
+  const leads = agent.leads ?? [];
   return (
     <section className="agent-section agent-page-section agent-page-about" aria-label={PAGE_SECTIONS.about}>
       <h2>{PAGE_SECTIONS.about}</h2>
@@ -300,7 +303,7 @@ function About({ agent }: { agent: DirectoryAgent }) {
           <figcaption>In its own words</figcaption>
         </figure>
       )}
-      {(takesOn.length > 0 || howToAsk) && (
+      {(takesOn.length > 0 || howToAsk || leads.length > 0) && (
         <dl className="agent-page-facts">
           {takesOn.length > 0 && (
             <div>
@@ -318,6 +321,18 @@ function About({ agent }: { agent: DirectoryAgent }) {
             <div>
               <dt>How to ask</dt>
               <dd>{howToAsk}</dd>
+            </div>
+          )}
+          {leads.length > 0 && (
+            <div>
+              <dt>Leads</dt>
+              <dd className="agent-page-chips">
+                {leads.map((room) => (
+                  <a key={room} className="agent-tool-chip" href={`#/rooms/${encodeURIComponent(room)}`}>
+                    #{room}
+                  </a>
+                ))}
+              </dd>
             </div>
           )}
         </dl>
@@ -341,7 +356,7 @@ function Goal({ record, agent }: { record: StateRecordInfo; agent: string }) {
 }
 
 /** A line of small facts, broken between them rather than inside one. A fact may be a control, like a select. */
-function Meta({ parts }: { parts: (string | ReactElement)[] }) {
+export function Meta({ parts }: { parts: (string | ReactElement)[] }) {
   return (
     <div className="agent-page-meta">
       {parts.map((p, i) => (
@@ -410,8 +425,8 @@ function AutonomyPick({
   );
 }
 
-/** The dated updates behind a commitment, opened on request. */
-function Updates({ record }: { record: StateRecordInfo }) {
+/** The dated updates behind a commitment, opened on request, each saying who wrote it when it says. */
+export function Updates({ record }: { record: StateRecordInfo }) {
   const updates = updatesOf(record);
   if (updates.length === 0) return null;
   return (
@@ -423,7 +438,10 @@ function Updates({ record }: { record: StateRecordInfo }) {
         {updates.map((u, i) => (
           <li key={`${u.at}-${i}`}>
             <time dateTime={u.at}>{day(u.at)}</time>
-            <span>{u.text}</span>
+            <span>
+              {u.text}
+              {u.by && <span className="agent-page-by"> · {u.by}</span>}
+            </span>
           </li>
         ))}
       </ol>
@@ -436,18 +454,27 @@ function Working({
   agent,
   now,
   reload,
+  rooms,
 }: {
   record: StateRecordInfo;
   agent: string;
   now: Date;
   reload: () => void;
+  /** Room names by ref, for a commitment taken on for a room. */
+  rooms?: Record<string, string>;
 }) {
   const d = record.data;
   const progress = progressOf(d.progress);
   const [error, setError] = useState<string | null>(null);
+  const room = text(d.room) && rooms?.[text(d.room) as string];
   const meta = [
     text(d.nextCheck) && `check ${text(d.nextCheck)}`,
     <AutonomyPick key="autonomy" record={record} reload={reload} onError={setError} />,
+    room && (
+      <a key="room" href={`#/rooms/${encodeURIComponent(room)}`}>
+        for #{room}
+      </a>
+    ),
     text(d.from) && `from ${text(d.from)}`,
     `updated ${ago(lastMoved(record), now)}`,
   ].filter((p): p is string | ReactElement => !!p);
@@ -522,7 +549,7 @@ function Result({ record }: { record: StateRecordInfo }) {
   );
 }
 
-function Docs({ docs }: { docs: StateRecordInfo[] }) {
+export function Docs({ docs }: { docs: StateRecordInfo[] }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <ul className="agent-page-list">
@@ -574,7 +601,7 @@ function DocBody({ doc }: { doc: StateRecordInfo }) {
   );
 }
 
-function Miss({ record }: { record: StateRecordInfo }) {
+export function Miss({ record }: { record: StateRecordInfo }) {
   const askedBy = list(record.data.askedBy);
   const at = text(record.data.at) ?? record.createdAt;
   return (
@@ -614,8 +641,26 @@ const NOT_IN_PROMPT: Record<string, string> = {
   pin: "The “Your commitments” block is turned off, so it won't see this unless it looks.",
 };
 
-/** Hand the agent a commitment of its own, from you. `example` is a kind of work it takes on, for the hint. */
-function HandOver({ agent, example }: { agent: string; example?: string }) {
+/**
+ * Hand the agent a commitment of its own, from you. `example` is a kind of
+ * work it takes on, for the hint. `send` says where it goes when the page is
+ * a room's and the work goes to its lead; `note` says so under the heading.
+ */
+export function HandOver({
+  agent,
+  example,
+  send,
+  note,
+}: {
+  agent: string;
+  example?: string;
+  send?: (input: {
+    goal: string;
+    doneWhen?: string;
+    autonomy?: string;
+  }) => Promise<{ inPrompt: boolean; why?: string }>;
+  note?: string;
+}) {
   const [goal, setGoal] = useState("");
   const [doneWhen, setDoneWhen] = useState("");
   const [autonomy, setAutonomy] = useState("suggest");
@@ -629,11 +674,12 @@ function HandOver({ agent, example }: { agent: string; example?: string }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await handToAgent(agent, {
+      const input = {
         goal: goal.trim(),
         ...(doneWhen.trim() ? { doneWhen: doneWhen.trim() } : {}),
         ...(autonomy !== "suggest" ? { autonomy } : {}),
-      });
+      };
+      const res = await (send ? send(input) : handToAgent(agent, input));
       setHanded({ goal: goal.trim(), inPrompt: res.inPrompt, why: res.why });
       setGoal("");
       setDoneWhen("");
@@ -647,6 +693,7 @@ function HandOver({ agent, example }: { agent: string; example?: string }) {
   return (
     <section className="agent-section agent-page-section agent-page-hand" aria-label="Hand it something">
       <h2>Hand it something</h2>
+      {note && <p className="agent-page-hint agent-page-hand-note">{note}</p>}
       <form className="agent-page-form" onSubmit={submit}>
         <label>
           <span>Goal</span>

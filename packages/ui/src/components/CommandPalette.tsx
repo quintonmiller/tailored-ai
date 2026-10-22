@@ -35,6 +35,7 @@ const NAV_PAGES: Item[] = [
   { kind: "page", title: "Chat", href: "#/chat" },
   { kind: "page", title: "Tasks", href: "#/projects" },
   { kind: "page", title: "Agents", href: "#/agents" },
+  { kind: "page", title: "Rooms", href: "#/rooms" },
   { kind: "page", title: "Projects", href: "#/projects" },
   { kind: "page", title: "Tools", href: "#/tools" },
   { kind: "page", title: "Workflows", href: "#/workflows" },

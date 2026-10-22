@@ -1595,6 +1595,12 @@ describe("handing an agent something", () => {
       "GET agents/:name",
       "POST agents/:name/commitments",
       "POST agents/:name/upkeep",
+      "GET rooms",
+      "GET rooms/:room",
+      "POST rooms/:room/commitments",
+      "PUT rooms/:room/lead",
+      "PATCH rooms/:room/profile",
+      "PATCH rooms/:room/commitments/:id",
     ]);
     await unload(loaded[0]);
     for (const r of mounted) {

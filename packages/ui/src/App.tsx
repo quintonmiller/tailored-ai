@@ -17,6 +17,7 @@ import Login from "./pages/Login";
 import { Memory } from "./pages/Memory";
 import { Projects } from "./pages/Projects";
 import { Resources } from "./pages/Resources";
+import { Rooms } from "./pages/Rooms";
 import { Sandboxes } from "./pages/Sandboxes";
 import { State } from "./pages/State";
 import { Tasks } from "./pages/Tasks";
@@ -30,6 +31,7 @@ type Route =
   | { page: "dashboard" }
   | { page: "board" }
   | { page: "agents"; agentName?: string; view?: "settings" }
+  | { page: "rooms"; roomName?: string }
   | { page: "projects"; projectId?: string; tab?: "tasks" | "documents"; taskId?: string; docId?: string }
   | { page: "tasks"; taskId?: string; status?: string }
   | { page: "chat"; sessionKey?: string; sessionId?: string }
@@ -51,6 +53,7 @@ type Route =
 // group trigger so a deep link into e.g. Workflows still lights up "Build".
 const BUILD_PAGES = new Set<Route["page"]>([
   "agents",
+  "rooms",
   "workflows",
   "workflow-runs",
   "workflow-analytics",
@@ -117,6 +120,10 @@ function parseHash(): Route {
   if (hash.startsWith("/agents")) {
     const parts = hash.split("?")[0].split("/");
     return { page: "agents", agentName: parts[2] || undefined, view: parts[3] === "settings" ? "settings" : undefined };
+  }
+  if (hash.startsWith("/rooms")) {
+    const parts = hash.split("?")[0].split("/");
+    return { page: "rooms", roomName: parts[2] ? decodeURIComponent(parts[2]) : undefined };
   }
   if (hash.startsWith("/board")) {
     return { page: "board" };
@@ -327,6 +334,7 @@ function AppShell({
             <Projects projectId={route.projectId} tab={route.tab} taskId={route.taskId} docId={route.docId} />
           )}
           {route.page === "agents" && <Agents agentName={route.agentName} view={route.view} />}
+          {route.page === "rooms" && <Rooms roomName={route.roomName} />}
           {route.page === "tasks" && <Tasks taskId={route.taskId} initialStatus={route.status} />}
           {route.page === "chat" && <Chat sessionKey={route.sessionKey} sessionId={route.sessionId} />}
           {route.page === "tools" && <Tools />}

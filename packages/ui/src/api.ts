@@ -2132,6 +2132,59 @@ export interface DirectoryAgent {
   misses: StateRecordInfo[];
   /** Its upkeep; null for an agent with none to do (no commitment tool). Absent from a server before upkeep. */
   upkeep?: DirectoryUpkeep | null;
+  /** The names of the rooms its commitments were taken on for, by ref. Absent from a server before rooms. */
+  rooms?: Record<string, string>;
+  /** The rooms it leads, by name. Absent from a server before rooms. */
+  leads?: string[];
+}
+
+/** Where a room's lead came from: a person chose it on the room's page, config names it, or it made the room. */
+export type RoomLeadSource = "person" | "config" | "creator";
+
+/** One live room as the rooms list shows it. */
+export interface DirectoryRoomSummary {
+  ref: string;
+  name: string;
+  /** Its profile's purpose, or the purpose it was given. */
+  purpose: string | null;
+  lead: string | null;
+  leadFrom?: RoomLeadSource;
+  members: string[];
+  /** Its own commitments and those its lead took on for it. */
+  commitments: { open: number; waiting: number; done: number };
+  docs: number;
+}
+
+/** Who leads a room: the agent, where that came from, and what config names when a person's choice stands in front. */
+export interface RoomLead {
+  agent?: string;
+  source?: RoomLeadSource;
+  configured?: string;
+  /** With a person's choice, who handing it back would give, and why. */
+  fallback?: { agent: string; source: Exclude<RoomLeadSource, "person"> };
+}
+
+/** One room's records, as its page draws them. */
+export interface DirectoryRoom {
+  ref: string;
+  name: string;
+  /** The purpose the room was given, which its profile starts from. */
+  purpose?: string;
+  createdBy?: string;
+  archived: boolean;
+  /** What it's for, its note and the lead a person chose; null until someone writes one. */
+  profile: StateRecordInfo | null;
+  lead: RoomLead;
+  /** The agents in it: subscribed, and its lead. */
+  members: string[];
+  /** Every agent, for choosing a lead. */
+  agents: string[];
+  /** Its own commitments, and those its lead took on for it. */
+  commitments: StateRecordInfo[];
+  docs: StateRecordInfo[];
+  misses: StateRecordInfo[];
+  /** The fields a person set, by record id: agents leave them as they are. */
+  held: Record<string, string[]>;
 }
 
 const DIRECTORY = "/api/ext/builtin:directory";
@@ -2148,6 +2201,70 @@ async function directoryRead<T>(path: string): Promise<T | null> {
   }
   if (!res.ok) throw new Error(json.error ?? `${res.status} ${res.statusText}`);
   return json;
+}
+
+/** Every live room with its lead, purpose and counts, or null when the directory is off. */
+export async function fetchDirectoryRooms(): Promise<DirectoryRoomSummary[] | null> {
+  const res = await directoryRead<{ rooms: DirectoryRoomSummary[] }>("rooms");
+  return res ? res.rooms : null;
+}
+
+/**
+ * One room's records, or null when the directory is off. A room that isn't
+ * there throws, with the server's words, rather than reading as "off": the
+ * directory names the room in that answer, and nothing else that answers
+ * 404 here does (the plugin routes' own "not found", or "turned off").
+ */
+export async function fetchDirectoryRoom(name: string): Promise<DirectoryRoom | null> {
+  const res = await fetch(`${DIRECTORY}/rooms/${encodeURIComponent(name)}`);
+  const json = (await res.json().catch(() => undefined)) as
+    | (DirectoryRoom & { error?: string; room?: unknown })
+    | undefined;
+  if (res.status === 404) {
+    if (json?.error && typeof json.room === "string") throw new Error(json.error);
+    return null;
+  }
+  if (json === undefined) {
+    // The page fallback answers 200 with the UI itself: the directory is off.
+    if (res.ok) return null;
+    throw new Error(`${res.status} ${res.statusText}`.trim());
+  }
+  if (!res.ok) throw new Error(json.error ?? `${res.status} ${res.statusText}`);
+  return json;
+}
+
+/** Hand a room something: a commitment for its lead, from you, that names the room. */
+export function handToRoom(
+  name: string,
+  input: { goal: string; doneWhen?: string; autonomy?: string },
+): Promise<{ commitment: StateRecordInfo; lead: string; inPrompt: boolean; why?: "tool" | "pin" }> {
+  return stateWrite("POST", `${DIRECTORY}/rooms/${encodeURIComponent(name)}/commitments`, input);
+}
+
+/** Choose who leads a room, or null to go back to config's choice and then the room's creator. */
+export function setRoomLead(name: string, lead: string | null): Promise<{ lead: RoomLead }> {
+  return stateWrite("PUT", `${DIRECTORY}/rooms/${encodeURIComponent(name)}/lead`, { lead });
+}
+
+/** Change what a room is for, or its note, as you: agents then leave those as you left them. Empty clears one. */
+export function editRoomProfile(
+  name: string,
+  changes: { purpose?: string; takesOn?: string[]; howToAsk?: string; note?: string },
+): Promise<{ profile: StateRecordInfo }> {
+  return stateWrite("PATCH", `${DIRECTORY}/rooms/${encodeURIComponent(name)}/profile`, changes);
+}
+
+/** Change one of a room's commitments, as you, with a dated update that says so. Empty clears a field. */
+export function editRoomCommitment(
+  name: string,
+  id: string,
+  changes: { goal?: string; doneWhen?: string; nextStep?: string; status?: string; waitingOn?: string },
+): Promise<{ commitment: StateRecordInfo }> {
+  return stateWrite(
+    "PATCH",
+    `${DIRECTORY}/rooms/${encodeURIComponent(name)}/commitments/${encodeURIComponent(id)}`,
+    changes,
+  );
 }
 
 /** Every agent with its purpose and counts, or null when the directory is off. */
