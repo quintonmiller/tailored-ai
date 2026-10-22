@@ -722,6 +722,10 @@ Set it from Discord with `/room purpose text:…`, or from an agent with
 reads the current one back. Discord caps a channel topic at 1024 characters, so
 a longer purpose is truncated *for display only* — agents get the whole thing.
 
+With the directory on, a room also has a lead and keeps a profile,
+commitments and docs of its own, and its purpose seeds that profile. See
+[the directory's rooms](./directory.md#rooms).
+
 ## Archiving a room
 
 A room that is finished has nowhere to go. Its poll timers keep firing, its

@@ -2,9 +2,10 @@
 
 > Status: design, accepted 2026-10-20. Step 1 (archive and private recall) is
 > in progress. Step 2 (`profile`, `commitment`, `doc` and `directory`),
-> step 3 (agent pages in the web UI) and step 4 (upkeep) are built, off by
-> default: see [the directory](./directory.md), its [pages](./directory.md#pages)
-> and its [upkeep](./directory.md#upkeep). Builds on
+> step 3 (agent pages in the web UI), step 4 (upkeep) and step 5 (rooms with
+> leads) are built, off by default: see [the directory](./directory.md), its
+> [pages](./directory.md#pages), its [upkeep](./directory.md#upkeep) and its
+> [rooms](./directory.md#rooms). Builds on
 > [world state](./world-state.md),
 > [agent interfaces](./agent-interfaces.md),
 > [dashboard widgets](./dashboard-widgets.md) and the places plugin's `tend`

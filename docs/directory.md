@@ -5,12 +5,13 @@ things up for each other. Other agents ask about any of it with one tool. It
 all lives in [world state](./world-state.md), so people see and edit the same
 records on the State page.
 
-This is steps 2 to 4 of [ownership and upkeep](./ownership-design.md). What
+This is steps 2 to 5 of [ownership and upkeep](./ownership-design.md). What
 works today: the records, the three tools, the similar-work check, misses, a
 "Your commitments" block in the prompt, a page for every agent in the web UI
-that the agent arranges and you can hand work through, and an
-[upkeep turn](#upkeep) in which an agent looks after what it owns. Nothing
-acts on a commitment by itself yet; see [Not yet](#not-yet).
+that the agent arranges and you can hand work through, an
+[upkeep turn](#upkeep) in which an agent looks after what it owns, and
+[rooms](#rooms) with a lead and records of their own. Nothing acts on a
+commitment by itself yet; see [Not yet](#not-yet).
 
 ## Turn it on
 
@@ -28,10 +29,12 @@ plugins:
       upkeep:           # off unless set; see Upkeep
         every: 24h
         agents: all
+      leads:            # who leads which room; see Rooms
+        travel: trip-planner
 ```
 
 Every key under `config` is optional; the values above are the defaults,
-except `upkeep`, which is off until you set it.
+except `upkeep`, which is off until you set it, and `leads`, which is empty.
 
 Turning it on adds three tools, `directory`, `commitment` and `writeup`. It
 can add a fourth: `state` is offered once any world-state type exists, so on
@@ -42,7 +45,7 @@ the ones it names, so a reader that should only look things up might take
 `[directory, writeup]`, and one that shouldn't have `state` leaves it out.
 
 **Changing it while TAI runs.** A config reload picks up `pin`, the two
-bars and `upkeep` at once, and turning the directory on or off by reload adds or removes
+bars, `upkeep` and `leads` at once, and turning the directory on or off by reload adds or removes
 its tools, types, prompt block and routes straight away. A call already
 running when it is turned off answers that the directory is turned off, and
 the agent pages show the [fallback](#with-the-directory-off).
@@ -64,10 +67,10 @@ Six world-state types, declared by the plugin:
 
 | Type | Id | Where it lives | Holds |
 |---|---|---|---|
-| `profile` | the agent's name | `global` | `owner`, `purpose`, `takesOn` (a list), `howToAsk` |
-| `commitment` | `<owner>-<slug>` | `global`, or `agent:<owner>` when private | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from` |
-| `doc` | `<owner>-<slug>` | `global` | `owner`, `title`, `summary`, `body`, `tags`, `reviewedAt` |
-| `miss` | `miss-<day>-<hash>` | `agent:<owner>` | `owner`, `query`, `askedBy`, `at`, `closest` |
+| `profile` | the agent's name, or `room:<ref>` for a room's | `global` | `owner`, `purpose`, `takesOn` (a list), `howToAsk`; a room's also `room`, `note`, `noteAt`, `lead` |
+| `commitment` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, `agent:<owner>` when private, or `room:<ref>` for a room's | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from`, `room` |
+| `doc` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, or `room:<ref>` for a room's | `owner`, `title`, `summary`, `body`, `tags`, `reviewedAt`, `room` |
+| `miss` | `miss-<day>-<hash>` | `agent:<owner>`, or `room:<ref>` for a room's | `owner`, `query`, `askedBy`, `at`, `closest`, `room` |
 | `page` | the agent's name | `global` | `owner`, `note`, `noteAt`, `order`, `hide`, `extra` (see [Pages](#pages)) |
 | `upkeep` | the agent's name | `agent:<owner>` | `owner`, `at`, `started`, `changed`, `fingerprint`, `error`, `failedAt`, `reads`, `readsAtLast` (see [Upkeep](#upkeep)) |
 
@@ -277,6 +280,8 @@ commitments behind the history, open ones first:
 | Profiles, docs, shared commitments | sees and changes | sees | sees and edits |
 | Private commitments | sees and changes | don't see them anywhere: not in `about`, `search`, `list` or similar work | see and edit |
 | Misses | sees its own | don't see them | see and edit |
+| A room's profile | its members change it | sees | sees and edits |
+| A room's commitments, docs and misses | its members see and change them | don't see them | see and edit |
 
 Another agent asking to change your record gets a plain refusal naming you:
 "trip-planner-lisbon-trip-nov-12-16 is trip-planner's commitment; only
@@ -516,6 +521,182 @@ Each section shows eight lines at most, then a count of the rest.
 - **An `upkeep` record a person archives** is written live again on the next
   turn or counted read, with what it held, so archiving it never stops upkeep.
 
+## Rooms
+
+A [room](./rooms.md) keeps a profile, commitments and docs of its own, the
+same three records an agent keeps. Its members change them, one agent leads
+it, and the lead looks after them in its upkeep.
+
+### Who leads a room
+
+```yaml
+plugins:
+  - module: builtin:directory
+    enabled: true
+    config:
+      leads:
+        travel: trip-planner             # by the room's name
+        "discord:1234567890": planner    # or by its ref
+```
+
+The lead is, in this order:
+
+1. the agent you chose on the room's page,
+2. the agent `leads` names for the room, by its ref or its name,
+3. the agent that created the room, when an agent did,
+4. nobody.
+
+Only an agent that exists counts, so a lead since removed falls through to
+the next. A room a person opened (with `/room create`, say) and that config
+leaves out has no lead until you choose one. A choice you make on the page
+stands in front of config until you set it back to "config's choice"; the
+page shows where the lead came from, and what config names when your choice
+hides it.
+
+The lead counts as one of the room's members whether it's subscribed or
+not. Leading a room doesn't subscribe it, so it isn't woken by the room's
+messages unless you add it.
+
+### The room's records
+
+| Record | Id | Where it lives | Who sees it |
+|---|---|---|---|
+| Profile | `room:<ref>` | `global` | every agent: it's the room's front door |
+| Commitments | `room-<name>-<slug>` | `room:<ref>` | the room's members |
+| Docs | `room-<name>-<slug>` | `room:<ref>` | the room's members |
+| Misses | `miss-<day>-<hash>` | `room:<ref>` | the room's members |
+
+A room's own records have `owner: "room:<ref>"` and `room: "<ref>"`. The
+profile also holds the room's page note and, when you chose one, its lead.
+Until someone writes the profile, the purpose the room was given stands in
+for it, marked as such, and the first write starts from that purpose.
+
+Members are the agents subscribed to the room, and its lead. They change the
+room's records with the tools they already have, by naming the room:
+
+```
+commitment(action: "open", room: "travel", goal: "Ferry tickets for August", doneWhen: "Tickets in the inbox")
+→ Opened room-travel-ferry-tickets-for-august: "Ferry tickets for August" (the travel room's, suggest).
+
+writeup(action: "write", room: "travel", title: "Visa rules", summary: "Who in the family needs one.", body: "…")
+directory(action: "profile", room: "travel", purpose: "Family trips, from first idea to bookings.")
+directory(action: "page", room: "travel", note: "We plan the family's trips. Ask us before you book anything.")
+directory(action: "about", room: "travel")
+commitment(action: "list", room: "travel")
+```
+
+`update`, `done`, `drop`, `archive`, `review` and `read` take the id as they
+always do. Each update on a room's commitment says who wrote it (`by`), and
+every change keeps its author in the record's history. A room's page takes a
+note and nothing else: its sections are the same for every room.
+
+An agent that isn't in the room gets one plain sentence back:
+
+```
+You're not in the travel room, so you can't change its records. Its members can: planner, trip-planner.
+```
+
+The room's commitments and docs don't exist for it at all: not in `about`,
+`search`, `list` or similar work, and reading one by id says there's no such
+record. Its profile it can read, and `about` tells it the rest is for the
+members.
+
+**Membership, not the turn, decides what an agent sees.** World state shows
+an agent a room's scope only in a turn woken in that room. The directory's
+own tools follow membership instead: an agent in the travel room sees the
+room's commitments and docs from its upkeep turn, a direct message, or
+another room, because that's where it looks after them. The `state` tool is
+unchanged, so `state query` from outside the room still shows none of them.
+An archived room's records drop out of its members' searches; `about` and
+`list` with its name still read them, and every change is refused.
+
+### A person's edit stays
+
+When you change a field of a room's record, on the room's page, on the State
+page, or through `/api/state`, agents leave that field as you left it. A
+member that tries to change it is refused, with the field named:
+
+```
+A person set nextStep on room-travel-ferry-tickets-for-august, so it stays as they left it. Ask them if it should change.
+```
+
+The rest of the call doesn't go through, and the other fields stay the
+members' to change. What finishing a commitment tidies by the way (clearing
+what it waited on, filling its progress bar) is skipped for a field you set,
+rather than refused.
+
+The rule is read from the record's history: a field holds when its latest
+change was a person's edit and it still has a value. So:
+
+- **Creating a record isn't an edit.** A room's commitment you create on the
+  State page holds nothing; change a field afterwards and that field holds.
+- **Clearing a field hands it back** to the agents.
+- **It's for room records only.** An agent's own records keep their rules
+  ([autonomy](#work-an-agent-owns-commitment), for one).
+- **A store that keeps no history can't tell who set what,** so nothing holds
+  there. The built-in SQLite store keeps history. The rule reads a record's
+  last 500 changes.
+
+The room's page marks every field you hold with "set by you".
+
+### Handing a room something
+
+**Hand it something** on a room's page opens a commitment for the room's
+lead, not for the room: the lead's own, shared, `from: "a person"`, with
+`room` naming the room and "Handed over by a person on the travel room's
+page." as its first update. The lead sees it in its "Your commitments" block
+with the room named:
+
+```
+- trip-planner-find-a-dog-sitter "Find a dog sitter": open, for the travel room, from a person, last update just now
+```
+
+It shows on the lead's page, linked to the room, and on the room's page under
+Working on, "taken on by trip-planner". A room with no lead can't be handed
+anything until you choose one.
+
+### The lead's upkeep
+
+The lead's [upkeep turn](#upkeep) gains a section for each live room it
+leads, counted by the same rules as its own records:
+
+```
+The travel room, which you lead
+- room-travel-ferry-tickets-for-august "Ferry tickets for August": no update in 16 days
+- room-travel-visa-rules "Visa rules": not reviewed in 45 days
+- Looked for in the room's area, with no doc or commitment to find: "ferry timetable", asked by writer
+- The travel room's page has no note for people.
+```
+
+That's a next check that came, waiting too long, no update, finished and not
+archived, docs not reviewed, misses in the room's area since the last upkeep,
+and no page note (or one older than the room's newest work). Reads aren't
+counted for a room's docs: only its members can read them. The room's
+evidence is part of the lead's fingerprint, so a room that changes wakes it,
+and what it changes in the room counts in its "Last upkeep" line.
+
+### A room's page
+
+Open **Rooms** in the web UI (`#/rooms`) to see every live room: what it's
+for, who leads it and where from, how many members it has, and how much it
+has open and waiting. Open one (`#/rooms/<name>`) for its page:
+
+| Section | Shows |
+|---|---|
+| What it's for | Its purpose and note, what it takes on and how to ask. **Edit** changes the purpose and the note, as you |
+| Lead and members | Who leads it and where that came from, a choice to change the lead, and its members |
+| Working on | Its open commitments and those its lead took on for it, with who took each on, and **Edit** for the next step and status |
+| Waiting on you | What waits, and on what |
+| Recent results | Done in the last two weeks |
+| Docs | Click one to read it in place |
+| Questions nobody could answer | Misses in its area from the last two weeks, when there are some |
+| Hand it something | A commitment for its lead |
+
+Fields you set carry a "set by you" tag. The page changes as the room's
+records do, from the state stream, and reads the room again every 15 seconds
+for what the stream doesn't carry: who joined, and who made it. An agent's
+page names the rooms it leads.
+
 ## HTTP
 
 Behind the usual bearer auth, as a person: every scope.
@@ -523,8 +704,14 @@ Behind the usual bearer auth, as a person: every scope.
 | Route | Returns |
 |---|---|
 | `GET /api/ext/builtin:directory/agents` | `{ agents: [{ name, profile, description?, commitments: { open, waiting, done }, docs }] }`: every agent (the agent registry and `config.agents`, as Discord counts them) and anyone with a profile. `profile` is the profile's data or `null`; `description` is the configured one |
-| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses, upkeep }`: the profile and page records or `null`, and lists of full records, private ones included. `upkeep` is `{ running, at?, changed?, error?, failedAt?, every? }`, or `null` for an agent upkeep can't run for (no `commitment` tool, or only a profile left). `404` for a name that is neither an agent nor a profile |
+| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses, upkeep, rooms, leads }`: the profile and page records or `null`, and lists of full records, private ones included. `upkeep` is `{ running, at?, changed?, error?, failedAt?, every? }`, or `null` for an agent upkeep can't run for (no `commitment` tool, or only a profile left). `rooms` names the rooms its commitments were taken on for, by ref, and `leads` the rooms it leads. `404` for a name that is neither an agent nor a profile |
 | `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen?, autonomy? }`; `autonomy` is `suggest` (the default), `tell` or `quiet`. `201` with `{ commitment, inPrompt, why? }`, where `inPrompt` says whether the agent will see it in its prompt block and, when it won't, `why` is `"tool"` (no `commitment` tool) or `"pin"` (the block is off). `400` without a goal, one longer than 300 characters, or an unknown autonomy. `404` for a name that is no agent, including one that only has a profile left |
+| `GET /api/ext/builtin:directory/rooms` | `{ rooms: [{ ref, name, purpose, lead, leadFrom?, members, commitments: { open, waiting, done }, docs }] }`: every live room. `purpose` is the profile's, or the room's own, or `null`; `lead` is `null` with nobody to lead it; `leadFrom` is `person`, `config` or `creator`. Commitments count the room's own and those its lead took on for it |
+| `GET /api/ext/builtin:directory/rooms/:room` | `{ ref, name, purpose?, createdBy?, archived, profile, lead: { agent?, source?, configured? }, members, agents, commitments, docs, misses, held }` for a room by name or ref, archived ones too. `agents` is everyone who could lead it; `held` maps a record's id to the fields a person set. `404` for no such room |
+| `POST /api/ext/builtin:directory/rooms/:room/commitments` | Hands the room's lead a commitment for the room. Body as for an agent. `201` with `{ commitment, lead, inPrompt, why? }`. `409` when the room has no lead or is archived |
+| `PUT /api/ext/builtin:directory/rooms/:room/lead` | Body `{ lead }`: an agent, or `null` to go back to config's choice and then the room's creator. `200` with `{ lead }` as `GET` gives it. `400` for no such agent |
+| `PATCH /api/ext/builtin:directory/rooms/:room/profile` | Body with any of `purpose`, `takesOn`, `howToAsk`, `note`; an empty one clears it. Written as you, so the fields you change hold. `200` with `{ profile }` |
+| `PATCH /api/ext/builtin:directory/rooms/:room/commitments/:id` | Body with any of `goal`, `doneWhen`, `nextStep`, `status`, `waitingOn`, for one of the room's commitments. Written as you, with a dated update saying a person changed it. `200` with `{ commitment }` |
 | `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep or any other agent turn on an interval (a tend, another agent's upkeep) is running, or for an agent with no `commitment` tool. `404` for a name that is no agent |
 
 Counts and lists read at most 5,000 records of each type. The routes come and
@@ -543,8 +730,10 @@ request already on its way when a reload turns the directory off answers
   the agent owns. Its evidence doesn't yet include notes a newer note or doc
   contradicts, what people corrected or waved away, or which page sections
   people opened, and it raises no questions for a person.
-- **No room records or room pages.** A room's own commitments and docs, owned
-  by its lead, and its page, are step 5.
+- **Rooms don't wake their lead for their records.** A room's upkeep runs in
+  its lead's turn on the lead's interval; a room's page arranges nothing but
+  its note; and a room whose ref changes (a re-pointed channel) leaves its
+  records under the old one.
 - **Pages are in the web UI only.** An agent's page on the wall of its home in
   the 3D world, and Board widgets in the same vocabulary, come later.
 - **A store that fails fails the search.** All four types usually share one

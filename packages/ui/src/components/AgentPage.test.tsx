@@ -269,6 +269,17 @@ describe("an agent's page", () => {
     expect(about.textContent).toContain("Hand it a commitment.");
   });
 
+  it("names the rooms it leads, and links work it took on for a room to the room's page", async () => {
+    const base = tripPlanner();
+    base.commitments[0] = { ...base.commitments[0], data: { ...base.commitments[0].data, room: "local:travel" } };
+    agent = { ...base, rooms: { "local:travel": "travel" }, leads: ["travel"] } as typeof base;
+    await render();
+    const leads = section("What I'm for")?.querySelector('a[href="#/rooms/travel"]');
+    expect(leads?.textContent).toBe("#travel");
+    const lisbon = section("Working on")?.querySelector(".agent-page-item") as HTMLElement;
+    expect(lisbon.querySelector('.agent-page-meta a[href="#/rooms/travel"]')?.textContent).toBe("for #travel");
+  });
+
   it("falls back to the configured description, marked as such, when there's no profile", async () => {
     agent = { ...tripPlanner(), profile: null as never };
     await render();

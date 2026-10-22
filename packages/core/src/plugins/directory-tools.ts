@@ -7,7 +7,7 @@
  * model, often a small one. Every line that carries another agent's text names
  * that agent, so it reads as that agent's data rather than as an instruction.
  * The caller always comes from the tool context, so an agent can only ever
- * change its own records.
+ * change its own records, and those of the rooms it's in.
  */
 import type { StateCaller, StateSearchHit } from "../state/service.js";
 import { StateConflictError, StateError, type StateRecord } from "../state/types.js";
@@ -26,12 +26,12 @@ import {
   KEPT_SECTIONS,
   lastUpdate,
   MAX_EXTRA,
-  MAX_UPDATES,
   ownerOf,
   PAGE_SECTIONS,
   type PageSection,
   PROFILE_TYPE,
   parseProgress,
+  type RoomEntry,
   SEARCH_KINDS,
   STATUSES,
   type Status,
@@ -39,7 +39,9 @@ import {
   stringList,
   titleOf,
   UPKEEP_SESSIONS,
+  withUpdate,
 } from "./directory-records.js";
+import { type Lead, roomOfOwner, roomOwner } from "./directory-rooms.js";
 
 /** Records shown in one section of `about` before the rest are counted. */
 const SHOWN = 10;
@@ -111,14 +113,29 @@ function count(n: number, full: boolean): string {
   return `${n}${full ? "+" : ""}`;
 }
 
-/** A commitment in one line: id, goal, status, progress, next step and check, and how long since it moved. */
-export function commitmentLine(record: StateRecord, now: Date): string {
+/**
+ * A commitment in one line: id, goal, status, progress, next step and check,
+ * and how long since it moved. `name` puts an owner in words ("the travel
+ * room"): with it, a lead's commitment for a room says which room, or, in a
+ * list of the room's own (`inRoom`), which agent took it on.
+ */
+export function commitmentLine(
+  record: StateRecord,
+  now: Date,
+  name?: (owner: string) => string,
+  inRoom = false,
+): string {
   const d = record.data;
   const parts: string[] = [];
   const status = String(d.status ?? "open");
   parts.push(status === "waiting" && text(d.waitingOn) ? `waiting on ${text(d.waitingOn)}` : status);
+  const owner = ownerOf(record);
+  const room = text(d.room);
+  if (name && room && owner && !roomOfOwner(owner)) {
+    parts.push(inRoom ? `taken on by ${owner}` : `for ${name(roomOwner(room))}`);
+  }
   // Who asked for it, when someone did: work a person handed over reads as theirs, not one the agent chose.
-  if (text(d.from) && text(d.from) !== ownerOf(record)) parts.push(`from ${text(d.from)}`);
+  if (text(d.from) && text(d.from) !== owner) parts.push(`from ${text(d.from)}`);
   const progress = formatProgress(d.progress);
   if (progress) parts.push(progress);
   if (text(d.nextStep)) parts.push(`next: ${text(d.nextStep)}`);
@@ -137,8 +154,13 @@ function docLine(record: StateRecord): string {
   return `- ${record.id} "${titleOf(record) ?? ""}", ${reviewed(record)}`;
 }
 
-/** What one agent is for, working on and has written up, as `about` says it. */
-export function formatAbout(entry: AgentEntry, self: boolean, now: Date): string {
+/** What one agent is for, working on and has written up, as `about` says it. `name` puts owners in words. */
+export function formatAbout(
+  entry: AgentEntry,
+  self: boolean,
+  now: Date,
+  ownerName?: (owner: string) => string,
+): string {
   const name = self ? `${entry.agent} (you)` : entry.agent;
   const lines: string[] = [];
   const p = entry.profile?.data;
@@ -151,6 +173,10 @@ export function formatAbout(entry: AgentEntry, self: boolean, now: Date): string
   if (takesOn.length) lines.push(`Takes on: ${takesOn.join(", ")}.`);
   const howToAsk = text(p?.howToAsk);
   if (howToAsk) lines.push(`To ask: ${howToAsk}`);
+  if (entry.leads.length) {
+    const rooms = entry.leads.length === 1 ? `the ${entry.leads[0]} room` : `the rooms ${entry.leads.join(", ")}`;
+    lines.push(`${self ? "You lead" : "Leads"} ${rooms}.`);
+  }
   if (self && !entry.profile) lines.push("Write your profile with action profile, so others know what to bring you.");
   if (self && entry.page !== undefined) {
     const note = text(entry.page?.data.note);
@@ -167,10 +193,11 @@ export function formatAbout(entry: AgentEntry, self: boolean, now: Date): string
       ? `Working on (${count(entry.working.length, moreWork)}):`
       : "Working on: nothing shared that's open or waiting.",
   );
-  lines.push(...capped(entry.working, (r) => commitmentLine(r, now), "commitment list shows more", moreWork));
+  const line = (r: StateRecord) => commitmentLine(r, now, ownerName);
+  lines.push(...capped(entry.working, line, "commitment list shows more", moreWork));
   if (entry.private.length) {
     lines.push(`Private, only you see these (${count(entry.private.length, moreWork)}):`);
-    lines.push(...capped(entry.private, (r) => commitmentLine(r, now), "commitment list shows more", moreWork));
+    lines.push(...capped(entry.private, line, "commitment list shows more", moreWork));
   }
   lines.push(entry.docs.length ? `Docs (${count(entry.docs.length, moreDocs)}):` : "Docs: none yet.");
   lines.push(...capped(entry.docs, docLine, "writeup list shows more", moreDocs));
@@ -186,10 +213,79 @@ export function formatAbout(entry: AgentEntry, self: boolean, now: Date): string
   return lines.join("\n");
 }
 
+/** Where a room's lead came from, in a few words. */
+const LEAD_FROM: Record<string, string> = {
+  person: "chosen by a person",
+  config: "named in config",
+  creator: "it made the room",
+};
+
+/** A room's lead in a line, or that it has none and who can choose one. */
+export function leadLine(lead: Lead): string {
+  if (!lead.agent) return "Lead: none yet. A person can choose one on the room's page.";
+  const over = lead.configured ? `; config names ${lead.configured}` : "";
+  return `Lead: ${lead.agent} (${lead.source ? LEAD_FROM[lead.source] : "lead"}${over}).`;
+}
+
+/**
+ * What one room is for, who leads it and who is in it, as `about` says it,
+ * and to its members what it's working on, what it has written up and what
+ * was asked in its area that nobody could answer.
+ */
+export function formatRoomAbout(entry: RoomEntry, now: Date, name: (owner: string) => string): string {
+  const { room } = entry;
+  const lines: string[] = [];
+  const p = entry.profile?.data;
+  const purpose = text(p?.purpose);
+  const label = `The ${room.name} room`;
+  if (purpose) lines.push(`${label}: ${purpose}`);
+  else if (room.purpose) lines.push(`${label} (no profile yet; this is the purpose it was given): ${room.purpose}`);
+  else lines.push(`${label} hasn't said what it's for yet.`);
+  if (room.archived) lines.push("It's archived.");
+  lines.push(leadLine(entry.lead));
+  lines.push(entry.members.length ? `Members: ${entry.members.join(", ")}.` : "Members: nobody yet.");
+  const takesOn = stringList(p?.takesOn) ?? [];
+  if (takesOn.length) lines.push(`Takes on: ${takesOn.join(", ")}.`);
+  const howToAsk = text(p?.howToAsk);
+  if (howToAsk) lines.push(`To ask: ${howToAsk}`);
+  const note = text(p?.note);
+  if (note) lines.push(`Its page note, which people see: "${note}"`);
+  if (!entry.member) {
+    lines.push(`Its commitments and docs are for its members, and you're not in it.`);
+    return lines.join("\n");
+  }
+  if (!note && !room.archived) lines.push("Its page has no note yet; directory page with room adds one.");
+  const { commitments: moreWork, docs: moreDocs } = entry.full;
+  lines.push(
+    entry.working.length
+      ? `Working on (${count(entry.working.length, moreWork)}):`
+      : "Working on: nothing that's open or waiting.",
+  );
+  lines.push(
+    ...capped(
+      entry.working,
+      (r) => commitmentLine(r, now, name, true),
+      `commitment list with room ${room.name} shows more`,
+      moreWork,
+    ),
+  );
+  lines.push(entry.docs.length ? `Docs (${count(entry.docs.length, moreDocs)}):` : "Docs: none yet.");
+  lines.push(...capped(entry.docs, docLine, `writeup list with room ${room.name} shows more`, moreDocs));
+  if (entry.misses.length) {
+    lines.push("Looked for in its area lately, with no doc or commitment to find:");
+    for (const m of entry.misses.slice(0, MISSES_SHOWN)) {
+      const askedBy = stringList(m.data.askedBy) ?? [];
+      const day = text(m.data.at)?.slice(0, 10) ?? m.createdAt.slice(0, 10);
+      lines.push(`- "${text(m.data.query) ?? ""}", asked by ${askedBy.join(", ") || "someone"} on ${day}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 /** One search hit: kind, id, title, owner, status or review, freshness, and how it matched. */
-function hitLine(hit: StateSearchHit, now: Date, asker: string): string {
+function hitLine(hit: StateSearchHit, now: Date, asker: string, name: (owner: string) => string): string {
   const r = hit.record;
-  const owner = ownerOf(r) ?? "nobody";
+  const owner = name(ownerOf(r) ?? "nobody");
   const parts: string[] = [];
   if (r.type === COMMITMENT_TYPE) {
     const status = String(r.data.status ?? "open");
@@ -212,11 +308,11 @@ function hitLine(hit: StateSearchHit, now: Date, asker: string): string {
   return `- ${r.type} ${r.id}${named} by ${owner}: ${parts.join(", ")} (matched by ${hit.how})`;
 }
 
-function similarLine(hits: StateSearchHit[], now: Date): string | undefined {
+function similarLine(hits: StateSearchHit[], now: Date, name: (owner: string) => string): string | undefined {
   if (hits.length === 0) return undefined;
   const each = hits.map((h) => {
     const r = h.record;
-    const owner = ownerOf(r);
+    const owner = name(ownerOf(r) ?? "nobody");
     if (r.type === COMMITMENT_TYPE) {
       const progress = formatProgress(r.data.progress);
       const status = String(r.data.status ?? "open");
@@ -305,6 +401,21 @@ function describePage(data: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
+/** A room's page as a member reads it: its sections, in order, with its note. Mirrored by the web UI. */
+function describeRoomPage(room: string, note: string | undefined): string {
+  return [
+    `People see the ${room} room's page as, in order:`,
+    `- What it's for, ${note ? `with its note "${note}"` : "with no note yet"}`,
+    "- Lead and members",
+    "- Working on",
+    "- Waiting on you",
+    "- Recent results",
+    "- Docs",
+    "- Questions nobody could answer, when there are some",
+    "Under them, people can hand its lead a commitment, and change who leads it.",
+  ].join("\n");
+}
+
 // --------------------------------------------------------------------------
 // directory
 // --------------------------------------------------------------------------
@@ -312,7 +423,7 @@ function describePage(data: Record<string, unknown>): string {
 export class DirectoryTool implements Tool {
   name = "directory";
   description =
-    "What agents are for, what they're working on and what they've written up: about one agent, or search across all of them. Also keeps your own profile and page.";
+    "What agents and rooms are for, what they're working on and what they've written up: about one, or search across them all. Also keeps your own profile and page, and those of the rooms you're in.";
   parameters = {
     type: "object",
     properties: {
@@ -320,9 +431,10 @@ export class DirectoryTool implements Tool {
         type: "string",
         enum: ["about", "search", "profile", "page"],
         description:
-          "about: one agent's purpose, open commitments and docs. search: commitments, docs and profiles about q. profile: update your own entry (to read one, use about). page: arrange your page for people: note, order, hide, add or remove a section.",
+          "about: one agent's or room's purpose, open commitments and docs. search: commitments, docs and profiles about q. profile: update your own entry, or a room's (to read one, use about). page: arrange your page for people: note, order, hide, add or remove a section; a room's takes a note.",
       },
       agent: { type: "string", description: "about: which agent. Default: you." },
+      room: { type: "string", description: "about, profile or page: a room, by name, instead of you." },
       q: { type: "string", description: "search: what you're looking for, in a few words." },
       kind: { type: "string", enum: [...SEARCH_KINDS], description: "search: only this kind of record." },
       purpose: { type: "string", description: "profile: what you're for, in a sentence or two." },
@@ -358,20 +470,26 @@ export class DirectoryTool implements Tool {
   constructor(private readonly directory: Directory) {}
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const caller = callerFor(context, this.name);
-    const me = caller.actor.name;
+    const narrow = callerFor(context, this.name);
+    const me = narrow.actor.name;
     const action = String(args.action ?? "").toLowerCase();
+    const room = text(args.room);
     return attempt(async () => {
       if (!this.directory.active()) return fail(TURNED_OFF);
+      const caller = await this.directory.widen(narrow);
+      const name = (owner: string) => this.directory.ownerName(owner);
       if (action === "about") {
+        if (room) return this.aboutRoom(caller, room);
         const asked = text(args.agent) ?? me;
         const agent = asked === me ? me : await this.directory.resolve(asked);
         if (!agent) {
+          // A room named where an agent was asked for is still the one meant.
+          if (this.directory.room(asked)) return this.aboutRoom(caller, asked);
           const roster = this.directory.agents();
           return fail(`There's no agent called "${asked}".${roster.length ? ` Agents: ${roster.join(", ")}.` : ""}`);
         }
         const entry = await this.directory.entry(caller, agent);
-        return ok(formatAbout(entry, agent === me, this.directory.now()));
+        return ok(formatAbout(entry, agent === me, this.directory.now(), name));
       }
       if (action === "search") {
         const q = text(args.q ?? args.query ?? args.text);
@@ -383,6 +501,7 @@ export class DirectoryTool implements Tool {
         return ok(await this.search(caller, q, kind));
       }
       if (action === "profile") {
+        if (room) return this.roomProfile(caller, room, args);
         // Reading a profile is `about`; a model that asks `profile` for someone else's wants that, not a write.
         const other = text(args.agent);
         const reading = `To read one, use action about${other && other !== me ? ` with agent ${other}` : ""}.`;
@@ -399,13 +518,72 @@ export class DirectoryTool implements Tool {
             `profile changes your own entry: give at least one of \`purpose\`, \`takesOn\` or \`howToAsk\`. ${reading}`,
           );
         }
-        await this.directory.saveProfile(caller, fields);
+        await this.directory.saveProfile(narrow, fields);
         const entry = await this.directory.entry(caller, me);
-        return ok(`Saved your profile. Others now see:\n${formatAbout(entry, true, this.directory.now())}`);
+        return ok(`Saved your profile. Others now see:\n${formatAbout(entry, true, this.directory.now(), name)}`);
       }
-      if (action === "page") return this.page(caller, args);
+      if (action === "page") return room ? this.roomPage(caller, room, args) : this.page(narrow, args);
       return fail(`Unknown action "${args.action ?? ""}". Use about, search, profile or page.`);
     });
+  }
+
+  /** What a room is for and who is in it, and to its members what it has on. */
+  private async aboutRoom(caller: StateCaller, asked: string): Promise<ToolResult> {
+    const room = this.directory.room(asked);
+    if (!room) {
+      const known = this.directory.rooms().map((r) => r.name);
+      return fail(`There's no room called "${asked}".${known.length ? ` Rooms: ${known.join(", ")}.` : ""}`);
+    }
+    const entry = await this.directory.roomEntry(caller, room);
+    return ok(formatRoomAbout(entry, this.directory.now(), (owner) => this.directory.ownerName(owner)));
+  }
+
+  /** Change a room's profile, for a member: only the fields given. */
+  private async roomProfile(caller: StateCaller, asked: string, args: Record<string, unknown>): Promise<ToolResult> {
+    const fields: Record<string, unknown> = {};
+    const purpose = text(args.purpose);
+    const takesOn = stringList(args.takesOn);
+    const howToAsk = text(args.howToAsk);
+    if (purpose) fields.purpose = purpose;
+    if (takesOn?.length) fields.takesOn = takesOn;
+    if (howToAsk) fields.howToAsk = howToAsk;
+    if (Object.keys(fields).length === 0) {
+      return fail(
+        `profile with room changes that room's entry: give at least one of \`purpose\`, \`takesOn\` or \`howToAsk\`. To read it, use action about with room ${asked}.`,
+      );
+    }
+    const record = await this.directory.saveRoomProfile(caller, asked, () => fields);
+    const room = this.directory.room(String(record.data.room ?? asked));
+    if (!room) return ok(`Saved the room's profile.`);
+    const entry = await this.directory.roomEntry(caller, room);
+    return ok(
+      `Saved the ${room.name} room's profile. Others now see:\n${formatRoomAbout(entry, this.directory.now(), (o) => this.directory.ownerName(o))}`,
+    );
+  }
+
+  /** A room's page, for a member: its note, the one thing on it a member arranges, or with no note how it's laid out. */
+  private async roomPage(caller: StateCaller, asked: string, args: Record<string, unknown>): Promise<ToolResult> {
+    if (["order", "hide", "add", "remove"].some((k) => args[k] != null)) {
+      return fail("A room's page takes a note, in its members' words; its sections are the same for every room.");
+    }
+    const room = this.directory.room(asked);
+    if (!room) {
+      const known = this.directory.rooms().map((r) => r.name);
+      return fail(`There's no room called "${asked}".${known.length ? ` Rooms: ${known.join(", ")}.` : ""}`);
+    }
+    if (args.note == null) {
+      const note = text((await this.directory.roomProfile(room))?.data.note);
+      return ok(describeRoomPage(room.name, note));
+    }
+    const note = String(args.note).trim();
+    if (note.length > 300)
+      return fail(`note is a sentence or two: at most 300 characters, and this is ${note.length}.`);
+    const at = this.directory.now().toISOString();
+    const record = await this.directory.saveRoomProfile(caller, room.ref, (data) => {
+      if (note === (typeof data.note === "string" ? data.note : "")) return {};
+      return note ? { note, noteAt: at } : { note: null, noteAt: null };
+    });
+    return ok(`Saved the ${room.name} room's page. ${describeRoomPage(room.name, text(record.data.note))}`);
   }
 
   /** Change the caller's page as asked, or with nothing asked, say how it's laid out now. */
@@ -516,7 +694,7 @@ export class DirectoryTool implements Tool {
     const short = found.partial.length
       ? `\nNot every ${found.partial.join(", ")} record could be searched, so one may still exist.`
       : "";
-    const lines = found.hits.map((h) => hitLine(h, now, me));
+    const lines = found.hits.map((h) => hitLine(h, now, me, (o) => this.directory.ownerName(o)));
     const shown = found.hits.length;
     // When more cleared the bar than are shown, the head says so, so the list isn't read as all there is.
     const head = !shown
@@ -531,7 +709,7 @@ export class DirectoryTool implements Tool {
     if (asked && !found.answered && found.partial.length === 0) {
       try {
         const area = await this.directory.miss(q, me, found);
-        const whose = area === me ? "your own" : `${area}'s`;
+        const whose = area === me ? "your own" : `${this.directory.ownerName(area)}'s`;
         if (area)
           note = `\n${found.hits.length ? "No commitment or doc matches. " : ""}Noted as a miss in ${whose} area.`;
       } catch (err) {
@@ -573,6 +751,7 @@ export class CommitmentTool implements Tool {
         description: "open or update: suggest, asking before acting. tell and quiet are granted by a person.",
       },
       private: { type: "boolean", description: "open: only you can see it." },
+      room: { type: "string", description: "open or list: a room you're in, by name, for that room's own." },
       from: { type: "string", description: "open: who asked for it." },
       note: { type: "string", description: "update or done: what happened, in a line." },
       progress: { type: "string", description: 'update: "3/5", "60%" or the step you\'re on.' },
@@ -593,11 +772,12 @@ export class CommitmentTool implements Tool {
   constructor(private readonly directory: Directory) {}
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const caller = callerFor(context, this.name);
+    const narrow = callerFor(context, this.name);
     const action = String(args.action ?? "").toLowerCase();
     const id = text(args.id);
     return attempt(async () => {
       if (!this.directory.active()) return fail(TURNED_OFF);
+      const caller = await this.directory.widen(narrow);
       if (action === "open") return this.open(caller, args);
       if (action === "list") return this.list(caller, args);
       if (!COMMITMENT_ACTIONS.includes(action)) {
@@ -617,12 +797,13 @@ export class CommitmentTool implements Tool {
     });
   }
 
-  private async open(caller: ReturnType<typeof agentStateCaller>, args: Record<string, unknown>): Promise<ToolResult> {
+  private async open(caller: StateCaller, args: Record<string, unknown>): Promise<ToolResult> {
     const goal = text(args.goal);
     const doneWhen = text(args.doneWhen);
     if (!goal || !doneWhen) {
       return fail("open needs `goal` (what it's for, in a line) and `doneWhen` (how anyone can tell it's finished).");
     }
+    const room = text(args.room);
     const asked = text(args.autonomy) ?? AGENT_AUTONOMY;
     if (!(AUTONOMY as readonly string[]).includes(asked)) return fail(`autonomy is one of: ${AUTONOMY.join(", ")}.`);
     // An agent may only ask first; more is a person's to grant. It opens anyway, and is told.
@@ -630,31 +811,40 @@ export class CommitmentTool implements Tool {
     const now = this.directory.now();
     const me = caller.actor.name;
     const isPrivate = args.private === true || args.private === "true";
+    if (room && isPrivate) {
+      return fail(
+        "A room's commitments are for all its members to see. Leave out private, or room for one of your own.",
+      );
+    }
     const data: Record<string, unknown> = {
       goal,
       doneWhen,
       status: "open",
       autonomy,
-      updates: [{ at: now.toISOString(), text: "Opened." }],
+      updates: [{ at: now.toISOString(), text: "Opened.", ...(room ? { by: me } : {}) }],
     };
     for (const field of ["nextStep", "nextCheck", "from"] as const) {
       const value = text(args[field]);
       if (value) data[field] = value;
     }
     const scope = isPrivate ? `agent:${me}` : "global";
-    const record = await this.directory.create(caller, this.name, COMMITMENT_TYPE, goal, scope, data);
-    const lines = [`Opened ${record.id}: "${goal}" (${isPrivate ? "private" : "shared"}, ${autonomy}).`];
+    const record = room
+      ? await this.directory.createInRoom(caller, this.name, COMMITMENT_TYPE, room, goal, data)
+      : await this.directory.create(caller, this.name, COMMITMENT_TYPE, goal, scope, data);
+    const whose = room ? `${this.directory.ownerName(ownerOf(record))}'s` : isPrivate ? "private" : "shared";
+    const lines = [`Opened ${record.id}: "${goal}" (${whose}, ${autonomy}).`];
     if (asked !== autonomy) lines.push(autonomyRefused(asked, autonomy));
-    const similar = similarLine(await this.directory.similar(caller, COMMITMENT_TYPE, goal, me), now);
+    const name = (owner: string) => this.directory.ownerName(owner);
+    const similar = similarLine(
+      await this.directory.similar(caller, COMMITMENT_TYPE, goal, ownerOf(record) ?? me),
+      now,
+      name,
+    );
     if (similar) lines.push(similar);
     return ok(lines.join("\n"));
   }
 
-  private async update(
-    caller: ReturnType<typeof agentStateCaller>,
-    id: string,
-    args: Record<string, unknown>,
-  ): Promise<ToolResult> {
+  private async update(caller: StateCaller, id: string, args: Record<string, unknown>): Promise<ToolResult> {
     const status = text(args.status);
     if (status === "done") return fail("To finish it, use action done.");
     if (status === "dropped") return fail("To give it up, use action drop with `why`.");
@@ -687,19 +877,22 @@ export class CommitmentTool implements Tool {
     if (!others && same) return ok(`${id} already has ${autonomy}; nothing changed.`);
     if (!others && refuse) return fail(autonomyRefused(autonomy, has ?? AGENT_AUTONOMY));
     const now = this.directory.now();
-    const record = await this.directory.change(caller, this.name, COMMITMENT_TYPE, id, "commitment", (r) => {
+    const me = caller.actor.name;
+    const record = await this.directory.change(caller, this.name, COMMITMENT_TYPE, id, "commitment", (r, held) => {
       const changes: Record<string, unknown> = {};
       if (progress !== undefined) changes.progress = progress;
       if (nextStep) changes.nextStep = nextStep;
       if (nextCheck) changes.nextCheck = nextCheck;
-      // Waiting on someone implies waiting; going back to open clears who it waited on.
+      // Waiting on someone implies waiting; going back to open clears who it waited on, unless a person set that.
       const next: Status | undefined = (status as Status | undefined) ?? (waitingOn ? "waiting" : undefined);
       if (next) changes.status = next;
       if (waitingOn) changes.waitingOn = waitingOn;
-      else if (next === "open") changes.waitingOn = null;
+      else if (next === "open" && !held.includes("waitingOn")) changes.waitingOn = null;
       if (lower && r.data.autonomy !== AGENT_AUTONOMY) changes.autonomy = AGENT_AUTONOMY;
       const said = note ?? describeChanges(changes);
-      changes.updates = withUpdate(r.data.updates, { at: now.toISOString(), text: said });
+      // On a room's commitment, several members write updates, so each says whose it is.
+      const by = roomOfOwner(ownerOf(r)) ? { by: me } : {};
+      changes.updates = withUpdate(r.data.updates, { at: now.toISOString(), text: said, ...by });
       return changes;
     });
     const updated = `Updated ${commitmentLine(record, now).slice(2)}`;
@@ -709,44 +902,65 @@ export class CommitmentTool implements Tool {
   }
 
   private async finish(
-    caller: ReturnType<typeof agentStateCaller>,
+    caller: StateCaller,
     id: string,
     status: "done" | "dropped",
     note: string | undefined,
   ): Promise<ToolResult> {
     const now = this.directory.now();
-    const record = await this.directory.change(caller, this.name, COMMITMENT_TYPE, id, "commitment", (r) => {
-      const changes: Record<string, unknown> = { status, waitingOn: null };
+    const me = caller.actor.name;
+    const record = await this.directory.change(caller, this.name, COMMITMENT_TYPE, id, "commitment", (r, held) => {
+      const changes: Record<string, unknown> = { status };
+      // What finishing tidies by the way, it leaves alone where a person set it.
+      if (!held.includes("waitingOn")) changes.waitingOn = null;
       // Finished work reads as finished: a count goes to its whole.
       const progress = r.data.progress as { value?: unknown; max?: unknown } | undefined;
-      if (status === "done" && progress && typeof progress === "object" && typeof progress.max === "number") {
+      const counted = progress && typeof progress === "object" && typeof progress.max === "number";
+      if (status === "done" && counted && !held.includes("progress")) {
         changes.progress = { value: progress.max, max: progress.max };
       }
       const said = status === "done" ? `Done${note ? `: ${note}` : "."}` : `Dropped: ${note}`;
-      changes.updates = withUpdate(r.data.updates, { at: now.toISOString(), text: said });
+      const by = roomOfOwner(ownerOf(r)) ? { by: me } : {};
+      changes.updates = withUpdate(r.data.updates, { at: now.toISOString(), text: said, ...by });
       return changes;
     });
     return ok(`${status === "done" ? "Done" : "Dropped"}: ${record.id} "${titleOf(record) ?? ""}".`);
   }
 
-  private async list(caller: ReturnType<typeof agentStateCaller>, args: Record<string, unknown>): Promise<ToolResult> {
+  private async list(caller: StateCaller, args: Record<string, unknown>): Promise<ToolResult> {
     const me = caller.actor.name;
-    const asked = text(args.agent) ?? me;
-    const agent = asked === me ? me : await this.directory.resolve(asked);
-    if (!agent) return fail(`There's no agent called "${asked}".`);
     const which = text(args.status);
     if (which && which !== "all" && !(STATUSES as readonly string[]).includes(which)) {
       return fail(`status is one of: ${[...STATUSES, "all"].join(", ")}.`);
     }
     const statuses: readonly Status[] = which === "all" ? STATUSES : which ? [which as Status] : ACTIVE;
+    const label = which === "all" ? "" : ` ${which ?? "open and waiting"}`;
+    const now = this.directory.now();
+    const name = (owner: string) => this.directory.ownerName(owner);
+    const room = text(args.room);
+    if (room) {
+      const inside = await this.directory.readable(caller, room, "commitments");
+      const records = await this.directory.roomCommitments(inside.caller, inside.room.ref, statuses, LIST_READ);
+      const whose = `The ${inside.room.name} room's`;
+      if (records.length === 0) return ok(`${whose}${label} commitments: none.`);
+      const full = records.length >= LIST_READ;
+      const lines = records.slice(0, LIST_SHOWN).map((r) => commitmentLine(r, now, name, true));
+      if (records.length > LIST_SHOWN) {
+        lines.push(
+          `- …and ${count(records.length - LIST_SHOWN, full)} more; ask for one status at a time to see them.`,
+        );
+      }
+      return ok(`${whose}${label} commitments (${count(records.length, full)}):\n${lines.join("\n")}`);
+    }
+    const asked = text(args.agent) ?? me;
+    const agent = asked === me ? me : await this.directory.resolve(asked);
+    if (!agent) return fail(`There's no agent called "${asked}".`);
     const records = await this.directory.commitments(caller, agent, statuses, LIST_READ);
     const whose = agent === me ? "Your" : `${agent}'s`;
-    const label = which === "all" ? "" : ` ${which ?? "open and waiting"}`;
     if (records.length === 0) return ok(`${whose}${label} commitments: none.`);
-    const now = this.directory.now();
     const full = records.length >= LIST_READ;
     const lines = records.slice(0, LIST_SHOWN).map((r) => {
-      const line = commitmentLine(r, now);
+      const line = commitmentLine(r, now, name);
       return r.scope === `agent:${me}` ? `${line}, private` : line;
     });
     if (records.length > LIST_SHOWN) {
@@ -754,12 +968,6 @@ export class CommitmentTool implements Tool {
     }
     return ok(`${whose}${label} commitments (${count(records.length, full)}):\n${lines.join("\n")}`);
   }
-}
-
-/** A new update in front of the old ones, keeping the newest {@link MAX_UPDATES}. */
-function withUpdate(existing: unknown, update: { at: string; text: string }): { at: string; text: string }[] {
-  const old = Array.isArray(existing) ? (existing as { at: string; text: string }[]) : [];
-  return [{ ...update, text: update.text.slice(0, 500) }, ...old].slice(0, MAX_UPDATES);
 }
 
 /** An update's text when the agent gave no note: what it changed. */
@@ -809,6 +1017,7 @@ export class WriteupTool implements Tool {
         description: "write or update: a few words to find it by, as a list or comma-separated.",
       },
       agent: { type: "string", description: "list: whose. Default: you." },
+      room: { type: "string", description: "write or list: a room you're in, by name, for that room's own." },
       reason: { type: "string", description: "archive: why, in a few words." },
     },
     required: ["action"],
@@ -819,13 +1028,16 @@ export class WriteupTool implements Tool {
   constructor(private readonly directory: Directory) {}
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const caller = callerFor(context, this.name);
-    const me = caller.actor.name;
+    const narrow = callerFor(context, this.name);
+    const me = narrow.actor.name;
     const action = String(args.action ?? "").toLowerCase();
     const id = text(args.id);
+    const room = text(args.room);
     const now = this.directory.now();
     return attempt(async () => {
       if (!this.directory.active()) return fail(TURNED_OFF);
+      const caller = await this.directory.widen(narrow);
+      const name = (owner: string) => this.directory.ownerName(owner);
       if (action === "write") {
         const title = text(args.title);
         const summary = text(args.summary);
@@ -834,21 +1046,33 @@ export class WriteupTool implements Tool {
         const tags = stringList(args.tags);
         const data: Record<string, unknown> = { title, summary, body, reviewedAt: now.toISOString() };
         if (tags?.length) data.tags = tags;
-        const record = await this.directory.create(caller, this.name, DOC_TYPE, title, "global", data);
-        const lines = [`Wrote ${record.id}: "${title}".`];
+        const record = room
+          ? await this.directory.createInRoom(caller, this.name, DOC_TYPE, room, title, data)
+          : await this.directory.create(caller, this.name, DOC_TYPE, title, "global", data);
+        const lines = [`Wrote ${record.id}: "${title}"${room ? ` (${name(ownerOf(record) ?? "")}'s)` : ""}.`];
+        const self = ownerOf(record) ?? me;
         const similar = similarLine(
-          await this.directory.similar(caller, DOC_TYPE, `${title}\n${summary}\n${(tags ?? []).join(" ")}`, me),
+          await this.directory.similar(caller, DOC_TYPE, `${title}\n${summary}\n${(tags ?? []).join(" ")}`, self),
           now,
+          name,
         );
         if (similar) lines.push(similar);
         return ok(lines.join("\n"));
       }
       if (action === "list") {
-        const asked = text(args.agent) ?? me;
-        const agent = asked === me ? me : await this.directory.resolve(asked);
-        if (!agent) return fail(`There's no agent called "${asked}".`);
-        const docs = await this.directory.docs(caller, agent, LIST_READ);
-        const whose = agent === me ? "Your" : `${agent}'s`;
+        let docs: StateRecord[];
+        let whose: string;
+        if (room) {
+          const inside = await this.directory.readable(caller, room, "docs");
+          docs = await this.directory.roomDocs(inside.caller, inside.room.ref, LIST_READ);
+          whose = `The ${inside.room.name} room's`;
+        } else {
+          const asked = text(args.agent) ?? me;
+          const agent = asked === me ? me : await this.directory.resolve(asked);
+          if (!agent) return fail(`There's no agent called "${asked}".`);
+          docs = await this.directory.docs(caller, agent, LIST_READ);
+          whose = agent === me ? "Your" : `${agent}'s`;
+        }
         if (docs.length === 0) return ok(`${whose} docs: none.`);
         const full = docs.length >= LIST_READ;
         const lines = docs.slice(0, LIST_SHOWN).map((r) => {
@@ -873,7 +1097,7 @@ export class WriteupTool implements Tool {
         if (!record) return fail(`There is no doc "${id}".`);
         // Another agent reading it is evidence for its owner's upkeep that it's worth keeping current.
         await this.directory.countRead(record, me);
-        return ok(formatDoc(record, me));
+        return ok(formatDoc(record, me, name));
       }
       if (action === "review") {
         const record = await this.directory.change(caller, this.name, DOC_TYPE, id, "doc", () => ({
@@ -903,9 +1127,10 @@ export class WriteupTool implements Tool {
   }
 }
 
-/** A whole doc. Another agent's is introduced as its writing, to be read as information, not obeyed. */
-function formatDoc(record: StateRecord, me: string): string {
-  const owner = ownerOf(record) ?? "nobody";
+/** A whole doc. Another agent's, or a room's, is introduced as its writing, to be read as information, not obeyed. */
+function formatDoc(record: StateRecord, me: string, name: (owner: string) => string): string {
+  const raw = ownerOf(record) ?? "nobody";
+  const owner = raw === me ? me : name(raw);
   const lines = [`${record.id} "${titleOf(record) ?? ""}" by ${owner}, ${reviewed(record)}.`];
   if (record.archivedAt) lines.push(`Archived ${record.archivedAt.slice(0, 10)}; it may be out of date.`);
   const tags = stringList(record.data.tags) ?? [];

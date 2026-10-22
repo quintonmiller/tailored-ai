@@ -4,12 +4,13 @@
  * Off by default; turn it on with `{ module: "builtin:directory", enabled: true }`.
  * See `docs/directory.md`, and `docs/ownership-design.md` for where it's going.
  *
- * It brings five record types (`profile`, `commitment`, `doc`, `miss`,
- * `page`), three tools (`directory`, `commitment`, `writeup`), a "Your
- * commitments" block in the prompt of every agent that has the `commitment`
- * tool, and the routes the agent pages in the web UI read and hand work over
- * through. It registers through the same seams a third-party plugin would,
- * and core knows nothing about it.
+ * It brings six record types (`profile`, `commitment`, `doc`, `miss`,
+ * `page`, `upkeep`), three tools (`directory`, `commitment`, `writeup`), a
+ * "Your commitments" block in the prompt of every agent that has the
+ * `commitment` tool, and the routes the agent and room pages in the web UI
+ * read and hand work over through. Rooms keep the same records, led by an
+ * agent (`directory-rooms.ts`). It registers through the same seams a
+ * third-party plugin would, and core knows nothing about it.
  *
  * Config (`plugins: [{ module: builtin:directory, config: {...} }]`):
  *   - `pin` (default true): the prompt block. `false` leaves it out.
@@ -19,6 +20,9 @@
  *   - `upkeep`: `{ every, agents }` gives each agent an upkeep turn on that
  *     interval (`directory-upkeep.ts`), plus the bars its evidence is counted
  *     against. Off unless set; a person can still start one from the page.
+ *   - `leads`: `{ "<room name or ref>": "<agent>" }`, who leads which room.
+ *     A room left out is led by the agent that created it, and a person can
+ *     choose another on the room's page.
  */
 
 import { resolveAgent } from "../agent/agents.js";
@@ -35,6 +39,8 @@ import { getExploratoryState } from "../db/exploratory-queries.js";
 import type { TaiHttpResponse } from "../http/registry.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { Disposer } from "../registry.js";
+import type { RoomStore } from "../rooms/store.js";
+import { formatRoomRef, type Room } from "../rooms/types.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { StateError, type StateRecord, type StateTypeDef } from "../state/types.js";
@@ -53,8 +59,11 @@ import {
   PAGE_TYPE,
   PERSON,
   PROFILE_TYPE,
+  STATUSES,
+  stringList,
   UPKEEP_TYPE,
 } from "./directory-records.js";
+import { type RoomInfo, type RoomSource, roomOfOwner, roomOwner } from "./directory-rooms.js";
 import { CommitmentTool, commitmentLine, DirectoryTool, WriteupTool } from "./directory-tools.js";
 import { changedOf, parseUpkeep, Upkeep, type UpkeepSettings } from "./directory-upkeep.js";
 import { busy, everyWords, runNow, Tender, turnSession, UPKEEP_KIND, whyAsleep } from "./places-tend.js";
@@ -77,6 +86,8 @@ export interface DirectoryConfig {
   pin: boolean;
   bar: Bar;
   upkeep: UpkeepSettings;
+  /** Who leads which room, by the room's name or ref. */
+  leads: Record<string, string>;
 }
 
 /**
@@ -102,6 +113,46 @@ export function readConfig(raw: Record<string, unknown>): DirectoryConfig {
     pin: raw.pin !== false,
     bar: { meaning: share("minMeaning", DEFAULT_BAR.meaning), words: share("minWords", DEFAULT_BAR.words) },
     upkeep: parseUpkeep(raw.upkeep, (problem) => console.warn(`[directory] ${problem}`)),
+    leads: parseLeads(raw.leads, (problem) => console.warn(`[directory] ${problem}`)),
+  };
+}
+
+/** The config's `leads`, read: room name or ref to agent, leaving out what can't be used and saying so. */
+export function parseLeads(raw: unknown, warn: (problem: string) => void): Record<string, string> {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    warn('leads is { "<room name or ref>": "<agent>" }; it is left out.');
+    return {};
+  }
+  const leads: Record<string, string> = {};
+  for (const [room, agent] of Object.entries(raw as Record<string, unknown>)) {
+    if (room.trim() && typeof agent === "string" && agent.trim()) leads[room.trim()] = agent.trim();
+    else warn(`leads["${room}"] should name an agent; it is left out.`);
+  }
+  return leads;
+}
+
+/** The runtime's rooms store, as the directory reads it. Undefined for a runtime without one. */
+function roomSource(runtime: AgentRuntime): RoomSource | undefined {
+  return typeof runtime.getRoomStore === "function" ? roomsFrom(runtime.getRoomStore()) : undefined;
+}
+
+/** A rooms store, as the directory reads it: live rooms, a room by name or ref, and who's subscribed. */
+export function roomsFrom(store: RoomStore): RoomSource {
+  const info = (room: Room): RoomInfo => ({
+    ref: formatRoomRef(room.ref),
+    name: room.name,
+    ...(room.purpose ? { purpose: room.purpose } : {}),
+    ...(room.createdBy ? { createdBy: room.createdBy } : {}),
+    archived: !!room.archivedAt,
+  });
+  return {
+    list: () => store.listRooms().map(info),
+    find: (nameOrRef) => {
+      const room = store.resolve(nameOrRef);
+      return room ? info(room) : undefined;
+    },
+    subscribers: (ref) => store.listSubscriptionsForRoom(ref).map((s) => s.agent),
   };
 }
 
@@ -211,8 +262,9 @@ export function commitmentsSlot(directory: Directory, takesPart: (agent: string)
       const reserve = `\n…and ${PINNED_READ}+ more; commitment list shows them.`.length;
       const lines: string[] = [];
       let used = 0;
+      const name = (owner: string) => directory.ownerName(owner);
       for (const r of ordered.slice(0, PINNED)) {
-        const full = commitmentLine(r, now) + (r.scope === `agent:${agent}` ? ", private" : "");
+        const full = commitmentLine(r, now, name) + (r.scope === `agent:${agent}` ? ", private" : "");
         const line = full.length > PINNED_LINE_CHARS ? `${full.slice(0, PINNED_LINE_CHARS - 1)}…` : full;
         const cost = line.length + (lines.length ? 1 : 0);
         if (lines.length > 0 && used + cost + reserve > PINNED_CHARS) break;
@@ -266,7 +318,9 @@ async function agentSummaries(directory: Directory) {
   const profileOf = byOwner(profiles);
   const commitmentsOf = byOwner(commitments);
   const docsOf = byOwner(docs);
-  const names = [...new Set([...directory.agents(), ...profileOf.keys()])].sort();
+  // A room's profile is the room's, not an agent's.
+  const profiled = [...profileOf.keys()].filter((owner) => !roomOfOwner(owner));
+  const names = [...new Set([...directory.agents(), ...profiled])].sort();
   return names.map((name) => {
     const own = commitmentsOf.get(name) ?? [];
     const count = (status: string) => own.filter((r) => r.data.status === status).length;
@@ -279,6 +333,40 @@ async function agentSummaries(directory: Directory) {
       docs: (docsOf.get(name) ?? []).length,
     };
   });
+}
+
+/** What the rooms list shows for each live room: what it's for, who leads it, who's in it, and counts. */
+async function roomSummaries(directory: Directory) {
+  const [commitments, docs] = await Promise.all([directory.all(COMMITMENT_TYPE), directory.all(DOC_TYPE)]);
+  const summaries = [];
+  for (const room of directory.rooms()) {
+    const profile = await directory.roomProfile(room);
+    const lead = await directory.lead(room, profile);
+    const members = await directory.members(room, lead);
+    // What it's working on: its own commitments and those its lead took on for it.
+    const work = commitments.filter((r) => r.data.room === room.ref);
+    const count = (status: string) => work.filter((r) => r.data.status === status).length;
+    const purpose =
+      typeof profile?.data.purpose === "string" && profile.data.purpose.trim() ? profile.data.purpose : room.purpose;
+    summaries.push({
+      ref: room.ref,
+      name: room.name,
+      purpose: purpose ?? null,
+      lead: lead.agent ?? null,
+      ...(lead.source ? { leadFrom: lead.source } : {}),
+      members,
+      commitments: { open: count("open"), waiting: count("waiting"), done: count("done") },
+      docs: docs.filter((d) => d.data.owner === roomOwner(room.ref)).length,
+    });
+  }
+  return summaries;
+}
+
+/** A string field of a request body, trimmed; undefined when it isn't there, "" when it's there and empty. */
+function field(body: Record<string, unknown> | null, key: string): string | undefined {
+  const value = body?.[key];
+  if (value === null) return "";
+  return typeof value === "string" ? value.trim() : undefined;
 }
 
 const plugin: Plugin = (ctx) => {
@@ -300,6 +388,11 @@ const plugin: Plugin = (ctx) => {
   const types: StateTypeDef[] = DIRECTORY_TYPES.map((def) => ({ ...def }));
   for (const def of types) disposers.push(ctx.stateTypes.register(def));
   warnReplaced(runtime.getStateService(), types);
+  for (const [room, agent] of Object.entries(config.leads)) {
+    if (!roster(runtime).includes(agent)) {
+      console.warn(`[directory] leads names ${agent} for ${room}, but there's no such agent; it leads nothing.`);
+    }
+  }
 
   const directoryFor = (getService: () => StateService) =>
     new Directory({
@@ -308,6 +401,8 @@ const plugin: Plugin = (ctx) => {
       describe: (agent) => runtime.getAgentDefinition(agent)?.description?.trim() || undefined,
       bar: () => (live ?? config).bar,
       active: () => live !== null,
+      rooms: () => roomSource(runtime),
+      leads: () => (live ?? config).leads,
     });
 
   ctx.tools.register("directory", (_cfg, tctx) =>
@@ -393,6 +488,13 @@ const plugin: Plugin = (ctx) => {
         directory.all(MISS_TYPE, where),
       ]);
       const description = directory.describe(agent);
+      // The rooms its commitments were taken on for, by name, so the page can say which.
+      const rooms: Record<string, string> = {};
+      for (const c of commitments) {
+        const ref = typeof c.data.room === "string" ? c.data.room : undefined;
+        const room = ref ? directory.room(ref) : undefined;
+        if (ref && room) rooms[ref] = room.name;
+      }
       return {
         json: {
           name: agent,
@@ -403,6 +505,8 @@ const plugin: Plugin = (ctx) => {
           docs,
           misses,
           upkeep: await upkeepView(agent),
+          rooms,
+          leads: (await directory.ledBy(agent)).map((r) => r.name),
         },
       };
     },
@@ -502,6 +606,210 @@ const plugin: Plugin = (ctx) => {
     },
   });
 
+  // ------------------------------------------------------------------ rooms
+
+  /** The room a route names, by name or ref, archived ones too. */
+  const roomFrom = (req: { params: Record<string, string> }) => directory.room(req.params.room ?? "");
+  const noRoom = (req: { params: Record<string, string> }): TaiHttpResponse => ({
+    status: 404,
+    json: { error: `There's no room called "${req.params.room ?? ""}".` },
+  });
+  const archived = (room: RoomInfo): TaiHttpResponse => ({
+    status: 409,
+    json: { error: `The ${room.name} room is archived, so its records stay as they are.` },
+  });
+
+  ctx.http.register({
+    method: "GET",
+    path: "rooms",
+    handler: async (): Promise<TaiHttpResponse> =>
+      directory.active() ? { json: { rooms: await roomSummaries(directory) } } : off(),
+  });
+
+  ctx.http.register({
+    method: "GET",
+    path: "rooms/:room",
+    handler: async (req): Promise<TaiHttpResponse> => {
+      if (!directory.active()) return off();
+      const room = roomFrom(req);
+      if (!room) return noRoom(req);
+      const entry = await directory.roomEntry(PERSON, room);
+      const [commitments, docs, misses] = await Promise.all([
+        directory.all(COMMITMENT_TYPE, { room: room.ref }),
+        directory.all(DOC_TYPE, { owner: roomOwner(room.ref) }),
+        directory.all(MISS_TYPE, { owner: roomOwner(room.ref) }),
+      ]);
+      // Which fields a person set, record by record, so the page can show what agents leave alone.
+      const held: Record<string, string[]> = {};
+      for (const record of [...(entry.profile ? [entry.profile] : []), ...commitments, ...docs]) {
+        const fields = await directory.held(record);
+        if (fields.length) held[record.id] = fields;
+      }
+      return {
+        json: {
+          ref: room.ref,
+          name: room.name,
+          ...(room.purpose ? { purpose: room.purpose } : {}),
+          ...(room.createdBy ? { createdBy: room.createdBy } : {}),
+          archived: room.archived,
+          profile: entry.profile,
+          lead: entry.lead,
+          members: entry.members,
+          agents: directory.agents(),
+          commitments,
+          docs,
+          misses,
+          held,
+        },
+      };
+    },
+  });
+
+  // A person handing a room something: a commitment for its lead, from them, that names the room.
+  ctx.http.register({
+    method: "POST",
+    path: "rooms/:room/commitments",
+    handler: async (req): Promise<TaiHttpResponse> => {
+      if (!directory.active()) return off();
+      const room = roomFrom(req);
+      if (!room) return noRoom(req);
+      if (room.archived) return archived(room);
+      const lead = (await directory.lead(room)).agent;
+      if (!lead) {
+        return { status: 409, json: { error: `The ${room.name} room has no lead to hand this to. Choose one first.` } };
+      }
+      const body = await req.json<Record<string, unknown>>().catch(() => null);
+      const goal = field(body, "goal") ?? "";
+      const doneWhen = field(body, "doneWhen") ?? "";
+      const autonomy = field(body, "autonomy") ?? "";
+      if (!goal) return { status: 400, json: { error: "Say what you're handing over in `goal`." } };
+      if (autonomy && !(AUTONOMY as readonly string[]).includes(autonomy)) {
+        return { status: 400, json: { error: `autonomy is one of: ${AUTONOMY.join(", ")}.` } };
+      }
+      if (goal.length > 300)
+        return { status: 400, json: { error: "Keep the goal to one line: 300 characters at most." } };
+      if (doneWhen.length > 500) return { status: 400, json: { error: "Keep done-when to 500 characters at most." } };
+      try {
+        const commitment = await directory.handOver(
+          lead,
+          {
+            goal,
+            ...(doneWhen ? { doneWhen } : {}),
+            ...(autonomy ? { autonomy: autonomy as Autonomy } : {}),
+          },
+          room,
+        );
+        const why = !hasCommitmentTool(runtime, lead) ? "tool" : !(live ?? config).pin ? "pin" : undefined;
+        return { status: 201, json: { commitment, lead, inPrompt: !why, ...(why ? { why } : {}) } };
+      } catch (err) {
+        if (err instanceof StateError) return { status: 400, json: { error: err.message } };
+        throw err;
+      }
+    },
+  });
+
+  // A person choosing a room's lead, or with null handing the choice back to config and the room's creator.
+  ctx.http.register({
+    method: "PUT",
+    path: "rooms/:room/lead",
+    handler: async (req): Promise<TaiHttpResponse> => {
+      if (!directory.active()) return off();
+      const room = roomFrom(req);
+      if (!room) return noRoom(req);
+      if (room.archived) return archived(room);
+      const body = await req.json<Record<string, unknown>>().catch(() => null);
+      const lead = field(body, "lead");
+      if (lead === undefined) {
+        return { status: 400, json: { error: "Say who leads it in `lead`, or null to go back to config's choice." } };
+      }
+      if (lead && !directory.agents().includes(lead)) {
+        return { status: 400, json: { error: `There's no agent called "${lead}".` } };
+      }
+      try {
+        await directory.saveRoomProfile(PERSON, room.ref, () => ({ lead: lead || null }));
+      } catch (err) {
+        if (err instanceof StateError) return { status: 400, json: { error: err.message } };
+        throw err;
+      }
+      return { json: { lead: await directory.lead(room) } };
+    },
+  });
+
+  // A person's edit to what a room is for and its note: theirs, so it stays as they left it.
+  ctx.http.register({
+    method: "PATCH",
+    path: "rooms/:room/profile",
+    handler: async (req): Promise<TaiHttpResponse> => {
+      if (!directory.active()) return off();
+      const room = roomFrom(req);
+      if (!room) return noRoom(req);
+      if (room.archived) return archived(room);
+      const body = await req.json<Record<string, unknown>>().catch(() => null);
+      const changes: Record<string, unknown> = {};
+      const limits: Record<string, number> = { purpose: 600, howToAsk: 400, note: 300 };
+      for (const [key, max] of Object.entries(limits)) {
+        const value = field(body, key);
+        if (value === undefined) continue;
+        if (value.length > max) return { status: 400, json: { error: `Keep ${key} to ${max} characters at most.` } };
+        changes[key] = value || null;
+      }
+      if (body && "takesOn" in body) {
+        const takesOn = stringList(body.takesOn) ?? [];
+        changes.takesOn = takesOn.length ? takesOn : null;
+      }
+      if (Object.keys(changes).length === 0) {
+        return { status: 400, json: { error: "Give at least one of purpose, takesOn, howToAsk or note." } };
+      }
+      if ("note" in changes) changes.noteAt = changes.note ? directory.now().toISOString() : null;
+      try {
+        const profile = await directory.saveRoomProfile(PERSON, room.ref, () => changes);
+        return { json: { profile } };
+      } catch (err) {
+        if (err instanceof StateError) return { status: 400, json: { error: err.message } };
+        throw err;
+      }
+    },
+  });
+
+  // A person's edit to one of a room's commitments: written as them, with a dated update that says so.
+  ctx.http.register({
+    method: "PATCH",
+    path: "rooms/:room/commitments/:id",
+    handler: async (req): Promise<TaiHttpResponse> => {
+      if (!directory.active()) return off();
+      const room = roomFrom(req);
+      if (!room) return noRoom(req);
+      if (room.archived) return archived(room);
+      const body = await req.json<Record<string, unknown>>().catch(() => null);
+      const changes: Record<string, unknown> = {};
+      const limits: Record<string, number> = { goal: 300, doneWhen: 500, nextStep: 300, waitingOn: 200 };
+      for (const [key, max] of Object.entries(limits)) {
+        const value = field(body, key);
+        if (value === undefined) continue;
+        if (key === "goal" && !value) return { status: 400, json: { error: "A commitment needs a goal." } };
+        if (value.length > max) return { status: 400, json: { error: `Keep ${key} to ${max} characters at most.` } };
+        changes[key] = value || null;
+      }
+      const status = field(body, "status");
+      if (status !== undefined) {
+        if (!(STATUSES as readonly string[]).includes(status)) {
+          return { status: 400, json: { error: `status is one of: ${STATUSES.join(", ")}.` } };
+        }
+        changes.status = status;
+      }
+      if (Object.keys(changes).length === 0) {
+        return { status: 400, json: { error: "Give at least one of goal, doneWhen, nextStep, status or waitingOn." } };
+      }
+      try {
+        const commitment = await directory.editRoomCommitment(room, req.params.id ?? "", changes);
+        return { json: { commitment } };
+      } catch (err) {
+        if (err instanceof StateError) return { status: 400, json: { error: err.message } };
+        throw err;
+      }
+    },
+  });
+
   return () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();
   };
@@ -510,7 +818,7 @@ const plugin: Plugin = (ctx) => {
 export const meta: PluginMeta = {
   name: "Directory",
   description:
-    "What agents are for, the work they've taken on and what they've written up: profile, commitment, doc and page records, the directory, commitment and writeup tools, a commitments block in the prompt, upkeep turns, and the routes behind agent pages.",
+    "What agents and rooms are for, the work they've taken on and what they've written up: profile, commitment, doc and page records, the directory, commitment and writeup tools, a commitments block in the prompt, upkeep turns, room leads, and the routes behind agent and room pages.",
   registers: [
     { kind: "tool", id: "directory" },
     { kind: "tool", id: "commitment" },

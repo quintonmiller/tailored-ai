@@ -63,14 +63,16 @@ export function lastMoved(record: StateRecordInfo): string {
   return typeof newest?.at === "string" ? newest.at : record.updatedAt;
 }
 
-/** A commitment's dated updates, newest first, as the record keeps them. */
-export function updatesOf(record: StateRecordInfo): { at: string; text: string }[] {
+/** A commitment's dated updates, newest first, as the record keeps them. `by` says who wrote one, on a room's. */
+export function updatesOf(record: StateRecordInfo): { at: string; text: string; by?: string }[] {
   const updates = record.data.updates;
   if (!Array.isArray(updates)) return [];
-  return updates.filter(
-    (u): u is { at: string; text: string } =>
-      !!u && typeof (u as { at?: unknown }).at === "string" && typeof (u as { text?: unknown }).text === "string",
-  );
+  return updates
+    .filter(
+      (u): u is { at: string; text: string; by?: unknown } =>
+        !!u && typeof (u as { at?: unknown }).at === "string" && typeof (u as { text?: unknown }).text === "string",
+    )
+    .map((u) => ({ at: u.at, text: u.text, ...(typeof u.by === "string" && u.by ? { by: u.by } : {}) }));
 }
 
 /**

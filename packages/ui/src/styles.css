@@ -6862,6 +6862,54 @@ select.model-entry-model {
 .agent-page-upkeep button:disabled { opacity: 0.6; cursor: default; }
 .agent-page-upkeep .agent-page-error { flex-basis: 100%; margin: 0; }
 
+/* ---- Rooms: the list and a room's page, drawn with the agent page's pieces ---- */
+.room-detail-header { justify-content: flex-start; }
+.room-back { color: var(--text-dim); text-decoration: none; font-size: 13px; white-space: nowrap; }
+.room-back:hover { color: var(--text); }
+.room-card-members { font-size: 11px; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.room-card-lead { font-size: 12px; color: var(--text); }
+.room-card-lead strong { font-weight: 600; }
+.room-card-from { color: var(--text-dim); }
+/* A small action that sits on a heading or a goal without taking the heading's style. */
+.room-edit {
+  margin-left: auto; background: none; border: 1px solid var(--border); border-radius: 6px;
+  padding: 1px 8px; font: 500 11px var(--font); letter-spacing: 0; text-transform: none;
+  color: var(--text-dim); cursor: pointer; white-space: nowrap;
+}
+.room-edit:hover, .room-edit:focus-visible { color: var(--text); border-color: var(--accent); }
+/* What a person set, which agents leave alone. */
+.room-held { border-color: var(--accent-dim); color: var(--accent); white-space: nowrap; vertical-align: 1px; }
+.agent-page-purpose .room-held, .agent-page-line .room-held { margin-left: 4px; }
+.room-lead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; }
+.room-lead-name { font-weight: 600; color: var(--text); text-decoration: none; }
+.room-lead-name:hover { text-decoration: underline; text-decoration-color: var(--accent); }
+/* The second column gives way on a phone, so the lead's choice wraps inside the card instead of past it. */
+.room-people .agent-page-facts { grid-template-columns: max-content minmax(0, 1fr); }
+.room-lead-pick { width: 100%; max-width: 360px; padding-top: 5px; padding-bottom: 5px; }
+/* Links among a line's small facts, and chips that open a page, read as part of the line, not as browser blue. */
+.agent-page-meta a { color: var(--text-dim); text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 2px; }
+.agent-page-meta a:hover { color: var(--text); text-decoration-color: var(--accent); }
+a.agent-tool-chip { color: var(--text); text-decoration: none; }
+a.agent-tool-chip:hover, a.agent-tool-chip:focus-visible { border-color: var(--accent); }
+.agent-page-by { color: var(--text-dim); }
+.agent-page-hand-note { margin: -4px 0 12px; }
+.room-form { display: flex; flex-direction: column; gap: 10px; }
+.room-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-dim); }
+.room-form textarea, .room-form input, .room-form select { width: 100%; }
+.room-form .agent-page-hint { margin: 0; }
+.room-item-form {
+  margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border);
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 180px); align-items: end;
+}
+.room-item-form .room-form-actions, .room-item-form .agent-page-error { grid-column: 1 / -1; }
+.room-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.room-form-actions button {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 7px 14px; font-size: 13px; cursor: pointer;
+}
+.room-form-actions button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+.room-form-actions button:disabled { opacity: 0.5; cursor: default; }
+
 @media (max-width: 800px) {
   .agents-page { padding: 16px; }
   /* One thing at a time on a phone: the agent cards, or one agent's page with a way back. */
@@ -6872,6 +6920,7 @@ select.model-entry-model {
   .agent-section { padding: 14px 16px; }
   .agent-page-form { grid-template-columns: minmax(0, 1fr); }
   .agent-page-form button { justify-self: start; }
+  .room-item-form { grid-template-columns: minmax(0, 1fr); }
   .agent-page-upkeep { padding-top: 10px; padding-bottom: 10px; }
   .agent-overview { padding: 16px; }
 }

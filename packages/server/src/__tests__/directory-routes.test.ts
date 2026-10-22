@@ -256,6 +256,150 @@ describe("the directory routes", () => {
     expect((await app.fetch(handOver())).status).toBe(401);
   });
 
+  describe("rooms", () => {
+    const api = (path: string, init?: RequestInit) =>
+      new Request(`http://t/api/ext/builtin:directory/${path}`, {
+        ...init,
+        headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      });
+    const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
+
+    async function withRooms() {
+      pluginConfig = { leads: { travel: "trip-planner" } };
+      const app = await start();
+      const rooms = runtime.getRoomStore();
+      rooms.upsertRoom({ ref: { backend: "local", id: "travel" }, name: "travel", purpose: "Family trips." }, "alex");
+      rooms.subscribe({ agent: "trip-planner", roomRef: "local:travel" });
+      rooms.subscribe({ agent: "planner", roomRef: "local:travel" });
+      rooms.upsertRoom({ ref: { backend: "local", id: "garden" }, name: "garden" }, "planner");
+      await runtime.getStateService().put(person, {
+        type: "commitment",
+        id: "room-travel-ferry",
+        scope: "room:local:travel",
+        data: {
+          owner: "room:local:travel",
+          room: "local:travel",
+          goal: "Ferry tickets",
+          status: "open",
+          nextStep: "Compare crossings",
+          updates: [{ at: new Date(Date.now() - 20 * 86_400_000).toISOString(), text: "Opened.", by: "planner" }],
+        },
+      });
+      return app;
+    }
+
+    it("lists each room with its lead and counts, and gives one room's records, members and lead", async () => {
+      const app = await withRooms();
+      const list = await app.fetch(api("rooms"));
+      expect(list.status).toBe(200);
+      expect(((await list.json()) as { rooms: unknown[] }).rooms).toEqual([
+        {
+          ref: "local:garden",
+          name: "garden",
+          purpose: null,
+          lead: "planner",
+          leadFrom: "creator",
+          members: ["planner"],
+          commitments: { open: 0, waiting: 0, done: 0 },
+          docs: 0,
+        },
+        {
+          ref: "local:travel",
+          name: "travel",
+          purpose: "Family trips.",
+          lead: "trip-planner",
+          leadFrom: "config",
+          members: ["planner", "trip-planner"],
+          commitments: { open: 1, waiting: 0, done: 0 },
+          docs: 0,
+        },
+      ]);
+      const one = await app.fetch(api("rooms/travel"));
+      const room = (await one.json()) as Record<string, unknown>;
+      expect(room).toMatchObject({
+        ref: "local:travel",
+        name: "travel",
+        createdBy: "alex",
+        archived: false,
+        profile: null,
+        lead: { agent: "trip-planner", source: "config" },
+        members: ["planner", "trip-planner"],
+        agents: ["planner", "trip-planner"],
+        held: {},
+      });
+      expect((room.commitments as { id: string }[]).map((c) => c.id)).toEqual(["room-travel-ferry"]);
+      expect((await app.fetch(api("rooms/attic"))).status).toBe(404);
+    });
+
+    it("hands the lead something, changes the lead, and keeps a person's edits, as the person", async () => {
+      const app = await withRooms();
+      const handed = await app.fetch(api("rooms/travel/commitments", json("POST", { goal: "Find a dog sitter" })));
+      expect(handed.status).toBe(201);
+      const { commitment, lead } = (await handed.json()) as { commitment: { id: string; data: unknown }; lead: string };
+      expect(lead).toBe("trip-planner");
+      expect(commitment.data).toMatchObject({ owner: "trip-planner", room: "local:travel", from: "a person" });
+
+      const chose = await app.fetch(api("rooms/travel/lead", json("PUT", { lead: "planner" })));
+      expect(((await chose.json()) as { lead: unknown }).lead).toEqual({
+        agent: "planner",
+        source: "person",
+        configured: "trip-planner",
+      });
+      await app.fetch(api("rooms/travel/lead", json("PUT", { lead: null })));
+
+      const profile = await app.fetch(
+        api("rooms/travel/profile", json("PATCH", { purpose: "Trips for everyone.", note: "Ask us." })),
+      );
+      expect(profile.status).toBe(200);
+      const edit = await app.fetch(
+        api("rooms/travel/commitments/room-travel-ferry", json("PATCH", { nextStep: "Wait for the timetable" })),
+      );
+      expect(edit.status).toBe(200);
+      const room = (await (await app.fetch(api("rooms/travel"))).json()) as Record<string, unknown>;
+      expect(room.held).toEqual({ "room:local:travel": ["note", "purpose"], "room-travel-ferry": ["nextStep"] });
+      expect((await app.fetch(api("rooms/travel/commitments/nope", json("PATCH", { nextStep: "x" })))).status).toBe(
+        400,
+      );
+    });
+
+    it("gives the lead the room in its upkeep turn, where it can't overwrite what a person set", async () => {
+      const app = await withRooms();
+      await app.fetch(
+        api("rooms/travel/commitments/room-travel-ferry", json("PATCH", { nextStep: "Wait for the timetable" })),
+      );
+      script = [calls("commitment", { action: "update", id: "room-travel-ferry", nextStep: "Book the early boat" })];
+      expect((await app.fetch(api("agents/trip-planner/upkeep", { method: "POST" }))).status).toBe(202);
+      // Until the turn has finished and kept its record, so nothing is still writing when the test ends.
+      for (let i = 0; i < 200; i++) {
+        const res = await app.fetch(api("agents/trip-planner"));
+        const { upkeep } = (await res.json()) as { upkeep: { running: boolean; at?: string } };
+        if (!upkeep.running && upkeep.at) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      const first = chats[0].messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+      expect(first).toContain("and the travel room you lead");
+      expect(first).toContain("The travel room, which you lead");
+      // The person's edit moved the commitment on, so what's left to see is the room's missing note.
+      expect(first).toContain("- The travel room's page has no note for people.");
+      // The test config's history is small enough to trim the tool's answer from the next request; it's in the session.
+      const answer = (
+        db.prepare("SELECT content FROM messages WHERE role = 'tool'").all() as { content: string }[]
+      ).map((m) => m.content);
+      expect(answer.join("\n")).toContain(
+        "A person set nextStep on room-travel-ferry, so it stays as they left it. Ask them if it should change.",
+      );
+      const ferry = await runtime.getStateService().get(person, { type: "commitment", id: "room-travel-ferry" });
+      expect(ferry?.data.nextStep).toBe("Wait for the timetable");
+    });
+
+    it("sits behind the bearer token", async () => {
+      pluginConfig = {};
+      const app = await start("secret");
+      expect((await app.fetch(api("rooms"))).status).toBe(401);
+      expect((await app.fetch(api("rooms/travel/lead", json("PUT", { lead: "planner" })))).status).toBe(401);
+    });
+  });
+
   describe("tidying up now", () => {
     const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
     const upkeep = (name: string) =>

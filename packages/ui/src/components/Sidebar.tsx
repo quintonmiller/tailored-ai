@@ -24,6 +24,7 @@ type PageKey =
   | "dashboard"
   | "board"
   | "agents"
+  | "rooms"
   | "projects"
   | "tasks"
   | "chat"
@@ -166,6 +167,8 @@ export function Sidebar({ page, onNavigate }: { page: PageKey; onNavigate?: () =
             );
           })}
         </Folder>
+
+        <SideLink href="#/rooms" label="Rooms" active={page === "rooms"} onNavigate={onNavigate} />
 
         {/* Projects folder — collapsed by default, open-task counts when cheap. */}
         <Folder

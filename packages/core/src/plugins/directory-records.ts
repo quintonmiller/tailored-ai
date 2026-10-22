@@ -12,6 +12,11 @@
  * Agents may only read these types through `state` (`access.write` is people
  * only). They change their own records through the directory's tools, which
  * check ownership here and then write as the plugin, naming the tool.
+ *
+ * A room keeps the same records in its own scope, `room:<ref>`, owned by the
+ * room: its members change them, and a person's edit to one holds
+ * (`directory-rooms.ts`). Its profile is shared, in `global`, so every agent
+ * can read what the room is for.
  */
 import { createHash } from "node:crypto";
 import { parseOrderBy } from "../state/format.js";
@@ -25,6 +30,17 @@ import {
   type StateRecord,
   type StateTypeDef,
 } from "../state/types.js";
+import {
+  heldFields,
+  heldRefusal,
+  type Lead,
+  leadOf,
+  overwrites,
+  type RoomInfo,
+  type RoomSource,
+  roomOfOwner,
+  roomOwner,
+} from "./directory-rooms.js";
 
 export const PROFILE_TYPE = "profile";
 export const COMMITMENT_TYPE = "commitment";
@@ -89,7 +105,20 @@ export interface PageSection {
   query: { type: string; where?: Record<string, unknown>; orderBy?: string; limit: number; scopes?: string[] };
 }
 
-const OWNER = { type: "string", minLength: 1, maxLength: 128, description: "The agent this belongs to." } as const;
+const OWNER = {
+  type: "string",
+  minLength: 1,
+  maxLength: 400,
+  description: "The agent this belongs to, or room:<ref> for a room's own.",
+} as const;
+
+/** The room a record belongs to, or a lead's commitment was taken on for. */
+const ROOM = {
+  type: "string",
+  minLength: 1,
+  maxLength: 300,
+  description: "The room it belongs to, or was taken on for, by its ref.",
+} as const;
 
 export const PROFILE_SCHEMA: JsonSchema = {
   type: "object",
@@ -104,6 +133,15 @@ export const PROFILE_SCHEMA: JsonSchema = {
       description: "The kinds of work it accepts.",
     },
     howToAsk: { type: "string", maxLength: 400, description: "How to hand it work: a commitment, a room, a message." },
+    room: ROOM,
+    note: { type: "string", maxLength: 300, description: "A room's: a sentence or two for people, by its members." },
+    noteAt: { type: "string", description: "A room's: when its note was last written." },
+    lead: {
+      type: "string",
+      minLength: 1,
+      maxLength: 128,
+      description: "A room's: the lead a person chose, which stands in front of config's and the room's creator.",
+    },
   },
 };
 
@@ -131,12 +169,17 @@ export const COMMITMENT_SCHEMA: JsonSchema = {
       items: {
         type: "object",
         required: ["at", "text"],
-        properties: { at: { type: "string" }, text: { type: "string", maxLength: 500 } },
+        properties: {
+          at: { type: "string" },
+          text: { type: "string", maxLength: 500 },
+          by: { type: "string", maxLength: 128, description: "Who wrote it, on a room's commitment." },
+        },
       },
       description: "Dated one-line entries, newest first.",
     },
     waitingOn: { type: "string", maxLength: 200, description: "Who or what it waits on, while waiting." },
     from: { type: "string", maxLength: 200, description: "Who handed it over: a person, an agent, a room." },
+    room: ROOM,
   },
 };
 
@@ -150,6 +193,7 @@ export const DOC_SCHEMA: JsonSchema = {
     body: { type: "string", maxLength: 20_000 },
     tags: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 60 } },
     reviewedAt: { type: "string", description: "When the owner last checked it was still true." },
+    room: ROOM,
   },
 };
 
@@ -166,6 +210,7 @@ export const MISS_SCHEMA: JsonSchema = {
       maxLength: 300,
       description: "The nearest commitment or doc, which wasn't close enough.",
     },
+    room: ROOM,
   },
 };
 
@@ -243,7 +288,7 @@ export const DIRECTORY_TYPES: StateTypeDef[] = [
   {
     name: PROFILE_TYPE,
     description:
-      "What an agent is for, the work it takes on and how to ask it, one per agent under its name. Agents keep their own with the directory tool.",
+      "What an agent or a room is for, the work it takes on and how to ask it: one per agent under its name, one per room under room:<ref>. Agents keep their own, and their rooms', with the directory tool.",
     scope: "global",
     title: "purpose",
     schema: PROFILE_SCHEMA,
@@ -253,7 +298,7 @@ export const DIRECTORY_TYPES: StateTypeDef[] = [
   {
     name: COMMITMENT_TYPE,
     description:
-      "Work an agent has taken on: its goal, how to tell it's done, status, next step, progress and dated updates. Shared unless private. Agents change their own with the commitment tool.",
+      "Work an agent or a room has taken on: its goal, how to tell it's done, status, next step, progress and dated updates. Shared unless private; a room's live in its scope. Agents change their own, and their rooms', with the commitment tool.",
     scope: "global",
     title: "goal",
     schema: COMMITMENT_SCHEMA,
@@ -263,7 +308,7 @@ export const DIRECTORY_TYPES: StateTypeDef[] = [
   {
     name: DOC_TYPE,
     description:
-      "Something an agent wrote up and keeps current: how a thing works, a checklist, someone's preferences. Agents change their own with the writeup tool.",
+      "Something an agent or a room wrote up and keeps current: how a thing works, a checklist, someone's preferences. Agents change their own, and their rooms', with the writeup tool.",
     scope: "global",
     title: "title",
     schema: DOC_SCHEMA,
@@ -273,7 +318,7 @@ export const DIRECTORY_TYPES: StateTypeDef[] = [
   {
     name: MISS_TYPE,
     description:
-      "A directory search no commitment or doc answered, noted against the agent whose profile was closest so it can write what was missing. Private to that agent.",
+      "A directory search no commitment or doc answered, noted against the agent or room whose profile was closest so it can write what was missing. Private to that agent, or to the room's members.",
     scope: "agent",
     title: "query",
     schema: MISS_SCHEMA,
@@ -340,6 +385,18 @@ const SCAN_CAP = 5_000;
  */
 export const UPKEEP_SESSIONS = new Set<string>();
 
+/** A commitment's fields as a person would name them, for the update that says what a person changed. */
+const FIELD_WORDS: Record<string, string> = {
+  goal: "goal",
+  doneWhen: "done-when",
+  nextStep: "next step",
+  waitingOn: "waiting-on",
+  status: "status",
+};
+
+/** Changes of a room's record read to tell which fields a person's edit holds. */
+const HELD_HISTORY = 500;
+
 /** What a person sees through the UI or API: every scope. */
 export const PERSON: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "http" } };
 
@@ -381,6 +438,10 @@ export interface DirectoryOptions {
   /** False once the plugin is unloaded with nothing in its place. Tools built before then still answer, to say so. */
   active?: () => boolean;
   now?: () => Date;
+  /** The rooms there are, read on every use. Absent, or undefined, where there are none. */
+  rooms?: () => RoomSource | undefined;
+  /** Which agent config says leads which room, by the room's name or ref. Read on every use, like the bar. */
+  leads?: () => Record<string, string>;
 }
 
 /** One agent, as `about` and the HTTP route put it together. */
@@ -398,7 +459,27 @@ export interface AgentEntry {
   misses: StateRecord[];
   /** Its page's layout: only when it asked about itself, and null when it has none. */
   page?: StateRecord | null;
+  /** The live rooms it leads, by name. */
+  leads: string[];
   /** Which reads came back full, so the counts above are at least what they say rather than all there is. */
+  full: { commitments: boolean; docs: boolean };
+}
+
+/** One room, as `about` and the room routes put it together. */
+export interface RoomEntry {
+  room: RoomInfo;
+  /** Its profile, or null when nobody has written one: its purpose stands in. */
+  profile: StateRecord | null;
+  lead: Lead;
+  /** The agents in it: subscribed, and its lead. */
+  members: string[];
+  /** Whether the asker is in it, and so sees its commitments, docs and misses. People always are. */
+  member: boolean;
+  /** Its open and waiting commitments, its own and those its lead took on for it. */
+  working: StateRecord[];
+  docs: StateRecord[];
+  /** Up to six misses in its area in the last fortnight, newest first. */
+  misses: StateRecord[];
   full: { commitments: boolean; docs: boolean };
 }
 
@@ -464,7 +545,9 @@ export class Directory {
     const exact = roster.find((a) => a === wanted) ?? roster.find((a) => a.toLowerCase() === wanted.toLowerCase());
     if (exact) return exact;
     const profile = await this.service().get(READER, { type: PROFILE_TYPE, id: profileId(wanted) });
-    return profile ? (ownerOf(profile) ?? wanted) : undefined;
+    // A room's profile names a room, not an agent.
+    if (!profile || roomOfOwner(ownerOf(profile))) return undefined;
+    return ownerOf(profile) ?? wanted;
   }
 
   async profile(caller: StateCaller, agent: string): Promise<StateRecord | null> {
@@ -525,8 +608,313 @@ export class Directory {
       docs,
       misses: self ? await this.misses(caller, agent, fortnight, 6) : [],
       ...(self ? { page: await this.page(caller, agent) } : {}),
+      leads: (await this.ledBy(agent)).map((r) => r.name),
       full: { commitments: active.length >= ENTRY_READ, docs: docs.length >= ENTRY_READ },
     };
+  }
+
+  // ------------------------------------------------------------------ rooms
+
+  /** Live rooms, by name. None where there's no rooms store. */
+  rooms(): RoomInfo[] {
+    return this.opts.rooms?.()?.list() ?? [];
+  }
+
+  /** A room by name (a leading `#` is fine) or ref, the live one first. */
+  room(nameOrRef: string): RoomInfo | undefined {
+    const wanted = nameOrRef.trim().replace(/^#/, "");
+    return wanted ? this.opts.rooms?.()?.find(wanted) : undefined;
+  }
+
+  /** Whose a record is, in words: the agent's name, or "the travel room" for a room's own. */
+  ownerName(owner: string | undefined): string {
+    const ref = roomOfOwner(owner);
+    if (!ref) return owner ?? "nobody";
+    return `the ${this.opts.rooms?.()?.find(ref)?.name ?? ref} room`;
+  }
+
+  /** A room's profile, or null when nobody has written one. */
+  async roomProfile(room: RoomInfo): Promise<StateRecord | null> {
+    const record = await this.service().get(READER, { type: PROFILE_TYPE, id: roomRecordId(room.ref) });
+    return record && !record.archivedAt ? record : null;
+  }
+
+  /** Who leads a room, and where that came from. `profile`, when given, saves reading it again. */
+  async lead(room: RoomInfo, profile?: StateRecord | null): Promise<Lead> {
+    const p = profile === undefined ? await this.roomProfile(room) : profile;
+    const chosen = typeof p?.data.lead === "string" ? p.data.lead : undefined;
+    return leadOf(room, { chosen, leads: this.opts.leads?.() ?? {}, agents: this.agents() });
+  }
+
+  /** The agents in a room: those subscribed to it, and its lead, which is in it whether subscribed or not. */
+  async members(room: RoomInfo, lead?: Lead): Promise<string[]> {
+    const subscribed = this.opts.rooms?.()?.subscribers(room.ref) ?? [];
+    const leader = (lead ?? (await this.lead(room))).agent;
+    return [...new Set([...subscribed, ...(leader ? [leader] : [])])].sort();
+  }
+
+  /** The live rooms an agent is in. */
+  async roomsOf(agent: string): Promise<RoomInfo[]> {
+    const rooms: RoomInfo[] = [];
+    for (const room of this.rooms()) if ((await this.members(room)).includes(agent)) rooms.push(room);
+    return rooms;
+  }
+
+  /** The live rooms an agent leads. */
+  async ledBy(agent: string): Promise<RoomInfo[]> {
+    const rooms: RoomInfo[] = [];
+    for (const room of this.rooms()) if ((await this.lead(room)).agent === agent) rooms.push(room);
+    return rooms;
+  }
+
+  /**
+   * The caller as the directory reads for it. World state shows an agent a
+   * room's scope only in a turn woken in that room; the directory's own
+   * records follow membership instead, so an agent sees the commitments and
+   * docs of every live room it's in, wherever its turn is: its upkeep, a
+   * direct message, another room. People and plugins see everything already.
+   */
+  async widen(caller: StateCaller): Promise<StateCaller> {
+    if (caller.actor.kind !== "agent") return caller;
+    const mine = (await this.roomsOf(caller.actor.name)).map((r) => r.ref);
+    if (mine.length === 0) return caller;
+    return { ...caller, rooms: [...new Set([...(caller.rooms ?? []), ...mine])] };
+  }
+
+  /**
+   * The live room `nameOrRef` names, when the caller may change its records:
+   * people may, and agents that are in it. Refused in a sentence otherwise.
+   */
+  async memberOf(caller: StateCaller, nameOrRef: string): Promise<RoomInfo> {
+    const room = this.room(nameOrRef);
+    if (!room) {
+      const known = this.rooms().map((r) => r.name);
+      throw new StateError(
+        `There's no room called "${nameOrRef}".${known.length ? ` Rooms: ${known.join(", ")}.` : ""}`,
+      );
+    }
+    if (room.archived) throw new StateError(`The ${room.name} room is archived, so its records stay as they are.`);
+    if (caller.actor.kind !== "agent") return room;
+    const members = await this.members(room);
+    if (!members.includes(caller.actor.name)) {
+      throw new StateError(
+        `You're not in the ${room.name} room, so you can't change its records.${members.length ? ` Its members can: ${members.join(", ")}.` : " Nobody is in it yet."}`,
+      );
+    }
+    return room;
+  }
+
+  /**
+   * The room `nameOrRef` names, when the caller may read its commitments and
+   * docs: people may, and agents in it, archived or not. The caller comes
+   * back with the room's scope in its view, so its records can be read from
+   * anywhere. Refused in a sentence otherwise.
+   */
+  async readable(
+    caller: StateCaller,
+    nameOrRef: string,
+    what: string,
+  ): Promise<{ room: RoomInfo; caller: StateCaller }> {
+    const room = this.room(nameOrRef);
+    if (!room) {
+      const known = this.rooms().map((r) => r.name);
+      throw new StateError(
+        `There's no room called "${nameOrRef}".${known.length ? ` Rooms: ${known.join(", ")}.` : ""}`,
+      );
+    }
+    if (caller.actor.kind !== "agent") return { room, caller };
+    if (!(await this.members(room)).includes(caller.actor.name)) {
+      throw new StateError(
+        `You're not in the ${room.name} room, so its ${what} aren't yours to see; its members' are. directory about with room ${room.name} says what it's for.`,
+      );
+    }
+    return { room, caller: { ...caller, rooms: [...new Set([...(caller.rooms ?? []), room.ref])] } };
+  }
+
+  /** A room's commitments the caller can see, its own and those its lead took on for it, newest change first. */
+  async roomCommitments(
+    caller: StateCaller,
+    ref: string,
+    statuses: readonly Status[] = ACTIVE,
+    limit = 50,
+  ): Promise<StateRecord[]> {
+    return this.service().query(caller, {
+      type: COMMITMENT_TYPE,
+      where: { room: ref, status: { in: [...statuses] } },
+      limit,
+    });
+  }
+
+  async roomDocs(caller: StateCaller, ref: string, limit = 30): Promise<StateRecord[]> {
+    return this.service().query(caller, { type: DOC_TYPE, where: { owner: roomOwner(ref) }, limit });
+  }
+
+  /** Misses put down to a room since a time, newest first. Its members and people see them. */
+  async roomMisses(caller: StateCaller, ref: string, since?: Date, limit = 5): Promise<StateRecord[]> {
+    return this.misses(caller, roomOwner(ref), since, limit);
+  }
+
+  /** What `about` shows of one room, read as `caller` sees it: its records only to its members. */
+  async roomEntry(caller: StateCaller, room: RoomInfo): Promise<RoomEntry> {
+    const profile = await this.roomProfile(room);
+    const lead = await this.lead(room, profile);
+    const members = await this.members(room, lead);
+    const member = caller.actor.kind !== "agent" || members.includes(caller.actor.name);
+    const none = { working: [], docs: [], misses: [], full: { commitments: false, docs: false } };
+    if (!member) return { room, profile, lead, members, member, ...none };
+    // A member reads the room's scope from anywhere, an archived room's too.
+    const inside = caller.actor.kind === "agent" ? { ...caller, rooms: [...(caller.rooms ?? []), room.ref] } : caller;
+    const fortnight = new Date(this.now().getTime() - 14 * 86_400_000);
+    const [working, docs, misses] = await Promise.all([
+      this.roomCommitments(inside, room.ref, ACTIVE, ENTRY_READ),
+      this.roomDocs(inside, room.ref, ENTRY_READ),
+      this.roomMisses(inside, room.ref, fortnight, 6),
+    ]);
+    return {
+      room,
+      profile,
+      lead,
+      members,
+      member,
+      working,
+      docs,
+      misses,
+      full: { commitments: working.length >= ENTRY_READ, docs: docs.length >= ENTRY_READ },
+    };
+  }
+
+  /**
+   * The fields of a room's record that a person's edit holds, which no agent
+   * may change. None for an agent's own records, and none from a store that
+   * keeps no history, which can't say who set what.
+   */
+  async held(record: StateRecord): Promise<string[]> {
+    if (!roomOfOwner(ownerOf(record))) return [];
+    try {
+      const history = await this.service().history(
+        READER,
+        { type: record.type, id: record.id },
+        { limit: HELD_HISTORY },
+      );
+      return heldFields(history, record.data);
+    } catch (err) {
+      if (err instanceof StateError) return [];
+      throw err;
+    }
+  }
+
+  /**
+   * A new record of a room's, for a member: owned by the room and kept in its
+   * scope, so only its members see it, under a fresh `room-<name>-<slug>` id.
+   */
+  async createInRoom(
+    caller: StateCaller,
+    tool: string,
+    type: string,
+    nameOrRef: string,
+    title: string,
+    data: Record<string, unknown>,
+  ): Promise<StateRecord> {
+    const room = await this.memberOf(caller, nameOrRef);
+    const owned = { ...data, owner: roomOwner(room.ref), room: room.ref };
+    return this.putNew(writerFor(caller, tool), type, roomOwnedId(room, title), roomOwner(room.ref), owned, title);
+  }
+
+  /**
+   * Change a room's profile, for a member or a person: `change` gets its
+   * fields as they stand, or, when it has none, the room's purpose to start
+   * from, and returns the fields to set (`null` removes one). An agent can't
+   * change a field a person holds. A person's edit to a room with no profile
+   * yet is made after the directory seeds one, so the edit is what holds.
+   */
+  async saveRoomProfile(
+    caller: StateCaller,
+    nameOrRef: string,
+    change: (data: Record<string, unknown>) => Record<string, unknown>,
+  ): Promise<StateRecord> {
+    const room = await this.memberOf(caller, nameOrRef);
+    const service = this.service();
+    const ref = { type: PROFILE_TYPE, id: roomRecordId(room.ref) };
+    const person = caller.actor.kind === "user";
+    for (let attempt = 0; ; attempt++) {
+      let existing = await service.get(READER, ref);
+      try {
+        if (person && (!existing || existing.archivedAt)) {
+          existing = await service.put(
+            READER,
+            { ...ref, scope: "global", data: this.seed(room, existing?.archivedAt ? existing.data : {}) },
+            existing?.version ?? 0,
+          );
+        }
+        const live = existing && !existing.archivedAt ? existing : null;
+        const before = live ? { ...live.data } : this.seed(room, {});
+        const changes = change(before);
+        if (live && !person) {
+          const over = overwrites(changes, live.data, await this.held(live));
+          if (over.length) throw new StateError(heldRefusal(ref.id, over));
+        }
+        if (live) {
+          const fixed = { ...changes, owner: roomOwner(room.ref), room: room.ref };
+          return await service.patch(person ? caller : writerFor(caller, "directory"), ref, fixed, live.version);
+        }
+        const data: Record<string, unknown> = { ...before };
+        for (const [key, value] of Object.entries(changes)) {
+          if (value === null || value === undefined) delete data[key];
+          else data[key] = value;
+        }
+        return await service.put(
+          writerFor(caller, "directory"),
+          { ...ref, scope: "global", data: { ...data, owner: roomOwner(room.ref), room: room.ref } },
+          existing?.version ?? 0,
+        );
+      } catch (err) {
+        if (!(err instanceof StateConflictError) || attempt >= 1) throw err;
+      }
+    }
+  }
+
+  /** A room's profile as the directory starts it: the room's purpose, over what an archived one held. */
+  private seed(room: RoomInfo, from: Record<string, unknown>): Record<string, unknown> {
+    return {
+      ...from,
+      ...(room.purpose && !from.purpose ? { purpose: room.purpose } : {}),
+      owner: roomOwner(room.ref),
+      room: room.ref,
+    };
+  }
+
+  /**
+   * A person's change to one of a room's commitments, from its page: written
+   * as the person, so it holds, with a dated update saying a person made it.
+   * Only a commitment of that room's, its own or one its lead took on for it.
+   */
+  async editRoomCommitment(room: RoomInfo, id: string, changes: Record<string, unknown>): Promise<StateRecord> {
+    const service = this.service();
+    const ref = { type: COMMITMENT_TYPE, id };
+    for (let attempt = 0; ; attempt++) {
+      const record = await service.get(PERSON, ref);
+      if (!record || record.data.room !== room.ref) {
+        throw new StateError(`The ${room.name} room has no commitment "${id}".`);
+      }
+      if (record.archivedAt) throw new StateError(`${id} is archived. Bring it back on the State page first.`);
+      const said = Object.keys(changes).map((key) => {
+        const name = FIELD_WORDS[key] ?? key;
+        if (changes[key] === null) return `cleared the ${name}`;
+        return key === "status" ? `set the status to ${changes[key]}` : `set the ${name} to "${changes[key]}"`;
+      });
+      const text = `A person ${said.length > 1 ? `${said.slice(0, -1).join(", ")} and ${said.at(-1)}` : said[0]}.`;
+      const update = { at: this.now().toISOString(), text, by: FROM_PERSON };
+      try {
+        return await service.patch(
+          PERSON,
+          ref,
+          { ...changes, updates: withUpdate(record.data.updates, update) },
+          record.version,
+        );
+      } catch (err) {
+        if (!(err instanceof StateConflictError) || attempt >= 1) throw err;
+      }
+    }
   }
 
   /**
@@ -603,9 +991,14 @@ export class Directory {
     }
     if (!best || !this.clears(best, ATTRIBUTE_SHARE)) return undefined;
     const owner = ownerOf(best.record) ?? best.record.id;
+    // A room's miss is its members' to read, in its scope, which is the same string as its owner.
+    const room = roomOfOwner(owner);
+    // A room since archived, or gone, has nobody to look after its area.
+    if (room && (this.room(room)?.archived ?? true)) return undefined;
+    const scope = room ? roomOwner(room) : `agent:${owner}`;
     // The miss is the owner's to read, so it names only a record the owner can see too. The near hits are the
     // asker's view: its private work, or a record in a room the owner isn't in, stays out.
-    const closest = found.near.find((h) => h.record.scope === "global" || h.record.scope === `agent:${owner}`);
+    const closest = found.near.find((h) => h.record.scope === "global" || h.record.scope === scope);
     const at = this.now().toISOString();
     const id = missId(query, at);
     const ref = { type: MISS_TYPE, id };
@@ -622,8 +1015,9 @@ export class Directory {
           return ownerOf(existing);
         }
         const data: Record<string, unknown> = { owner, query: query.slice(0, 300), askedBy: [asker], at };
+        if (room) data.room = room;
         if (closest) data.closest = describeHit(closest).slice(0, 300);
-        await service.put(writer("directory", asker), { type: MISS_TYPE, id, scope: `agent:${owner}`, data }, 0);
+        await service.put(writer("directory", asker), { type: MISS_TYPE, id, scope, data }, 0);
         return owner;
       } catch (err) {
         // Someone else noted the same miss, or added to it, a moment ago: read it again and add to that.
@@ -696,14 +1090,16 @@ export class Directory {
   }
 
   /**
-   * A commitment a person hands an agent on its page: the agent's, shared,
-   * open, from a person, and written as the person, so the State page and
-   * the record's history say who asked. The person may grant it more than
-   * `suggest`, which the agent can't give itself. Returns the record.
+   * A commitment a person hands an agent on its page, or a room's lead on the
+   * room's: the agent's, shared, open, from a person, and written as the
+   * person, so the State page and the record's history say who asked. One
+   * handed to a lead names the room it's for. The person may grant it more
+   * than `suggest`, which the agent can't give itself. Returns the record.
    */
   async handOver(
     agent: string,
     fields: { goal: string; doneWhen?: string; autonomy?: Autonomy },
+    room?: RoomInfo,
   ): Promise<StateRecord> {
     const at = this.now().toISOString();
     const data: Record<string, unknown> = {
@@ -713,7 +1109,15 @@ export class Directory {
       status: "open",
       autonomy: fields.autonomy ?? AGENT_AUTONOMY,
       from: FROM_PERSON,
-      updates: [{ at, text: "Handed over by a person on this page." }],
+      ...(room ? { room: room.ref } : {}),
+      updates: [
+        {
+          at,
+          text: room
+            ? `Handed over by a person on the ${room.name} room's page.`
+            : "Handed over by a person on this page.",
+        },
+      ],
     };
     return this.putNew(PERSON, COMMITMENT_TYPE, ownedId(agent, fields.goal), "global", data, fields.goal);
   }
@@ -791,13 +1195,19 @@ export class Directory {
   }
 
   /**
-   * One of the caller's own records, as it sees it. A record it can't see
-   * reads as absent; one that belongs to another agent is refused by name.
+   * One of the caller's own records, as it sees it, or one of a room's it is
+   * in. A record it can't see reads as absent; one that belongs to another
+   * agent is refused by name, and one of a room it isn't in by the room's.
    */
   async own(caller: StateCaller, type: string, id: string, noun: string): Promise<StateRecord> {
     const record = await this.service().get(caller, { type, id });
     if (!record) throw new StateError(`There is no ${noun} "${id}".`);
     const owner = ownerOf(record);
+    const room = roomOfOwner(owner);
+    if (room) {
+      await this.memberOf(caller, room);
+      return record;
+    }
     if (owner !== caller.actor.name) {
       throw new StateError(
         owner
@@ -809,9 +1219,12 @@ export class Directory {
   }
 
   /**
-   * Change one of the caller's records: `change` gets the record as it stands
-   * and returns the fields to set (`null` removes one). A concurrent write is
-   * retried once against the fresh record.
+   * Change one of the caller's records, or one of a room's it is in: `change`
+   * gets the record as it stands and the fields a person's edit holds, and
+   * returns the fields to set (`null` removes one). A change that would
+   * overwrite a held field is refused: on a room's record, a person's edit
+   * stays as they left it. A concurrent write is retried once against the
+   * fresh record.
    */
   async change(
     caller: StateCaller,
@@ -819,15 +1232,19 @@ export class Directory {
     type: string,
     id: string,
     noun: string,
-    change: (record: StateRecord) => Record<string, unknown>,
+    change: (record: StateRecord, held: string[]) => Record<string, unknown>,
   ): Promise<StateRecord> {
     for (let attempt = 0; ; attempt++) {
       const record = await this.own(caller, type, id, noun);
       if (record.archivedAt) {
         throw new StateError(`${id} is archived. A person can bring it back on the State page.`);
       }
+      const held = await this.held(record);
+      const changes = change(record, held);
+      const over = overwrites(changes, record.data, held);
+      if (over.length) throw new StateError(heldRefusal(id, over));
       try {
-        return await this.service().patch(writerFor(caller, tool), { type, id }, change(record), record.version);
+        return await this.service().patch(writerFor(caller, tool), { type, id }, changes, record.version);
       } catch (err) {
         if (!(err instanceof StateConflictError) || attempt >= 1) throw err;
       }
@@ -916,7 +1333,8 @@ export class Directory {
    */
   async countRead(doc: StateRecord, reader: string): Promise<void> {
     const owner = ownerOf(doc);
-    if (!owner || owner === reader) return;
+    // A room's docs are read only by its members, so a read of one is nobody else's.
+    if (!owner || owner === reader || roomOfOwner(owner)) return;
     try {
       await this.saveUpkeep(
         owner,
@@ -979,6 +1397,30 @@ export function profileId(agent: string): string {
 /** `<owner>-<slug>`, the id of a new commitment or doc. */
 export function ownedId(owner: string, title: string): string {
   return `${slug(owner, 60) || "agent"}-${slug(title) || "untitled"}`;
+}
+
+/** A room's profile id: `room:<ref>`, or a slug of the ref when that isn't a valid record id. */
+export function roomRecordId(ref: string): string {
+  const id = `room:${ref}`;
+  return RECORD_ID.test(id) ? id : `room-${slug(ref, 100) || "room"}`;
+}
+
+/** `room-<name>-<slug>`, the id of a room's new commitment or doc. */
+export function roomOwnedId(room: RoomInfo, title: string): string {
+  return ownedId(`room-${room.name}`, title);
+}
+
+/** A dated update in front of the old ones, keeping the newest {@link MAX_UPDATES}. */
+export function withUpdate(existing: unknown, update: { at: string; text: string; by?: string }): Update[] {
+  const old = Array.isArray(existing) ? (existing as Update[]) : [];
+  return [{ ...update, text: update.text.slice(0, 500) }, ...old].slice(0, MAX_UPDATES);
+}
+
+/** One of a commitment's dated updates. `by` says who wrote it, on a room's. */
+export interface Update {
+  at: string;
+  text: string;
+  by?: string;
 }
 
 /**
