@@ -33,6 +33,13 @@ export const MAX_WATCH_CHANGE_CHARS = 300;
 /** The longest `value` text. A longer one is cut the same way. */
 export const MAX_WATCH_VALUE_CHARS = 120;
 
+/**
+ * The longest `description` a kind may register with. A runner shows every
+ * kind's description to an agent choosing one, so a paragraph here costs every
+ * request that lists them.
+ */
+const MAX_DESCRIPTION_CHARS = 160;
+
 /** What a check is handed besides the watch's config and last snapshot. */
 export interface WatcherCheckContext {
   /** The runner's clock. Use it rather than `new Date()`, so a check agrees with the runner and with tests. */
@@ -87,7 +94,11 @@ export interface WatcherKind<C = Record<string, unknown>, S = unknown> {
    * whose config fails it is refused before it is kept.
    */
   schema: JsonSchema;
-  /** How often a watch runs when it names no interval, in the words `tend` and schedules use: "1h", "30 minutes", "1 day". */
+  /**
+   * How often a watch runs when it names no interval: a length of time, as
+   * `tend` reads one ("1h", "30 minutes", "1 day"). A leading "every", as the
+   * `schedule` tool writes it, is read the same.
+   */
   defaultEvery: string;
   /**
    * The shortest interval a watch of this kind may ask for, in the same
@@ -123,8 +134,14 @@ export class WatcherError extends Error {
 
 /**
  * The plugin view of the registry: `ctx.watcherKinds`. `register` is how a
- * plugin brings a kind; `get` and `list` are how a runner plugin finds them,
- * through the context, with no runtime import of core.
+ * plugin brings a kind; the rest is what a runner plugin needs.
+ *
+ * A runner reaches all of it here rather than through core's exports. A
+ * plugin under `<TAI_HOME>/plugins` resolves its own install of core, which
+ * may be older than the host's (a named import of a missing export fails
+ * before `register(ctx)` runs) and is a separate module with its own, empty
+ * registry. For the same reason, match a {@link WatcherError} on its `name`,
+ * not with `instanceof`.
  */
 export interface WatcherKindRegistryView {
   register(kind: WatcherKind<any, any>): Disposer;
@@ -132,6 +149,12 @@ export interface WatcherKindRegistryView {
   get(kind: string): WatcherKind | undefined;
   /** Every kind registered now, in the order they came. */
   list(): WatcherKind[];
+  /** {@link validateWatchConfig}: every way a watch's config fails its kind's schema. */
+  validate(kind: WatcherKind<any, any>, config: unknown): string[];
+  /** {@link watchInterval}: how often a watch runs, never under its kind's floor. */
+  interval(kind: WatcherKind<any, any>, every?: unknown): WatchInterval | string;
+  /** {@link watcherResult}: what a check returned, made safe to keep, or a thrown {@link WatcherError}. */
+  result(raw: unknown, previous: unknown): WatcherResult;
 }
 
 export const watcherKindRegistry = new Registry<WatcherKind<any, any>>("watcher-kind");
@@ -141,9 +164,10 @@ const KIND_NAME = /^[a-z][a-z0-9_.-]*$/;
 
 /**
  * Add a kind, and hand back its inverse. Throws a {@link WatcherError} for a
- * kind no runner could use (a bad name, a missing `check`, an interval that
- * isn't a length of time, a default under its own floor), so the plugin author
- * hears about it at load rather than when the first watch fails.
+ * kind no runner could use (a bad name, a description that isn't one short
+ * line, no schema, a missing `check`, an interval that isn't a length of time,
+ * a default under its own floor), so the plugin author hears about it at load
+ * rather than when the first watch fails.
  */
 export function registerWatcherKind(kind: WatcherKind<any, any>): Disposer {
   const name = typeof kind?.kind === "string" ? kind.kind : "";
@@ -154,6 +178,12 @@ export function registerWatcherKind(kind: WatcherKind<any, any>): Disposer {
   }
   if (typeof kind.description !== "string" || !kind.description.trim()) {
     throw new WatcherError(`Watcher kind "${name}" needs a description: one line on what it checks.`);
+  }
+  const description = kind.description.trim();
+  if (/[\r\n]/.test(description) || description.length > MAX_DESCRIPTION_CHARS) {
+    throw new WatcherError(
+      `Watcher kind "${name}": the description is one line of at most ${MAX_DESCRIPTION_CHARS} characters on what it checks, because a runner shows it to an agent choosing a kind.`,
+    );
   }
   if (typeof kind.schema !== "object" || kind.schema === null || Array.isArray(kind.schema)) {
     throw new WatcherError(`Watcher kind "${name}" needs a schema: the JSON schema of a watch's config.`);
@@ -214,16 +244,26 @@ export interface WatchInterval {
 export function watchInterval(kind: WatcherKind<any, any>, every?: unknown): WatchInterval | string {
   const { minMs, defaultMs } = kindIntervals(kind);
   if (every === undefined || every === null || every === "") return { ms: defaultMs };
-  const ms = typeof every === "string" ? parseWindow(every) : undefined;
+  const ms = readEvery(every);
   if (!ms) return `every is a length of time like "15m", "2 hours" or "1 day", not ${JSON.stringify(every)}.`;
   return ms < minMs ? { ms: minMs, raisedFrom: ms } : { ms };
+}
+
+/**
+ * A length of time in milliseconds, or undefined when `raw` isn't one. The
+ * `schedule` tool's own `every` is written "every 30 minutes", so a model that
+ * learned the word there writes it here too; a leading "every" is read past
+ * rather than costing it a round on the correction.
+ */
+function readEvery(raw: unknown): number | undefined {
+  return typeof raw === "string" ? parseWindow(raw.replace(/^\s*every\s+/i, "")) : undefined;
 }
 
 /** A kind's two intervals in milliseconds, or a {@link WatcherError} naming the one that won't read. */
 function kindIntervals(kind: WatcherKind<any, any>): { minMs: number; defaultMs: number } {
   const read = (field: "minEvery" | "defaultEvery") => {
     const raw = kind[field];
-    const ms = typeof raw === "string" ? parseWindow(raw) : undefined;
+    const ms = readEvery(raw);
     if (!ms) {
       throw new WatcherError(
         `Watcher kind "${kind.kind}": ${field} is a length of time like "15m", "2 hours" or "1 day", not ${JSON.stringify(raw)}.`,
@@ -246,7 +286,8 @@ function kindIntervals(kind: WatcherKind<any, any>): { minMs: number; defaultMs:
  *
  * The runner calls this on every result before it stores anything. It throws
  * a {@link WatcherError}, which the runner counts as a failed check, when the
- * result has no snapshot or a snapshot that isn't JSON or is over
+ * result has no snapshot, a snapshot that isn't JSON or is `null` once
+ * serialized (NaN, Infinity and an invalid date all are), or one over
  * {@link MAX_WATCH_SNAPSHOT_BYTES}. The snapshot comes back as a plain JSON copy, so
  * what is stored is exactly what the next check will be handed. `change` and
  * `value` come back as one trimmed line, cut with an ellipsis past their caps.
@@ -255,7 +296,8 @@ function kindIntervals(kind: WatcherKind<any, any>): { minMs: number; defaultMs:
  * or a `null` a store handed back for one), this was the first check, and any
  * `change` is dropped. That is the baseline rule in the contract, held here as
  * well so that a kind which forgets it doesn't report everything it found on
- * its first run. A snapshot is never `null`, so the two can't be confused.
+ * its first run. A kept snapshot is never `null`, because one that serializes
+ * to `null` is refused above, so the two can't be confused.
  */
 export function watcherResult(raw: unknown, previous: unknown): WatcherResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
@@ -272,6 +314,14 @@ export function watcherResult(raw: unknown, previous: unknown): WatcherResult {
     throw new WatcherError(`The snapshot is not JSON: ${(err as Error).message}`);
   }
   if (json === undefined) throw new WatcherError("The snapshot is not JSON.");
+  // Kept, a null would come back as `previous` and read as "no snapshot yet",
+  // so every later change would be dropped as a baseline and nothing would
+  // ever count as a failure.
+  if (json === "null") {
+    throw new WatcherError(
+      "The snapshot is null once serialized: NaN, Infinity and an invalid date all become null. Return a value JSON keeps.",
+    );
+  }
   const bytes = new TextEncoder().encode(json).byteLength;
   if (bytes > MAX_WATCH_SNAPSHOT_BYTES) {
     throw new WatcherError(
@@ -298,8 +348,16 @@ export function watcherResult(raw: unknown, previous: unknown): WatcherResult {
   return out;
 }
 
-/** Whitespace runs folded to one space, trimmed, and cut at `max` with an ellipsis that says it was. */
+/**
+ * Whitespace runs folded to one space, trimmed, and cut at `max` with an
+ * ellipsis that says it was. A cut never ends on half of a surrogate pair,
+ * which would reach a notification as a replacement character.
+ */
 function oneLine(text: string, max: number): string {
   const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+  if (line.length <= max) return line;
+  return `${line
+    .slice(0, max - 1)
+    .replace(/[\uD800-\uDBFF]$/, "")
+    .trimEnd()}…`;
 }
