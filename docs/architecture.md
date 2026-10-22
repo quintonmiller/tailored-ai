@@ -49,6 +49,7 @@ It exists because every other off switch is the wrong shape. Killing the process
 | Stall retries (`task.dispatch_requested`) and the tasks tool handing work to another agent | `task-watcher.ts` `handleDispatchRequest`, `notifyById` |
 | Room check-ins, and wakes caused only by other agents | `rooms/watcher.ts` `runCheckIn`, `pollOnce`, `runWake` |
 | One agent starting a loop in another | `runtime.ts` `deliverAgentMessage` |
+| Turns started through `runtime.wakeAgent`: a plugin's own turns, and subscription turns in an agent's session | `agent/wake.ts` `AgentWaker.wake` |
 
 It deliberately leaves **human-initiated** runs working: `POST /api/chat`, `POST /api/command`, Discord DMs and slash commands, Slack, the CLI, cron "Run now", `/room status`, the exploratory manual-run route, `runWorkflow` with trigger `http` or `tool`, and an agent answering *you* in a room.
 
@@ -64,7 +65,57 @@ State is the `runtime_settings` singleton table (`agents_paused`, `pause_scope`,
 - `runtime.getPauseState()` — the full row, for surfaces that report *why* rather than just refuse.
 - `runtime.setAgentsPaused({ paused, scope?, by? })` — writes and, on a real change, emits `agents.pause_changed` on the runtime bus.
 
-Adding an autonomous entry point? Gate it. The two that are easy to miss are paths that reach `runAgentLoop` without passing through `runWorkflow` (the webhook `action: agent` route) and paths where one agent starts another (`deliverAgentMessage`). See also [rooms](./rooms.md#runaway-protection) and [tasks & autopilot](./tasks-and-autopilot.md#autopilot).
+Adding an autonomous entry point? Gate it. The two that are easy to miss are paths that reach `runAgentLoop` without passing through `runWorkflow` (the webhook `action: agent` route) and paths where one agent starts another (`deliverAgentMessage`). A plugin that wants an agent to take a turn should [wake it](#waking-an-agent-from-a-plugin) rather than call the loop, and gets the gate with it. See also [rooms](./rooms.md#runaway-protection) and [tasks & autopilot](./tasks-and-autopilot.md#autopilot).
+
+## Waking an agent from a plugin
+
+A plugin that wants an agent to take a turn of its own, such as upkeep, a
+watcher that fired or a check coming due, calls `runtime.wakeAgent` rather than
+`runAgentLoop`:
+
+```ts
+const outcome = await ctx.runtime.wakeAgent("planner", {
+  prompt: [
+    "Upkeep. Two of your notes say the same thing: keep one and archive the other.",
+    "Nobody is reading this session. If a person needs to hear something, send it.",
+  ].join("\n"),
+  sessionKey: "upkeep:planner",
+  wake: { kind: "upkeep", ref: "notes" },
+});
+```
+
+`ctx.runtime` is set for plugins loaded once the runtime exists, which in the
+CLI are the `builtin:*` ones.
+
+Subscription turns go the same way, so every turn nobody asked for stops for
+the same things. The outcome says which:
+
+| `outcome` | when | what to do |
+|---|---|---|
+| `ran` | the turn ran | |
+| `paused` | autonomous turns are paused (`/pause`) | skip it, or try later |
+| `at-ceiling` | the agent has had `rooms.maxWakesPerHour` session wakes in the last hour, plugins' and subscriptions' counted together; a woken turn is still running in that session; the room turned it away (its own ceiling, a turn already running); or rooms are still starting | try later |
+| `gone` | no such agent, an online agent switched off on the Agents page, a room that doesn't exist, is archived or doesn't have the agent in it, or rooms switched off | don't retry |
+
+- **`sessionKey`** runs the turn in that session. A reply there reaches nobody,
+  so the prompt has to say so. One session per kind of work (`upkeep:<agent>`)
+  lets the agent see its last turn of the same kind.
+- **`room`**, a name or a ref, runs it in the room instead, framed like any room
+  turn (who and where the agent is, what it missed) with `pass` offered. The
+  room's turn order and hourly ceiling apply in place of the session one. The
+  host connects the room watcher with `runtime.setRoomWaker`; the CLI does.
+- **`wake`** says why the turn runs: `kind` in your own word, `ref` for which
+  one. The turn's tools see it as `ToolContext.wake`,
+  [`agent.pre_tool_use`](#agentpre_tool_use-and-agentpost_tool_use) carries it,
+  and `notify_owner` treats the turn as unprompted, so a repeat goes through the
+  [repeat gate](./notifications.md).
+- **`agent.woken`** is emitted once a wake has passed the pause and the ceiling
+  and its turn is about to run, with the agent, the wake, and where it runs.
+- A turn that throws rejects, and still counts toward the hour. The count lives
+  in memory: a reload keeps it, a restart starts it again.
+
+The places plugin's `tend` turn still starts its own loop, so it doesn't stop at
+the hourly ceiling yet.
 
 ## Factories (`packages/core/src/factories.ts`)
 
@@ -444,6 +495,14 @@ A subscriber sees the arguments after `liftArgs()`: a single string the model
 gave where the schema asks for a list of strings already arrives as the list
 of one, and a list written out as JSON text as that list (see
 [agent-loop.md](./agent-loop.md#tool-parameter-validation)).
+
+It also sees what the call does and why the turn runs. `effect` is the tool's
+own declaration for these arguments (`read`, `write` or `irreversible`), read
+the way the loop's derivability check reads it, so a tool that declares nothing
+shows `read`. `effectDeclared` is `false` then, which lets a policy tell "says
+it only reads" from "says nothing". `wake` is set on a turn nobody asked for
+([above](#waking-an-agent-from-a-plugin)) and absent on one a person started.
+All three describe the call as it arrived, and changing them changes nothing.
 
 What must stay authoritative *after* a human says yes does not belong here.
 Those ceilings live inside the tools — `exec`'s allowlist, the path boundary,

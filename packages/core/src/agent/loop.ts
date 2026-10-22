@@ -43,7 +43,7 @@ import type {
   ToolSchema,
 } from "../providers/interface.js";
 import { WAKE_ROOMS_KEY } from "../rooms/keys.js";
-import { effectOf } from "../tools/effect.js";
+import { declaredEffectOf, effectOf } from "../tools/effect.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { type ActiveSkillState, createActiveSkillState } from "./active-skill.js";
 import type { SkillCatalogEntry } from "./agents.js";
@@ -1328,6 +1328,7 @@ async function executeToolCall(
   // Lifted first, so a subscriber, the approval and the tool all see the shape the schema asks for.
   let args = liftArgs(tool, call.arguments);
   if (opts.events) {
+    const declared = declaredEffectOf(tool, args);
     const decided = await opts.events.waterfall("agent.pre_tool_use", {
       sessionId: opts.session.id,
       agent: opts.toolContextExtras?.agentName as string | undefined,
@@ -1336,6 +1337,9 @@ async function executeToolCall(
       toolUseId: call.id,
       cwd: context.workingDirectory,
       args,
+      effect: declared ?? "read",
+      effectDeclared: declared !== undefined,
+      ...(context.wake ? { wake: context.wake } : {}),
     });
     if (decided.deny) return { output: decided.deny };
     args = decided.args;

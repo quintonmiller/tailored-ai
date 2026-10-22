@@ -11,8 +11,17 @@ import type { Tool, ToolEffect } from "./interface.js";
 
 /** What this specific call does. Undeclared is `read`, which gates nothing. */
 export function effectOf(tool: Tool, args: Record<string, unknown>): ToolEffect {
+  return declaredEffectOf(tool, args) ?? "read";
+}
+
+/**
+ * What this call does, or undefined when the tool doesn't say. For a policy
+ * that wants to treat "says it only reads" and "says nothing" differently,
+ * which `effectOf` can't tell apart.
+ */
+export function declaredEffectOf(tool: Tool, args: Record<string, unknown>): ToolEffect | undefined {
   const declared = tool.effect;
-  if (!declared) return "read";
+  if (!declared) return undefined;
   if (typeof declared === "function") {
     try {
       return declared(args);

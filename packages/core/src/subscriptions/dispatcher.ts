@@ -222,6 +222,7 @@ export class SubscriptionDispatcher {
         events,
         deliver: sub.deliver,
         ...(sub.config.instructions ? { instructions: sub.config.instructions } : {}),
+        wake: { kind: "subscription", ref: sub.key },
       };
       let outcome: "ran" | "at-ceiling" | "gone";
       try {

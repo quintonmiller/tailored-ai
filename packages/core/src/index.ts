@@ -47,6 +47,7 @@ export type { TaskInfo } from "./agent/tasks.js";
 export { getTask, listTasks, startTask } from "./agent/tasks.js";
 export type { CapToolOutputOptions } from "./agent/tool-output.js";
 export { capToolOutput, DEFAULT_MAX_TOOL_OUTPUT_CHARS, resolveToolOutputLimit } from "./agent/tool-output.js";
+export type { RoomWaker, Wake, WakeAgentOptions, WakeOutcome } from "./agent/wake.js";
 export type {
   ApprovalHandler,
   ApprovalRequest,
@@ -1133,7 +1134,7 @@ export { ExecTool } from "./tools/exec.js";
 export { ExtractDocumentTool, type ExtractDocumentToolOptions, extractText } from "./tools/extract-document.js";
 export { FactsTool } from "./tools/facts.js";
 // Gmail / GoogleCalendar / GoogleDrive moved to @tailored-ai/google-tools.
-export type { Tool, ToolContext, ToolResult } from "./tools/interface.js";
+export type { Tool, ToolContext, ToolEffect, ToolResult } from "./tools/interface.js";
 export { MdToPdfTool } from "./tools/md-to-pdf.js";
 export { MemoryTool } from "./tools/memory.js";
 export { ProjectsTool } from "./tools/projects.js";

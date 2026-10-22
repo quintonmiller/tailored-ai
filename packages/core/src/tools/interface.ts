@@ -38,6 +38,13 @@ export interface ToolContext {
   /** Name of the agent currently running. Used as the author on tool-initiated records (comments, etc.). */
   agentName?: string;
   /**
+   * Why this turn is running, when nobody asked for it: set on every turn
+   * `runtime.wakeAgent` starts and every subscription turn. Unset when a
+   * person started the turn, so a tool can treat what it does here as
+   * unprompted.
+   */
+  wake?: import("../agent/wake.js").Wake;
+  /**
    * The running agent's guardrails, for tools that send a message on its
    * behalf.
    *

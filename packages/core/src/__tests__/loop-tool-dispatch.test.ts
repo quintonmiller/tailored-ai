@@ -188,6 +188,40 @@ describe("agent.pre_tool_use", () => {
     await run(callsProbe(), [probeTool(executed)]);
     expect(executed).toEqual([{ path: "/tmp/a" }]);
   });
+
+  describe("what the call does, and why the turn runs", () => {
+    /** The effect fields of every payload, for a probe declaring `effect`. */
+    async function effects(effect: Tool["effect"], over: Record<string, unknown> = {}) {
+      const events = new TypedEventBus();
+      const seen: Array<Record<string, unknown>> = [];
+      events.onWaterfall("agent.pre_tool_use", (p, next) => {
+        seen.push({ effect: p.effect, effectDeclared: p.effectDeclared, ...(p.wake ? { wake: p.wake } : {}) });
+        return next(p);
+      });
+      await run(callsProbe({ path: "/srv/x" }), [{ ...probeTool([]), effect }], { events, ...over });
+      return seen;
+    }
+
+    it("reads an undeclared tool as read, and says it was not declared", async () => {
+      expect(await effects(undefined)).toEqual([{ effect: "read", effectDeclared: false }]);
+    });
+
+    it("says a tool that declares read did declare it", async () => {
+      expect(await effects("read")).toEqual([{ effect: "read", effectDeclared: true }]);
+    });
+
+    it("asks a per-call classifier about these arguments", async () => {
+      const classify = (a: Record<string, unknown>) => (String(a.path).startsWith("/srv") ? "irreversible" : "write");
+      expect(await effects(classify)).toEqual([{ effect: "irreversible", effectDeclared: true }]);
+    });
+
+    it("carries the turn's wake from the tool context", async () => {
+      const wake = { kind: "upkeep", ref: "plan/trip" };
+      expect(await effects("write", { toolContextExtras: { wake } })).toEqual([
+        { effect: "write", effectDeclared: true, wake },
+      ]);
+    });
+  });
 });
 
 describe("agent.post_tool_use", () => {

@@ -7,6 +7,7 @@ import type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { canSelfModify } from "./agent/prompt.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
+import { AgentWaker, type RoomWaker, type Wake, type WakeAgentOptions, type WakeOutcome } from "./agent/wake.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import type { OutboundNotifier } from "./channels/outbound.js";
 import {
@@ -178,6 +179,8 @@ export class AgentRuntime {
    */
   private _stateService: StateService | undefined;
   private readonly _liveSessions = new LiveSessions();
+  /** Wakes agents for turns nobody asked for. Kept across reloads, and so is its hourly count. */
+  private readonly _waker = new AgentWaker(this);
   /**
    * Typed pub/sub bus for runtime lifecycle events — the foundation of
    * the platform vision (`docs/platform-vision.md`). Internal subsystems
@@ -1290,6 +1293,32 @@ export class AgentRuntime {
   }
 
   /**
+   * Wake an agent for a turn nobody asked for, under the brakes every such
+   * turn shares: refused while autonomous runs are paused, held at the
+   * agent's hourly wake ceiling (`rooms.maxWakesPerHour`, one count with
+   * subscription wakes) or while a woken turn is still running in the same
+   * session, and `gone` for an agent that isn't there or is switched off.
+   * Emits `agent.woken`, and the turn's tools see `wake` on their context.
+   *
+   * `sessionKey` runs the turn in that session, where a reply reaches nobody
+   * unless the agent sends it somewhere, so the prompt should say so. `room`
+   * runs it in the room, through the room's own turn order and ceiling, and
+   * the agent can `pass`. A turn that throws rejects.
+   */
+  wakeAgent(agent: string, opts: WakeAgentOptions): Promise<WakeOutcome> {
+    return this._waker.wake(agent, opts);
+  }
+
+  /**
+   * Where `wakeAgent` sends a turn with a `room`. The host sets it once its
+   * room watcher is running and clears it when rooms are off. Until then a
+   * room wake reports `at-ceiling`, or `gone` when rooms are switched off.
+   */
+  setRoomWaker(waker: RoomWaker | undefined): void {
+    this._waker.setRoomWaker(waker);
+  }
+
+  /**
    * The room directory: which rooms exist, who subscribes to them, and how far
    * each subscriber has read. See docs/rooms.md.
    *
@@ -1582,6 +1611,8 @@ export class AgentRuntime {
     mode?: "voice";
     /** What the surface shows the agent with, whose cues it may write: in voice mode or typed. */
     body?: Body;
+    /** Why the turn runs, when nobody asked for it. Its tools see it as `ToolContext.wake`. */
+    wake?: Wake;
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
@@ -1701,7 +1732,10 @@ export class AgentRuntime {
       // exploratory worker can still override by passing their own
       // toolContextExtras — those override fields are spread AFTER this
       // in the loop body (see agent/loop.ts ToolContext construction).
-      toolContextExtras: this.toolContextExtrasFor(resolved, agentName),
+      toolContextExtras: {
+        ...this.toolContextExtrasFor(resolved, agentName),
+        ...(opts.wake ? { wake: opts.wake } : {}),
+      },
       getTools: () => {
         const r = resolveAgent(
           agentName,

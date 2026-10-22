@@ -374,10 +374,20 @@ ceiling, and the agent can `pass`.
 - An agent is not told about changes it made itself, including ones a plugin
   made for it (`source.onBehalfOf`), unless the subscription sets
   `includeOwn: true`.
-- Session wakes share the rooms' hourly ceiling (`rooms.maxWakesPerHour`), per
-  agent; room wakes use the room's.
+- Session wakes go through `runtime.wakeAgent`, so they share one hourly
+  ceiling per agent (`rooms.maxWakesPerHour`) with the turns plugins start that
+  way ([architecture](./architecture.md#waking-an-agent-from-a-plugin)): one
+  count, not two. Room wakes use the room's.
 - A wake refused by a ceiling or by pausing agents is held and retried every
   minute for up to an hour, then dropped with a warning.
+- Events for an agent that isn't there are dropped with a warning rather than
+  retried, and so are session events for an online agent switched off on the
+  Agents page.
+- The turn's tools see which subscription woke it as `ToolContext.wake`:
+  `{ kind: "subscription", ref }`, where `ref` is the subscription's agent,
+  `on`, `when`, `deliver`, target, `window` and `every` joined by `|`.
+  `notify_owner` in that turn goes through the
+  [repeat gate](./notifications.md).
 
 **Nothing waiting is lost.** Pending events are stored, so a restart re-arms
 every batch and digest on its original schedule. Changing a subscription so
