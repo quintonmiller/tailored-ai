@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initDatabase } from "../db/schema.js";
+import { type NotificationSent, TypedEventBus } from "../events.js";
 import { NotificationGate, type NotificationGateLike } from "../notifications/dedup.js";
 import { IdentityResolver, type IdentityResolverOptions } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
@@ -404,6 +405,36 @@ describe("room tool — repeat suppression", () => {
     expect(highAfterAnHour.output).toContain("Posted to");
     expect(messageCount()).toBe(3);
     expect(contents()[2]).toBe("[supervisor] prod latency spiking");
+  });
+
+  it("says on the bus that a post is a room post from its agent", async () => {
+    const events = new TypedEventBus();
+    const sent: NotificationSent[] = [];
+    events.on("notification.sent", (p) => {
+      sent.push(p);
+    });
+    gate = new NotificationGate(db, () => ({}), events);
+    await createRoom("eng");
+
+    await post("eng", "the nightly build is broken");
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ source: "room:supervisor", kind: "room", agent: "supervisor", channel: "local" });
+  });
+
+  it("tells the agent why a subscriber held its post back, not that it repeated itself", async () => {
+    const events = new TypedEventBus();
+    events.onWaterfall("notification.outgoing", async (p) => ({
+      ...p,
+      deny: "This room is quiet until morning. Post it then.",
+    }));
+    gate = new NotificationGate(db, () => ({}), events);
+    await createRoom("eng");
+
+    const res = await post("eng", "the nightly build is broken");
+
+    expect(res.output).toBe("Held back — This room is quiet until morning. Post it then.");
+    expect(messageCount()).toBe(0);
   });
 
   it("defaults to the high urgency window when the argument is junk", async () => {

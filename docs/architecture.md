@@ -348,7 +348,9 @@ declare module "@tailored-ai/core" {
 }
 ```
 
-Core declares one: `agent.context_slots`. See [the loop's bus](#the-loops-bus).
+Core declares three: `agent.context_slots` and `agent.pre_tool_use`, on [the
+loop's bus](#the-loops-bus), and `notification.outgoing`, a message nobody asked
+for about to pass the notification gate (see [notifications](./notifications.md#what-the-gate-tells-the-bus)).
 
 ### The loop's bus
 

@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
+import type { EventBus, NotificationFields } from "../events.js";
 
 /**
  * Repeat suppression for unsolicited messages.
@@ -18,6 +20,10 @@ import type Database from "better-sqlite3";
  * The similarity tier exists because a model asked to summarize the same
  * unchanged state twice rarely emits the same bytes twice — it rephrases. Exact
  * hashing alone would let a stream of near-identical restatements through.
+ *
+ * Given the runtime's bus, the gate also says what passes through it:
+ * `notification.outgoing` before the repeat check, where a subscriber can hold
+ * a message back, and `notification.sent` once one has gone out.
  */
 
 export interface NotificationDedupConfig {
@@ -81,14 +87,41 @@ export interface NotificationCandidate {
    * back to the configured default when unset.
    */
   windowHours?: number;
+  /**
+   * What kind of message this is, for whoever listens on the bus. Coarse on
+   * purpose: one per sort of initiative (`cron:<job>`, `digest`, `notify`), not
+   * per fact, which is what `key` is for. Defaults to `source` with `agent`'s
+   * name taken off the end. See {@link notificationKind}.
+   */
+  kind?: string;
+  /** The agent sending it, when an agent is. */
+  agent?: string;
 }
 
-export type NotificationVerdict = "new" | "repeat-exact" | "repeat-similar" | "repeat-key" | "dedup-disabled";
+/**
+ * A candidate's kind: the one its caller named, or else its `source` with the
+ * sending agent's name taken off the end, so `room:planner` from `planner` is
+ * the kind `room`. A source that doesn't end in the agent's name is the kind
+ * as it stands.
+ */
+export function notificationKind(candidate: Pick<NotificationCandidate, "source" | "kind" | "agent">): string {
+  if (candidate.kind) return candidate.kind;
+  const suffix = candidate.agent ? `:${candidate.agent}` : "";
+  return suffix && candidate.source.endsWith(suffix) ? candidate.source.slice(0, -suffix.length) : candidate.source;
+}
+
+/**
+ * `held` is a `notification.outgoing` subscriber holding the message back,
+ * whether or not it was a repeat; the `repeat-*` verdicts are the gate's own.
+ */
+export type NotificationVerdict = "new" | "repeat-exact" | "repeat-similar" | "repeat-key" | "dedup-disabled" | "held";
 
 export interface NotificationDecision {
   /** Whether the caller should actually send. */
   send: boolean;
   verdict: NotificationVerdict;
+  /** Why a subscriber held the message back, when `verdict` is `held`. */
+  reason?: string;
   /**
    * Primary key of the notification_log row that matched. Carried so
    * `recordSuppressed` updates exactly the row the decision came from instead
@@ -129,6 +162,11 @@ export function normalizeForDedup(content: string): string {
 
 function hashKey(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
+}
+
+/** What the log keeps of a message, and what the bus is shown of it. */
+function previewOf(content: string): string {
+  return content.slice(0, 200);
 }
 
 /**
@@ -285,10 +323,48 @@ export function resolveGate(get?: () => NotificationGateLike | undefined): Notif
   }
 }
 
+/**
+ * Set while a `notification.outgoing` subscriber runs.
+ *
+ * A subscriber that sends a message of its own, such as a hook that copies
+ * every message into an audit room, would otherwise run the waterfall again
+ * from inside itself, and again from inside that, before the first message was
+ * ever sent: the repeat check comes after the waterfall, so it cannot end the
+ * loop. Module-wide rather than per gate, so two gates on one bus cannot pass
+ * the loop between them.
+ *
+ * The store is a token switched off once the subscribers finish, not a flag.
+ * Node carries the store into every timer and promise started inside `run`, so
+ * a flag would also cover work a subscriber only started: a room post that arms
+ * an agent's wake would hand the skip to that agent's whole turn, and to every
+ * turn it wakes in turn, and a mute would stop applying to all of them.
+ */
+const insideOutgoing = new AsyncLocalStorage<{ live: boolean }>();
+
+/**
+ * How long the gate waits for `notification.outgoing` before sending anyway.
+ *
+ * A ceiling, not a tuning knob: it is there so a subscriber that never returns
+ * delays a message instead of stopping every unprompted message, and with them
+ * the room turn waiting on a post, until a restart. Set above the 120 seconds a
+ * `script` hook gets by default, so a slow hook's refusal still counts.
+ */
+export const OUTGOING_TIMEOUT_MS = 300_000;
+
+/** SQLite's `datetime('now')`, for a send the log couldn't give a time to. */
+function sqliteNow(): string {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
 export class NotificationGate implements NotificationGateLike {
   constructor(
     private db: Database.Database,
     private getConfig: () => NotificationDedupConfig | undefined,
+    /**
+     * Where `notification.outgoing` and `notification.sent` go. Without a bus
+     * the gate works exactly as it did before it had one, and says nothing.
+     */
+    private events?: EventBus,
   ) {}
 
   private settings() {
@@ -371,11 +447,11 @@ export class NotificationGate implements NotificationGateLike {
     return { send: true, verdict: "new", suppressedCount: 0 };
   }
 
-  /** Record that the message actually went out. */
-  recordSent(candidate: NotificationCandidate): void {
+  /** Record that the message actually went out, and say on which row and when. */
+  recordSent(candidate: NotificationCandidate): { id: number; at: string } {
     const normalized = normalizeForDedup(candidate.content);
     const dedupKey = candidate.key ?? hashKey(normalized);
-    this.db
+    const row = this.db
       .prepare(
         `INSERT INTO notification_log (source, channel, target, dedup_key, normalized, preview, sent_count)
          VALUES (?, ?, ?, ?, ?, ?, 1)
@@ -384,16 +460,18 @@ export class NotificationGate implements NotificationGateLike {
            normalized   = excluded.normalized,
            preview      = excluded.preview,
            last_sent_at = datetime('now'),
-           last_seen_at = datetime('now')`,
+           last_seen_at = datetime('now')
+         RETURNING id, last_sent_at`,
       )
-      .run(
+      .get(
         candidate.source,
         candidate.channel,
         candidate.target,
         dedupKey,
         normalized,
-        candidate.content.slice(0, 200),
-      );
+        previewOf(candidate.content),
+      ) as { id: number; last_sent_at: string };
+    return { id: row.id, at: row.last_sent_at };
   }
 
   /**
@@ -418,15 +496,38 @@ export class NotificationGate implements NotificationGateLike {
   }
 
   /**
-   * Gate a send. Runs `send` only when the message is news, and records the
-   * outcome. A send that throws is not recorded, so a transport failure does
-   * not suppress the retry.
+   * Gate a send. Runs `send` only when the message is news and no
+   * `notification.outgoing` subscriber held it back, and records the outcome.
+   * A send that throws is not recorded, so a transport failure does not
+   * suppress the retry, and it is not announced as sent.
    */
   async deliver(
     candidate: NotificationCandidate,
     send: () => Promise<void>,
     log?: (message: string) => void,
   ): Promise<NotificationDecision> {
+    const fields: NotificationFields = {
+      source: candidate.source,
+      kind: notificationKind(candidate),
+      ...(candidate.agent ? { agent: candidate.agent } : {}),
+      channel: candidate.channel,
+      target: candidate.target,
+      preview: previewOf(candidate.content),
+    };
+
+    // Before the repeat check, so a subscriber sees every message, repeats
+    // included. What it holds back is logged and left out of the table, whose
+    // counts are of messages sent and repeats withheld. Not awaited at all
+    // without a bus, so a gate with none runs as it did before it had one, nor
+    // for a message a subscriber sends while it runs, which would otherwise
+    // run the waterfall from inside itself without end.
+    const held =
+      this.events && !insideOutgoing.getStore()?.live ? await this.outgoing(this.events, fields, log) : undefined;
+    if (held) {
+      log?.(`[notify] suppressed ${candidate.source} -> ${candidate.target} (${held})`);
+      return { send: false, verdict: "held", reason: held, suppressedCount: 0 };
+    }
+
     // Bookkeeping must never cost a message. A locked or migrating database
     // makes check() throw; without this the send would simply not happen, which
     // is the one outcome this module exists to prevent.
@@ -436,6 +537,7 @@ export class NotificationGate implements NotificationGateLike {
     } catch (err) {
       log?.(`[notify] dedup check failed (${(err as Error).message}) — sending anyway`);
       await send();
+      this.announce(fields, undefined, log);
       return { send: true, verdict: "dedup-disabled", suppressedCount: 0 };
     }
 
@@ -453,13 +555,80 @@ export class NotificationGate implements NotificationGateLike {
       return decision;
     }
     await send();
+    let recorded: { id: number; at: string } | undefined;
     try {
-      this.recordSent(candidate);
+      recorded = this.recordSent(candidate);
     } catch (err) {
       // The message is already out. Failing to log it only risks a future
       // duplicate, which is the safe direction.
       log?.(`[notify] failed to record sent notification: ${(err as Error).message}`);
     }
+    this.announce(fields, recorded, log);
     return decision;
+  }
+
+  /**
+   * Run `notification.outgoing` and return the reason a subscriber gave for
+   * holding the message back, if one did.
+   *
+   * Fails open, like the rest of the gate. The bus already skips a listener
+   * that throws; this covers a bus that throws itself, because a broken
+   * subscriber must not cost the message it was only looking at, and a
+   * subscriber that takes longer than {@link OUTGOING_TIMEOUT_MS}.
+   */
+  private async outgoing(
+    events: EventBus,
+    fields: NotificationFields,
+    log?: (message: string) => void,
+  ): Promise<string | undefined> {
+    const token = { live: true };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const waterfall = insideOutgoing.run(token, () => events.waterfall("notification.outgoing", { ...fields }));
+      // Off when the subscribers finish rather than when the gate stops
+      // waiting, so one still running past the timeout keeps its own sends
+      // out of the waterfall. Registered first, so it is off before the
+      // await below resumes.
+      const off = () => {
+        token.live = false;
+      };
+      waterfall.then(off, off);
+      const timedOut = new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), OUTGOING_TIMEOUT_MS);
+      });
+      const out = await Promise.race([waterfall, timedOut]);
+      if (out === "timeout") {
+        log?.(`[notify] notification.outgoing timed out after ${OUTGOING_TIMEOUT_MS}ms — sending anyway`);
+        return undefined;
+      }
+      return out?.deny || undefined;
+    } catch (err) {
+      token.live = false;
+      log?.(`[notify] notification.outgoing failed (${(err as Error).message}) — sending anyway`);
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Say a message went out. Never throws: the send has already happened, and a
+   * caller that saw an error here would report a delivered message as failed.
+   */
+  private announce(
+    fields: NotificationFields,
+    recorded: { id: number; at: string } | undefined,
+    log?: (message: string) => void,
+  ): void {
+    if (!this.events) return;
+    try {
+      this.events.emit("notification.sent", {
+        ...fields,
+        ...(recorded ? { logId: recorded.id } : {}),
+        at: recorded?.at ?? sqliteNow(),
+      });
+    } catch (err) {
+      log?.(`[notify] notification.sent failed: ${(err as Error).message}`);
+    }
   }
 }

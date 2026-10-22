@@ -654,6 +654,9 @@ export {
   isWaterfallEvent,
   KNOWN_BROADCAST_EVENTS,
   listKnownEvents,
+  type NotificationFields,
+  type NotificationOutgoingWaterfall,
+  type NotificationSent,
   type PreToolUseWaterfall,
   type RequestAssembled,
   type RuntimeEvent,
@@ -757,8 +760,12 @@ export {
   type NotificationDecision,
   type NotificationDedupConfig,
   NotificationGate,
+  type NotificationGateLike,
   type NotificationVerdict,
   normalizeForDedup,
+  notificationKind,
+  PASSTHROUGH_GATE,
+  resolveGate,
   wordSetSimilarity,
 } from "./notifications/dedup.js";
 export {

@@ -414,6 +414,29 @@ describe("notify_owner", () => {
     expect(sent).toEqual(["The nightly build is red."]);
   });
 
+  it("says on the runtime's bus what it sent, as a notify:<what woke it> from the agent", async () => {
+    const runtime = makeRuntime();
+    withOutbound(runtime);
+    const announced: Array<RuntimeEventPayload<"notification.sent">> = [];
+    runtime.events.on("notification.sent", (e) => {
+      announced.push(e);
+    });
+
+    queue = [notify];
+    await wakeOf(runtime);
+
+    expect(announced).toHaveLength(1);
+    expect(announced[0]).toMatchObject({
+      source: "tool:notify_owner:planner",
+      kind: "notify:upkeep",
+      agent: "planner",
+      channel: "discord",
+      target: "OWNER",
+      preview: "The nightly build is red.",
+    });
+    expect(announced[0].logId).toEqual(expect.any(Number));
+  });
+
   it("sends every time a person asks in their own chat", async () => {
     const runtime = makeRuntime();
     const sent = withOutbound(runtime);

@@ -79,6 +79,10 @@ export class NotifyOwnerTool implements Tool {
         const decision = await gate.deliver(
           {
             source: `tool:notify_owner:${context.agentName ?? "unknown"}`,
+            // A woken turn says what woke it, so an upkeep nudge and a
+            // subscription's alert are different kinds of message.
+            kind: context.wake ? `notify:${context.wake.kind}` : "notify",
+            agent: context.agentName,
             channel: out.id,
             target,
             content: message,
@@ -86,6 +90,9 @@ export class NotifyOwnerTool implements Tool {
           () => out.sendDM(target, message),
           (msg) => console.log(msg),
         );
+        if (decision.verdict === "held") {
+          return { success: true, output: `Not sent — ${decision.reason}` };
+        }
         if (!decision.send) {
           return {
             success: true,
