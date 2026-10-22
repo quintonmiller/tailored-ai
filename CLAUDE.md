@@ -150,6 +150,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Notifications: repeat suppression for unsolicited messages (`NotificationGate`) | [docs/notifications.md](./docs/notifications.md) |
 | Rooms: shared multi-agent conversations (backend seam, envelopes, subscriptions, wake policy, image/file attachments) | [docs/rooms.md](./docs/rooms.md) + archiving design [docs/rooms-archive-design.md](./docs/rooms-archive-design.md) |
 | Schedules: agents booking their own future wakes (`schedule` tool, poll tick, room vs session targets) | [docs/schedules.md](./docs/schedules.md) |
+| Watchers: kinds of cheap check with no model call (a page, a price, a sender's mail) that plugins register through `ctx.watcherKinds`; the contract, snapshot cap, baseline rule and runner helpers. Core ships no kinds and runs no watches | [docs/watchers.md](./docs/watchers.md) |
 | Workflow engine | [docs/workflows.md](./docs/workflows.md) |
 | Skills: SKILL.md install + enable per agent (CLI + UI) | [docs/skills.md](./docs/skills.md) |
 | Speech synthesis: the `speak` tool, provider seam, local-vs-hosted survey, dialogue concatenation | [docs/speech.md](./docs/speech.md) |

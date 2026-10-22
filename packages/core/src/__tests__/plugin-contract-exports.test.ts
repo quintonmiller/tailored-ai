@@ -32,6 +32,7 @@ import type {
   ToolResult,
   UiProvider,
   UiProviderFactory,
+  WatcherKind,
 } from "../index.js";
 import * as core from "../index.js";
 
@@ -249,5 +250,34 @@ describe("plugin contract — interface component kinds", () => {
       dispose();
     }
     expect(core.componentKindRegistry.has("rating")).toBe(false);
+  });
+});
+
+describe("plugin contract — watcher kinds", () => {
+  it("a plugin can bring a kind through its context, and a runner can find it the same way", () => {
+    const ctx = core.createPluginContext({});
+    const page: WatcherKind<{ url: string }, { hash: string }> = {
+      kind: "page_hash",
+      description: "Whether a page's text changed.",
+      schema: { type: "object", required: ["url"], properties: { url: { type: "string" } } },
+      defaultEvery: "1h",
+      minEvery: "15m",
+      check: (_config, previous) => ({
+        snapshot: { hash: "b" },
+        ...(previous && previous.hash !== "b" ? { change: "The page changed." } : {}),
+      }),
+    };
+    const dispose = ctx.watcherKinds.register(page);
+    try {
+      expect(ctx.watcherKinds.get("page_hash")).toBe(page);
+      expect(core.validateWatchConfig(page, { url: "https://example.com" })).toEqual([]);
+      expect(core.watchInterval(page, "5m")).toEqual({ ms: 15 * 60_000, raisedFrom: 5 * 60_000 });
+      expect(core.watcherResult({ snapshot: { hash: "b" }, change: "The page changed." }, { hash: "a" }).change).toBe(
+        "The page changed.",
+      );
+    } finally {
+      dispose();
+    }
+    expect(core.watcherKindRegistry.has("page_hash")).toBe(false);
   });
 });
