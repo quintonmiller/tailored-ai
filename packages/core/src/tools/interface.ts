@@ -38,6 +38,15 @@ export interface ToolContext {
   /** Name of the agent currently running. Used as the author on tool-initiated records (comments, etc.). */
   agentName?: string;
   /**
+   * Why this turn is running, when nobody asked for it: set on every turn
+   * `runtime.wakeAgent` starts and every subscription turn, and carried into an
+   * agent such a turn delegates to or messages. A tool can treat what it does
+   * then as unprompted. Other turns nobody asked for (cron, schedules, room
+   * check-ins, autopilot, exploratory ticks) don't set it yet, so its absence
+   * doesn't mean a person asked.
+   */
+  wake?: import("../agent/wake.js").Wake;
+  /**
    * The running agent's guardrails, for tools that send a message on its
    * behalf.
    *

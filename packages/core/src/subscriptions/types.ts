@@ -66,6 +66,8 @@ export interface EventWakeContext {
   events: DeliveredEvent[];
   instructions?: string;
   deliver: DeliveryMode;
+  /** Which subscription this is, for the turn's `ToolContext.wake`. `{ kind: "subscription" }` when absent. */
+  wake?: import("../agent/wake.js").Wake;
 }
 
 /**

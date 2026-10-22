@@ -273,12 +273,17 @@ export function resolveEventHooks(config: AgentConfig): ResolvedEventHooks[] {
  * A field the payload does not have never matches. Saying "this hook wanted
  * something that is not there" is more useful than treating absence as a
  * wildcard, which would fire the hook on every event of that name.
+ *
+ * Both sides are compared as text. YAML hands over `false` or `3` unquoted as
+ * a boolean or a number, and a comparison that kept the type would never
+ * match them, so a deny hook written that way would be skipped without a word.
  */
-export function matchesWhen(payload: Record<string, unknown>, when: Record<string, string> | undefined): boolean {
+export function matchesWhen(payload: Record<string, unknown>, when: Record<string, unknown> | undefined): boolean {
   if (!when) return true;
-  for (const [key, want] of Object.entries(when)) {
+  for (const [key, wanted] of Object.entries(when)) {
     const value = payload[key];
     if (value === undefined || value === null) return false;
+    const want = String(wanted);
     const actual = String(value);
     if (want.length > 1 && want.startsWith("/") && want.endsWith("/")) {
       try {

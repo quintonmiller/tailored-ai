@@ -247,11 +247,15 @@ async function runServer(
       // handler down for those channels — the bot would go quiet with no
       // visible cause.
       if (runtime.getConfig().rooms?.enabled === false) {
+        runtime.setRoomWaker(undefined);
         roomWatcher.stop();
         return;
       }
       runtime.reconcileRooms();
       roomWatcher.start();
+      // Where `runtime.wakeAgent` sends a turn with a room: the watcher that
+      // subscriptions deliver to rooms through, below.
+      runtime.setRoomWaker((agent, room, turn) => roomWatcher.runAgentWake(agent, room, turn));
     } catch (err) {
       console.error("[rooms] Startup error:", (err as Error).message);
     }
@@ -505,6 +509,7 @@ async function runServer(
     await disposeRuntimePlugins();
     autopilot.stop();
     exploratory.stop();
+    runtime.setRoomWaker(undefined);
     roomWatcher.stop();
     await channelManager.stopAll();
     await mcpManager.stopAll(runtime);

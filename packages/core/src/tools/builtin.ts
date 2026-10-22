@@ -13,6 +13,7 @@
  */
 
 import { resolve } from "node:path";
+import type { Wake } from "../agent/wake.js";
 import { DEFAULT_CONFIG } from "../config.js";
 import { interfaceStoreFor } from "../interfaces/index.js";
 import { IdentityResolver } from "../rooms/identities.js";
@@ -205,7 +206,7 @@ registerToolFactory("room", (config, ctx) => {
       defaultBackend: () => config.rooms?.defaultBackend,
       desks: () => config.rooms?.desks,
       deliverAgentMessage: ctx.deliverAgentMessage as
-        | ((to: string, from: string, body: string) => Promise<string>)
+        | ((to: string, from: string, body: string, wake?: Wake) => Promise<string>)
         | undefined,
     }),
   ];

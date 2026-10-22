@@ -19,10 +19,12 @@
  *   3. debouncing, so a burst of five messages is one run and not five
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveAgent } from "../agent/agents.js";
 import { registerContextSlot, unregisterContextSlot } from "../agent/context-slots.js";
 import { estimateTokens, isStallStop, type LoopStop, runAgentLoop, stallReasonOf } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
+import type { Wake } from "../agent/wake.js";
 import { type ComponentSpec, type MediaRef, mediaPlaceholder } from "../content/types.js";
 import type { Subscription } from "../events.js";
 import { checkGuardrails } from "../guardrails/check.js";
@@ -63,7 +65,7 @@ export function roomPostedKey(roomRef: string): string {
 }
 
 /** Why an agent was woken. Surfaced in the activity record. */
-export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked" | "scheduled" | "event";
+export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked" | "scheduled" | "event" | "woken";
 
 /**
  * What became of a wake the agent booked for itself.
@@ -349,8 +351,11 @@ export function todayLine(now = new Date(), timeZone: string = systemTimeZone())
   })}.`;
 }
 
-/** Plain-language wake reason for the activity record. */
-export function describeWakeReason(reason: WakeReason): string {
+/**
+ * Plain-language wake reason for the activity record. A woken turn is told in
+ * the words of whatever woke it, since only that knows what the turn is for.
+ */
+export function describeWakeReason(reason: WakeReason, wake?: Wake): string {
   switch (reason) {
     case "named":
       return "named directly";
@@ -366,6 +371,8 @@ export function describeWakeReason(reason: WakeReason): string {
       return "a wake it scheduled for itself";
     case "event":
       return "something it subscribes to happened";
+    case "woken":
+      return wake ? (wake.ref ? `${wake.kind} (${wake.ref})` : wake.kind) : "a plugin woke it";
   }
 }
 
@@ -576,6 +583,13 @@ export class RoomWatcher {
    * Keyed by roomRef; the value is the tail of that room's queue.
    */
   private roomChains = new Map<string, Promise<void>>();
+  /**
+   * The room queues the running turn holds. A turn that waited on a room's
+   * queue from inside a turn holding it would be waiting on itself. A hold is
+   * marked dead when its turn ends, because a timer armed during the turn
+   * keeps the turn's context for as long as it lives.
+   */
+  private readonly holding = new AsyncLocalStorage<readonly { roomRef: string; live: boolean }[]>();
   /**
    * Wakes already sitting on a chain, keyed `${agent} ${roomRef}`. A second
    * trigger for an agent that is still queued is dropped rather than enqueued
@@ -1156,6 +1170,44 @@ export class RoomWatcher {
    * `room` may be a name or a ref, since it comes straight from config.
    */
   async runEventWake(agent: string, room: string, ctx: EventWakeContext): Promise<DeliveryOutcome> {
+    return this.wakeInRoom(agent, room, {
+      lines: ["Something you subscribe to happened. Nobody has asked you anything.", "", ...renderEventLines(ctx)],
+      close: 'Act on it if it needs anything said here. If it does not, call room(action="pass").',
+      reason: "event",
+      wake: ctx.wake ?? { kind: "subscription" },
+      log: (ref) => `[subscriptions] waking ${agent} in ${ref} for ${ctx.events.length} event(s)`,
+    });
+  }
+
+  /**
+   * A turn `runtime.wakeAgent` sends to a room: the caller's prompt, framed by
+   * who and where the agent is, the room's purpose, what it missed, and
+   * `pass`. Everything else is `runEventWake`'s, ceiling included.
+   */
+  async runAgentWake(agent: string, room: string, turn: { prompt: string; wake: Wake }): Promise<DeliveryOutcome> {
+    return this.wakeInRoom(agent, room, {
+      lines: [turn.prompt],
+      close: 'If nothing here needs saying in the room, call room(action="pass").',
+      reason: "woken",
+      wake: turn.wake,
+      log: (ref) => `[rooms] waking ${agent} in ${ref} for ${turn.wake.kind}`,
+      refuseFromInside: true,
+    });
+  }
+
+  private async wakeInRoom(
+    agent: string,
+    room: string,
+    turn: {
+      lines: string[];
+      close: string;
+      reason: WakeReason;
+      wake: Wake;
+      log: (roomRef: string) => string;
+      /** Turn the wake away when the caller is itself inside a turn holding this room's queue. */
+      refuseFromInside?: boolean;
+    },
+  ): Promise<DeliveryOutcome> {
     if (this.runtime.isAgentsPaused("autonomous")) return "at-ceiling";
 
     const target = this.store.getRoomByRef(room) ?? this.store.getRoomByName(room);
@@ -1163,29 +1215,37 @@ export class RoomWatcher {
     const roomRef = formatRoomRef(target.ref);
     const sub = this.store.getSubscription(agent, roomRef);
     if (!sub) return "gone";
+    // Queued behind the turn it was called from, the wake would wait for that
+    // turn while that turn waits for the wake, and the room would take no turn
+    // again until a restart. A subscription's delivery is never awaited by a
+    // turn, so only a caller's own wake is turned away here.
+    if (turn.refuseFromInside && this.holdsRoom(roomRef)) {
+      console.warn(`[rooms] not waking ${agent} in ${roomRef} from inside a turn there; try again once it ends.`);
+      return "at-ceiling";
+    }
 
     const identities = this.identities();
     const label = identities.labelForAgent(agent);
     const fresh = await this.fetchBacklog(sub);
     const transcript = this.renderTranscript(fresh, agent, label, identities);
 
-    this.wakeReasons.set(`${agent} ${roomRef}`, "event");
+    this.wakeReasons.set(`${agent} ${roomRef}`, turn.reason);
     const prompt = [
       `Room "${target.name}". You are ${label}. ${this.today()}`,
-      "Something you subscribe to happened. Nobody has asked you anything.",
-      "",
-      ...renderEventLines(ctx),
+      ...turn.lines,
       ...(target.purpose ? ["", `Purpose: ${target.purpose}`] : []),
       ...(sub.role ? [`Your role here: ${sub.role}`] : []),
       "",
       ...describeSinceLastTurn(transcript),
-      'Act on it if it needs anything said here. If it does not, call room(action="pass").',
+      turn.close,
     ].join("\n");
 
-    console.log(`[subscriptions] waking ${agent} in ${roomRef} for ${ctx.events.length} event(s)`);
-    let outcome: DeliveryOutcome = "ran";
-    await this.onRoomTurn(roomRef, `event:${agent} ${roomRef}`, async () => {
-      outcome = await this.runPrompted(sub, prompt, label, "event", fresh);
+    console.log(turn.log(roomRef));
+    // Left as it is when the room's queue already holds a turn under this key
+    // and drops this one, so the caller hears "try later" rather than "ran".
+    let outcome: DeliveryOutcome = "at-ceiling";
+    await this.onRoomTurn(roomRef, `${turn.reason}:${agent} ${roomRef}`, async () => {
+      outcome = await this.runPrompted(sub, prompt, label, turn.reason, fresh, turn.wake);
     });
     return outcome;
   }
@@ -1441,7 +1501,7 @@ export class RoomWatcher {
     const tail = this.roomChains.get(roomRef) ?? Promise.resolve();
     const next = tail.then(() => {
       this.queued.delete(key);
-      return fn();
+      return this.holdRoom(roomRef, fn);
     });
     this.roomChains.set(roomRef, next);
     // Let the map forget a room once its queue drains, so a long-lived
@@ -1450,6 +1510,23 @@ export class RoomWatcher {
       if (this.roomChains.get(roomRef) === next) this.roomChains.delete(roomRef);
     });
     return next;
+  }
+
+  /** Run `fn` holding `roomRef`'s queue, so a wake started from inside it can tell. */
+  private async holdRoom(roomRef: string, fn: () => Promise<void>): Promise<void> {
+    const hold = { roomRef, live: true };
+    const held = (this.holding.getStore() ?? []).filter((h) => h.live);
+    try {
+      await this.holding.run([...held, hold], fn);
+    } finally {
+      hold.live = false;
+    }
+  }
+
+  /** Whether the running turn holds `roomRef`'s queue, so waiting on it would wait on itself. */
+  private holdsRoom(roomRef: string): boolean {
+    if (this.readLimits(roomRef).turnTaking !== "serial") return false;
+    return this.holding.getStore()?.some((h) => h.live && h.roomRef === roomRef) ?? false;
   }
 
   /**
@@ -2055,9 +2132,9 @@ export class RoomWatcher {
     sub: RoomSubscription,
     prompt: string,
     label: string,
-    opts: { messages?: RoomMessage[]; reason?: WakeReason; batch?: BatchedTurn } = {},
+    opts: { messages?: RoomMessage[]; reason?: WakeReason; batch?: BatchedTurn; wake?: Wake } = {},
   ): Promise<void> {
-    const { messages, reason, batch } = opts;
+    const { messages, reason, batch, wake } = opts;
     // Every room this turn covers. One for an ordinary wake; the whole batch
     // for a combined one, and `sub` is then only the room it was charged to.
     const rooms = batch ? batch.subs.map((s) => s.roomRef) : [sub.roomRef];
@@ -2090,7 +2167,7 @@ export class RoomWatcher {
       resolved.provider,
     );
 
-    const base = this.runtime.buildLoopOptions({ agentName: sub.agent, session });
+    const base = this.runtime.buildLoopOptions({ agentName: sub.agent, session, ...(wake ? { wake } : {}) });
     // Spread rather than replace: buildLoopOptions puts agentName in here,
     // and dropping it is how task-watcher lost tool attribution.
     const workingMemory = new Map<string, string>();
@@ -2112,7 +2189,7 @@ export class RoomWatcher {
     const changed: string[] = [];
     const activity: string[] = [];
     if (reason && this.readLimits().toolActivity !== "none") {
-      activity.push(`woke: ${describeWakeReason(reason)}`);
+      activity.push(`woke: ${describeWakeReason(reason, wake)}`);
     }
     // Watermarked before the turn so what it produces can be told apart from
     // what its session already held. Outside the try, because the reply that
@@ -2484,6 +2561,7 @@ export class RoomWatcher {
     label: string,
     reason: WakeReason,
     messages?: RoomMessage[],
+    wake?: Wake,
   ): Promise<ScheduledWakeOutcome> {
     const key = `${sub.agent} ${sub.roomRef}`;
     // Both refusals are temporary — the turn in flight will end, and the hourly
@@ -2494,8 +2572,13 @@ export class RoomWatcher {
 
     const limits = this.readLimits(sub.roomRef);
     if (!this.store.tryConsumeWake(sub.agent, sub.roomRef, limits.maxWakesPerHour)) {
-      console.warn(`[rooms] ${sub.agent} is at its wake ceiling; skipping this turn (${describeWakeReason(reason)}).`);
+      console.warn(
+        `[rooms] ${sub.agent} is at its wake ceiling; skipping this turn (${describeWakeReason(reason, wake)}).`,
+      );
       return "at-ceiling";
+    }
+    if (wake) {
+      this.runtime.events?.emit("agent.woken", { agent: sub.agent, wake, targetKind: "room", target: sub.roomRef });
     }
 
     this.running.add(key);
@@ -2503,7 +2586,7 @@ export class RoomWatcher {
       // Handing the messages down is what advances the cursor. Without it a
       // timed wake read the room and left it looking unread, so the next one
       // re-read the same messages — for ever, into the same session.
-      await this.runTurn(sub, prompt, label, { reason, messages });
+      await this.runTurn(sub, prompt, label, { reason, messages, wake });
     } finally {
       this.running.delete(key);
     }

@@ -42,8 +42,10 @@
 
 import type { ContextSlot, ContextSlotContext, RenderedSlot } from "./agent/context-slots.js";
 import type { LoopStop } from "./agent/loop.js";
+import type { Wake } from "./agent/wake.js";
 import type { ChatParams } from "./providers/interface.js";
 import type { WakeReason } from "./rooms/watcher.js";
+import type { ToolEffect } from "./tools/interface.js";
 
 /**
  * The catalog of events the runtime emits and their payload shapes.
@@ -354,6 +356,23 @@ export interface RuntimeEventMap {
     reply: string;
     /** Which surface produced it — `"dm"`, `"delegate"`, or a plugin's own. */
     via: string;
+  };
+
+  /**
+   * An agent was woken for a turn nobody asked for: by `runtime.wakeAgent`,
+   * or by a subscription, in its session or in a room. Emitted once the wake
+   * has passed the pause and the hourly ceiling and its turn is about to run,
+   * so a subscriber counting these counts turns, not attempts.
+   *
+   * `wake` says why, the same value the turn's tools see as `ToolContext.wake`
+   * and `agent.pre_tool_use` carries.
+   */
+  "agent.woken": {
+    agent: string;
+    wake: Wake;
+    targetKind: "session" | "room";
+    /** The session key, or the room's ref. */
+    target: string;
   };
 
   /**
@@ -995,6 +1014,24 @@ export interface PreToolUseWaterfall {
   /** The call's arguments. Replace them to change what runs. */
   args: Record<string, unknown>;
   /**
+   * What the call does, as the tool declares it for these arguments: `read`
+   * when it declares nothing, which is how the loop's own checks read it.
+   * Worked out from the arguments as the waterfall received them, so a
+   * subscriber that rewrites `args` doesn't change it. Changing it changes
+   * nothing.
+   */
+  effect: ToolEffect;
+  /** False when the tool declares no effect, so `effect` is the `read` it defaults to rather than its word. */
+  effectDeclared: boolean;
+  /**
+   * Why the turn is running, as `ToolContext.wake` has it. Set on turns started
+   * through `runtime.wakeAgent` and on subscription turns, and carried into an
+   * agent they delegate to or message. Other turns nobody asked for (cron,
+   * schedules, room check-ins, autopilot, exploratory ticks) don't set it yet,
+   * so its absence doesn't mean a person asked.
+   */
+  wake?: Wake;
+  /**
    * Set to refuse the call. The text is returned to the model in place of the
    * tool's output, so write it as an instruction — the model reads it and
    * decides what to do next, and "denied" alone tells it nothing.
@@ -1057,6 +1094,7 @@ export const KNOWN_BROADCAST_EVENTS = [
   "agent.stalled",
   "agent.turn_ended",
   "agent.turn_started",
+  "agent.woken",
   "agents.pause_changed",
   "approval.requested",
   "approval.settled",
@@ -1138,6 +1176,7 @@ export const AGENT_SCOPED_EVENTS = [
   "agent.stalled",
   "agent.turn_ended",
   "agent.turn_started",
+  "agent.woken",
   "approval.requested",
   "approval.settled",
   "interface.action",

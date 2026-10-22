@@ -66,11 +66,12 @@ export class NotifyOwnerTool implements Tool {
       };
     }
 
-    // Repeat-gate only the unprompted case. A background tick or autopilot run
-    // is the agent deciding on its own that the user should hear something, and
-    // that is what repeats. When the user is present and asked for something,
-    // send it however many times they ask.
-    const proactive = Boolean(context.exploratoryRunId || context.autopilotTaskId);
+    // Repeat-gate only the unprompted case. A background tick, an autopilot run
+    // or a woken turn (a subscription, a plugin's own) is the agent deciding on
+    // its own that the user should hear something, and that is what repeats.
+    // When the user is present and asked for something, send it however many
+    // times they ask.
+    const proactive = Boolean(context.exploratoryRunId || context.autopilotTaskId || context.wake);
     const gate = proactive ? resolveGate(this.getGate) : undefined;
 
     try {

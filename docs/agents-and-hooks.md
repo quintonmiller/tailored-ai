@@ -432,6 +432,37 @@ name is the wrong kind of surprise in a security control.
 Delivered by `builtin:config-hooks`, enabled by default and free when unused —
 it subscribes only to events something actually names.
 
+### What a tool-call hook sees
+
+`agent.pre_tool_use` carries the call and what's known about it:
+
+| field | |
+|---|---|
+| `tool`, `args`, `toolUseId`, `cwd` | the call, after `liftArgs` |
+| `agent`, `sessionId`, `projectId` | whose turn it is |
+| `effect` | what the tool says this call does: `read`, `write` or `irreversible`. `read` when the tool says nothing, which is how the loop's own checks read it |
+| `effectDeclared` | `false` when the tool says nothing, so `effect` is that default rather than the tool's word |
+| `wake` | why the turn is running when nobody asked for it, `{ kind, ref }`: set on a subscription's turn or one started through `runtime.wakeAgent`, and on an agent either delegates to or messages. Cron, schedules, room check-ins, autopilot and exploratory ticks don't set it yet, so a missing `wake` doesn't mean a person asked |
+
+So a deployment can put a check in front of every call a tool declares
+irreversible, whichever tool it is. Most tools declare nothing yet, MCP tools
+among them, and arrive as `effect: read`; the second entry catches those:
+
+```yaml
+hooks:
+  on:
+    agent.pre_tool_use:
+      - when: { effect: irreversible }
+        tool: policy_check
+        denyIf: "BLOCK"
+      - when: { effectDeclared: false }
+        tool: policy_check
+        denyIf: "BLOCK"
+```
+
+`when` compares as text, so `false` and `"false"` match alike. `wake` is an
+object, for plugins that subscribe in code; `when` can't reach inside it.
+
 ### Whose hook is it
 
 Two places to declare one, and which you want depends on the event.

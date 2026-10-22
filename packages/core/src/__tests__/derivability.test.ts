@@ -5,7 +5,7 @@ import { runAgentLoop } from "../agent/loop.js";
 import { newSession } from "../agent/session.js";
 import { initDatabase } from "../db/schema.js";
 import type { AIProvider, ChatParams, ChatResponse } from "../providers/interface.js";
-import { classifyCommand, effectOf } from "../tools/effect.js";
+import { classifyCommand, declaredEffectOf, effectOf } from "../tools/effect.js";
 import type { Tool, ToolResult } from "../tools/interface.js";
 
 /**
@@ -278,6 +278,38 @@ describe("commands the first classifier missed", () => {
   it("still leaves listing alone", () => {
     for (const command of ["aws s3 ls", "aws s3api list-buckets", "gcloud storage buckets list"]) {
       expect(classifyCommand(command), command).toBe("read");
+    }
+  });
+});
+
+describe("declaredEffectOf", () => {
+  const tool = (effect?: Tool["effect"]): Tool =>
+    ({
+      name: "t",
+      description: "t",
+      parameters: {},
+      effect,
+      async execute() {
+        return { success: true, output: "" };
+      },
+    }) as Tool;
+
+  it("tells a tool that says nothing from one that says it only reads", () => {
+    expect(declaredEffectOf(tool(), {})).toBeUndefined();
+    expect(declaredEffectOf(tool("read"), {})).toBe("read");
+  });
+
+  it("agrees with effectOf on every declared effect, a throwing classifier included", () => {
+    const declared: Array<Tool["effect"]> = [
+      "write",
+      "irreversible",
+      (a) => (a.x === 1 ? "write" : "read"),
+      () => {
+        throw new Error("bad");
+      },
+    ];
+    for (const effect of declared) {
+      expect(declaredEffectOf(tool(effect), { x: 1 })).toBe(effectOf(tool(effect), { x: 1 }));
     }
   });
 });

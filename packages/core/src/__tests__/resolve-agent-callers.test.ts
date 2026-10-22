@@ -22,7 +22,8 @@ describe("every resolveAgent caller passes the resolve options", () => {
     "task-watcher.ts",
     "channels/discord.ts",
     "runtime.ts",
-    "subscriptions/delivery.ts",
+    // Subscription session wakes resolve their agent here now, as plugins' turns do.
+    "agent/wake.ts",
   ];
 
   for (const rel of files) {

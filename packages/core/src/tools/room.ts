@@ -16,6 +16,7 @@
  * prompt and config, not code.
  */
 
+import type { Wake } from "../agent/wake.js";
 import { checkGuardrails } from "../guardrails/check.js";
 import { collectTurnComponents, collectTurnMedia, turnStartId, withComponentText } from "../media/turn.js";
 import type { NotificationGateLike } from "../notifications/dedup.js";
@@ -39,8 +40,8 @@ export interface RoomToolOptions {
   defaultBackend?: () => string | undefined;
   /** Where an agent's direct messages go, when one has been designated. */
   desks?: () => Record<string, string> | undefined;
-  /** Hand a message straight to another agent and return its reply. */
-  deliverAgentMessage?: (to: string, from: string, body: string) => Promise<string>;
+  /** Hand a message straight to another agent and return its reply. `wake` carries a woken sender's reason over. */
+  deliverAgentMessage?: (to: string, from: string, body: string, wake?: Wake) => Promise<string>;
 }
 
 const URGENCIES: RoomUrgency[] = ["high", "medium", "low"];
@@ -644,7 +645,7 @@ export class RoomTool implements Tool {
     if (!this.opts.deliverAgentMessage) {
       return fail("Direct messaging is not wired up in this deployment.");
     }
-    const reply = await this.opts.deliverAgentMessage(identity.agent, agentName, body);
+    const reply = await this.opts.deliverAgentMessage(identity.agent, agentName, body, context.wake);
     return ok(reply.trim() ? `${identity.label} replied:\n${reply.trim()}` : `Delivered to ${identity.label}.`);
   }
 

@@ -31,8 +31,13 @@ import type { AgentRuntime } from "./runtime.js";
 
 export interface CreateToolsOptions {
   resolveOutbound?: (channelId?: string) => import("./channels/outbound.js").OutboundNotifier | undefined;
-  /** Deliver a message straight to another agent and return its reply. */
-  deliverAgentMessage?: (to: string, from: string, body: string) => Promise<string>;
+  /** Deliver a message straight to another agent and return its reply. `wake` carries a woken sender's reason over. */
+  deliverAgentMessage?: (
+    to: string,
+    from: string,
+    body: string,
+    wake?: import("./agent/wake.js").Wake,
+  ) => Promise<string>;
   getOwnerId?: (channelId?: string) => string | undefined;
   /** Repeat gate for unsolicited outbound messages. See NotificationGate. */
   getNotificationGate?: () => import("./notifications/dedup.js").NotificationGate | undefined;
