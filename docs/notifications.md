@@ -67,7 +67,8 @@ notifications:
 
 - **Anything you asked for is never suppressed.** Chat replies don't touch the
   gate at all, and a run you triggered yourself — the UI's "Run now",
-  `POST /api/cron/:name/run` — bypasses it while still recording the send.
+  `POST /api/cron/:name/run` — bypasses it. That run isn't recorded, so the
+  repeat window doesn't move, and it isn't announced on the bus.
 - **Fails open.** If the gate is missing, or its database is locked or
   mid-migration, the message still goes out. A duplicate is an annoyance; a
   dropped notification is a missed thing you needed to know.
@@ -98,6 +99,9 @@ runtime's event bus, as two events:
   If an agent's `notify_owner` call or room post is held back, the agent gets
   the reason as the tool's answer, so write the reason for the agent and say
   what to do instead. A held-back message isn't written to `notification_log`.
+  A held room post also keeps that turn's closing reply out of the room: the
+  watcher posts that reply through no gate, so it would otherwise undo the
+  hold, often with the same message in other words.
 
 - **`notification.sent`** is a broadcast. It fires after the transport has
   taken the message. It never fires for a repeat, a held-back message, or a
@@ -124,9 +128,21 @@ Both carry the same fields:
 Both events name an agent, so a hook declared under `agents.<name>` fires for
 that agent's messages only.
 
-The events fail open, like the rest of the gate. A subscriber that throws is
-skipped and the message still goes out. A gate built without a bus works
-exactly as it did before these events existed, and so does `PASSTHROUGH_GATE`.
+The events fail open, like the rest of the gate. A plugin listener that throws
+is skipped, and so is a bus that throws, and the message still goes out. A
+config hook can fail closed instead ([below](#holding-a-kind-back)). A gate
+built without a bus works exactly as it did before these events existed, and
+so does `PASSTHROUGH_GATE`.
+
+The gate waits for `notification.outgoing` to finish before it sends, as core
+waits for any waterfall. A slow subscriber delays the message, and one that
+never returns holds it up.
+
+A message a `notification.outgoing` subscriber sends while it runs, such as a
+copy to an audit room, isn't run through `notification.outgoing` again. It still
+goes through the repeat check and is announced on `notification.sent`. Without
+that, the copy would run the subscriber again, and that copy would too, before
+anything was sent.
 
 ### What a kind is
 
@@ -169,11 +185,17 @@ const plugin: Plugin = (ctx) => {
 };
 ```
 
-A config hook can refuse too. Any hook that refuses on `notification.outgoing`
-holds the message back, such as a `script` hook that exits non-zero, with its
-stderr as the reason. Like every refusable hook, one that fails to run refuses
-unless it says `onError: continue`. Set that on a hook that only watches, or a
-broken script will hold back every message.
+A config hook can refuse too, and any hook that refuses on
+`notification.outgoing` holds the message back. A `script` hook refuses
+whenever it exits non-zero or times out (after 120 seconds by default), with its
+stderr as the reason, and `onError: continue` doesn't change that. `onError`
+only covers a handler that throws, such as a `tool` hook whose tool fails, which
+refuses unless the hook says `onError: continue`. A `script` hook whose command
+can't be started at all is skipped, and the message goes out.
+
+So put a hook that only watches on `notification.sent`, a broadcast that can't
+hold anything back. A watching script on `notification.outgoing` holds back
+every message the moment it breaks.
 
 ### Logging every unprompted message
 

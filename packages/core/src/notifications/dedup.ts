@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { EventBus, NotificationFields } from "../events.js";
@@ -322,6 +323,18 @@ export function resolveGate(get?: () => NotificationGateLike | undefined): Notif
   }
 }
 
+/**
+ * Set while a `notification.outgoing` subscriber runs.
+ *
+ * A subscriber that sends a message of its own, such as a hook that copies
+ * every message into an audit room, would otherwise run the waterfall again
+ * from inside itself, and again from inside that, before the first message was
+ * ever sent: the repeat check comes after the waterfall, so it cannot end the
+ * loop. Module-wide rather than per gate, so two gates on one bus cannot pass
+ * the loop between them.
+ */
+const insideOutgoing = new AsyncLocalStorage<true>();
+
 /** SQLite's `datetime('now')`, for a send the log couldn't give a time to. */
 function sqliteNow(): string {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -489,8 +502,10 @@ export class NotificationGate implements NotificationGateLike {
     // Before the repeat check, so a subscriber sees every message, repeats
     // included. What it holds back is logged and left out of the table, whose
     // counts are of messages sent and repeats withheld. Not awaited at all
-    // without a bus, so a gate with none runs as it did before it had one.
-    const held = this.events ? await this.outgoing(this.events, fields, log) : undefined;
+    // without a bus, so a gate with none runs as it did before it had one, nor
+    // for a message a subscriber sends while it runs, which would otherwise
+    // run the waterfall from inside itself without end.
+    const held = this.events && !insideOutgoing.getStore() ? await this.outgoing(this.events, fields, log) : undefined;
     if (held) {
       log?.(`[notify] suppressed ${candidate.source} -> ${candidate.target} (${held})`);
       return { send: false, verdict: "held", reason: held, suppressedCount: 0 };
@@ -549,7 +564,7 @@ export class NotificationGate implements NotificationGateLike {
     log?: (message: string) => void,
   ): Promise<string | undefined> {
     try {
-      const out = await events.waterfall("notification.outgoing", { ...fields });
+      const out = await insideOutgoing.run(true, () => events.waterfall("notification.outgoing", { ...fields }));
       return out?.deny || undefined;
     } catch (err) {
       log?.(`[notify] notification.outgoing failed (${(err as Error).message}) — sending anyway`);

@@ -26,7 +26,7 @@ import { enrichRoomMessage, type IdentityResolver } from "../rooms/identities.js
 import { getRoomBackend, listRoomBackends, requireRoomBackend } from "../rooms/registry.js";
 import type { RoomStore, WakeOn } from "../rooms/store.js";
 import { DEFAULT_URGENCY_WINDOW_HOURS, formatRoomRef, type Room, type RoomUrgency } from "../rooms/types.js";
-import { roomPostedKey, WAKE_ROOMS_KEY } from "../rooms/watcher.js";
+import { roomHeldKey, roomPostedKey, WAKE_ROOMS_KEY } from "../rooms/watcher.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface RoomToolOptions {
@@ -481,6 +481,9 @@ export class RoomTool implements Tool {
     );
 
     if (decision.verdict === "held") {
+      // Without this the watcher would post the turn's closing text to the
+      // room instead, and that text is often this message in other words.
+      context.workingMemory?.set(roomHeldKey(ref), "true");
       return ok(`Held back — ${decision.reason}`);
     }
     if (!sent) {

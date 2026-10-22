@@ -20,9 +20,15 @@ runtime's bus:
 
 Both are in the event catalog, so `hooks.on` can bind to either and a
 subscription can wake an agent on `notification.sent`. Both name the agent, so
-a hook declared under an agent sees only that agent's messages. A hook that refuses on `notification.outgoing` holds the
-message back, and one that fails to run refuses unless it says
-`onError: continue`.
+a hook declared under an agent sees only that agent's messages. A hook that
+refuses on `notification.outgoing` holds the message back. A `script` hook
+there refuses whenever it exits non-zero or times out, whatever `onError` says,
+so put a hook that only watches on `notification.sent`.
+
+A room post that was held back also keeps that turn's closing reply out of the
+room, so the agent's next sentence can't undo the hold. A message a
+`notification.outgoing` subscriber sends while it runs isn't run through the
+waterfall again, so a hook that copies messages somewhere can't loop.
 
 `NotificationCandidate` gains `kind` and `agent`. A kind is coarse, one per
 sort of message: `cron:<job>`, `task-blocked`, `digest`, `question`,

@@ -367,8 +367,9 @@ export class CronScheduler {
     // changed keeps producing the same summary; the user should hear it once.
     //
     // A run the user triggered is the opposite case: they asked for this
-    // answer now, so it always goes out, unchanged or not. It still records a
-    // send so the window advances.
+    // answer now, so it always goes out, unchanged or not. It goes through
+    // `PASSTHROUGH_GATE`, which records nothing, so the repeat window doesn't
+    // move and the run isn't announced on the bus.
     const gate = solicited ? PASSTHROUGH_GATE : resolveGate(() => this.runtime.getNotificationGate?.());
     // One kind per job: a job is one sort of message, however its text varies.
     const about = { source: `cron:${job.name}`, kind: `cron:${job.name}`, agent: job.agent ?? job.profile };

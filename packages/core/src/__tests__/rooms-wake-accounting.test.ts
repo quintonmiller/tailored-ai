@@ -20,6 +20,8 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
+import { TypedEventBus } from "../events.js";
+import { NotificationGate } from "../notifications/dedup.js";
 
 const runAgentLoopMock = vi.fn();
 vi.mock("../agent/loop.js", async () => {
@@ -27,11 +29,13 @@ vi.mock("../agent/loop.js", async () => {
   return { ...actual, runAgentLoop: (...args: unknown[]) => runAgentLoopMock(...args) };
 });
 
+import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
 import { RoomStore } from "../rooms/store.js";
 import { RoomWatcher, roomPostedKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
+import { RoomTool } from "../tools/room.js";
 
 let db: Database.Database;
 let store: RoomStore;
@@ -176,5 +180,51 @@ describe("wake accounting: a tool post is not silence (#345)", () => {
     });
 
     expect(wakesThisHour()).toBe(1);
+  });
+});
+
+describe("a room post a notification.outgoing subscriber held back", () => {
+  // The closing text of a room turn is posted by the watcher, through no gate.
+  // A hold that the tool honoured and the watcher then undid with the agent's
+  // next sentence, often the same message reworded, would be no hold at all.
+  function heldTool(): RoomTool {
+    const events = new TypedEventBus();
+    events.onWaterfall("notification.outgoing", async (p) => ({
+      ...p,
+      deny: "This room is quiet until morning. Post it then.",
+    }));
+    const gate = new NotificationGate(db, () => ({}), events);
+    return new RoomTool({
+      store,
+      identities: () => new IdentityResolver({ agentNames: ["coder", "supervisor"] }),
+      getNotificationGate: () => gate,
+      urgencyWindowHours: () => undefined,
+      defaultBackend: () => "local",
+    });
+  }
+
+  const contents = (): string[] =>
+    (db.prepare("SELECT content FROM room_messages ORDER BY id").all() as Array<{ content: string }>).map(
+      (r) => r.content,
+    );
+
+  it("keeps the turn's closing text out of the room", async () => {
+    const tool = heldTool();
+    let answer = "";
+    runAgentLoopMock.mockImplementation(async (_prompt: string, opts: Record<string, any>) => {
+      const workingMemory = opts.toolContextExtras.workingMemory as Map<string, string>;
+      const res = await tool.execute(
+        { action: "post", room: "eng", body: "status is green" },
+        { sessionId: "s", workingDirectory: "/tmp", env: {}, agentName: "coder", workingMemory },
+      );
+      answer = res.output;
+      return "Understood. Status is green, I'll post it in the morning.";
+    });
+    const before = contents();
+
+    await new RoomWatcher({ runtime: makeRuntime(), store }).pollOnce("coder", ROOM);
+
+    expect(answer).toBe("Held back — This room is quiet until morning. Post it then.");
+    expect(contents()).toEqual(before);
   });
 });

@@ -150,6 +150,47 @@ describe("notification.outgoing", () => {
     expect(decision.send).toBe(true);
     expect(lines[0]).toContain("notification.outgoing failed (bus down)");
   });
+
+  it("does not run again for a message a subscriber sends while it runs", async () => {
+    // A subscriber that copies every message somewhere through the same gate.
+    // The repeat check comes after the waterfall, so it can't end the loop;
+    // without a guard each copy runs the waterfall again before anything is
+    // sent. Capped here so a broken guard fails the test instead of hanging it.
+    const events = new TypedEventBus();
+    const sent = sentOn(events);
+    const gate = new NotificationGate(db, () => undefined, events);
+    const send = vi.fn(async () => {});
+    let runs = 0;
+    events.onWaterfall("notification.outgoing", async (p, next) => {
+      runs += 1;
+      if (runs < 5) await gate.deliver(candidate(`audit: ${p.preview}`, { source: "audit", target: "AUDIT" }), send);
+      return next(p);
+    });
+
+    const decision = await gate.deliver(candidate("The nightly build is red."), send);
+
+    expect(runs).toBe(1);
+    expect(decision.send).toBe(true);
+    // The copy still goes through the repeat check and is announced.
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sent.map((s) => s.source)).toEqual(["audit", "cron:digest"]);
+  });
+
+  it("runs again for the next message once a subscriber has finished", async () => {
+    // The guard is scoped to the subscriber's own work, not left set behind it.
+    const events = new TypedEventBus();
+    const gate = new NotificationGate(db, () => undefined, events);
+    let runs = 0;
+    events.onWaterfall("notification.outgoing", async (p, next) => {
+      runs += 1;
+      return next(p);
+    });
+
+    await gate.deliver(candidate("The nightly build is red."), async () => {});
+    await gate.deliver(candidate("The nightly build is green again."), async () => {});
+
+    expect(runs).toBe(2);
+  });
 });
 
 describe("notification.sent", () => {
@@ -450,6 +491,36 @@ describe("config hooks", () => {
     expect(weather).toMatchObject({ send: false, verdict: "held", reason: "weather is muted" });
     expect(digest.send).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
+    hooks.stop();
+    dispose();
+  });
+
+  it("a hook on notification.outgoing that sends a message itself does not loop", async () => {
+    // The shape of a hook that copies every unprompted message to an audit
+    // room: its handler sends through the same gate while the waterfall runs.
+    const events = new TypedEventBus();
+    const gate = new NotificationGate(db, () => undefined, events);
+    const send = vi.fn(async () => {});
+    let runs = 0;
+    const dispose = registerEventHookHandler("copy-test", async (ctx) => {
+      runs += 1;
+      if (runs < 5) {
+        await gate.deliver(
+          candidate(`copy: ${String(ctx.payload.preview)}`, { source: "copy", target: "AUDIT" }),
+          send,
+        );
+      }
+      return { output: "" };
+    });
+    const hooks = new ConfigHooks({
+      runtime: runtimeFor(config({ "notification.outgoing": { type: "copy-test" } }), events),
+    });
+
+    const decision = await gate.deliver(candidate("Rain at noon.", { source: "cron:weather" }), send);
+
+    expect(runs).toBe(1);
+    expect(decision.send).toBe(true);
+    expect(send).toHaveBeenCalledTimes(2);
     hooks.stop();
     dispose();
   });

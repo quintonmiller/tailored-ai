@@ -64,6 +64,19 @@ export function roomPostedKey(roomRef: string): string {
   return `${ROOM_POSTED_PREFIX}${roomRef}`;
 }
 
+/**
+ * Working-memory key recording that a `notification.outgoing` subscriber held
+ * back the agent's post to `roomRef` this turn.
+ *
+ * Its own marker rather than `room:passed:`, because the agent did not choose
+ * silence and a pass is counted and questioned as one. What the two share is
+ * that the turn's closing text must not reach the room: posting it would undo
+ * the hold with whatever the agent said next, often the same message reworded.
+ */
+export function roomHeldKey(roomRef: string): string {
+  return `room:held:${roomRef}`;
+}
+
 /** Why an agent was woken. Surfaced in the activity record. */
 export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked" | "scheduled" | "event" | "woken";
 
@@ -2258,14 +2271,17 @@ export class RoomWatcher {
     // output is spent asking which room it was for.
     const passed = rooms.some((ref) => workingMemory.get(`room:passed:${ref}`) === "true");
     const spokeThroughTool = rooms.some((ref) => workingMemory.get(roomPostedKey(ref)) === "true");
+    // A post a subscriber held back settles the turn the way a post that went
+    // out does: nothing the turn ends with will be sent to that room.
+    const held = rooms.some((ref) => workingMemory.get(roomHeldKey(ref)) === "true");
 
     // A fourth thing that goes wrong at the end of a turn: the message is
     // well-formed and against the house rules. Checked only when this reply is
     // the thing that will actually be posted — an agent that already spoke
-    // through the room tool has sent different text, and one that passed is
-    // sending none.
+    // through the room tool has sent different text, and one that passed, or
+    // whose post was held back, is sending none.
     const guardrailReason =
-      !passed && !spokeThroughTool && reply.trim().length > 0
+      !passed && !spokeThroughTool && !held && reply.trim().length > 0
         ? await checkGuardrails(resolved.guardrails, reply, {
             agent: sub.agent,
             surface: "room",
@@ -2284,7 +2300,7 @@ export class RoomWatcher {
               "Your last message came out as raw tool-call markup rather than a tool call, so nothing was sent.",
             )
           : "Your last message came out as raw tool-call markup rather than a tool call, so nothing was sent. Say what you wanted to say as plain text — you are already in the room, and a reply does not need a tool call."
-        : batch && reply.trim().length > 0 && !spokeThroughTool && !passed
+        : batch && reply.trim().length > 0 && !spokeThroughTool && !passed && !held
           ? this.batchCorrection(batch, "A message needs one of them, so nothing has been sent yet.")
           : guardrailReason
             ? // Below the malformed-output branches on purpose: a reply that is
@@ -2499,6 +2515,7 @@ export class RoomWatcher {
     // the closing text is commentary on a decision already made.
     if (batch.subs.some((s) => workingMemory.get(roomPostedKey(s.roomRef)) === "true")) return;
     if (batch.subs.some((s) => workingMemory.get(`room:passed:${s.roomRef}`) === "true")) return;
+    if (batch.subs.some((s) => workingMemory.get(roomHeldKey(s.roomRef)) === "true")) return;
     if (looksLikeUninvokedPass(body)) return;
     console.warn(
       `[rooms] ${agent} answered a combined wake over ${batch.names.join(", ")} with text naming no room, twice. Not posted: ${body.slice(0, 160)}`,
@@ -2679,6 +2696,9 @@ export class RoomWatcher {
     // The agent explicitly chose to stay quiet. Posting its closing thought
     // anyway would make `pass` decorative.
     if (workingMemory.get(`room:passed:${sub.roomRef}`) === "true") return null;
+    // A subscriber held the agent's post back. The closing text goes out
+    // through no gate, so posting it would undo the hold.
+    if (workingMemory.get(roomHeldKey(sub.roomRef)) === "true") return null;
 
     // Still against the rules after its correction round. Dropped the same way
     // raw tool-call markup is: the agent has had its one chance to say this
