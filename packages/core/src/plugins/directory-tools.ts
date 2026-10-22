@@ -13,6 +13,7 @@ import type { StateCaller, StateSearchHit } from "../state/service.js";
 import { StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
+import { type Check, checkFields, checkLine, checkSaid, newCheckFields, readCheckFor } from "./directory-checks.js";
 import {
   ACTIVE,
   AGENT_AUTONOMY,
@@ -113,15 +114,22 @@ function count(n: number, full: boolean): string {
   return `${n}${full ? "+" : ""}`;
 }
 
+/** The moment a line is written for, and the zone a check's time is said in. */
+export interface Clock {
+  now: Date;
+  timeZone: string;
+}
+
 /**
  * A commitment in one line: id, goal, status, progress, next step and check,
- * and how long since it moved. `name` puts an owner in words ("the travel
- * room"): with it, a lead's commitment for a room says which room, or, in a
- * list of the room's own (`inRoom`), which agent took it on.
+ * and how long since it moved. The check is said as the directory read it, so
+ * "in 2 days" reads as the day it meant. `name` puts an owner in words ("the
+ * travel room"): with it, a lead's commitment for a room says which room, or,
+ * in a list of the room's own (`inRoom`), which agent took it on.
  */
 export function commitmentLine(
   record: StateRecord,
-  now: Date,
+  clock: Clock,
   name?: (owner: string) => string,
   inRoom = false,
 ): string {
@@ -139,8 +147,9 @@ export function commitmentLine(
   const progress = formatProgress(d.progress);
   if (progress) parts.push(progress);
   if (text(d.nextStep)) parts.push(`next: ${text(d.nextStep)}`);
-  if (text(d.nextCheck)) parts.push(`check: ${text(d.nextCheck)}`);
-  const moved = ago(lastUpdate(record), now);
+  const check = checkLine(d, clock.timeZone);
+  if (check) parts.push(`check: ${check}`);
+  const moved = ago(lastUpdate(record), clock.now);
   if (moved) parts.push(`last update ${moved}`);
   return `- ${record.id} "${titleOf(record) ?? ""}": ${parts.join(", ")}`;
 }
@@ -158,7 +167,7 @@ function docLine(record: StateRecord): string {
 export function formatAbout(
   entry: AgentEntry,
   self: boolean,
-  now: Date,
+  clock: Clock,
   ownerName?: (owner: string) => string,
 ): string {
   const name = self ? `${entry.agent} (you)` : entry.agent;
@@ -193,7 +202,7 @@ export function formatAbout(
       ? `Working on (${count(entry.working.length, moreWork)}):`
       : "Working on: nothing shared that's open or waiting.",
   );
-  const line = (r: StateRecord) => commitmentLine(r, now, ownerName);
+  const line = (r: StateRecord) => commitmentLine(r, clock, ownerName);
   lines.push(...capped(entry.working, line, "commitment list shows more", moreWork));
   if (entry.private.length) {
     lines.push(`Private, only you see these (${count(entry.private.length, moreWork)}):`);
@@ -232,7 +241,7 @@ export function leadLine(lead: Lead): string {
  * and to its members what it's working on, what it has written up and what
  * was asked in its area that nobody could answer.
  */
-export function formatRoomAbout(entry: RoomEntry, now: Date, name: (owner: string) => string): string {
+export function formatRoomAbout(entry: RoomEntry, clock: Clock, name: (owner: string) => string): string {
   const { room } = entry;
   const lines: string[] = [];
   const p = entry.profile?.data;
@@ -268,7 +277,7 @@ export function formatRoomAbout(entry: RoomEntry, now: Date, name: (owner: strin
   lines.push(
     ...capped(
       entry.working,
-      (r) => commitmentLine(r, now, name, true),
+      (r) => commitmentLine(r, clock, name, true),
       `commitment list with room ${room.name} shows more`,
       moreWork,
     ),
@@ -493,7 +502,7 @@ export class DirectoryTool implements Tool {
           return fail(`There's no agent called "${asked}".${roster.length ? ` Agents: ${roster.join(", ")}.` : ""}`);
         }
         const entry = await this.directory.entry(caller, agent);
-        return ok(formatAbout(entry, agent === me, this.directory.now(), name));
+        return ok(formatAbout(entry, agent === me, this.directory.clock(), name));
       }
       if (action === "search") {
         const q = text(args.q ?? args.query ?? args.text);
@@ -524,7 +533,7 @@ export class DirectoryTool implements Tool {
         }
         await this.directory.saveProfile(narrow, fields);
         const entry = await this.directory.entry(caller, me);
-        return ok(`Saved your profile. Others now see:\n${formatAbout(entry, true, this.directory.now(), name)}`);
+        return ok(`Saved your profile. Others now see:\n${formatAbout(entry, true, this.directory.clock(), name)}`);
       }
       if (action === "page") return room ? this.roomPage(caller, room, args) : this.page(narrow, args);
       return fail(`Unknown action "${args.action ?? ""}". Use about, search, profile or page.`);
@@ -539,7 +548,7 @@ export class DirectoryTool implements Tool {
       return fail(`There's no room called "${asked}".${known.length ? ` Rooms: ${known.join(", ")}.` : ""}`);
     }
     const entry = await this.directory.roomEntry(caller, room);
-    return ok(formatRoomAbout(entry, this.directory.now(), (owner) => this.directory.ownerName(owner)));
+    return ok(formatRoomAbout(entry, this.directory.clock(), (owner) => this.directory.ownerName(owner)));
   }
 
   /** Change a room's profile, for a member: only the fields given. */
@@ -561,7 +570,7 @@ export class DirectoryTool implements Tool {
     if (!room) return ok(`Saved the room's profile.`);
     const entry = await this.directory.roomEntry(caller, room);
     return ok(
-      `Saved the ${room.name} room's profile. Others now see:\n${formatRoomAbout(entry, this.directory.now(), (o) => this.directory.ownerName(o))}`,
+      `Saved the ${room.name} room's profile. Others now see:\n${formatRoomAbout(entry, this.directory.clock(), (o) => this.directory.ownerName(o))}`,
     );
   }
 
@@ -748,7 +757,11 @@ export class CommitmentTool implements Tool {
       goal: { type: "string", description: "open: what it's for, in one line." },
       doneWhen: { type: "string", description: "open: how anyone can tell it's finished." },
       nextStep: { type: "string", description: "open or update: the next thing you'll do." },
-      nextCheck: { type: "string", description: "open or update: when to look again, a date or an event." },
+      nextCheck: {
+        type: "string",
+        description:
+          'open or update: when you\'re woken to look again: a time ("Friday 9am", "in 2 days") or "when <type>/<id> changes".',
+      },
       autonomy: {
         type: "string",
         enum: [...AUTONOMY],
@@ -820,12 +833,19 @@ export class CommitmentTool implements Tool {
         "A room's commitments are for all its members to see. Leave out private, or room for one of your own.",
       );
     }
+    const nextCheck = text(args.nextCheck);
+    // Read as the agent it will wake: the opener, or the lead of the room it's for.
+    const known = room ? this.directory.room(room) : undefined;
+    const check = nextCheck
+      ? await readCheckFor(this.directory, known ? roomOwner(known.ref) : me, nextCheck)
+      : undefined;
     const data: Record<string, unknown> = {
       goal,
       doneWhen,
       status: "open",
       autonomy,
       updates: [{ at: now.toISOString(), text: "Opened.", ...(room ? { by: me } : {}) }],
+      ...newCheckFields(check),
     };
     for (const field of ["nextStep", "nextCheck", "from"] as const) {
       const value = text(args[field]);
@@ -838,6 +858,7 @@ export class CommitmentTool implements Tool {
     const whose = room ? `${this.directory.ownerName(ownerOf(record))}'s` : isPrivate ? "private" : "shared";
     const lines = [`Opened ${record.id}: "${goal}" (${whose}, ${autonomy}).`];
     if (asked !== autonomy) lines.push(autonomyRefused(asked, autonomy));
+    if (nextCheck && check) lines.push(checkSaid(nextCheck, check, now, this.directory.timeZone()));
     const name = (owner: string) => this.directory.ownerName(owner);
     const similar = similarLine(
       await this.directory.similar(caller, COMMITMENT_TYPE, goal, ownerOf(record) ?? me),
@@ -870,10 +891,13 @@ export class CommitmentTool implements Tool {
     if (!others && !autonomy) {
       return fail("update needs at least one of `note`, `progress`, `nextStep`, `nextCheck`, `status` or `waitingOn`.");
     }
+    // Read first when the answer depends on it: the autonomy it has, and whose it is, which says who a check wakes.
+    const current =
+      autonomy || nextCheck ? await this.directory.own(caller, COMMITMENT_TYPE, id, "commitment") : undefined;
     // Asking for the autonomy it already has changes nothing, granted or not.
-    const has = autonomy
-      ? String((await this.directory.own(caller, COMMITMENT_TYPE, id, "commitment")).data.autonomy ?? AGENT_AUTONOMY)
-      : undefined;
+    const has = autonomy ? String(current?.data.autonomy ?? AGENT_AUTONOMY) : undefined;
+    const check: Check | undefined =
+      nextCheck && current ? await readCheckFor(this.directory, ownerOf(current), nextCheck) : undefined;
     const same = !!autonomy && autonomy === has;
     // An agent can step back to asking first, never up: a granted tell or quiet is left as it is.
     const lower = autonomy === AGENT_AUTONOMY && !same;
@@ -886,7 +910,7 @@ export class CommitmentTool implements Tool {
       const changes: Record<string, unknown> = {};
       if (progress !== undefined) changes.progress = progress;
       if (nextStep) changes.nextStep = nextStep;
-      if (nextCheck) changes.nextCheck = nextCheck;
+      if (nextCheck) Object.assign(changes, { nextCheck }, checkFields(check));
       // Waiting on someone implies waiting; going back to open clears who it waited on, unless a person set that.
       const next: Status | undefined = (status as Status | undefined) ?? (waitingOn ? "waiting" : undefined);
       if (next) changes.status = next;
@@ -899,10 +923,10 @@ export class CommitmentTool implements Tool {
       changes.updates = withUpdate(r.data.updates, { at: now.toISOString(), text: said, ...by });
       return changes;
     });
-    const updated = `Updated ${commitmentLine(record, now).slice(2)}`;
-    return ok(
-      refuse ? `${updated}\n${autonomyRefused(autonomy, String(record.data.autonomy ?? AGENT_AUTONOMY))}` : updated,
-    );
+    const lines = [`Updated ${commitmentLine(record, { now, timeZone: this.directory.timeZone() }).slice(2)}`];
+    if (refuse) lines.push(autonomyRefused(autonomy, String(record.data.autonomy ?? AGENT_AUTONOMY)));
+    if (nextCheck && check) lines.push(checkSaid(nextCheck, check, now, this.directory.timeZone()));
+    return ok(lines.join("\n"));
   }
 
   private async finish(
@@ -939,7 +963,7 @@ export class CommitmentTool implements Tool {
     }
     const statuses: readonly Status[] = which === "all" ? STATUSES : which ? [which as Status] : ACTIVE;
     const label = which === "all" ? "" : ` ${which ?? "open and waiting"}`;
-    const now = this.directory.now();
+    const clock = this.directory.clock();
     const name = (owner: string) => this.directory.ownerName(owner);
     const room = text(args.room);
     if (room) {
@@ -948,7 +972,7 @@ export class CommitmentTool implements Tool {
       const whose = `The ${inside.room.name} room's`;
       if (records.length === 0) return ok(`${whose}${label} commitments: none.`);
       const full = records.length >= LIST_READ;
-      const lines = records.slice(0, LIST_SHOWN).map((r) => commitmentLine(r, now, name, true));
+      const lines = records.slice(0, LIST_SHOWN).map((r) => commitmentLine(r, clock, name, true));
       if (records.length > LIST_SHOWN) {
         lines.push(
           `- …and ${count(records.length - LIST_SHOWN, full)} more; ask for one status at a time to see them.`,
@@ -964,7 +988,7 @@ export class CommitmentTool implements Tool {
     if (records.length === 0) return ok(`${whose}${label} commitments: none.`);
     const full = records.length >= LIST_READ;
     const lines = records.slice(0, LIST_SHOWN).map((r) => {
-      const line = commitmentLine(r, now, name);
+      const line = commitmentLine(r, clock, name);
       return r.scope === `agent:${me}` ? `${line}, private` : line;
     });
     if (records.length > LIST_SHOWN) {

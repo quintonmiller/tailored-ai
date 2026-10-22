@@ -366,7 +366,10 @@ describe("commitment", () => {
       nextCheck: "Friday",
       from: "a person",
     });
-    expect(out).toBe('Opened planner-lisbon-trip-prep: "Lisbon trip prep" (shared, suggest).');
+    const [opened, check] = out.split("\n");
+    expect(opened).toBe('Opened planner-lisbon-trip-prep: "Lisbon trip prep" (shared, suggest).');
+    // When its check falls, in this machine's zone, since this runtime has no time provider of its own.
+    expect(check).toMatch(/^Check: Fri, \w+ \d+, 09:00, in .+\. No time was given, so 09:00\.$/);
     const r = await record(COMMITMENT_TYPE, "planner-lisbon-trip-prep");
     expect(r?.scope).toBe("global");
     expect(r?.data).toMatchObject({
@@ -1198,8 +1201,11 @@ describe("the commitments block", () => {
     const lines = text.split("\n").filter((l) => l.startsWith("- "));
     expect(lines).toHaveLength(3);
     expect(lines).toContain('- planner-gift-ideas "Gift ideas": open, last update just now, private');
-    expect(lines).toContain(
-      '- planner-weekly-review "Weekly review": open, 1/3, next: Gather notes, check: Friday, last update just now',
+    // The check as the directory read it: the Friday it meant, not the word, which says less every day.
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /^- planner-weekly-review "Weekly review": open, 1\/3, next: Gather notes, check: Fri, \w{3} \d{1,2}, 09:00, last update just now$/,
+      ),
     );
     // Work in hand first; what waits on someone after it.
     expect(lines[2]).toBe('- planner-book-flights "Book flights": waiting on a person, last update just now');

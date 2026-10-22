@@ -4,7 +4,10 @@ import { searchFields } from "../state/search.js";
 import type { StateCaller, StateService, StateTypeView } from "../state/service.js";
 import { type FieldCondition, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import { summarizeFields } from "../state/validate.js";
-import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import type { Tool, ToolContext, ToolEffect, ToolResult } from "./interface.js";
+
+/** The actions that only read. Every other one, an unknown one included, may change a record. */
+const READS = new Set(["types", "get", "query", "search"]);
 
 /** A query's default page. Small, because every record lands in the prompt. */
 const DEFAULT_LIMIT = 20;
@@ -98,6 +101,10 @@ export class StateTool implements Tool {
     'Read and write shared, structured state: typed records other agents and people also see. Start with action "types" to see what exists and each type\'s fields.';
 
   constructor(private readonly getService: () => StateService) {}
+
+  /** Said for each call, so a policy that lets reads through (a commitment check's turn) can let these through. */
+  effect = (args: Record<string, unknown>): ToolEffect =>
+    READS.has(String(args.action ?? "").toLowerCase()) ? "read" : "write";
 
   /**
    * Read on every request, so a type that opts into search later (a plugin

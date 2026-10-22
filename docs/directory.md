@@ -5,13 +5,14 @@ things up for each other. Other agents ask about any of it with one tool. It
 all lives in [world state](./world-state.md), so people see and edit the same
 records on the State page.
 
-This is steps 2 to 5 of [ownership and upkeep](./ownership-design.md). What
-works today: the records, the three tools, the similar-work check, misses, a
-"Your commitments" block in the prompt, a page for every agent in the web UI
-that the agent arranges and you can hand work through, an
-[upkeep turn](#upkeep) in which an agent looks after what it owns, and
-[rooms](#rooms) with a lead and records of their own. Nothing acts on a
-commitment by itself yet; see [Not yet](#not-yet).
+This is steps 2 to 5 of [ownership and upkeep](./ownership-design.md), and
+the first of step 7. What works today: the records, the three tools, the
+similar-work check, misses, a "Your commitments" block in the prompt, a page
+for every agent in the web UI that the agent arranges and you can hand work
+through, an [upkeep turn](#upkeep) in which an agent looks after what it owns,
+[rooms](#rooms) with a lead and records of their own, and
+[checks](#checks) that wake a commitment's owner when its `nextCheck` comes
+due. What's still to come is under [Not yet](#not-yet).
 
 ## Turn it on
 
@@ -24,6 +25,7 @@ plugins:
     enabled: true
     config:
       pin: true         # the "Your commitments" block; false leaves it out
+      checks: true      # a commitment's check wakes its owner; see Checks
       minMeaning: 0.5   # how close a search hit by meaning must be, 0 to 1
       minWords: 0.3     # how close a search hit by words must be, 0 to 1
       upkeep:           # off unless set; see Upkeep
@@ -44,7 +46,7 @@ it. An agent with no `tools:` list gets all of them. An agent with a list gets
 the ones it names, so a reader that should only look things up might take
 `[directory, writeup]`, and one that shouldn't have `state` leaves it out.
 
-**Changing it while TAI runs.** A config reload picks up `pin`, the two
+**Changing it while TAI runs.** A config reload picks up `pin`, `checks`, the two
 bars, `upkeep` and `leads` at once, and turning the directory on or off by reload adds or removes
 its tools, types, prompt block and routes straight away. A call already
 running when it is turned off answers that the directory is turned off, and
@@ -68,7 +70,7 @@ Six world-state types, declared by the plugin:
 | Type | Id | Where it lives | Holds |
 |---|---|---|---|
 | `profile` | the agent's name, or `room:<ref>` for a room's | `global` | `owner`, `purpose`, `takesOn` (a list), `howToAsk`; a room's also `room`, `note`, `noteAt`, `lead` |
-| `commitment` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, `agent:<owner>` when private, or `room:<ref>` for a room's | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from`, `room` |
+| `commitment` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, `agent:<owner>` when private, or `room:<ref>` for a room's | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from`, `room`, and the directory's reading of `nextCheck`: `checkAt`, `checkOn`, `checkedAt`, `checkEvents` (see [Checks](#checks)) |
 | `doc` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, or `room:<ref>` for a room's | `owner`, `title`, `summary`, `body`, `tags`, `reviewedAt`, `room` |
 | `miss` | `miss-<day>-<hash>` | `agent:<owner>`, or `room:<ref>` for a room's | `owner`, `query`, `askedBy`, `at`, `closest`, `room` |
 | `page` | the agent's name | `global` | `owner`, `note`, `noteAt`, `order`, `hide`, `extra` (see [Pages](#pages)) |
@@ -158,8 +160,8 @@ commitment(action: "open", goal: "Lisbon trip planning for November", doneWhen: 
 
 | Action | Takes | Does |
 |---|---|---|
-| `open` | `goal`, `doneWhen`, and optionally `nextStep`, `nextCheck`, `autonomy`, `private`, `from` | creates it, open, with an "Opened." update, and names up to two similar open commitments of other agents |
-| `update` | `id`, and any of `note`, `progress`, `nextStep`, `nextCheck`, `status` (`open` or `waiting`), `waitingOn` | changes those fields and adds a dated update: the note, or a line saying what changed. `waitingOn` sets it waiting; going back to `open` clears it |
+| `open` | `goal`, `doneWhen`, and optionally `nextStep`, `nextCheck`, `autonomy`, `private`, `from` | creates it, open, with an "Opened." update, and names up to two similar open commitments of other agents. With a `nextCheck`, says what it made of it ([Checks](#checks)) |
+| `update` | `id`, and any of `note`, `progress`, `nextStep`, `nextCheck`, `status` (`open` or `waiting`), `waitingOn` | changes those fields and adds a dated update: the note, or a line saying what changed. `waitingOn` sets it waiting; going back to `open` clears it. With a `nextCheck`, says what it made of it |
 | `done` | `id`, `note`? | marks it done; a count like 3/5 goes to 5/5 |
 | `drop` | `id`, `why` | marks it dropped, with the reason as its last update |
 | `archive` | `id`, `reason`? | puts it away |
@@ -167,8 +169,8 @@ commitment(action: "open", goal: "Lisbon trip planning for November", doneWhen: 
 
 `autonomy` says how much the agent may do about a commitment without asking:
 `suggest` asks first, `tell` acts on what's reversible and reports, `quiet`
-acts and logs. Nothing acts on it yet; it's recorded for the pieces still to
-come. **An agent can set `suggest` and nothing more.** `tell` and `quiet` are
+acts and logs. For now a [check's turn](#when-a-check-comes-due) asks first
+whatever it says, so `tell` and `quiet` behave like `suggest`. **An agent can set `suggest` and nothing more.** `tell` and `quiet` are
 a person's to grant: on the State page, in the hand-over form on the agent's
 page, or on a commitment in its Working on list. An agent that asks for more,
 opening a commitment or updating one, gets one plain sentence back:
@@ -182,6 +184,168 @@ The rest of the call goes through. An agent can always step back to
 `suggest` with `update`, and asking for the autonomy a commitment already has
 changes nothing and isn't refused. Commitments an agent opened with `tell` or
 `quiet` before this are left as they are.
+
+### Checks
+
+`nextCheck` says when the owner looks at a commitment again. It stays the text
+people and agents read and write, and the directory reads it as it's written:
+
+| `nextCheck` | Read as |
+|---|---|
+| a time: `Friday 9am`, `fri`, `in 2 days`, `tomorrow 5pm`, `2026-10-28`, `2026-10-28 14:00` | that moment, in the runtime's time zone (`time.timezone`), with the grammar [`schedule`](./schedules.md#when--one-shots) uses. A day with no time is 09:00 |
+| a change: `when plan/lisbon changes`, `when plan changes`, `when a booking changes where status=confirmed` | a change to that record, to any record of that type, or to one whose fields match, as [`state.changed`](./world-state.md) reports it, plus a backstop a week out |
+| anything else: `after Sam replies` | a note. Nothing wakes the owner for it |
+
+The tool says what it made of it, the way `schedule` echoes a booking. The
+commitment's line, in the reply, in listings and in the "Your commitments"
+block, says the check as the directory read it, so "in 2 days" reads as the
+day it meant, and a change as what it watches for:
+
+```
+commitment(action: "update", id: "planner-watch-hotel-prices", nextCheck: "Friday 9am")
+→ Updated planner-watch-hotel-prices "Watch hotel prices": open, check: Fri, Oct 23, 09:00, last update just now
+  Check: Fri, Oct 23, 09:00, in 22h.
+
+commitment(action: "update", id: "planner-watch-hotel-prices", nextCheck: "after Sam replies")
+→ Updated planner-watch-hotel-prices "Watch hotel prices": open, check: after Sam replies, last update just now
+  "after Sam replies" isn't a time or a change, so nothing will wake you for it; it stays a note. A check wakes
+  you for a time ("Friday 9am", "in 2 days", "2026-10-28") or a change ("when plan/lisbon changes", "when plan changes").
+```
+
+A note isn't refused: the update goes through and the reply says what would
+work. A change can only be one the agent it wakes can read: the owner, or a
+room's lead for one of the room's own. A type it can't read stays a note, and
+the reply says so.
+
+What the directory reads is kept beside the text, in fields it maintains:
+`checkAt` (when the owner is next woken, in UTC), `checkOn` (`{ type, id?,
+where? }`, the change it watches for), `checkedAt` (when it was last woken for
+one) and `checkEvents` (what changed since). They follow the text: a person's
+edit of `nextCheck` on the State page, on the agent's page (press the check on
+a commitment in its Working on list) or on a room's page is read again the same
+way, and clearing it takes the check away. On a room's commitment, a person's
+`nextCheck` holds like their other edits; the fields beside it never do.
+
+**Commitments written before checks were read.** When the directory starts,
+it reads once the `nextCheck` of each open or waiting commitment that has
+none of these fields, if the text means the same whenever it's read: a date
+(`2026-10-28`, `2026-10-28 14:00`) or a change. From then on it wakes its
+owner like one written today, and a date that has already passed is due at
+the first look. A relative one (`in 2 days`, `Friday`) is left as it was
+written, since what it meant then can't be told now, until it's next
+written; [upkeep](#upkeep) still notices one of those that reads as a date.
+
+**Turning checks off.** `checks: false` wakes no one for a check. The tool
+and a person's edit still read `nextCheck` and keep the fields beside it, and
+upkeep reports a time check that has come, since nothing else will.
+
+#### When a check comes due
+
+Every thirty seconds the directory looks for open and waiting commitments
+whose `checkAt` has come, oldest first, and wakes each one's owner, one at a
+time, through `runtime.wakeAgent`: the one way TAI wakes an agent nobody
+asked, so the pause switch, an online agent's own switch and its hourly wake
+ceiling (`rooms.maxWakesPerHour`, shared with its subscriptions, tends and
+upkeep) apply. A room's own commitment wakes the room's lead. The turn runs in
+the commitment's own session, `commitment:<id>`, so each check sees the last,
+and the log says so:
+
+```
+[wake] waking planner in commitment:planner-watch-hotel-prices for commitment (planner-watch-hotel-prices)
+```
+
+- **Claimed first.** Before the turn, the check is moved an hour on (`checkAt`
+  set to the claim's lease, `checkedAt` to now), so a slow turn is never
+  started twice, however many looks, or reloads, come while it runs. If the
+  turn never gets to its end, because TAI stopped in the middle of it or the
+  write after it failed, the check comes round again when the hour is up
+  instead of never. The line an agent reads says `check: now` meanwhile.
+- **Paused, it stays due**, and nothing is written; it runs at the first look
+  after the pause lifts. While agents are paused for everyone, a look reads
+  nothing. An online agent switched off or paused on its own is passed over
+  for the rest of the look, so its checks don't hold up anyone else's.
+  **At the hourly ceiling** it comes round five minutes on, or when the hour
+  has room if that's later. A commitment with nobody to wake (a room with no
+  lead) gets "Couldn't check on it: …" in its updates and no further check.
+- **A change it watches for** makes it due at once, with the change's line
+  kept in `checkEvents`: a burst of changes is gathered for a second and
+  becomes one wake that lists them (the five newest, then a count). A change
+  counts only when the agent it wakes can read what changed, and never when
+  it's that agent's own. A check on a change that has seen none for a week
+  wakes the agent anyway.
+- **What a change's line says depends on who reads the commitment.** Anyone
+  who can read the commitment reads its `checkEvents`, and that can be more
+  than can read the record that changed: a shared commitment is read by every
+  agent. So the line says what changed, values and all
+  (`trip/lisbon updated by a person (web): budget: 900 → 950`), only when
+  the record is global or in the commitment's own scope and of a type anyone
+  may read. Otherwise it says no more than the commitment already does
+  (`plan/lisbon changed; read it to see how`, or `a note it watches changed;
+  look it up to see which`), and the agent reads the record itself.
+- **Finished, dropped and archived commitments never wake.** An agent with no
+  `commitment` tool isn't woken either, since it couldn't write down what it
+  found; its check waits a day at a time.
+- Changes a check sees are the world-state changes `state.changed` carries.
+  The directory listens once for all of them, whatever its commitments watch.
+
+What a check's turn is told, kept to about 120 tokens:
+
+```
+Time to check on your commitment planner-watch-hotel-prices "Watch hotel prices" (open, 2/3).
+Done when: Three hotels under budget shortlisted
+Next step: Compare Friday's list
+Latest:
+- 2026-10-21: Two shortlisted.
+- 2026-10-20: Found five.
+- 2026-10-19: Asked for dates.
+Why now: its check was due Fri, Oct 23, 09:00 ("Friday 9am").
+It asks first: update your commitments and docs and read records and files, but put anything that would change something else in nextStep and set the commitment waiting on a person.
+Do the next step, then update the commitment with progress and a new check (commitment update, id planner-watch-hotel-prices).
+```
+
+For a check on a change, "Why now" lists what changed. **After the turn:**
+
+- If the agent set a new check, that's the one kept.
+- If it set its check to a note, it stays a note, as the tool told it:
+  nothing wakes the agent for it.
+- If it wrote no update, the directory writes "Checked; no change." for it,
+  marked `kind: "check"`. That says the agent looked, not that the work
+  moved: "last update" in its line and on its page, and upkeep's "no update
+  in a while", go by the last update that isn't marked so. The mark, not the
+  words, is what counts: an agent that writes the same sentence has written
+  an update.
+- With no new check, a check on a time comes round again 1 day on, then 2,
+  then 4, then every 7 days while each one changes nothing (an update from
+  the agent starts the count again); a check on a change goes back to waiting
+  for one, with its week's backstop.
+- A turn that fails says so in the updates ("The check stopped with an error:
+  …") and comes round again the same way, a day on for a check on a time.
+
+**Every check asks first, for now.** Until autonomy is enforced, a check's
+turn acts as `suggest` whatever its commitment's `autonomy` says, so `tell`
+and `quiet` behave like `suggest`. Through the `agent.pre_tool_use` waterfall,
+a call in a turn woken with `wake.kind: "commitment"` that writes or can't
+be undone is refused, and the agent reads one sentence in its place:
+
+```
+This commitment asks first: put it in nextStep and set the commitment waiting on a person.
+```
+
+A call to a tool that declares no effect at all (`Tool.effect`) is refused
+too, since it may change something, but in its own sentence, since it may
+only read:
+
+```
+"web_fetch" isn't open to a commitment check yet: note in nextStep what you'd use it for.
+```
+
+Calls that declare they only read go through, and so do the agent's own
+`commitment`, `writeup` and `directory`, which is how it records what it
+found. Of core's tools, `read` declares it only reads, and `state` declares
+it for `types`, `get`, `query` and `search`, so a check woken by a change
+can read what changed. Most other tools declare no effect yet, so most are
+refused in a check's turn. A person's chat, and every other turn, is left
+alone.
 
 ## What an agent writes up: `writeup`
 
@@ -299,7 +463,7 @@ order:
 | Section | Id | Shows |
 |---|---|---|
 | What I'm for | `about` | The profile's purpose, what it takes on and how to ask, and the agent's page note, in its own words. With no profile, the configured description, marked as such |
-| Working on | `working` | Open commitments: goal, next step, how to tell it's done, a progress bar (or the step it's on), next check, autonomy, how long since it moved. Open one for its dated updates |
+| Working on | `working` | Open commitments: goal, next step, how to tell it's done, a progress bar (or the step it's on), next check as the time it was read as and how far off that is (the words as written show on hover), or "(a note)" when it's neither a time nor a change (press it to change it), when it was last checked, autonomy, how long since it moved. Open one for its dated updates |
 | Waiting on you | `waiting` | Commitments waiting, with what each waits on |
 | Recent results | `results` | Commitments done in the last two weeks, with the day |
 | Docs | `docs` | Title, summary and when it was last reviewed. Click one to read it in place |
@@ -453,7 +617,7 @@ commitments with `commitment`, docs with `writeup`, the page with
 
 | Evidence | Counts when | Default |
 |---|---|---|
-| Next check passed | an open or waiting commitment's `nextCheck` reads as a date (an ISO date like "2026-10-25", or a month named with its day and year, like "Oct 25, 2026" or "25 October 2026") and it has come. "Friday", "end of 2026" or "when the hotel replies" count for nothing | |
+| Next check passed | an open or waiting commitment's `nextCheck` was written before the directory read checks, reads as a date (an ISO date like "2026-10-25", or a month named with its day and year, like "Oct 25, 2026" or "25 October 2026") and it has come. A check the directory read wakes the agent itself ([Checks](#checks)), so upkeep leaves those alone, unless `checks: false`: then a time it read that has come counts | |
 | Waiting too long | waiting for `waitingDays` or more, since its history says it started waiting | 7 days |
 | No update | open or waiting, with no update for `quietDays` or more | 14 days |
 | Finished, not archived | done or dropped `archiveAfterDays` or more ago, and still not archived | 7 days |
@@ -720,7 +884,7 @@ has open and waiting. Open one (`#/rooms/<name>`) for its page:
 |---|---|
 | What it's for | Its purpose and note, what it takes on and how to ask. **Edit** changes the purpose and the note, as you |
 | Lead and members | Who leads it and where that came from, a choice to change the lead, and its members |
-| Working on | Its open commitments and those its lead took on for it, with who took each on, and **Edit** for the next step and status |
+| Working on | Its open commitments and those its lead took on for it, with who took each on, and **Edit** for the next step, the next check and the status |
 | Waiting on you | What waits, and on what |
 | Recent results | Done in the last two weeks |
 | Docs | Click one to read it in place |
@@ -746,7 +910,7 @@ Behind the usual bearer auth, as a person: every scope.
 | `POST /api/ext/builtin:directory/rooms/:room/commitments` | Hands the room's lead a commitment for the room. Body as for an agent. `201` with `{ commitment, lead, inPrompt, why? }`. `409` when the room has no lead or is archived |
 | `PUT /api/ext/builtin:directory/rooms/:room/lead` | Body `{ lead }`: an agent, or `null` to go back to config's choice and then the room's creator. `200` with `{ lead }` as `GET` gives it. `400` for no such agent |
 | `PATCH /api/ext/builtin:directory/rooms/:room/profile` | Body with any of `purpose`, `takesOn`, `howToAsk`, `note`; an empty one clears it. Written as you, so the fields you change hold. `200` with `{ profile }` |
-| `PATCH /api/ext/builtin:directory/rooms/:room/commitments/:id` | Body with any of `goal`, `doneWhen`, `nextStep`, `status`, `waitingOn`, for one of the room's commitments. Written as you, with a dated update saying a person changed it. `200` with `{ commitment }` |
+| `PATCH /api/ext/builtin:directory/rooms/:room/commitments/:id` | Body with any of `goal`, `doneWhen`, `nextStep`, `nextCheck`, `status`, `waitingOn`, for one of the room's commitments. Written as you, with a dated update saying a person changed it; a `nextCheck` is then read as a [check](#checks). `200` with `{ commitment }` |
 | `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause or the agent's hourly wake ceiling. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep or any other agent turn on an interval (a tend, another agent's upkeep) is running, while the agent is at its hourly wake ceiling ("trip-planner can't tidy up now: it's at its wake ceiling: 12 wakes in the last hour. Try again later."), or for an agent with no `commitment` tool. `404` for a name that is no agent |
 
 Counts and lists read at most 5,000 records of each type. The routes come and
@@ -756,13 +920,14 @@ request already on its way when a reload turns the directory off answers
 
 ## Not yet
 
-- **Nothing acts on a commitment.** `autonomy` is a label, and no turn is
-  started when a `nextCheck` comes due: upkeep only notices it on its next
-  turn. Watchers and schedules come later in the
+- **Autonomy isn't enforced.** Every check's turn asks first, so `tell` and
+  `quiet` behave like `suggest`, and most tools are refused in it because
+  they don't yet declare what they do (`state` and `read` do). Watchers, reactions and the daily
+  batch of questions come later in the
   [build order](./ownership-design.md#build-order).
-- **Upkeep runs on an interval only.** It doesn't yet start when a
-  commitment's check comes due, a watcher fires or a person edits something
-  the agent owns. Its evidence doesn't yet include notes a newer note or doc
+- **Upkeep runs on an interval only.** It doesn't yet start when a watcher
+  fires or a person edits something the agent owns; a commitment's check
+  wakes the agent for that commitment alone. Its evidence doesn't yet include notes a newer note or doc
   contradicts, what people corrected or waved away, or which page sections
   people opened, and it raises no questions for a person.
 - **Rooms don't wake their lead for their records.** A room's upkeep runs in

@@ -301,7 +301,9 @@ describe("an agent's page", () => {
     expect(lisbon.textContent).toContain("Done when Hotel booked");
     expect(lisbon.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("60");
     expect(lisbon.textContent).toContain("3 of 5 (60%)");
-    expect(readText(lisbon.querySelector(".agent-page-meta"))).toBe("check Friday · asks first · updated 2h ago");
+    expect(readText(lisbon.querySelector(".agent-page-meta"))).toBe(
+      "check Friday (a note) · asks first · updated 2h ago",
+    );
     expect(lisbon.querySelector("summary")?.textContent).toBe("2 updates");
     expect([...lisbon.querySelectorAll(".agent-page-updates li span")].map((s) => s.textContent)).toEqual([
       "Found three hotels.",
@@ -472,9 +474,9 @@ describe("an agent's page", () => {
     try {
       await render();
       const meta = () => readText(section("Working on")?.querySelector(".agent-page-meta"));
-      expect(meta()).toBe("check Friday · asks first · updated 2h ago");
+      expect(meta()).toBe("check Friday (a note) · asks first · updated 2h ago");
       await act(async () => vi.advanceTimersByTime(60 * 60_000));
-      expect(meta()).toBe("check Friday · asks first · updated 3h ago");
+      expect(meta()).toBe("check Friday (a note) · asks first · updated 3h ago");
     } finally {
       vi.useRealTimers();
     }
@@ -701,6 +703,55 @@ describe("autonomy on its work", () => {
     await choose("quiet");
     await act(async () => {});
     expect(item.querySelector('[role="alert"]')?.textContent).toBe("autonomy is one of: suggest, tell, quiet.");
+  });
+});
+
+describe("a commitment's check", () => {
+  const lisbon = () => section("Working on")?.querySelector(".agent-page-item") as HTMLElement;
+  const check = () => lisbon().querySelector(".agent-page-check") as HTMLButtonElement;
+
+  it("says when it wakes the agent and when it last did, as the directory read it", async () => {
+    const planner = tripPlanner();
+    Object.assign(planner.commitments[0].data, {
+      nextCheck: "Friday 9am",
+      checkAt: new Date(NOW.getTime() + 51 * 3_600_000).toISOString(),
+      checkedAt: hoursAgo(3),
+    });
+    agent = planner as never;
+    await render();
+    // The time it was read as, in this machine's zone, with the words as written in its title.
+    expect(readText(lisbon().querySelector(".agent-page-meta"))).toMatch(
+      /^check \w{3}, \w{3} \d{1,2}, \d{2}:\d{2}, in 2d 3h · checked 3h ago · asks first · updated 2h ago$/,
+    );
+    expect(check().title).toBe('"Friday 9am", as written');
+  });
+
+  it("is changed in place, as a person's edit the directory reads again", async () => {
+    await render();
+    await act(async () => check().click());
+    const input = lisbon().querySelector(".agent-page-check-form input") as HTMLInputElement;
+    expect(input.value).toBe("Friday");
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      set?.call(input, "when plan/lisbon changes");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      (lisbon().querySelector(".agent-page-check-form") as HTMLFormElement).requestSubmit();
+    });
+    await act(async () => {});
+    expect(calls.find((c) => c.method === "PATCH")).toEqual({
+      method: "PATCH",
+      url: "/api/state/commitment/trip-planner-lisbon",
+      body: { changes: { nextCheck: "when plan/lisbon changes" }, expectedVersion: 1 },
+    });
+    expect(lisbon().querySelector(".agent-page-check-form")).toBeNull();
+  });
+
+  it("offers one on work that has none", async () => {
+    await render();
+    const gift = section("Working on")?.querySelectorAll(".agent-page-item")[1] as HTMLElement;
+    expect(gift.querySelector(".agent-page-check")?.textContent).toBe("set a check");
   });
 });
 

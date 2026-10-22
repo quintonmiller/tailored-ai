@@ -5,7 +5,9 @@
 > step 3 (agent pages in the web UI), step 4 (upkeep) and step 5 (rooms with
 > leads) are built, off by default: see [the directory](./directory.md), its
 > [pages](./directory.md#pages), its [upkeep](./directory.md#upkeep) and its
-> [rooms](./directory.md#rooms). Builds on
+> [rooms](./directory.md#rooms). From step 7, commitments whose `nextCheck`
+> comes due wake their owner, asking first whatever their autonomy says
+> until it's enforced ([checks](./directory.md#checks)). Builds on
 > [world state](./world-state.md),
 > [agent interfaces](./agent-interfaces.md),
 > [dashboard widgets](./dashboard-widgets.md) and the places plugin's `tend`

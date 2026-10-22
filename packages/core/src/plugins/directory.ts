@@ -7,13 +7,17 @@
  * It brings six record types (`profile`, `commitment`, `doc`, `miss`,
  * `page`, `upkeep`), three tools (`directory`, `commitment`, `writeup`), a
  * "Your commitments" block in the prompt of every agent that has the
- * `commitment` tool, and the routes the agent and room pages in the web UI
- * read and hand work over through. Rooms keep the same records, led by an
- * agent (`directory-rooms.ts`). It registers through the same seams a
- * third-party plugin would, and core knows nothing about it.
+ * `commitment` tool, checks that wake a commitment's owner when its
+ * `nextCheck` comes due (`directory-checks.ts`), and the routes the agent and
+ * room pages in the web UI read and hand work over through. Rooms keep the
+ * same records, led by an agent (`directory-rooms.ts`). It registers through
+ * the same seams a third-party plugin would, and core knows nothing about it.
  *
  * Config (`plugins: [{ module: builtin:directory, config: {...} }]`):
  *   - `pin` (default true): the prompt block. `false` leaves it out.
+ *   - `checks` (default true): commitments whose check comes due wake their
+ *     owner. `false` wakes no one for them; `nextCheck` is still read and
+ *     kept beside the text, and upkeep reports a dated one that has come.
  *   - `minMeaning` (default 0.5) and `minWords` (default 0.3): how close a
  *     search hit must be to count as found, for searches matched by meaning
  *     and by words. Below the bar a search finds nothing and notes a miss.
@@ -43,6 +47,8 @@ import { formatRoomRef, type Room } from "../rooms/types.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { StateError, type StateRecord, type StateTypeDef } from "../state/types.js";
+import { systemTimeZone } from "../time/provider.js";
+import { asksFirst, Checker, rederive } from "./directory-checks.js";
 import {
   ACTIVE,
   AUTONOMY,
@@ -93,6 +99,8 @@ const PINNED_LINE_CHARS = 400;
 
 export interface DirectoryConfig {
   pin: boolean;
+  /** Whether a commitment's check wakes its owner when it comes due. */
+  checks: boolean;
   bar: Bar;
   upkeep: UpkeepSettings;
   /** Who leads which room, by the room's name or ref. */
@@ -120,6 +128,7 @@ export function readConfig(raw: Record<string, unknown>): DirectoryConfig {
   };
   return {
     pin: raw.pin !== false,
+    checks: raw.checks !== false,
     bar: { meaning: share("minMeaning", DEFAULT_BAR.meaning), words: share("minWords", DEFAULT_BAR.words) },
     upkeep: parseUpkeep(raw.upkeep, (problem) => console.warn(`[directory] ${problem}`)),
     leads: parseLeads(raw.leads, (problem) => console.warn(`[directory] ${problem}`)),
@@ -211,7 +220,7 @@ function asleep(runtime: AgentRuntime, agent: string): string | null {
  * `upkeep:<agent>` session through the runtime's waker, with the round budget
  * as its ceiling.
  */
-function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: UpkeepSettings): Upkeep {
+function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: UpkeepSettings, checks: boolean): Upkeep {
   const resolve = (agent: string) =>
     resolveAgent(
       agent === "default" ? undefined : agent,
@@ -225,6 +234,7 @@ function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: Upkeep
   return new Upkeep({
     directory,
     settings,
+    checks,
     has: (agent, tool) => hasTool(runtime, agent, tool),
     memory: () => runtime.getMemoryBackend(),
     embedder: () => runtime.getEmbedder(),
@@ -272,14 +282,14 @@ export function commitmentsSlot(directory: Directory, takesPart: (agent: string)
         ...records.filter((r) => r.data.status === "open"),
         ...records.filter((r) => r.data.status !== "open"),
       ];
-      const now = directory.now();
+      const clock = directory.clock();
       // Room for the count line, which goes last and must survive.
       const reserve = `\n…and ${PINNED_READ}+ more; commitment list shows them.`.length;
       const lines: string[] = [];
       let used = 0;
       const name = (owner: string) => directory.ownerName(owner);
       for (const r of ordered.slice(0, PINNED)) {
-        const full = commitmentLine(r, now, name) + (r.scope === `agent:${agent}` ? ", private" : "");
+        const full = commitmentLine(r, clock, name) + (r.scope === `agent:${agent}` ? ", private" : "");
         const line = full.length > PINNED_LINE_CHARS ? `${full.slice(0, PINNED_LINE_CHARS - 1)}…` : full;
         const cost = line.length + (lines.length ? 1 : 0);
         if (lines.length > 0 && used + cost + reserve > PINNED_CHARS) break;
@@ -418,6 +428,9 @@ const plugin: Plugin = (ctx) => {
       active: () => live !== null,
       rooms: () => roomSource(runtime),
       leads: () => (live ?? config).leads,
+      // The runtime's clock and time zone, read on every use: a reload can change them.
+      now: () => runtime.getTimeProvider?.().now() ?? new Date(),
+      timeZone: () => runtime.getTimeProvider?.().timeZone() ?? systemTimeZone(),
     });
 
   ctx.tools.register("directory", (_cfg, tctx) =>
@@ -431,6 +444,46 @@ const plugin: Plugin = (ctx) => {
   );
 
   const directory = directoryFor(() => runtime.getStateService());
+
+  // Commitment checks (`directory-checks.ts`): each due check wakes the commitment's owner through the runtime's
+  // waker, one at a time per runtime, a reload's next load included. A runtime with no waker can't wake anyone, so
+  // it gets no runner, and neither does a config that turns checks off.
+  const checker =
+    config.checks && typeof runtime.wakeAgent === "function"
+      ? new Checker({
+          directory,
+          wake: (agent, opts) => runtime.wakeAgent(agent, opts),
+          refusal: (agent, where) => runtime.wakeRefusal(agent, where),
+          paused: () => runtime.isAgentsPaused?.("autonomous") ?? false,
+          canUpdate: (agent) => hasCommitmentTool(runtime, agent),
+          lock: runtime,
+        })
+      : undefined;
+  if (checker) {
+    void checker.start();
+    disposers.push(() => void checker.stop());
+  }
+
+  // One listener for every change in world state. A person's edit of a commitment's nextCheck, on the State page or
+  // an agent or room page, is read again, so what wakes the agent follows what the person wrote (the tools read it
+  // as they write it); and a change a commitment watches for makes its check due.
+  const changes = ctx.events.on("state.changed", (change) => {
+    rederive(directory, change).catch((err: unknown) =>
+      console.warn(`[directory] couldn't read the check on ${change.id}: ${(err as Error).message}`),
+    );
+    checker?.onChange(change);
+  });
+  disposers.push(() => changes.dispose());
+
+  // Until autonomy is enforced, a check's turn asks first whatever its commitment's autonomy says: a call that
+  // changes something outside the directory's own tools is refused, in one sentence the agent can act on.
+  const guard = ctx.events.onWaterfall("agent.pre_tool_use", async (call, next) => {
+    const deny = asksFirst(call);
+    if (!deny) return next(call);
+    const out = await next({ ...call, deny });
+    return out.deny ? out : { ...out, deny };
+  });
+  disposers.push(() => guard.dispose());
 
   // A reload disposes this load, which takes the block out, and loads the plugin again, which puts it back.
   if (config.pin) {
@@ -446,7 +499,7 @@ const plugin: Plugin = (ctx) => {
 
   // Upkeep: each agent, on the interval, looks after what it owns (`directory-upkeep.ts`). The schedule is off unless
   // set; a person can start a turn from the agent's page either way.
-  const upkeep = upkeepFor(runtime, directory, config.upkeep);
+  const upkeep = upkeepFor(runtime, directory, config.upkeep, config.checks);
   const schedule = config.upkeep.schedule;
   if (schedule) {
     if (schedule.agents !== "all") {
@@ -814,7 +867,13 @@ const plugin: Plugin = (ctx) => {
       if (room.archived) return archived(room);
       const body = await req.json<Record<string, unknown>>().catch(() => null);
       const changes: Record<string, unknown> = {};
-      const limits: Record<string, number> = { goal: 300, doneWhen: 500, nextStep: 300, waitingOn: 200 };
+      const limits: Record<string, number> = {
+        goal: 300,
+        doneWhen: 500,
+        nextStep: 300,
+        nextCheck: 200,
+        waitingOn: 200,
+      };
       for (const [key, max] of Object.entries(limits)) {
         const value = field(body, key);
         if (value === undefined) continue;
@@ -830,7 +889,10 @@ const plugin: Plugin = (ctx) => {
         changes.status = status;
       }
       if (Object.keys(changes).length === 0) {
-        return { status: 400, json: { error: "Give at least one of goal, doneWhen, nextStep, status or waitingOn." } };
+        return {
+          status: 400,
+          json: { error: "Give at least one of goal, doneWhen, nextStep, nextCheck, status or waitingOn." },
+        };
       }
       try {
         const commitment = await directory.editRoomCommitment(room, req.params.id ?? "", changes);
@@ -850,7 +912,7 @@ const plugin: Plugin = (ctx) => {
 export const meta: PluginMeta = {
   name: "Directory",
   description:
-    "What agents and rooms are for, the work they've taken on and what they've written up: profile, commitment, doc and page records, the directory, commitment and writeup tools, a commitments block in the prompt, upkeep turns, room leads, and the routes behind agent and room pages.",
+    "What agents and rooms are for, the work they've taken on and what they've written up: profile, commitment, doc and page records, the directory, commitment and writeup tools, a commitments block in the prompt, checks that wake a commitment's owner, upkeep turns, room leads, and the routes behind agent and room pages.",
   registers: [
     { kind: "tool", id: "directory" },
     { kind: "tool", id: "commitment" },

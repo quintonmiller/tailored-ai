@@ -358,19 +358,21 @@ describe("a room's page", () => {
     expect(section("Questions nobody could answer").textContent).toContain("ferry timetable");
   });
 
-  it("lets a person change a commitment's next step and status, as them", async () => {
+  it("lets a person change a commitment's next step, next check and status, as them", async () => {
     await render("travel");
     const ferry = section("Working on").querySelector(".agent-page-item") as HTMLElement;
     await act(async () => (ferry.querySelector(".room-edit") as HTMLButtonElement).click());
     const form = ferry.querySelector("form") as HTMLFormElement;
-    await act(async () => type(form.querySelector("input") as HTMLInputElement, "Book the early boat"));
+    const [nextStep, nextCheck] = [...form.querySelectorAll("input")] as HTMLInputElement[];
+    await act(async () => type(nextStep, "Book the early boat"));
+    await act(async () => type(nextCheck, "Friday 9am"));
     await act(async () => pick(form.querySelector("select") as HTMLSelectElement, "done"));
     await act(async () => form.requestSubmit());
     await act(async () => {});
     expect(calls.find((c) => c.method === "PATCH")).toEqual({
       method: "PATCH",
       url: "/api/ext/builtin:directory/rooms/travel/commitments/room-travel-ferry",
-      body: { nextStep: "Book the early boat", status: "done" },
+      body: { nextStep: "Book the early boat", nextCheck: "Friday 9am", status: "done" },
     });
   });
 
@@ -387,7 +389,7 @@ describe("a room's page", () => {
     await act(async () => (sitter.querySelector(".room-edit") as HTMLButtonElement).click());
     // The form says what holds and what doesn't.
     expect(sitter.querySelector("form")?.textContent).toContain(
-      "Agents leave the next step and what it waits on as you set them; clear one to hand it back.",
+      "Agents leave the next step, the next check and what it waits on as you set them; clear one to hand it back.",
     );
   });
 

@@ -6837,6 +6837,16 @@ select.model-entry-model {
 }
 .agent-page-autonomy select:hover, .agent-page-autonomy select:focus-visible { border-color: var(--border); color: var(--text); }
 .agent-page-item-error { margin: 4px 0 0; font-size: 12px; }
+/* When it looks again, changed in place: reads as one of the meta facts until it's pressed. */
+.agent-page-check {
+  font: inherit; font-size: 12px; color: var(--text-dim);
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  padding: 0 2px; margin: 0 -2px; cursor: pointer;
+}
+.agent-page-check:hover, .agent-page-check:focus-visible, .agent-page-check[aria-expanded="true"] {
+  border-color: var(--border); color: var(--text);
+}
+.room-form.agent-page-check-form { grid-template-columns: minmax(0, 1fr); }
 
 /* Upkeep: a slim line over the page, with the one action a person has on it. */
 .agent-page-upkeep {
@@ -6901,7 +6911,7 @@ a.agent-tool-chip:hover, a.agent-tool-chip:focus-visible { border-color: var(--a
   margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border);
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 180px); align-items: end;
 }
-.room-item-form .room-form-actions, .room-item-form .agent-page-error { grid-column: 1 / -1; }
+.room-item-form .room-form-actions, .room-item-form .agent-page-error, .room-item-form .agent-page-hint { grid-column: 1 / -1; }
 .room-form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .room-form-actions button {
   background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
