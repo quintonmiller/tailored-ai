@@ -68,7 +68,7 @@ Six world-state types, declared by the plugin:
 | Type | Id | Where it lives | Holds |
 |---|---|---|---|
 | `profile` | the agent's name, or `room:<ref>` for a room's | `global` | `owner`, `purpose`, `takesOn` (a list), `howToAsk`; a room's also `room`, `note`, `noteAt`, `lead` |
-| `commitment` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, `agent:<owner>` when private, or `room:<ref>` for a room's | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from`, `room` |
+| `commitment` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, `agent:<owner>` when private, or `room:<ref>` for a room's | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from`, `room`, and the directory's reading of `nextCheck`: `checkAt`, `checkOn`, `checkedAt`, `checkEvents` (see [Checks](#checks)) |
 | `doc` | `<owner>-<slug>`, or `room-<name>-<slug>` for a room's | `global`, or `room:<ref>` for a room's | `owner`, `title`, `summary`, `body`, `tags`, `reviewedAt`, `room` |
 | `miss` | `miss-<day>-<hash>` | `agent:<owner>`, or `room:<ref>` for a room's | `owner`, `query`, `askedBy`, `at`, `closest`, `room` |
 | `page` | the agent's name | `global` | `owner`, `note`, `noteAt`, `order`, `hide`, `extra` (see [Pages](#pages)) |
@@ -158,8 +158,8 @@ commitment(action: "open", goal: "Lisbon trip planning for November", doneWhen: 
 
 | Action | Takes | Does |
 |---|---|---|
-| `open` | `goal`, `doneWhen`, and optionally `nextStep`, `nextCheck`, `autonomy`, `private`, `from` | creates it, open, with an "Opened." update, and names up to two similar open commitments of other agents |
-| `update` | `id`, and any of `note`, `progress`, `nextStep`, `nextCheck`, `status` (`open` or `waiting`), `waitingOn` | changes those fields and adds a dated update: the note, or a line saying what changed. `waitingOn` sets it waiting; going back to `open` clears it |
+| `open` | `goal`, `doneWhen`, and optionally `nextStep`, `nextCheck`, `autonomy`, `private`, `from` | creates it, open, with an "Opened." update, and names up to two similar open commitments of other agents. With a `nextCheck`, says what it made of it ([Checks](#checks)) |
+| `update` | `id`, and any of `note`, `progress`, `nextStep`, `nextCheck`, `status` (`open` or `waiting`), `waitingOn` | changes those fields and adds a dated update: the note, or a line saying what changed. `waitingOn` sets it waiting; going back to `open` clears it. With a `nextCheck`, says what it made of it |
 | `done` | `id`, `note`? | marks it done; a count like 3/5 goes to 5/5 |
 | `drop` | `id`, `why` | marks it dropped, with the reason as its last update |
 | `archive` | `id`, `reason`? | puts it away |
@@ -182,6 +182,46 @@ The rest of the call goes through. An agent can always step back to
 `suggest` with `update`, and asking for the autonomy a commitment already has
 changes nothing and isn't refused. Commitments an agent opened with `tell` or
 `quiet` before this are left as they are.
+
+### Checks
+
+`nextCheck` says when the owner looks at a commitment again. It stays the text
+people and agents read and write, and the directory reads it as it's written:
+
+| `nextCheck` | Read as |
+|---|---|
+| a time: `Friday 9am`, `fri`, `in 2 days`, `tomorrow 5pm`, `2026-10-28`, `2026-10-28 14:00` | that moment, in the runtime's time zone (`time.timezone`), with the grammar [`schedule`](./schedules.md#when--one-shots) uses. A day with no time is 09:00 |
+| a change: `when plan/lisbon changes`, `when plan changes`, `when a booking changes where status=confirmed` | a change to that record, to any record of that type, or to one whose fields match, as [`state.changed`](./world-state.md) reports it, plus a backstop a week out |
+| anything else: `after Sam replies` | a note. Nothing wakes the owner for it |
+
+The tool says what it made of it, the way `schedule` echoes a booking:
+
+```
+commitment(action: "update", id: "planner-watch-hotel-prices", nextCheck: "Friday 9am")
+→ Updated planner-watch-hotel-prices "Watch hotel prices": open, check: Friday 9am, last update just now
+  Check: Fri, Oct 23, 09:00, in 22h.
+
+commitment(action: "update", id: "planner-watch-hotel-prices", nextCheck: "after Sam replies")
+→ Updated planner-watch-hotel-prices "Watch hotel prices": open, check: after Sam replies, last update just now
+  "after Sam replies" isn't a time or a change, so nothing will wake you for it; it stays a note. A check wakes
+  you for a time ("Friday 9am", "in 2 days", "2026-10-28") or a change ("when plan/lisbon changes", "when plan changes").
+```
+
+A note isn't refused: the update goes through and the reply says what would
+work. A change can only be one the agent it wakes can read: the owner, or a
+room's lead for one of the room's own. A type it can't read stays a note, and
+the reply says so.
+
+What the directory reads is kept beside the text, in fields it maintains:
+`checkAt` (when the owner is next woken, in UTC), `checkOn` (`{ type, id?,
+where? }`, the change it watches for), `checkedAt` (when it was last woken for
+one) and `checkEvents` (what changed since). They follow the text: a person's
+edit of `nextCheck` on the State page, on the agent's page (press the check on
+a commitment in its Working on list) or on a room's page is read again the same
+way, and clearing it takes the check away. On a room's commitment, a person's
+`nextCheck` holds like their other edits; the fields beside it never do.
+Commitments written before this keep their text with nothing beside it until
+it's next written; [upkeep](#upkeep) still notices a dated one that has come.
 
 ## What an agent writes up: `writeup`
 
@@ -299,7 +339,7 @@ order:
 | Section | Id | Shows |
 |---|---|---|
 | What I'm for | `about` | The profile's purpose, what it takes on and how to ask, and the agent's page note, in its own words. With no profile, the configured description, marked as such |
-| Working on | `working` | Open commitments: goal, next step, how to tell it's done, a progress bar (or the step it's on), next check, autonomy, how long since it moved. Open one for its dated updates |
+| Working on | `working` | Open commitments: goal, next step, how to tell it's done, a progress bar (or the step it's on), next check and how far off it is, or "(a note)" when it's neither a time nor a change (press it to change it), when it was last checked, autonomy, how long since it moved. Open one for its dated updates |
 | Waiting on you | `waiting` | Commitments waiting, with what each waits on |
 | Recent results | `results` | Commitments done in the last two weeks, with the day |
 | Docs | `docs` | Title, summary and when it was last reviewed. Click one to read it in place |
@@ -720,7 +760,7 @@ has open and waiting. Open one (`#/rooms/<name>`) for its page:
 |---|---|
 | What it's for | Its purpose and note, what it takes on and how to ask. **Edit** changes the purpose and the note, as you |
 | Lead and members | Who leads it and where that came from, a choice to change the lead, and its members |
-| Working on | Its open commitments and those its lead took on for it, with who took each on, and **Edit** for the next step and status |
+| Working on | Its open commitments and those its lead took on for it, with who took each on, and **Edit** for the next step, the next check and the status |
 | Waiting on you | What waits, and on what |
 | Recent results | Done in the last two weeks |
 | Docs | Click one to read it in place |
@@ -746,7 +786,7 @@ Behind the usual bearer auth, as a person: every scope.
 | `POST /api/ext/builtin:directory/rooms/:room/commitments` | Hands the room's lead a commitment for the room. Body as for an agent. `201` with `{ commitment, lead, inPrompt, why? }`. `409` when the room has no lead or is archived |
 | `PUT /api/ext/builtin:directory/rooms/:room/lead` | Body `{ lead }`: an agent, or `null` to go back to config's choice and then the room's creator. `200` with `{ lead }` as `GET` gives it. `400` for no such agent |
 | `PATCH /api/ext/builtin:directory/rooms/:room/profile` | Body with any of `purpose`, `takesOn`, `howToAsk`, `note`; an empty one clears it. Written as you, so the fields you change hold. `200` with `{ profile }` |
-| `PATCH /api/ext/builtin:directory/rooms/:room/commitments/:id` | Body with any of `goal`, `doneWhen`, `nextStep`, `status`, `waitingOn`, for one of the room's commitments. Written as you, with a dated update saying a person changed it. `200` with `{ commitment }` |
+| `PATCH /api/ext/builtin:directory/rooms/:room/commitments/:id` | Body with any of `goal`, `doneWhen`, `nextStep`, `nextCheck`, `status`, `waitingOn`, for one of the room's commitments. Written as you, with a dated update saying a person changed it; a `nextCheck` is then read as a [check](#checks). `200` with `{ commitment }` |
 | `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause or the agent's hourly wake ceiling. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep or any other agent turn on an interval (a tend, another agent's upkeep) is running, while the agent is at its hourly wake ceiling ("trip-planner can't tidy up now: it's at its wake ceiling: 12 wakes in the last hour. Try again later."), or for an agent with no `commitment` tool. `404` for a name that is no agent |
 
 Counts and lists read at most 5,000 records of each type. The routes come and

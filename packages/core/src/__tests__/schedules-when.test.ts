@@ -119,6 +119,46 @@ describe("parseWhen — clock and day words", () => {
   });
 });
 
+describe("parseWhen — weekdays", () => {
+  // NOW is Thursday 6 Aug 2026, 14:30 local.
+  it("reads a weekday with a time as the next one", () => {
+    const { at, defaultedTime } = parseWhen("friday 9am", NOW);
+    expect(at).toEqual(new Date(2026, 7, 7, 9, 0, 0));
+    expect(defaultedTime).toBe(false);
+  });
+
+  it("gives a weekday with no time 09:00, and says so", () => {
+    const { at, defaultedTime } = parseWhen("Friday", NOW);
+    expect(at).toEqual(new Date(2026, 7, 7, 9, 0, 0));
+    expect(defaultedTime).toBe(true);
+  });
+
+  it.each([
+    ["mon", new Date(2026, 7, 10, 9, 0, 0)],
+    ["on tuesday at 14:00", new Date(2026, 7, 11, 14, 0, 0)],
+    ["next friday 5pm", new Date(2026, 7, 7, 17, 0, 0)],
+    ["sat 21:30", new Date(2026, 7, 8, 21, 30, 0)],
+  ])("reads %s", (input, expected) => {
+    expect(parseWhen(input, NOW).at).toEqual(expected);
+  });
+
+  it("keeps today while its time is still ahead, and goes a week on once it has passed", () => {
+    expect(parseWhen("thursday 5pm", NOW).at).toEqual(new Date(2026, 7, 6, 17, 0, 0));
+    expect(parseWhen("thursday 9am", NOW).at).toEqual(new Date(2026, 7, 13, 9, 0, 0));
+  });
+
+  it("resolves the weekday in the zone it is given", () => {
+    // 01:00 UTC on Friday is still Thursday evening in Los Angeles.
+    const now = new Date("2026-08-07T01:00:00.000Z");
+    expect(parseWhen("friday 9am", now, "America/Los_Angeles").at.toISOString()).toBe("2026-08-07T16:00:00.000Z");
+    expect(parseWhen("friday 9am", now, "Europe/Lisbon").at.toISOString()).toBe("2026-08-07T08:00:00.000Z");
+  });
+
+  it("refuses a weekday with a time it can't read, with the forms", () => {
+    expect(() => parseWhen("friday after lunch", NOW)).toThrow(WhenParseError);
+  });
+});
+
 describe("parseEvery", () => {
   it("makes plain intervals elapsed time, not cron", () => {
     expect(parseEvery("every 2 hours")).toEqual({ mode: "interval", seconds: 7200, source: "every 2 hours" });

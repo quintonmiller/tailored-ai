@@ -43,6 +43,8 @@ import { formatRoomRef, type Room } from "../rooms/types.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { StateError, type StateRecord, type StateTypeDef } from "../state/types.js";
+import { systemTimeZone } from "../time/provider.js";
+import { rederive } from "./directory-checks.js";
 import {
   ACTIVE,
   AUTONOMY,
@@ -418,6 +420,9 @@ const plugin: Plugin = (ctx) => {
       active: () => live !== null,
       rooms: () => roomSource(runtime),
       leads: () => (live ?? config).leads,
+      // The runtime's clock and time zone, read on every use: a reload can change them.
+      now: () => runtime.getTimeProvider?.().now() ?? new Date(),
+      timeZone: () => runtime.getTimeProvider?.().timeZone() ?? systemTimeZone(),
     });
 
   ctx.tools.register("directory", (_cfg, tctx) =>
@@ -431,6 +436,15 @@ const plugin: Plugin = (ctx) => {
   );
 
   const directory = directoryFor(() => runtime.getStateService());
+
+  // A person's edit of a commitment's nextCheck, on the State page or an agent or room page, is read again here,
+  // so what wakes the agent follows what the person wrote. The tools read it as they write it.
+  const edits = ctx.events.on("state.changed", (change) => {
+    rederive(directory, change).catch((err: unknown) =>
+      console.warn(`[directory] couldn't read the check on ${change.id}: ${(err as Error).message}`),
+    );
+  });
+  disposers.push(() => edits.dispose());
 
   // A reload disposes this load, which takes the block out, and loads the plugin again, which puts it back.
   if (config.pin) {
@@ -814,7 +828,13 @@ const plugin: Plugin = (ctx) => {
       if (room.archived) return archived(room);
       const body = await req.json<Record<string, unknown>>().catch(() => null);
       const changes: Record<string, unknown> = {};
-      const limits: Record<string, number> = { goal: 300, doneWhen: 500, nextStep: 300, waitingOn: 200 };
+      const limits: Record<string, number> = {
+        goal: 300,
+        doneWhen: 500,
+        nextStep: 300,
+        nextCheck: 200,
+        waitingOn: 200,
+      };
       for (const [key, max] of Object.entries(limits)) {
         const value = field(body, key);
         if (value === undefined) continue;
@@ -830,7 +850,10 @@ const plugin: Plugin = (ctx) => {
         changes.status = status;
       }
       if (Object.keys(changes).length === 0) {
-        return { status: 400, json: { error: "Give at least one of goal, doneWhen, nextStep, status or waitingOn." } };
+        return {
+          status: 400,
+          json: { error: "Give at least one of goal, doneWhen, nextStep, nextCheck, status or waitingOn." },
+        };
       }
       try {
         const commitment = await directory.editRoomCommitment(room, req.params.id ?? "", changes);

@@ -100,6 +100,8 @@ export function leadOf(room: RoomInfo, at: { chosen?: string; leads: Record<stri
  * lead, which no agent can set, and a commitment's status. Status is the
  * work's own progress: a person's change to it goes in the log as a dated
  * update, and members carry the work on from there, finishing it included.
+ * A commitment's check fields are the directory's reading of its
+ * `nextCheck`, which holds when a person sets it: they follow the text.
  */
 export const UNHELD: ReadonlySet<string> = new Set([
   "owner",
@@ -109,6 +111,10 @@ export const UNHELD: ReadonlySet<string> = new Set([
   "noteAt",
   "lead",
   "status",
+  "checkAt",
+  "checkOn",
+  "checkedAt",
+  "checkEvents",
 ]);
 
 /**

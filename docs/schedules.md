@@ -56,6 +56,7 @@ not depend on a timezone.
 | date only | `2026-08-08` → 09:00, and the echo says so |
 | clock only | `9am`, `21:30`, `noon` → the next time it is that o'clock |
 | day word | `tomorrow`, `tomorrow 9am`, `today 5pm` |
+| weekday | `friday`, `friday 9am`, `mon at 14:00`, `next friday` → the next one whose time is still ahead; with no time, 09:00 |
 
 A bare number (`10`) is refused rather than guessed: it reads equally as ten
 minutes and ten o'clock, and a wake nine hours off is worse than one the model

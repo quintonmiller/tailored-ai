@@ -20,6 +20,7 @@ import {
 import {
   AUTONOMY,
   ago,
+  checkWhen,
   day,
   groupCommitments,
   lastMoved,
@@ -466,9 +467,21 @@ function Working({
   const d = record.data;
   const progress = progressOf(d.progress);
   const [error, setError] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
   const room = text(d.room) && rooms?.[text(d.room) as string];
+  const check = checkWhen(d, now);
   const meta = [
-    text(d.nextCheck) && `check ${text(d.nextCheck)}`,
+    <button
+      key="check"
+      type="button"
+      className="agent-page-check"
+      title={check?.title ?? `When ${agent} looks at this again`}
+      aria-expanded={checking}
+      onClick={() => setChecking((open) => !open)}
+    >
+      {check?.label ?? "set a check"}
+    </button>,
+    text(d.checkedAt) && `checked ${ago(text(d.checkedAt), now)}`,
     <AutonomyPick key="autonomy" record={record} reload={reload} onError={setError} />,
     room && (
       <a key="room" href={`#/rooms/${encodeURIComponent(room)}`}>
@@ -502,6 +515,16 @@ function Working({
           </div>
         ))}
       <Meta parts={meta} />
+      {checking && (
+        <CheckForm
+          record={record}
+          agent={agent}
+          done={() => {
+            setChecking(false);
+            reload();
+          }}
+        />
+      )}
       {error && (
         <p className="agent-page-error agent-page-item-error" role="alert">
           {error}
@@ -509,6 +532,68 @@ function Working({
       )}
       <Updates record={record} />
     </li>
+  );
+}
+
+/**
+ * When the agent looks at a commitment again, changed as you: a time or a
+ * change to watch for, which the directory reads as it reads the agent's own
+ * and wakes it for. Anything else stays a note; empty takes the check away.
+ */
+function CheckForm({ record, agent, done }: { record: StateRecordInfo; agent: string; done: () => void }) {
+  const was = text(record.data.nextCheck) ?? "";
+  const [value, setValue] = useState(was);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (value.trim() === was) return done();
+    setBusy(true);
+    setError(null);
+    try {
+      await patchStateRecord(record.type, record.id, { nextCheck: value.trim() || null }, record.version);
+      done();
+    } catch (err) {
+      setError(
+        (err as { status?: number }).status === 409
+          ? "This changed while you were looking. Try again."
+          : (err as Error).message,
+      );
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="room-form room-item-form agent-page-check-form" onSubmit={save}>
+      <label>
+        <span>Next check</span>
+        <input
+          type="text"
+          value={value}
+          maxLength={200}
+          placeholder="Friday 9am, in 2 days, when plan/lisbon changes"
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </label>
+      <p className="agent-page-hint">
+        A time, or a change to a record, wakes {agent} to look at this then. Anything else stays a note; empty takes the
+        check away.
+      </p>
+      <div className="room-form-actions">
+        <button type="submit" className="primary" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button type="button" onClick={done} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+      {error && (
+        <p className="agent-page-error" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }
 

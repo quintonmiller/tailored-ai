@@ -366,7 +366,10 @@ describe("commitment", () => {
       nextCheck: "Friday",
       from: "a person",
     });
-    expect(out).toBe('Opened planner-lisbon-trip-prep: "Lisbon trip prep" (shared, suggest).');
+    const [opened, check] = out.split("\n");
+    expect(opened).toBe('Opened planner-lisbon-trip-prep: "Lisbon trip prep" (shared, suggest).');
+    // When its check falls, in this machine's zone, since this runtime has no time provider of its own.
+    expect(check).toMatch(/^Check: Fri, \w+ \d+, 09:00, in .+\. No time was given, so 09:00\.$/);
     const r = await record(COMMITMENT_TYPE, "planner-lisbon-trip-prep");
     expect(r?.scope).toBe("global");
     expect(r?.data).toMatchObject({

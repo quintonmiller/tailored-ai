@@ -126,6 +126,57 @@ export function upkeepChanges(changed: Partial<Record<UpkeepKind, number>> | und
   return parts.length ? parts.join(", ") : "changed nothing";
 }
 
+/** "2d 3h", "45m", "under a minute": how far off a time is, coarse, as the directory says it. */
+export function distance(ms: number): string {
+  const mins = Math.round(Math.abs(ms) / 60_000);
+  if (mins < 1) return "under a minute";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  if (hours < 24) return rem ? `${hours}h ${rem}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remH = hours % 24;
+  return remH ? `${days}d ${remH}h` : `${days}d`;
+}
+
+/**
+ * When a commitment's check wakes its agent, as its page says it: the text
+ * people and agents write, with how far off the time it was read as is
+ * ("check Friday 9am, in 2d 3h"), or that it's due. A check on a change says
+ * itself; `title` gives the backstop time. Text the directory couldn't read
+ * as a time or a change, or that was written before it read them, is marked
+ * as a note, since nothing wakes the agent for it. Undefined when there's no
+ * check at all.
+ */
+export function checkWhen(
+  data: Record<string, unknown>,
+  now = new Date(),
+): { label: string; title?: string } | undefined {
+  const said = typeof data.nextCheck === "string" && data.nextCheck.trim() ? data.nextCheck.trim() : undefined;
+  const at = typeof data.checkAt === "string" ? Date.parse(data.checkAt) : Number.NaN;
+  const local = (ms: number) =>
+    new Date(ms).toLocaleString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+  const watching = !!data.checkOn && typeof data.checkOn === "object";
+  // Nothing the directory could read: a note, or text written before it read checks. Nothing wakes the agent for it.
+  if (!Number.isFinite(at)) {
+    return said
+      ? { label: `check ${said} (a note)`, title: "Not a time or a change, so nothing wakes it for this" }
+      : undefined;
+  }
+  if (watching)
+    return { label: `check ${said ?? "on a change"}`, title: `Or ${local(at)}, if nothing changes by then` };
+  const ms = at - now.getTime();
+  const when = ms > 0 ? `in ${distance(ms)}` : "due now";
+  return { label: said ? `check ${said}, ${when}` : `check ${when}`, title: local(at) };
+}
+
 /** "just now", "5m ago", "3h ago", "2d ago". */
 export function ago(iso: string | undefined, now = new Date()): string {
   if (!iso) return "";

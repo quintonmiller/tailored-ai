@@ -8,7 +8,16 @@ import {
   type StateRecordInfo,
   setRoomLead,
 } from "../api";
-import { AUTONOMY, ago, day, groupCommitments, lastMoved, progressOf, recentMisses } from "../lib/agent-page";
+import {
+  AUTONOMY,
+  ago,
+  checkWhen,
+  day,
+  groupCommitments,
+  lastMoved,
+  progressOf,
+  recentMisses,
+} from "../lib/agent-page";
 import { heldOf, leadFrom, ROOM_SECTIONS, roomPurpose } from "../lib/room-page";
 import { subscribeStateChanges } from "../lib/state-events";
 import { Docs, HandOver, list, Meta, Miss, text, Updates, useNow } from "./AgentPage";
@@ -497,13 +506,19 @@ function Item({
   const owner = text(d.owner);
   const [editing, setEditing] = useState(false);
   const takenOn = owner && !owner.startsWith("room:") ? owner : undefined;
+  const check = variant === "working" ? checkWhen(d, now) : undefined;
   const meta = [
     takenOn && (
       <a key="taken" href={`#/agents/${encodeURIComponent(takenOn)}`}>
         taken on by {takenOn}
       </a>
     ),
-    variant === "working" && text(d.nextCheck) && `check ${text(d.nextCheck)}`,
+    check && (
+      <span key="check" title={check.title}>
+        {check.label}
+      </span>
+    ),
+    variant === "working" && text(d.checkedAt) && `checked ${ago(text(d.checkedAt), now)}`,
     variant === "working" && (AUTONOMY[text(d.autonomy) ?? "suggest"] ?? text(d.autonomy)),
     text(d.from) && `from ${text(d.from)}`,
     `${variant === "waiting" ? "since" : "updated"} ${ago(lastMoved(record), now)}`,
@@ -564,9 +579,11 @@ function Item({
 /** A room's commitment changed as you: its next step and status, with a dated update saying a person did it. */
 function ItemForm({ room, record, done }: { room: DirectoryRoom; record: StateRecordInfo; done: () => void }) {
   const wasNext = text(record.data.nextStep) ?? "";
+  const wasCheck = text(record.data.nextCheck) ?? "";
   const wasStatus = text(record.data.status) ?? "open";
   const wasWaiting = text(record.data.waitingOn) ?? "";
   const [nextStep, setNextStep] = useState(wasNext);
+  const [nextCheck, setNextCheck] = useState(wasCheck);
   const [status, setStatus] = useState(wasStatus);
   const [waitingOn, setWaitingOn] = useState(wasWaiting);
   const [busy, setBusy] = useState(false);
@@ -576,6 +593,7 @@ function ItemForm({ room, record, done }: { room: DirectoryRoom; record: StateRe
     e.preventDefault();
     const changes = {
       ...(nextStep.trim() !== wasNext ? { nextStep: nextStep.trim() } : {}),
+      ...(nextCheck.trim() !== wasCheck ? { nextCheck: nextCheck.trim() } : {}),
       ...(status !== wasStatus ? { status } : {}),
       ...(status === "waiting" && waitingOn.trim() !== wasWaiting ? { waitingOn: waitingOn.trim() } : {}),
     };
@@ -607,6 +625,16 @@ function ItemForm({ room, record, done }: { room: DirectoryRoom; record: StateRe
           ))}
         </select>
       </label>
+      <label>
+        <span>Next check</span>
+        <input
+          type="text"
+          value={nextCheck}
+          maxLength={200}
+          placeholder="Friday 9am, in 2 days, when plan/lisbon changes"
+          onChange={(e) => setNextCheck(e.target.value)}
+        />
+      </label>
       {status === "waiting" && (
         <label>
           <span>Waiting on</span>
@@ -614,8 +642,9 @@ function ItemForm({ room, record, done }: { room: DirectoryRoom; record: StateRe
         </label>
       )}
       <p className="agent-page-hint">
-        Agents leave the next step and what it waits on as you set them; clear one to hand it back. The status goes in
-        its updates, and its members carry the work on from there.
+        Agents leave the next step, the next check and what it waits on as you set them; clear one to hand it back. A
+        check that's a time or a change wakes the lead to look then. The status goes in its updates, and its members
+        carry the work on from there.
       </p>
       <div className="room-form-actions">
         <button type="submit" className="primary" disabled={busy}>

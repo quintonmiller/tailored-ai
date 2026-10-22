@@ -43,6 +43,7 @@ export const WHEN_FORMS = [
   '"2026-08-08" (date only — 09:00 is assumed)',
   '"9am", "21:30", "noon" (next time it is that o\'clock)',
   '"tomorrow", "tomorrow 9am", "today 5pm"',
+  '"friday", "friday 9am", "mon at 14:00" (the next one)',
 ] as const;
 
 const UNIT_SECONDS: Record<string, number> = {
@@ -101,6 +102,9 @@ export function parseWhen(input: string, now: Date = new Date(), timeZone: strin
 
   const dayWord = parseDayWord(text, now, timeZone);
   if (dayWord) return dayWord;
+
+  const weekday = parseWeekday(text, now, timeZone);
+  if (weekday) return weekday;
 
   // Bare number with no unit and no colon — ambiguous, see the doc comment.
   if (/^\d{1,2}$/.test(text)) throw new WhenParseError(input);
@@ -171,6 +175,49 @@ function parseDayWord(text: string, now: Date, timeZone: string): ParsedWhen | n
     at: localDate(base.year, base.month, base.day, hour, minute, timeZone),
     defaultedTime: false,
   };
+}
+
+/** Weekday names, Sunday first as `getUTCDay` counts, with the short forms people write. */
+const WEEKDAYS: string[][] = [
+  ["sunday", "sun"],
+  ["monday", "mon"],
+  ["tuesday", "tue", "tues"],
+  ["wednesday", "wed"],
+  ["thursday", "thu", "thur", "thurs"],
+  ["friday", "fri"],
+  ["saturday", "sat"],
+];
+
+/**
+ * "friday", "fri 9am", "friday at 14:00", "on friday", "next friday": the
+ * next one whose time is still ahead, so "friday 9am" said on a Friday at 8
+ * is today. "next" means the coming one, as most people say it; the echo
+ * shows the date, so a model that meant the week after sees it in the same
+ * turn. With no time, 09:00, as for a date.
+ */
+function parseWeekday(text: string, now: Date, timeZone: string): ParsedWhen | null {
+  const m = text.match(/^(?:(?:on|next|this)\s+)?([a-z]+)(?:\s+(?:at\s+)?(.+))?$/);
+  if (!m) return null;
+  const wanted = WEEKDAYS.findIndex((names) => names.includes(m[1]));
+  if (wanted < 0) return null;
+  let clock = { hour: DEFAULT_HOUR, minute: 0 };
+  if (m[2]) {
+    try {
+      clock = parseTime(m[2]);
+    } catch {
+      throw new WhenParseError(text);
+    }
+  }
+  const { hour, minute } = clock;
+  const today = zonedParts(now, timeZone);
+  const weekday = new Date(Date.UTC(today.year, today.month - 1, today.day)).getUTCDay();
+  // Today counts only while the time is still ahead; otherwise a week on.
+  for (const ahead of [(wanted - weekday + 7) % 7, ((wanted - weekday + 7) % 7) + 7]) {
+    const day = addCivilDays(today, ahead);
+    const at = localDate(day.year, day.month, day.day, hour, minute, timeZone);
+    if (at.getTime() > now.getTime()) return { at, defaultedTime: !m[2] };
+  }
+  return null;
 }
 
 function localDate(year: number, month: number, day: number, hour: number, minute: number, timeZone: string): Date {

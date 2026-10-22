@@ -30,6 +30,7 @@ import {
   type StateRecord,
   type StateTypeDef,
 } from "../state/types.js";
+import { systemTimeZone } from "../time/provider.js";
 import {
   heldArchiveRefusal,
   heldFields,
@@ -156,6 +157,30 @@ export const COMMITMENT_SCHEMA: JsonSchema = {
     status: { enum: [...STATUSES] },
     nextStep: { type: "string", maxLength: 300, description: "The next thing the owner will do." },
     nextCheck: { type: "string", maxLength: 200, description: "When to look again: a time, or an event to watch for." },
+    checkAt: {
+      type: "string",
+      maxLength: 40,
+      description:
+        "When the owner is next woken to check on it, in UTC (ISO). Read from nextCheck; kept by the directory.",
+    },
+    checkOn: {
+      type: "object",
+      required: ["type"],
+      properties: {
+        type: { type: "string", minLength: 1, maxLength: 128 },
+        id: { type: "string", minLength: 1, maxLength: 128 },
+        where: { type: "object" },
+      },
+      description:
+        "The record change that wakes the owner: a type, and optionally an id and fields. Read from nextCheck.",
+    },
+    checkedAt: { type: "string", maxLength: 40, description: "When the owner was last woken to check on it." },
+    checkEvents: {
+      type: "array",
+      maxItems: 5,
+      items: { type: "string", maxLength: 500 },
+      description: "What changed since the last check, newest first, for the next one to say why it came.",
+    },
     autonomy: { enum: [...AUTONOMY], description: "suggest asks first, tell acts and reports, quiet acts and logs." },
     progress: {
       type: ["object", "string"],
@@ -391,6 +416,7 @@ const FIELD_WORDS: Record<string, string> = {
   goal: "goal",
   doneWhen: "done-when",
   nextStep: "next step",
+  nextCheck: "next check",
   waitingOn: "waiting-on",
   status: "status",
 };
@@ -451,6 +477,8 @@ export interface DirectoryOptions {
   rooms?: () => RoomSource | undefined;
   /** Which agent config says leads which room, by the room's name or ref. Read on every use, like the bar. */
   leads?: () => Record<string, string>;
+  /** The runtime's time zone, which a `nextCheck` like "Friday 9am" is read in. Read on every use. */
+  timeZone?: () => string;
 }
 
 /** One agent, as `about` and the HTTP route put it together. */
@@ -524,6 +552,11 @@ export class Directory {
 
   now(): Date {
     return this.opts.now?.() ?? new Date();
+  }
+
+  /** The time zone a check like "Friday 9am" is read in: the runtime's, or this machine's. */
+  timeZone(): string {
+    return this.opts.timeZone?.() ?? systemTimeZone();
   }
 
   agents(): string[] {

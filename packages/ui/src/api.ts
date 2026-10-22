@@ -2258,7 +2258,14 @@ export function editRoomProfile(
 export function editRoomCommitment(
   name: string,
   id: string,
-  changes: { goal?: string; doneWhen?: string; nextStep?: string; status?: string; waitingOn?: string },
+  changes: {
+    goal?: string;
+    doneWhen?: string;
+    nextStep?: string;
+    nextCheck?: string;
+    status?: string;
+    waitingOn?: string;
+  },
 ): Promise<{ commitment: StateRecordInfo }> {
   return stateWrite(
     "PATCH",

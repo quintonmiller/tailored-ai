@@ -13,6 +13,7 @@ import type { StateCaller, StateSearchHit } from "../state/service.js";
 import { StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
+import { type Check, checkFields, checkSaid, newCheckFields, readCheckFor } from "./directory-checks.js";
 import {
   ACTIVE,
   AGENT_AUTONOMY,
@@ -748,7 +749,11 @@ export class CommitmentTool implements Tool {
       goal: { type: "string", description: "open: what it's for, in one line." },
       doneWhen: { type: "string", description: "open: how anyone can tell it's finished." },
       nextStep: { type: "string", description: "open or update: the next thing you'll do." },
-      nextCheck: { type: "string", description: "open or update: when to look again, a date or an event." },
+      nextCheck: {
+        type: "string",
+        description:
+          'open or update: when you\'re woken to look again: a time ("Friday 9am", "in 2 days") or "when <type>/<id> changes".',
+      },
       autonomy: {
         type: "string",
         enum: [...AUTONOMY],
@@ -820,12 +825,19 @@ export class CommitmentTool implements Tool {
         "A room's commitments are for all its members to see. Leave out private, or room for one of your own.",
       );
     }
+    const nextCheck = text(args.nextCheck);
+    // Read as the agent it will wake: the opener, or the lead of the room it's for.
+    const known = room ? this.directory.room(room) : undefined;
+    const check = nextCheck
+      ? await readCheckFor(this.directory, known ? roomOwner(known.ref) : me, nextCheck)
+      : undefined;
     const data: Record<string, unknown> = {
       goal,
       doneWhen,
       status: "open",
       autonomy,
       updates: [{ at: now.toISOString(), text: "Opened.", ...(room ? { by: me } : {}) }],
+      ...newCheckFields(check),
     };
     for (const field of ["nextStep", "nextCheck", "from"] as const) {
       const value = text(args[field]);
@@ -838,6 +850,7 @@ export class CommitmentTool implements Tool {
     const whose = room ? `${this.directory.ownerName(ownerOf(record))}'s` : isPrivate ? "private" : "shared";
     const lines = [`Opened ${record.id}: "${goal}" (${whose}, ${autonomy}).`];
     if (asked !== autonomy) lines.push(autonomyRefused(asked, autonomy));
+    if (nextCheck && check) lines.push(checkSaid(nextCheck, check, now, this.directory.timeZone()));
     const name = (owner: string) => this.directory.ownerName(owner);
     const similar = similarLine(
       await this.directory.similar(caller, COMMITMENT_TYPE, goal, ownerOf(record) ?? me),
@@ -870,10 +883,13 @@ export class CommitmentTool implements Tool {
     if (!others && !autonomy) {
       return fail("update needs at least one of `note`, `progress`, `nextStep`, `nextCheck`, `status` or `waitingOn`.");
     }
+    // Read first when the answer depends on it: the autonomy it has, and whose it is, which says who a check wakes.
+    const current =
+      autonomy || nextCheck ? await this.directory.own(caller, COMMITMENT_TYPE, id, "commitment") : undefined;
     // Asking for the autonomy it already has changes nothing, granted or not.
-    const has = autonomy
-      ? String((await this.directory.own(caller, COMMITMENT_TYPE, id, "commitment")).data.autonomy ?? AGENT_AUTONOMY)
-      : undefined;
+    const has = autonomy ? String(current?.data.autonomy ?? AGENT_AUTONOMY) : undefined;
+    const check: Check | undefined =
+      nextCheck && current ? await readCheckFor(this.directory, ownerOf(current), nextCheck) : undefined;
     const same = !!autonomy && autonomy === has;
     // An agent can step back to asking first, never up: a granted tell or quiet is left as it is.
     const lower = autonomy === AGENT_AUTONOMY && !same;
@@ -886,7 +902,7 @@ export class CommitmentTool implements Tool {
       const changes: Record<string, unknown> = {};
       if (progress !== undefined) changes.progress = progress;
       if (nextStep) changes.nextStep = nextStep;
-      if (nextCheck) changes.nextCheck = nextCheck;
+      if (nextCheck) Object.assign(changes, { nextCheck }, checkFields(check));
       // Waiting on someone implies waiting; going back to open clears who it waited on, unless a person set that.
       const next: Status | undefined = (status as Status | undefined) ?? (waitingOn ? "waiting" : undefined);
       if (next) changes.status = next;
@@ -899,10 +915,10 @@ export class CommitmentTool implements Tool {
       changes.updates = withUpdate(r.data.updates, { at: now.toISOString(), text: said, ...by });
       return changes;
     });
-    const updated = `Updated ${commitmentLine(record, now).slice(2)}`;
-    return ok(
-      refuse ? `${updated}\n${autonomyRefused(autonomy, String(record.data.autonomy ?? AGENT_AUTONOMY))}` : updated,
-    );
+    const lines = [`Updated ${commitmentLine(record, now).slice(2)}`];
+    if (refuse) lines.push(autonomyRefused(autonomy, String(record.data.autonomy ?? AGENT_AUTONOMY)));
+    if (nextCheck && check) lines.push(checkSaid(nextCheck, check, now, this.directory.timeZone()));
+    return ok(lines.join("\n"));
   }
 
   private async finish(
