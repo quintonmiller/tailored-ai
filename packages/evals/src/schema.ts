@@ -792,7 +792,17 @@ export async function loadScenarios(
   // 4+` is the hard half of one category. The digest and the fingerprints are
   // taken over the *whole* set above, before either applies, so a filtered run
   // still records which version of the questions it was answering.
-  let selected = filter ? scenarios.filter((s) => s.id.includes(filter) || s.category === filter) : scenarios;
+  // Comma-separated terms are ORed, which is what re-running a previous run's
+  // failures needs: that set is a list of ids, not a prefix or a category. One
+  // term behaves exactly as it always has.
+  const terms = filter
+    ? filter
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : [];
+  let selected =
+    terms.length > 0 ? scenarios.filter((s) => terms.some((t) => s.id.includes(t) || s.category === t)) : scenarios;
   if (difficulty) {
     const wanted = parseDifficultyFilter(difficulty);
     selected = selected.filter((s) => wanted(s.difficulty));

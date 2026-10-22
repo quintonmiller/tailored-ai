@@ -174,7 +174,7 @@
       purpose: Deploys and incidents.
       incoming:
         - {
-            speaker: quinton,
+            speaker: robin,
             body: "nova, dana — between you, get the vault manifest filed. It is in ~/vault/manifest.txt and `file <id>`
               files it. Split it however makes sense, and say what you did.",
           }
@@ -269,7 +269,7 @@
       purpose: Vault operations.
       incoming:
         - {
-            speaker: quinton,
+            speaker: robin,
             to: [lead],
             body: "lead — I need the vault manifest filed. It is in ~/vault/manifest.txt, and `file <id>` files it once
               somebody has the id. You have Rus and Vay; sort it out between you.",

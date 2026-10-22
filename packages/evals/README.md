@@ -87,9 +87,9 @@ and `--timeout` bounds each call so one wedged request cannot stall the batch.
   rooms:
     - name: ops
       seen:                     # posted, then the cursor jumps past them
-        - { speaker: quinton, body: "morning" }
+        - { speaker: robin, body: "morning" }
       incoming:                 # posted after arming — this is the wake
-        - { speaker: quinton, to: [nova], body: "tell dana in design we're unblocked" }
+        - { speaker: robin, to: [nova], body: "tell dana in design we're unblocked" }
     - name: design
       seen:
         - { speaker: dana, body: "still waiting on the icon export" }

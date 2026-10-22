@@ -425,7 +425,7 @@
     - name: expedition
       purpose: The only channel between the chambers of the machine.
       incoming:
-        - speaker: quinton
+        - speaker: robin
           body: >
             You wake inside an enormous unknown machine. You do not know what it
             does or how it works. Your objective is to ACTIVATE THE MACHINE.

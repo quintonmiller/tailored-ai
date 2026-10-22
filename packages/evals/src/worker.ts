@@ -21,6 +21,7 @@ import { type HarnessOptions, runOnce } from "./harness.js";
 import { writeWorkerResult } from "./protocol.js";
 import { traceFacts } from "./routing.js";
 import { mintTokens, substituteTokens } from "./tokens.js";
+import { fileSink, type TraceEvent, type TraceSink } from "./trace.js";
 import type { RunOutcome, RunResult, Scenario, ScenarioResult } from "./types.js";
 
 interface Payload {
@@ -38,6 +39,102 @@ interface Payload {
    * scenario arrives as JSON, and JSON does not carry a module's imports.
    */
   source?: string;
+  /** NDJSON trace path, when somebody is watching. See `trace.ts`. */
+  tracePath?: string;
+}
+
+/**
+ * A sink that scores the ladder as the run happens.
+ *
+ * Wraps the file sink and, at each round boundary, rebuilds enough of a
+ * `RunOutcome` from the events so far to hand to the *real* milestone grader.
+ * Reusing the grader rather than reimplementing it in the viewer is the whole
+ * point: a live ladder that disagreed with the report would be worse than no
+ * live ladder, because you would believe it.
+ *
+ * It lives in the worker because `graders.ts` imports `harness.ts`, so the
+ * harness cannot import the graders back. The worker already owns grading.
+ */
+function progressSink(scenario: Scenario, write: TraceSink): TraceSink {
+  const seen: TraceEvent[] = [];
+  let scoring = false;
+  return (event) => {
+    seen.push(event);
+    write(event);
+    // Scored at each round boundary, and once more when the run ends — without
+    // the last one a run that solves the puzzle on its final turn shows a
+    // ladder that stops one rung short of what the report will say, which is
+    // the one moment a reader is most likely to trust the screen.
+    if ((event.kind !== "round" && event.kind !== "end") || !scenario.milestones?.length || scoring) return;
+
+    // Rebuilt from the trace rather than from the harness's own recorder, which
+    // is out of reach from here. Every field a milestone can read is present;
+    // anything a milestone asks for that a partial run cannot answer simply
+    // reads as not-yet-reached, which is what it is.
+    const partial = {
+      reply: seen
+        .filter((e): e is Extract<TraceEvent, { kind: "post" }> => e.kind === "post")
+        .map((e) => e.body)
+        .join("\n"),
+      posts: seen
+        .filter((e): e is Extract<TraceEvent, { kind: "post" }> => e.kind === "post")
+        .map((e) => ({ room: e.room, body: e.body, agent: e.agent, turn: e.turn })),
+      // Populated, not empty: `calls_tool_any` reads `calls` while `calls_by`
+      // reads `executions`, so leaving this blank made half the call-shaped
+      // milestones unreachable live while the other half worked — which reads
+      // as a team that never used a tool it had in fact used two dozen times.
+      calls: seen
+        .filter((e): e is Extract<TraceEvent, { kind: "call" }> => e.kind === "call")
+        .map((e) => ({ name: e.tool, args: e.args })),
+      executions: seen
+        .filter((e): e is Extract<TraceEvent, { kind: "call" }> => e.kind === "call")
+        .map((e) => ({ name: e.tool, args: e.args, agent: e.agent, turn: e.turn, result: e.result })),
+      requests: [],
+      turns: seen
+        .filter((e): e is Extract<TraceEvent, { kind: "turn" }> => e.kind === "turn")
+        .map((e) => ({ agent: e.agent, room: e.room })),
+      usage: { input: 0, output: 0 },
+      latencyMs: 0,
+      ...(scenario.simulation
+        ? {
+            simulation: {
+              name: scenario.simulation.name,
+              seed: scenario.simulation.seed ?? 0,
+              days: event.kind === "round" ? (event.day ?? 0) : 0,
+              daysManaged: event.kind === "round" ? (event.day ?? 0) : 0,
+              daysPerRound: scenario.simulation.daysPerRound ?? 1,
+              // `snapshot()` is metric-shaped by convention in every simulation
+              // here, which is what lets a partial run report a live ladder.
+              metrics:
+                (seen.filter((e) => e.kind === "state").at(-1) as Extract<TraceEvent, { kind: "state" }> | undefined)
+                  ?.snapshot ?? {},
+              objective: 0,
+              events: [],
+              dayOfTurn: [],
+              roles: scenario.simulation.roles,
+              responses: {},
+            },
+          }
+        : {}),
+    } as unknown as RunOutcome;
+
+    scoring = true;
+    void scoreMilestones(scenario, partial)
+      .then((scored) => {
+        write({
+          kind: "progress",
+          at: Date.now(),
+          round: event.kind === "round" ? event.round : -1,
+          milestones: scored.map((m) => ({ id: m.id, reached: m.reached })),
+        });
+      })
+      .catch(() => {
+        // A live ladder is a convenience. It must never be able to fail a run.
+      })
+      .finally(() => {
+        scoring = false;
+      });
+  };
 }
 
 /**
@@ -115,10 +212,6 @@ async function main(): Promise<void> {
     // A seed per repeat: reproducible across benchmark runs, varied within one.
     // Without this a repeat count of 3 is three identical samples on a server
     // that honours seeds, and measures nothing about variance.
-    const options: HarnessOptions = {
-      ...payload.options,
-      seed: payload.options.seed === null ? null : payload.options.seed + i,
-    };
     // Minted here, and used for the run *and* the grade, because a witness is
     // only a witness if the check and the thing it checks carry the same value.
     // Minting inside `runOnce` looked tidier and silently broke exactly that:
@@ -127,6 +220,18 @@ async function main(): Promise<void> {
     // Fresh per repeat, so a value cannot survive from one run into the next.
     const tokens = mintTokens(scenario.tokens ?? []);
     const scoped = Object.keys(tokens).length ? substituteTokens(scenario, tokens) : scenario;
+
+    // After `scoped`, because the live ladder grades the same substituted
+    // scenario the run and the final grade use — a live view scoring against
+    // unsubstituted tokens would disagree with the report, which is worse than
+    // having no live view at all.
+    const options: HarnessOptions = {
+      ...payload.options,
+      // Opened per repeat rather than per worker so a three-repeat run is three
+      // readable traces in one file rather than three interleaved ones.
+      ...(payload.tracePath ? { trace: progressSink(scoped, fileSink(payload.tracePath)) } : {}),
+      seed: payload.options.seed === null ? null : payload.options.seed + i,
+    };
 
     const outcome = await runOnce(scoped, options);
     const checks = await grade(scoped, outcome, { judge });

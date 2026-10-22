@@ -15,12 +15,14 @@
 
 import type { Tool } from "@tailored-ai/core";
 import { makeRng, type Rng } from "../rng.js";
+import { tool } from "../tool.js";
 import {
   registerSimulation,
   type SimEvent,
   type SimMetrics,
   type Simulation,
   type SimulationOptions,
+  type SimulationReport,
 } from "../types.js";
 import {
   availableCredit,
@@ -47,35 +49,6 @@ import {
 import { FACTORY_POLICIES } from "./policies.js";
 
 const money = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
-
-/** A tool with no side effects beyond reading. Everything here is stubbed by construction. */
-function tool(
-  name: string,
-  description: string,
-  params: Record<string, string>,
-  execute: (args: Record<string, unknown>) => string,
-  effect: "read" | "write" = "write",
-): Tool {
-  return {
-    name,
-    description,
-    parameters: {
-      type: "object",
-      properties: Object.fromEntries(Object.entries(params).map(([k, d]) => [k, { type: "string", description: d }])),
-      required: Object.keys(params),
-    },
-    effect,
-    async execute(args) {
-      try {
-        return { success: true, output: execute(args) };
-      } catch (err) {
-        // A refusal is information, not a crash. The agent should read it and
-        // choose differently, exactly as it would with a real system.
-        return { success: true, output: `Refused: ${(err as Error).message}` };
-      }
-    },
-  };
-}
 
 const num = (v: unknown, fallback = Number.NaN): number => {
   const n = typeof v === "number" ? v : Number.parseFloat(String(v ?? "").replace(/[^0-9.-]/g, ""));
@@ -143,6 +116,20 @@ export class FactorySimulation implements Simulation {
     machine_failure: ["set_production_plan", "schedule_maintenance"],
     covenant_warning: ["set_price", "set_production_plan", "set_workforce"],
   };
+
+  /**
+   * The line the clock posts in every room at the top of the day.
+   *
+   * It carries the date and nothing else. Anything about the state of the
+   * business would be a broadcast, and would hand every manager information the
+   * simulation deliberately gave to one of them.
+   */
+  announce(): string {
+    return (
+      `Day ${this.state.day + 1} of ${this.horizon}. ` +
+      "Overnight the factory ran, customers ordered, and the books moved. Today's decisions are yours."
+    );
+  }
 
   advance(): SimEvent[] {
     if (this.done) return [];
@@ -617,6 +604,27 @@ export class FactorySimulation implements Simulation {
   }
 }
 
-registerSimulation("factory", (options) => new FactorySimulation(options), FACTORY_POLICIES);
+/**
+ * How this world wants its ladder printed: money, and the two things a mean
+ * cannot tell you — whether the customers were served and whether anybody went
+ * broke getting there.
+ */
+const usd = (n: number) => {
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `$${Math.round(n / 1_000)}K`;
+  return `$${Math.round(n)}`;
+};
+
+export const FACTORY_REPORT: SimulationReport = {
+  key: "enterpriseValue",
+  format: usd,
+  columns: [
+    { label: "service", key: "serviceLevel", kind: "mean" },
+    { label: "bankrupt", key: "bankrupt", kind: "rate" },
+  ],
+};
+
+registerSimulation("factory", (options) => new FactorySimulation(options), FACTORY_POLICIES, FACTORY_REPORT);
 
 export { FACTORY_POLICIES };

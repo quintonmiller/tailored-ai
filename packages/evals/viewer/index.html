@@ -1,0 +1,709 @@
+<title>Lock Watch</title>
+<style>
+  /* A control room, not a document. Slate ground, one cool accent for the
+     machinery, and semantic colour reserved for state — an agent's colour is
+     identity, green/amber/rose always mean "what happened". */
+  :root {
+    --bg: #0e1116;
+    --panel: #151a21;
+    --panel-2: #1b222b;
+    --line: #263040;
+    --ink: #dde5f0;
+    --ink-dim: #8b98ab;
+    --ink-faint: #5c6879;
+    --accent: #6fb2d2;
+    --good: #57c98a;
+    --warn: #d9a441;
+    --bad: #e0685f;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --head-h: 48px;
+  }
+  * { box-sizing: border-box; }
+
+  /* The page does not scroll; each column does.
+     A run produces hundreds of events, and a state diagram that scrolls out of
+     view the moment the stream fills is a diagram nobody sees — which is most
+     of the reason to draw one. */
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 var(--sans);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  header {
+    flex: none; height: var(--head-h);
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  h1 { font-size: 15px; margin: 0; font-weight: 650; white-space: nowrap; }
+  .meta { color: var(--ink-dim); font: 12px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pulse { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--mono); margin-left: auto; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex: none; }
+  .dot.stale { background: var(--ink-faint); }
+  @keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .dot.live { animation: breathe 1.6s ease-in-out infinite; }
+
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 232px minmax(0,1fr) 336px; }
+  .rail, aside { overflow-y: auto; padding: 14px; border-right: 1px solid var(--line); }
+  aside { border-right: 0; border-left: 1px solid var(--line); }
+
+  /* Centre column: the state is pinned, only the stream scrolls. */
+  .centre { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .statewrap { flex: none; padding: 14px 18px 0; }
+  .streamwrap { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px 18px; }
+  .streamhead {
+    position: sticky; top: 0; z-index: 2; background: var(--bg);
+    padding: 14px 0 8px; display: flex; align-items: baseline; gap: 10px;
+  }
+
+  @media (max-width: 1080px) {
+    body { overflow: auto; }
+    main { grid-template-columns: 1fr; }
+    .rail, aside, .streamwrap { overflow: visible; }
+    .centre { min-height: auto; }
+  }
+
+  h2 { font: 600 11px/1 var(--sans); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 10px; }
+  h2.spaced { margin-top: 18px; }
+
+  /* ---- scope control ---- */
+  .seg { display: flex; gap: 2px; background: var(--panel-2); padding: 2px; border-radius: 7px; }
+  .seg button {
+    flex: 1; font: 600 11px var(--sans); letter-spacing: .02em;
+    background: transparent; color: var(--ink-faint); border: 0; border-radius: 5px;
+    padding: 5px 4px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #0b0e12; }
+  .seg button:hover:not([aria-pressed="true"]) { color: var(--ink); }
+
+  .pick { display: flex; flex-direction: column; gap: 1px; margin-top: 8px; }
+  .pick button {
+    display: flex; align-items: center; gap: 8px; text-align: left; width: 100%;
+    background: transparent; border: 0; border-radius: 5px; padding: 5px 7px;
+    color: var(--ink-dim); font: 13px var(--sans); cursor: pointer;
+  }
+  .pick button:hover { background: #ffffff08; color: var(--ink); }
+  .pick button[aria-pressed="true"] { background: #ffffff0d; color: var(--ink); }
+  .pick .swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+  .pick .count { margin-left: auto; font: 10px var(--mono); color: var(--ink-faint); }
+
+  .members { margin-top: 8px; padding: 8px 9px; background: var(--panel-2); border-radius: 6px; }
+  .members .k { font: 10px var(--mono); color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font: 11px var(--mono); padding: 2px 7px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); }
+  .chip i { width: 7px; height: 7px; border-radius: 2px; display: block; }
+
+  label.chk { display: flex; align-items: center; gap: 7px; padding: 3px 0; cursor: pointer; font-size: 13px; color: var(--ink-dim); }
+  label.chk input { accent-color: var(--accent); }
+
+  button.mini { font: 11px var(--mono); background: var(--panel-2); color: var(--ink-dim); border: 1px solid var(--line); border-radius: 5px; padding: 3px 8px; cursor: pointer; }
+  button.mini:hover { color: var(--ink); border-color: var(--accent); }
+  button.mini[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+
+  /* ---- the descent panel ---- */
+  .party { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; }
+  .pc { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+  .pc.down { opacity: .45; border-style: dashed; }
+  .pc .nm { font: 11px var(--mono); color: var(--ink); display: flex; justify-content: space-between; gap: 6px; }
+  .pc .nm em { font-style: normal; color: var(--dim); font-size: 10px; }
+  .meter { height: 5px; border-radius: 3px; background: #1b2028; margin-top: 5px; overflow: hidden; }
+  .meter i { display: block; height: 100%; width: 100%; transform-origin: left; transition: transform .4s ease; }
+  .meter.hp i { background: linear-gradient(90deg, var(--good), #7fd18c); }
+  .meter.hp.hurt i { background: linear-gradient(90deg, #d1a24a, #e0c07a); }
+  .meter.hp.dire i { background: linear-gradient(90deg, var(--bad), #e08a8a); }
+  .meter.mp i { background: linear-gradient(90deg, #4a7fd1, #7aa8e0); }
+  .foes { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+  .foe { display: grid; grid-template-columns: 1fr 62px; gap: 8px; align-items: center;
+         font: 11px var(--mono); background: var(--panel-2); border: 1px solid var(--line);
+         border-radius: 5px; padding: 5px 8px; }
+  .foe.boss { border-color: var(--bad); }
+  .readied { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+
+  /* ---- the lock diagram ---- */
+  .lock { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .lockrow { display: flex; align-items: stretch; margin-top: 9px; }
+  .chamber { flex: 1; position: relative; height: 84px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--panel-2); }
+  /* Scaled rather than resized: the water moves every round, and animating
+     `height` would relayout the whole lock each time. */
+  .water {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 100%;
+    transform-origin: bottom; transform: scaleY(.2);
+    background: linear-gradient(180deg, #24506b, #16303f);
+    transition: transform .4s ease, background .4s ease;
+  }
+  .chamber.held   .water { transform: scaleY(.78); background: linear-gradient(180deg, #2f7ba3, #1b4459); }
+  .chamber.fading .water { transform: scaleY(.5);  background: linear-gradient(180deg, #2a6180, #18384a); }
+  .chamber.none   .water { transform: scaleY(.2); }
+  .clabel { position: absolute; top: 5px; left: 8px; font: 11px var(--mono); color: var(--ink-dim); z-index: 2; }
+  .cstate { position: absolute; top: 5px; right: 8px; font: 11px var(--mono); z-index: 2; }
+  .barge { position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%); font-size: 19px; z-index: 3; filter: drop-shadow(0 1px 2px #000a); }
+  .gate { width: 12px; align-self: stretch; margin: 0 2px; border-radius: 2px; background: var(--bad); transition: background .3s, opacity .3s; position: relative; }
+  .gate.open { background: var(--good); opacity: .45; }
+  .gate span { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%) rotate(-90deg); font: 9px var(--mono); color: #0b0e12; white-space: nowrap; }
+  .paddles { display: flex; margin-top: 5px; }
+  .pad { flex: 1; display: flex; justify-content: center; gap: 5px; }
+  .pip { width: 24px; height: 5px; border-radius: 3px; background: var(--line); transition: background .25s; }
+  .pip.up { background: var(--accent); }
+  .padnames { display: flex; margin-top: 3px; }
+  .padnames div { flex: 1; text-align: center; font: 10px var(--mono); color: var(--ink-faint); }
+
+  .gauges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+  .gauge { font: 11px var(--mono); padding: 3px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-dim); }
+  .gauge b { color: var(--ink); font-weight: 600; }
+  .gauge.on { border-color: color-mix(in srgb, var(--good) 55%, transparent); color: var(--good); }
+  .gauge.alarm { border-color: color-mix(in srgb, var(--bad) 60%, transparent); color: var(--bad); }
+  .gauge.changed { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--accent) 35%, transparent); } }
+
+  .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 8px; }
+  .cell { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  .cell .k { font: 10px var(--mono); color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; }
+  .cell .v { font: 600 17px/1.2 var(--mono); margin-top: 3px; }
+
+  /* ---- stream ---- */
+  .stream { display: flex; flex-direction: column; gap: 2px; }
+  .ev { display: grid; grid-template-columns: 42px 76px 1fr; gap: 10px; align-items: baseline; padding: 5px 8px; border-radius: 5px; border-left: 3px solid transparent; }
+  .ev:hover { background: #ffffff06; }
+  .ev .t { font: 10px var(--mono); color: var(--ink-faint); text-align: right; }
+  .ev .who { font: 11px var(--mono); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .ev .what { min-width: 0; overflow-wrap: anywhere; }
+  .ev.call { background: #ffffff04; }
+  .ev.call .what { font: 12px/1.5 var(--mono); color: var(--ink-dim); }
+  .ev.call .tool { color: var(--accent); }
+  .ev.refused { border-left-color: var(--bad); }
+  .ev.refused .what { color: color-mix(in srgb, var(--bad) 80%, var(--ink)); }
+  .ev.round { grid-template-columns: 1fr; margin: 12px 0 4px; border-top: 1px solid var(--line); color: var(--ink-faint); font: 11px var(--mono); padding: 6px 0 0; }
+  .room { font: 10px var(--mono); color: var(--ink-faint); }
+  .to { color: var(--warn); }
+
+  /* ---- ladders ---- */
+  .ms { display: flex; flex-direction: column; gap: 1px; }
+  .ms div { display: flex; gap: 8px; align-items: baseline; padding: 3px 6px; border-radius: 4px; font-size: 12px; }
+  .ms .pts { font: 10px var(--mono); color: var(--ink-faint); margin-left: auto; }
+  .ms .hit { background: color-mix(in srgb, var(--good) 12%, transparent); }
+  .ms .hit .mk { color: var(--good); }
+  .ms .miss { color: var(--ink-faint); }
+  .ms .mk { font: 11px var(--mono); width: 10px; }
+  .bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; margin: 6px 0 12px; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--good); transform-origin: left; transition: transform .5s ease; }
+  .score { font: 600 22px var(--mono); }
+  .score small { font: 12px var(--mono); color: var(--ink-faint); }
+
+  table.facts { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.facts th { font: 600 10px var(--sans); text-transform: uppercase; letter-spacing: .07em; color: var(--ink-faint); text-align: left; padding-bottom: 5px; }
+  table.facts td { padding: 5px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+  table.facts .stage { font: 10px var(--mono); }
+  table.facts .none { color: var(--bad); opacity: .65; }
+  .empty { color: var(--ink-faint); font-size: 12px; padding: 8px 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  }
+</style>
+
+<header>
+  <h1 id="title">waiting for a run…</h1>
+  <span class="meta" id="sub"></span>
+  <span class="pulse"><span class="dot live" id="dot"></span><span id="pulse">connecting</span></span>
+</header>
+
+<main>
+  <div class="rail">
+    <h2>Scope</h2>
+    <div class="seg" id="scope">
+      <button data-scope="all" aria-pressed="true">Everything</button>
+      <button data-scope="room" aria-pressed="false">Room</button>
+      <button data-scope="agent" aria-pressed="false">Agent</button>
+    </div>
+    <div class="pick" id="picker"></div>
+    <div id="who"></div>
+
+    <h2 class="spaced">Show</h2>
+    <div id="kinds"></div>
+    <div id="repeats"></div>
+    <h2 class="spaced">Follow</h2>
+    <button class="mini" id="follow" aria-pressed="true">auto-scroll</button>
+  </div>
+
+  <div class="centre">
+    <div class="statewrap">
+      <h2>State</h2>
+      <div id="state"></div>
+    </div>
+    <div class="streamwrap" id="streamwrap">
+      <div class="streamhead"><h2 style="margin:0">Activity</h2><span class="meta" id="scopeNote"></span></div>
+      <div class="stream" id="stream"></div>
+      <div class="empty" id="streamEmpty">Nothing yet.</div>
+    </div>
+  </div>
+
+  <aside>
+    <h2>Milestones</h2>
+    <div id="score"></div>
+    <div class="ms" id="milestones"></div>
+    <h2 class="spaced">Facts</h2>
+    <div id="facts"></div>
+  </aside>
+</main>
+
+<script type="module">
+// Identity is a hue; state is never one. Six stops that stay apart on a dark
+// ground and survive the two common colour-vision deficiencies.
+const PALETTE = ["#6fb2d2", "#c9a227", "#9b8ec4", "#5fb49c", "#d98b73", "#8fa8c8"];
+const colourOf = new Map();
+const colour = (a) => {
+  if (!a) return "#8b98ab";
+  if (!colourOf.has(a)) colourOf.set(a, PALETTE[colourOf.size % PALETTE.length]);
+  return colourOf.get(a);
+};
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+
+const state = {
+  /** Everything the trace has ever contained. */
+  all: [],
+  /** Just the repeat currently being shown. See `currentRepeat`. */
+  events: [], run: null,
+  /** Which repeat is on screen, and how many the trace holds. */
+  repeat: 0, repeats: 1,
+  /** "all" | "room" | "agent" — one question at a time, rather than twelve checkboxes. */
+  scope: "all", pick: null,
+  hiddenKinds: new Set(), follow: true, lastCount: 0,
+};
+
+async function poll() {
+  try {
+    // The cursor counts everything received, not what is on screen. Reading it
+    // off the visible slice re-requests every event already held, and the
+    // duplicates land as extra `run` markers — a two-repeat run reported five.
+    const res = await fetch(`./events?since=${state.all.length}`);
+    const body = await res.json();
+    if (body.reset) { state.all = []; state.events = []; state.run = null; colourOf.clear(); }
+    if (body.events?.length) state.all.push(...body.events);
+    currentRepeat();
+    $("dot").className = `dot ${body.live ? "live" : "stale"}`;
+    $("pulse").textContent = `${body.live ? "live" : "finished"} · ${state.events.length} events`;
+    render();
+  } catch {
+    $("dot").className = "dot stale";
+    $("pulse").textContent = "no server";
+  }
+  setTimeout(poll, 1500);
+}
+
+/**
+ * One trace file can hold several repeats of the same scenario.
+ *
+ * `--repeats 2` runs the scenario twice into one file, so the events are two
+ * complete runs end to end. Rendering them as one shows a state panel from the
+ * second run under a transcript from the first, and a fact that "never moved"
+ * because the search stopped at the first run's copy of it. So the view is
+ * always exactly one repeat: the newest by default, and any earlier one from
+ * the picker.
+ */
+function currentRepeat() {
+  const starts = state.all.map((e, i) => (e.kind === "run" ? i : -1)).filter((i) => i >= 0);
+  state.repeats = Math.max(1, starts.length);
+  if (state.repeat > starts.length - 1) state.repeat = starts.length - 1;
+  if (state.repeat < 0) state.repeat = 0;
+  const from = starts[state.repeat] ?? 0;
+  const to = starts[state.repeat + 1] ?? state.all.length;
+  state.events = state.all.slice(from, to);
+}
+
+/** Who is in a room. Absent on traces written before membership was recorded. */
+const membersOf = (room) => state.run?.roomMembers?.[room] ?? null;
+/** Which rooms an agent can be heard in. */
+const roomsOf = (agent) => (state.run?.rooms ?? []).filter((r) => (membersOf(r) ?? []).includes(agent));
+
+/**
+ * Does this event belong in the current scope?
+ *
+ * A tool call carries no room — an agent calls its instruments from wherever it
+ * happens to be standing — so a room scope shows calls made by that room's
+ * members. That is the useful reading of "what happened in this room": the
+ * conversation, plus what the people in it did.
+ */
+function inScope(e) {
+  if (state.scope === "all" || !state.pick) return true;
+  if (state.scope === "agent") return e.agent === state.pick;
+  const members = membersOf(state.pick);
+  if (e.kind === "post") return e.room === state.pick;
+  if (e.kind === "call") return members ? members.includes(e.agent) : true;
+  return true;
+}
+
+function render() {
+  const run = state.events.find((e) => e.kind === "run");
+  if (run && run !== state.run) { state.run = run; for (const a of run.agents ?? []) colour(a); buildRail(); }
+  if (!state.run) return;
+
+  const now = state.events.filter((e) => e.kind === "round").at(-1);
+  $("title").textContent = state.run.scenario;
+  document.title = `${state.run.scenario} — Lock Watch`;
+  $("sub").textContent =
+    `${state.run.model} · round ${now ? now.round + 1 : 0} of ${state.run.rounds ?? "?"}` +
+    (state.repeats > 1 ? ` · repeat ${state.repeat + 1} of ${state.repeats}` : "");
+  renderRepeats();
+
+  renderState();
+  renderStream();
+  renderMilestones();
+  renderFacts();
+  renderWho();
+}
+
+function latestState() {
+  const snaps = state.events.filter((e) => e.kind === "state");
+  const last = snaps.at(-1)?.snapshot;
+  const prev = snaps.at(-2)?.snapshot ?? {};
+  const changed = new Set(last ? Object.keys(last).filter((k) => JSON.stringify(last[k]) !== JSON.stringify(prev[k])) : []);
+  return { last, changed };
+}
+
+function renderState() {
+  const { last, changed } = latestState();
+  const host = $("state");
+  if (!last) { host.innerHTML = `<div class="empty">No simulation state yet.</div>`; return; }
+  // A simulation the viewer knows how to draw gets drawn; everything else gets
+  // an honest board of its own numbers. The fallback is the important half — a
+  // new simulation should be watchable the day it is written.
+  host.innerHTML =
+    state.run?.scenario === "the-lock"
+      ? drawLock(last, changed)
+      : state.run?.scenario === "the-endless-descent"
+        ? drawDescent(last, changed)
+        : drawBoard(last, changed);
+}
+
+const LOCK_PADDLES = { 1: ["sluice", "signal"], 2: ["signal", "wright"], 3: ["sluice", "keeper"] };
+const LOCK_GATES = { 1: "signal", 2: "pilot", 3: "keeper" };
+
+function drawLock(s, changed) {
+  const berth = String(s.barge ?? "basin");
+  const levels = { 1: s.level1, 2: s.level2, 3: s.level3 };
+  const gates = { 1: s.gate1, 2: s.gate2, 3: s.gate3 };
+  const pads = { 1: s.paddles1, 2: s.paddles2, 3: s.paddles3 };
+
+  const chamber = (n) => {
+    const lvl = levels[n] ?? "none";
+    return `<div class="chamber ${lvl}"><div class="water"></div>
+      <span class="clabel">chamber ${n}</span>
+      <span class="cstate" style="color:${lvl === "held" ? "var(--good)" : lvl === "fading" ? "var(--warn)" : "var(--ink-faint)"}">${lvl}</span>
+      ${berth === `ch${n}` ? `<span class="barge" title="the barge">⛴</span>` : ""}</div>`;
+  };
+  const gate = (n) =>
+    `<div class="gate ${gates[n] === "open" ? "open" : ""}" title="${LOCK_GATES[n]} works this gate"><span>gate ${n}</span></div>`;
+  // Two pips per chamber: the simultaneity mechanic made visible. Both lit in
+  // the same round, or the water never rises.
+  const pips = (n) => {
+    const up = String(pads[n] ?? "--");
+    return `<div class="pad">${LOCK_PADDLES[n]
+      .map((who, i) => `<span class="pip ${up[i] !== "-" ? "up" : ""}" title="${who}"></span>`)
+      .join("")}</div>`;
+  };
+
+  const flags = [["keyed", s.keySet], ["authorised", s.authorised], ["code void", s.codeLeaks], ["log entries", s.logEntries], ["round", s.round]];
+  return `<div class="lock">
+    <span class="meta">the barge lies in <b style="color:var(--ink)">${esc(
+      berth === "reach" ? "the upper pound" : berth === "basin" ? "the lower basin" : `chamber ${berth.slice(2)}`,
+    )}</b></span>
+    <div class="lockrow">
+      <div class="chamber none" style="max-width:84px"><div class="water"></div><span class="clabel">basin</span>${berth === "basin" ? `<span class="barge">⛴</span>` : ""}</div>
+      ${gate(1)}${chamber(1)}${gate(2)}${chamber(2)}${gate(3)}${chamber(3)}
+      <div class="chamber held" style="max-width:84px"><div class="water"></div><span class="clabel">pound</span>${berth === "reach" ? `<span class="barge">⛴</span>` : ""}</div>
+    </div>
+    <div class="paddles" style="padding:0 88px">${pips(1)}${pips(2)}${pips(3)}</div>
+    <div class="padnames" style="padding:0 88px">${[1, 2, 3].map((n) => `<div>${LOCK_PADDLES[n].join(" + ")}</div>`).join("")}</div>
+    <div class="gauges">${flags
+      .map(([k, v]) => {
+        const on = Number(v) > 0;
+        return `<span class="gauge ${k === "code void" && on ? "alarm" : on ? "on" : ""} ${changed.has(k) ? "changed" : ""}">${esc(k)} <b>${esc(v ?? 0)}</b></span>`;
+      })
+      .join("")}</div>
+  </div>`;
+}
+
+/**
+ * The descent: five health bars, whatever is trying to kill them, and the
+ * actions readied for this round.
+ *
+ * A key/value grid — which is what the generic board gives it — is a JSON dump
+ * with borders, and the whole point of asking for a viewer was not to read
+ * JSON. What a reader of this scenario actually wants at a glance is who is
+ * about to die and what everyone has committed to doing about it.
+ *
+ * The party strings are parsed rather than sent structured, so the snapshot
+ * stays readable on its own in a trace and in the generic board.
+ */
+const DESCENT_PARTY = ["guardian", "mage", "rogue", "cleric", "ranger"];
+
+function drawDescent(s, changed) {
+  const bar = (kind, frac, extra = "") =>
+    `<div class="meter ${kind} ${extra}"><i style="transform:scaleX(${Math.max(0, Math.min(1, frac)) || 0})"></i></div>`;
+
+  const member = (id) => {
+    const raw = String(s[id] ?? "");
+    if (!raw || raw === "DOWN") return `<div class="pc down"><div class="nm">${esc(id)}<em>down</em></div></div>`;
+    const hp = raw.match(/^(\d+)\/(\d+)/);
+    const mp = raw.match(/m(\d+)\/?(\d+)?/);
+    const gold = raw.match(/g(\d+)/);
+    const frac = hp ? Number(hp[1]) / Math.max(1, Number(hp[2])) : 0;
+    const band = frac < 0.3 ? "dire" : frac < 0.65 ? "hurt" : "";
+    return `<div class="pc ${changed.has(id) ? "changed" : ""}">
+      <div class="nm">${esc(id)}<em>${hp ? `${hp[1]}/${hp[2]}` : esc(raw)}</em></div>
+      ${bar("hp", frac, band)}
+      ${mp ? bar("mp", Number(mp[1]) / Math.max(1, Number(mp[2] ?? mp[1]))) : ""}
+      <div class="nm" style="margin-top:4px"><em>${gold ? `${gold[1]}g` : ""}</em></div>
+    </div>`;
+  };
+
+  const foes = String(s.enemies ?? "—");
+  const foeRows =
+    foes === "—" || !foes
+      ? `<div class="foe"><span style="color:var(--dim)">nothing in the room</span><span></span></div>`
+      : foes
+          .split(" | ")
+          .map((one) => {
+            const m = one.match(/^(\S+)\s+(\d+)\/(\d+)$/);
+            if (!m) return `<div class="foe"><span>${esc(one)}</span><span></span></div>`;
+            const frac = Number(m[2]) / Math.max(1, Number(m[3]));
+            const boss = /boss|saint|choir|warden-boss|alpha/.test(m[1]);
+            return `<div class="foe ${boss ? "boss" : ""}">
+              <span>${esc(m[1])} ${bar("hp", frac, frac < 0.35 ? "dire" : frac < 0.7 ? "hurt" : "")}</span>
+              <span style="color:var(--dim);text-align:right">${m[2]}/${m[3]}</span>
+            </div>`;
+          })
+          .join("");
+
+  const readied = String(s.readied ?? "—");
+  const chips =
+    readied === "—" || !readied
+      ? `<span class="gauge">nothing readied</span>`
+      : readied
+          .split(" ")
+          .map((r) => `<span class="gauge on">${esc(r.replace(":", " · "))}</span>`)
+          .join("");
+
+  const flags = [
+    ["floor", s.floor],
+    ["phase", s.phase],
+    ["round", s.tick],
+    ["dread", s.dread],
+    ["level", s.level],
+    ["total xp", s.xp],
+    ["bosses", s.bosses],
+    ["standing", `${s.survivors ?? 0}/5`],
+  ];
+
+  return `<div class="lock">
+    <div class="gauges" style="margin-bottom:10px">${flags
+      .map(
+        ([k, v]) =>
+          `<span class="gauge ${k === "dread" && Number(v) >= 4 ? "alarm" : "on"} ${changed.has(k === "total xp" ? "xp" : k === "round" ? "tick" : k) ? "changed" : ""}">${esc(k)} <b>${esc(v ?? 0)}</b></span>`,
+      )
+      .join("")}</div>
+    <div class="party">${DESCENT_PARTY.map(member).join("")}</div>
+    <div class="foes">${foeRows}</div>
+    <div class="readied">${chips}</div>
+  </div>`;
+}
+
+function drawBoard(s, changed) {
+  return `<div class="board">${Object.entries(s)
+    .filter(([, v]) => typeof v !== "object")
+    .map(([k, v]) => `<div class="cell ${changed.has(k) ? "changed" : ""}">
+      <div class="k">${esc(k.replace(/([a-z])([A-Z])/g, "$1 $2"))}</div>
+      <div class="v">${esc(typeof v === "number" ? Math.round(v * 100) / 100 : v)}</div></div>`)
+    .join("")}</div>`;
+}
+
+function renderStream() {
+  const rows = [];
+  for (const e of state.events) {
+    // Round rules and the ending are the spine of the transcript and stay
+    // whatever the scope: a filtered stream with no round markers is a list of
+    // sentences with no clock against them.
+    if (e.kind === "round") {
+      if (!state.hiddenKinds.has("round"))
+        rows.push(`<div class="ev round">round ${e.round + 1}${e.announce ? ` — ${esc(e.announce)}` : ""}</div>`);
+      continue;
+    }
+    if (e.kind === "end") {
+      rows.push(`<div class="ev round">run ended — ${esc(e.reason ?? "no reason given")} · ${e.turns} turns</div>`);
+      continue;
+    }
+    if (state.hiddenKinds.has(e.kind) || !inScope(e)) continue;
+
+    if (e.kind === "post") {
+      const to = e.to?.length ? `<span class="to">→ ${esc(e.to.join(", "))}</span> ` : "";
+      rows.push(`<div class="ev post">
+        <span class="t">t${e.turn}</span>
+        <span class="who" style="color:${colour(e.agent)}">${esc(e.agent ?? "?")}</span>
+        <span class="what"><span class="room">[${esc(e.room)}]</span> ${to}${esc(e.body).replace(/\n/g, "<br>")}</span></div>`);
+    }
+    if (e.kind === "call") {
+      const args = Object.entries(e.args ?? {}).map(([k, v]) => `${k}=${esc(JSON.stringify(v)).replace(/^"|"$/g, "")}`).join(" ");
+      rows.push(`<div class="ev call ${e.refused ? "refused" : ""}">
+        <span class="t">t${e.turn}</span>
+        <span class="who" style="color:${colour(e.agent)}">${esc(e.agent ?? "?")}</span>
+        <span class="what"><span class="tool">${esc(e.tool)}</span>${args ? ` ${esc(args)}` : ""} <span style="color:var(--ink-faint)">→</span> ${esc(e.result).slice(0, 400)}</span></div>`);
+    }
+  }
+  $("streamEmpty").style.display = rows.length ? "none" : "";
+  $("stream").innerHTML = rows.join("");
+
+  // Scroll the stream, never the page: the state panel is pinned and has to
+  // stay where it is.
+  if (state.follow && state.events.length !== state.lastCount) {
+    state.lastCount = state.events.length;
+    const box = $("streamwrap");
+    box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
+  }
+}
+
+function renderMilestones() {
+  const declared = state.run?.milestones ?? [];
+  const latest = state.events.filter((e) => e.kind === "progress").at(-1);
+  const reached = new Map((latest?.milestones ?? []).map((m) => [m.id, m.reached]));
+  if (!declared.length) { $("milestones").innerHTML = `<div class="empty">No ladder.</div>`; $("score").innerHTML = ""; return; }
+  const earned = declared.filter((m) => reached.get(m.id)).reduce((a, m) => a + m.points, 0);
+  const total = declared.reduce((a, m) => a + m.points, 0);
+  $("score").innerHTML = `<div class="score">${earned}<small>/${total}</small></div>
+    <div class="bar"><i style="transform:scaleX(${total ? earned / total : 0})"></i></div>`;
+  $("milestones").innerHTML = declared
+    .map((m) => `<div class="${reached.get(m.id) ? "hit" : "miss"}">
+      <span class="mk">${reached.get(m.id) ? "✓" : "·"}</span>
+      <span>${esc(m.id.replace(/-/g, " "))}</span><span class="pts">${m.points}</span></div>`)
+    .join("");
+}
+
+/**
+ * Where each fact got to, computed from posts and calls.
+ *
+ * The grader runs once at the end; the interesting moment is the one where a
+ * value is found and then does not move, so this works it out live from the
+ * same four stages the report uses.
+ */
+function renderFacts() {
+  const specs = state.run?.facts ?? {};
+  const names = Object.keys(specs);
+  if (!names.length) { $("facts").innerHTML = `<div class="empty">No tracked facts.</div>`; return; }
+  const rows = names.map((name) => {
+    const want = String(specs[name].value ?? "").toLowerCase();
+    let found, said, used;
+    for (const e of state.events) {
+      if (e.kind === "call" && String(e.result ?? "").toLowerCase().includes(want)) found ??= { agent: e.agent, turn: e.turn };
+      if (e.kind === "post" && String(e.body ?? "").toLowerCase().includes(want)) said ??= { agent: e.agent, turn: e.turn, room: e.room };
+      if (e.kind === "call" && !e.refused && JSON.stringify(e.args ?? {}).toLowerCase().includes(want))
+        used ??= { agent: e.agent, turn: e.turn, tool: e.tool };
+    }
+    const cell = (x, extra) =>
+      x
+        ? `<span class="stage" style="color:${colour(x.agent)}">${esc(x.agent)}</span><span class="stage" style="color:var(--ink-faint)"> t${x.turn}${extra && x[extra] ? ` ${esc(x[extra])}` : ""}</span>`
+        : `<span class="stage none">—</span>`;
+    return `<tr><td><span class="stage">${esc(name.replace(/_/g, " "))}</span></td>
+      <td>${cell(found)}</td><td>${cell(said, "room")}</td><td>${cell(used, "tool")}</td></tr>`;
+  });
+  $("facts").innerHTML = `<table class="facts"><thead><tr><th>fact</th><th>found</th><th>said</th><th>used</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+/** Who is in the room you are looking at, or which rooms the agent sits in. */
+function renderWho() {
+  const host = $("who");
+  if (state.scope === "all" || !state.pick) { host.innerHTML = ""; $("scopeNote").textContent = ""; return; }
+
+  if (state.scope === "room") {
+    const members = membersOf(state.pick);
+    host.innerHTML = `<div class="members"><div class="k">in this room</div><div class="chips">${
+      members
+        ? members.map((m) => `<span class="chip"><i style="background:${colour(m)}"></i>${esc(m)}</span>`).join("")
+        : `<span class="meta">not recorded in this trace</span>`
+    }</div></div>`;
+    $("scopeNote").textContent = `#${state.pick} — everything said here, and what its members did`;
+  } else {
+    const rooms = roomsOf(state.pick);
+    host.innerHTML = `<div class="members"><div class="k">can be heard in</div><div class="chips">${
+      rooms.length ? rooms.map((r) => `<span class="chip">${esc(r)}</span>`).join("") : `<span class="meta">not recorded</span>`
+    }</div></div>`;
+    $("scopeNote").textContent = `${state.pick} — everything it said and every tool it called`;
+  }
+}
+
+/** A repeat switcher, only when the trace actually holds more than one. */
+function renderRepeats() {
+  const host = $("repeats");
+  if (state.repeats < 2) { host.innerHTML = ""; return; }
+  host.innerHTML =
+    `<h2 class="spaced">Repeat</h2><div class="seg">` +
+    Array.from({ length: state.repeats }, (_, i) => `<button data-r="${i}" aria-pressed="${i === state.repeat}">${i + 1}</button>`).join("") +
+    `</div>`;
+  host.querySelectorAll("button").forEach((el) =>
+    el.addEventListener("click", () => {
+      state.repeat = Number(el.dataset.r);
+      state.lastCount = -1;
+      currentRepeat();
+      state.run = null;
+      render();
+    }),
+  );
+}
+
+function buildRail() {
+  $("kinds").innerHTML = ["post", "call", "round"]
+    .map((k) => `<label class="chk"><input type="checkbox" checked data-k="${k}"><span>${k}s</span></label>`)
+    .join("");
+  $("kinds").querySelectorAll("input").forEach((el) =>
+    el.addEventListener("change", () => {
+      el.checked ? state.hiddenKinds.delete(el.dataset.k) : state.hiddenKinds.add(el.dataset.k);
+      render();
+    }),
+  );
+  buildPicker();
+}
+
+function buildPicker() {
+  const host = $("picker");
+  if (state.scope === "all") { host.innerHTML = ""; return; }
+  const items = state.scope === "room" ? (state.run?.rooms ?? []) : (state.run?.agents ?? []);
+  // Default to the first option rather than showing an empty stream and making
+  // the reader work out that they were supposed to pick something.
+  if (!items.includes(state.pick)) state.pick = items[0] ?? null;
+
+  host.innerHTML = items
+    .map((v) => {
+      const n =
+        state.scope === "room"
+          ? state.events.filter((e) => e.kind === "post" && e.room === v).length
+          : state.events.filter((e) => (e.kind === "post" || e.kind === "call") && e.agent === v).length;
+      return `<button data-v="${esc(v)}" aria-pressed="${v === state.pick}">
+        ${state.scope === "agent" ? `<span class="swatch" style="background:${colour(v)}"></span>` : ""}
+        <span>${esc(v)}</span><span class="count">${n}</span></button>`;
+    })
+    .join("");
+  host.querySelectorAll("button").forEach((el) =>
+    el.addEventListener("click", () => { state.pick = el.dataset.v; buildPicker(); render(); }),
+  );
+}
+
+$("scope").querySelectorAll("button").forEach((el) =>
+  el.addEventListener("click", () => {
+    state.scope = el.dataset.scope;
+    for (const b of $("scope").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b === el));
+    state.pick = null;
+    buildPicker();
+    render();
+  }),
+);
+
+$("follow").addEventListener("click", () => {
+  state.follow = !state.follow;
+  $("follow").setAttribute("aria-pressed", String(state.follow));
+});
+
+poll();
+</script>

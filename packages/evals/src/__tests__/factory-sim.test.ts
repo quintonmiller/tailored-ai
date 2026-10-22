@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { FACTORY_POLICIES, FactorySimulation } from "../sim/factory/index.js";
+import { FACTORY_POLICIES, FACTORY_REPORT, FactorySimulation } from "../sim/factory/index.js";
 import { enterpriseValue, priceEffect, seasonality } from "../sim/factory/model.js";
 import { makeRng } from "../sim/rng.js";
 import { gradient, runPolicy, summarise, sweep } from "../sim/sweep.js";
@@ -94,9 +94,11 @@ describe("the economics", () => {
 
 describe("the baseline ladder", () => {
   const all = [...SPINE, "fill-the-line", "growth"].map((name) =>
-    summarise(sweep("factory", FACTORY_POLICIES[name as keyof typeof FACTORY_POLICIES](), SEEDS)),
+    summarise(sweep("factory", FACTORY_POLICIES[name as keyof typeof FACTORY_POLICIES](), SEEDS), FACTORY_REPORT),
   );
   const by = (name: string) => all.find((s) => s.policy === name) as (typeof all)[number];
+  /** The columns the factory declares for itself, now that the reporter is generic. */
+  const column = (name: string, label: string) => by(name).extra.find((e) => e.label === label)?.value ?? Number.NaN;
   const spine = SPINE.map(by);
 
   it("is monotonic — a policy that pays more attention earns more", () => {
@@ -130,9 +132,9 @@ describe("the baseline ladder", () => {
     // seed, which made the bankruptcy rate, P10 and worst case a column of
     // decoration. A benchmark that cannot show a downside cannot mark anything
     // down for running into one.
-    expect(by("random").bankruptcyRate).toBeGreaterThan(0);
+    expect(column("random", "bankrupt")).toBeGreaterThan(0);
     expect(by("random").p10).toBeLessThan(by("random").mean * 0.6);
-    expect(by("operator").bankruptcyRate).toBe(0);
+    expect(column("operator", "bankrupt")).toBe(0);
   });
 
   it("punishes the two policies that serve customers best", () => {
@@ -144,7 +146,7 @@ describe("the baseline ladder", () => {
     // are not the objective, and a benchmark that scores subsystems separately
     // would have called each of them an improvement.
     for (const trap of ["fill-the-line", "growth"]) {
-      expect(by(trap).serviceLevel).toBeGreaterThan(by("reorder-point").serviceLevel);
+      expect(column(trap, "service")).toBeGreaterThan(column("reorder-point", "service"));
       expect(by(trap).mean).toBeLessThan(by("reorder-point").mean);
     }
   });

@@ -5,10 +5,12 @@
   "description": "Scenario benchmark: assembles a real invocation message through core, sends it to a live model, and scores what comes back.",
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "build": "pnpm run build:viewer",
+    "build:viewer": "esbuild viewer/broadcast/src/main.ts --bundle --format=esm --target=es2022 --outfile=viewer/broadcast/dist/broadcast.js --sourcemap --log-level=warning",
     "eval": "tsx src/cli.ts run",
-    "eval:compare": "tsx src/cli.ts compare"
+    "eval:compare": "tsx src/cli.ts compare",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.viewer.json"
   },
   "dependencies": {
     "@tailored-ai/core": "workspace:*",
@@ -23,6 +25,7 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
     "better-sqlite3": "^11.7.0",
+    "esbuild": "^0.27.3",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"

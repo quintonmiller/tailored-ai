@@ -1,0 +1,606 @@
+/*
+ * Tokens and layout for the broadcast page.
+ *
+ * Everything here is sized for something being *watched* rather than read at
+ * arm's length: large type, few simultaneous moving things, and no state that is
+ * carried only by a small colour difference. A viewer three metres from a screen
+ * — or looking at a re-encoded stream — has to be able to tell a party in
+ * trouble from a party winning without squinting at a number.
+ *
+ * Single-theme on purpose. This is a lit stage in a dark room; a light variant
+ * would be a different design rather than the same one inverted.
+ *
+ * ## What this page is meant to look like
+ *
+ * A surface station tracking an expedition that is underground — an instrument,
+ * not a game HUD. Wet stone and iron, one sodium lamp, and brass-and-verdigris
+ * for the chrome that measures things.
+ *
+ * That reading decides most of what follows, and it replaced a look that was
+ * competent and completely anonymous: dark-slate cards with a uniform 10px
+ * radius, `system-ui` throughout, an uppercase letter-spaced micro-label on
+ * every panel and a single orange accent. Every one of those is a default
+ * rather than a decision, and together they are the house style of every
+ * dashboard generated in the last two years.
+ *
+ * Three rules come out of it:
+ *
+ * - **Panels are machined plates, not cards.** A 3px radius, a hairline border
+ *   and a 1px inner top highlight, so they read as something bolted down.
+ * - **The instrument speaks in monospace.** Labels, numbers and headings are
+ *   mono with wide tracking; prose — the party channel, the commentary, the
+ *   log — stays in the sans face, because that is people talking.
+ * - **Two structural colours, not one.** Sodium lamp for anything live or warm,
+ *   verdigris for the chrome that frames and measures. A lone warm accent on
+ *   near-black is the cliché this is getting out of.
+ *
+ * ## Which tokens the canvas also reads
+ *
+ * `stage.ts` pulls `--ink`, `--dim`, `--faint`, `--flame`, `--panel` and
+ * `--ground` at runtime through `readVar`, so changing them here moves the
+ * stage with the page. The semantic colours (`--good`, `--warn`, `--bad`,
+ * `--arcane`, `--gold`) and the five class colours are *duplicated by value* in
+ * that file instead — change one of those here and the canvas will quietly
+ * disagree with the panels about who is who.
+ */
+
+:root {
+  /* Ground: cold and deep, biased green-grey rather than blue — wet stone under
+     a lamp, and far enough from slate that the page does not read as a chart. */
+  --ground: #080a0a;
+  --panel: #0e1211;
+  --panel-2: #141918;
+  --line: #212927;
+
+  /* The lamp. Anything live, warm, or happening now. */
+  --flame: #e08b3c;
+  --flame-dim: #7a4f20;
+
+  /* The instrument. Frames, rules, tick marks, and the chrome around a reading
+     — never the reading itself, so the two never compete. */
+  --verdigris: #4e8b7c;
+  --verdigris-dim: #2b4a43;
+
+  /* Warm off-white: paper under that lamp, not a blue screen. */
+  --ink: #e7e4dc;
+  --dim: #9a9c94;
+  --faint: #5c625d;
+
+  --good: #5fb98a;
+  --warn: #e0b040;
+  --bad: #d9564f;
+  --arcane: #7b8ff5;
+  --gold: #d9b45c;
+
+  /* One colour per class, used by every module: the stage, the bars, the
+     speech bubbles and the log all have to agree on who is who. */
+  --guardian: #d8b45a;
+  --mage: #7b8ff5;
+  --rogue: #b06fd6;
+  --cleric: #5fb98a;
+  --ranger: #4fb3c4;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+
+  --gap: 10px;
+  /* Plates, not cards. */
+  --radius: 3px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  /* A stage that fills whatever it is given, down to a laptop and up to a
+     television, without any panel ever scrolling the page itself. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- header ------------------------------------------------------------ */
+
+/*
+ * The station's fascia: a plate with a lit edge, not a web page banner.
+ *
+ * The verdigris hairline along the bottom is the one line that runs the full
+ * width of the page, and it is what makes everything below read as instruments
+ * mounted under it rather than as cards floating on a background.
+ */
+.top {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 11px 18px 10px;
+  border-bottom: 1px solid var(--verdigris-dim);
+  background: linear-gradient(180deg, #121716, var(--panel));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
+  flex: 0 0 auto;
+}
+
+.title {
+  font: 600 17px/1 var(--mono);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.title b {
+  color: var(--flame);
+  font-weight: 600;
+}
+
+/* A cut tick against the title, the way a gauge marks its own scale. */
+.title::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 13px;
+  margin-right: 11px;
+  vertical-align: -1px;
+  background: var(--flame);
+}
+
+.top .facts {
+  display: flex;
+  gap: 14px;
+  font: 15px/1 var(--mono);
+  color: var(--dim);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.top .facts b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/*
+ * A status lozenge carrying a square panel lamp.
+ *
+ * Square rather than a round dot, and set *inside* the lozenge rather than
+ * running down its edge: a bar of colour along one side of a box is the most
+ * recognisable tell of a generated interface, and a lamp is what the thing this
+ * page is pretending to be would actually have.
+ */
+.pill {
+  font: 13px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 5px 9px;
+  border-radius: 2px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  vertical-align: 0;
+  background: var(--faint);
+}
+
+.pill.live {
+  border-color: var(--verdigris-dim);
+  color: var(--good);
+}
+
+.pill.live::before {
+  background: var(--good);
+  box-shadow: 0 0 6px var(--good);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.pill.done {
+  border-color: var(--flame-dim);
+  color: var(--flame);
+}
+
+.pill.done::before {
+  background: var(--flame);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* ---- the three columns ------------------------------------------------- */
+
+/*
+ * Proportional, not fixed. The side columns were 270 and 320 CSS pixels
+ * whatever they were shown on, which is a reasonable measure on a laptop and a
+ * ribbon on a television — and it is the reason the type in them had been
+ * driven down to nine and ten pixels to fit. Giving them a share of the width
+ * instead lets the same content sit at a readable size on a big screen, with a
+ * floor so a small one still gets a usable column.
+ */
+main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 19%) minmax(0, 1fr) minmax(340px, 24%);
+  gap: var(--gap);
+  padding: var(--gap);
+}
+
+/*
+ * The map holds a fixed share of the left column and the slot takes the rest.
+ * A `flex: 1` on both would let a floor with nine rooms squeeze the records
+ * panel to nothing on one round and back on the next.
+ */
+#panel-map {
+  flex: 0 0 46%;
+}
+
+.col {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.centre {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+/*
+ * A machined plate: hairline edge, tight radius, one lit top edge.
+ *
+ * The inner highlight is the whole trick. Without it a dark rectangle on a dark
+ * background is a card and reads as software; with it the panel has a top
+ * surface catching the lamp, and the page reads as a rack of instruments.
+ */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * A plate's engraved label, with a cut tick in front of it.
+ *
+ * Mono rather than the sans face: on this page the instrument speaks in
+ * monospace and only people speak in prose, so a heading in the body face was
+ * quietly claiming to be something somebody said.
+ */
+.panel > h2 {
+  margin: 0;
+  padding: 9px 12px 7px;
+  font: 500 12px/1 var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel > h2::before {
+  content: "";
+  width: 2px;
+  height: 9px;
+  background: var(--verdigris);
+  flex: 0 0 auto;
+}
+
+.panel > .body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 10px 12px;
+}
+
+/*
+ * A rotating slot: several panels share one box and the director fades between
+ * them. There is more to show than fits, and a static layout would either be
+ * crowded or leave most of it out.
+ */
+.slot {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+ * Every panel in a slot occupies the whole slot, so all four are stacked on the
+ * same box and the director picks one.
+ *
+ * It fades *in*, and does not cross-fade. That is the fix for a real defect
+ * rather than a preference. These panels have opaque backgrounds, so a
+ * cross-dissolve between two of them is not a dissolve at all — for the length
+ * of the fade the outgoing panel reads straight through the incoming one and
+ * the slot shows two headings and two bodies superimposed.
+ *
+ * At 0.45s that is a flicker. It stops being a flicker when the tab is not the
+ * frontmost one: Chrome pauses the document timeline for a hidden tab, and a
+ * transition caught in flight freezes exactly where it was. Measured on this
+ * page at `visibilityState: "hidden"` — `spoils` stuck at 0.85 over `records`
+ * at 0.15, unmoving for twenty seconds, `requestAnimationFrame` never firing.
+ * A broadcast is *meant* to live on a second screen, which is precisely where a
+ * tab is occluded, so relying on a transition to finish is relying on the one
+ * condition this page does not get.
+ *
+ * So `visibility` steps with no delay in either direction. The outgoing panel
+ * stops painting on the same frame the class changes, whether or not any
+ * subsequent frame ever arrives, and the incoming one fades up from the slot's
+ * own ground. Freezing it at any point now shows one panel at partial opacity,
+ * which reads as a panel arriving rather than as a broken page.
+ */
+.slot > .panel {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  transition: opacity 0.45s ease, transform 0.45s ease;
+  pointer-events: none;
+}
+
+.slot > .panel.on {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot > .panel {
+    transition: none;
+  }
+  .pill.live::before {
+    animation: none;
+  }
+}
+
+/* ---- stage ------------------------------------------------------------- */
+
+/*
+ * The ground the canvas is drawn over.
+ *
+ * Kept close to `--ground` rather than the old blue-slate wash, because every
+ * zone now paints its own light and a background that disagreed with all five
+ * of them showed through at the edges as a cold halo.
+ */
+#stage {
+  padding: 0;
+  background: radial-gradient(ellipse at 50% 32%, #131816 0%, #070908 72%);
+}
+
+#stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- shared small parts ------------------------------------------------ */
+
+.meter {
+  height: 6px;
+  border-radius: 3px;
+  background: #0d1219;
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  transform-origin: left;
+  transition: transform 0.45s ease, background 0.3s ease;
+  background: var(--good);
+}
+
+.meter.hurt i {
+  background: var(--warn);
+}
+
+.meter.dire i {
+  background: var(--bad);
+}
+
+.meter.mana i {
+  background: var(--arcane);
+}
+
+.k {
+  font: 12px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.num {
+  font: 15px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.empty {
+  color: var(--faint);
+  font: 14px/1.5 var(--sans);
+  padding: 6px 0;
+}
+
+/* ==== object categories ==================================================
+ *
+ * The one thing a viewer must never have to read to work out: whether the
+ * thing that just happened involved a person, a monster, a piece of gear, a
+ * potion, the room itself, or an effect sitting on somebody.
+ *
+ * Six categories, and every panel that names a thing spends the same six
+ * tokens on it. They are aliases rather than new colours on purpose — the
+ * palette above is still the palette, so an identity pass that re-points
+ * `--gold` moves every piece of gear on the page with it, and a category is
+ * never the reason a seventh hue appears.
+ *
+ * Colour is the *second* signal. The first is silhouette: `viewer/broadcast/
+ * src/marks.ts` draws one shape per category, and the shapes are chosen to
+ * survive a re-encode at eleven pixels. Nothing here is load-bearing on its
+ * own.
+ * ======================================================================== */
+
+:root {
+  --cat-character: var(--ink);
+  --cat-enemy: var(--bad);
+  --cat-loot: var(--gold);
+  --cat-consumable: var(--good);
+  --cat-feature: var(--arcane);
+  --cat-effect: var(--warn);
+
+  /* Health going the wrong way, and health coming back. Named for what they
+     mean rather than for their colour, so a panel asking for "the damage
+     colour" cannot end up asking for amber. */
+  --hurt: var(--bad);
+  --mend: var(--good);
+  --blank: var(--faint);
+}
+
+/*
+ * A drawn glyph, inline.
+ *
+ * `currentColor` throughout, so an icon takes the colour of the row it sits in
+ * and one rule below can tint a whole line. `flex: 0 0 auto` because these live
+ * next to text that is allowed to ellipsis and they are not.
+ */
+.mark {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  color: inherit;
+  vertical-align: -1px;
+}
+
+.mark.lg {
+  width: 15px;
+  height: 15px;
+}
+
+.mark.sm {
+  width: 10px;
+  height: 10px;
+}
+
+/* The category itself, wherever one is named outright. */
+.cat {
+  --cat: var(--faint);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--cat);
+}
+
+.cat[data-cat="character"] { --cat: var(--cat-character); }
+.cat[data-cat="enemy"] { --cat: var(--cat-enemy); }
+.cat[data-cat="loot"] { --cat: var(--cat-loot); }
+.cat[data-cat="consumable"] { --cat: var(--cat-consumable); }
+.cat[data-cat="feature"] { --cat: var(--cat-feature); }
+.cat[data-cat="effect"] { --cat: var(--cat-effect); }
+
+/*
+ * A number that just changed.
+ *
+ * Damage is the figure a viewer tracks round to round and a shrinking bar does
+ * not carry it — the bar says "worse" and the tick says "by 143". It rises and
+ * fades once rather than pulsing, so several of them at once read as one round
+ * of blows instead of as an alarm.
+ */
+.tick {
+  font: 800 14px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--hurt);
+  opacity: 0;
+}
+
+.tick.mend { color: var(--mend); }
+.tick.blank { color: var(--blank); font-weight: 700; }
+
+.tick.on {
+  animation: tick-rise 1.9s ease-out both;
+}
+
+@keyframes tick-rise {
+  0% { opacity: 0; transform: translateY(4px); }
+  14% { opacity: 1; transform: none; }
+  72% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: translateY(-3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tick.on {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- footer ------------------------------------------------------------ */
+
+/*
+ * The credit line, and the last thing on the page.
+ *
+ * Outside `main` so it is a band of its own rather than a panel: it must never
+ * compete with a panel for height, and it must never be the reason a column
+ * scrolls. The mirrored verdigris hairline pairs it with the fascia at the top,
+ * which is what makes the page read as a single instrument rather than as a
+ * layout with a note stuck under it.
+ */
+.foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 7px 18px 8px;
+  border-top: 1px solid var(--verdigris-dim);
+  background: linear-gradient(0deg, #121716, var(--panel));
+  font: 12px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.foot b {
+  font-weight: 600;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+}
+
+/* A cut tick between the two credits, matching the one on every panel label. */
+.foot .sep {
+  width: 2px;
+  height: 9px;
+  background: var(--verdigris-dim);
+}
+

@@ -741,6 +741,439 @@ drops functions without complaint, so logic hidden in a closure would keep its
 fingerprint while changing its meaning. Logic that genuinely needs to be code
 goes in a registered simulation, which the scenario names.
 
+## Puzzles: a simulation with a win condition
+
+A simulation does not have to be an economy. `the-lock` is the same seam used
+for a puzzle — a derelict staircase lock, six agents across three rooms, one
+barge to work up it — and it exists because `the-machine` is finished: 98/98 on
+three runs out of three. A benchmark whose top rung is cleared measures its own
+ceiling.
+
+The measured lesson it is built on is its sibling. `the-machine-across-a-divide`
+is the same fifteen-step graph with the room cut in half, and it scores 32, 52
+and 107 out of 107 on the same model. **What makes a multi-agent puzzle hard is
+the shape of the team, not the length of the chain.** So `the-lock` keeps a
+chain about as long and changes what a team has to do with it: two paddles that
+must stand up in the same round, held by two agents who — for the upper chamber
+— have no room in common; a key made of two numbers from opposite ends of the
+lock, combined by a third party who can read neither; an authorisation that
+crosses two rooms and is void if it lands in the public register.
+
+### Prove it before running a model at it
+
+```bash
+pnpm run eval -- prove --puzzle lock
+```
+
+A puzzle written as an explicit transition system is a finite graph, so the two
+questions that decide whether it is worth a model's time are decidable rather
+than a matter of the author's care:
+
+```
+  reachable states   21,054
+  soft-locks         none
+  shortest solution  2 rounds, 14 moves
+  blind player wins  0.0%
+```
+
+**Soft-locks** are the reason this exists. A state the team can reach and can
+never recover from cannot be found by playing, because the runs that hit it look
+exactly like runs where the team was not good enough — and it poisons the
+measurement in the worst direction, since the harder a team tries the more
+likely it is to trip one. `prove` takes the backward closure from every winning
+state and reports everything reachable outside it. The command exits non-zero,
+so this is a gate rather than a report.
+
+**`blindRate`** separates a hard puzzle from a long one. A blind player runs
+eighteen random moves a round for the whole horizon — far more calls than a real
+roster can make — and if it wins with any regularity the scenario is measuring
+persistence, and a model that simply calls more tools scores better without
+understanding anything.
+
+**`minRounds`** is what calibrates the budget, and it is counted against the
+roster: agents take turns in order, a turn may make several calls, and an agent
+whose turn has passed cannot act again until the clock comes round. Without that
+constraint the answer for any puzzle whose solution is legal in the opening
+position is one round, which is exactly the number that would let a simultaneity
+puzzle ship with a budget it cannot be solved in.
+
+### The solver ladder, and the control that matters
+
+`prove` also plays the puzzle with five non-model solvers:
+
+```
+  one-paddle-at-a-time      no   0/3 chambers   never levels anything
+  hydraulics-only           no   1/3            works the water, routes nothing
+  key-routed-code-not       no   2/3            one hop lands, two hops do not
+  perfect-team             yes   3/3, 3 rounds
+  solo-omniscient          yes   3/3, 3 rounds
+```
+
+The last two are the pair to watch. **One omniscient agent holding every
+instrument finishes in the same three rounds a perfect team does**, which is how
+we know the puzzle itself is not the hard part — everything between
+`hydraulics-only` and `perfect-team` is the cost of being six people. If `solo`
+ever needs markedly fewer rounds than `perfect`, the scenario has stopped
+measuring orchestration and started measuring the machine.
+
+### No mechanic that cannot be undone
+
+The design constraint is that the puzzle can be solved and cannot be soft-locked,
+so every mechanic is reversible by construction: water goes in and out, a gate
+that swings shut reopens from the state that opened it, a code struck out of the
+register is reissued on request. That is also why the machinery lives in a pure
+`model.ts` with the prose and plumbing in `index.ts` — everything that could hide
+a soft-lock is in the half the prover searches.
+
+The tests carry the same discipline. `lock-puzzle.test.ts` builds a puzzle with a
+known dead end and requires the prover to find it, and one with no locked doors
+and requires the blind rate to notice; a checker that reports "all clear" on
+everything is worse than none, because it is trusted.
+
+## Endless runs: a simulation with no win condition at all
+
+> The reasoning behind this scenario — what was decided, what was traded away,
+> and what is worth doing next — is in [docs/endless-descent.md](./endless-descent.md).
+> This section is how it works.
+
+Both of the above are finished. `the-machine` scores 98/98 on three runs of
+three; `the-lock` — proved solvable, proved impossible to soft-lock, built over
+a full session — was solved on its third run and every run after. That is the
+structural problem with a benchmark you author an answer for: **every time one
+is beaten it has to be replaced**, and each replacement costs a session and buys
+one bit of information.
+
+`the-endless-descent` removes the answer. Five agents with different classes,
+tools, information and inventories run a dungeon that goes down forever and gets
+harder on six axes. The party's growth is deliberately slower than the dungeon's,
+so the two curves cross and the run ends — by a party wipe or by the clock. The
+score is the experience earned before that happened, which is continuous,
+comparative, and cannot be saturated.
+
+### Difficulty is bands, not a health multiplier
+
+`hp *= floor` produces floor 50 as floor 1 with a longer fight, which measures
+patience. Depth opens *bands*, and each one makes a demand the last did not:
+
+| floors | what is new |
+|---|---|
+| 1–4 | one archetype, no tricks |
+| 5–9 | armour and elemental resistance — is the right class swinging |
+| 10–14 | statuses, interrupts, target priority |
+| 15–24 | hidden mechanics that cost something |
+| 25–39 | healing itself gets punished |
+| 40+ | several at once, plus reinforcements |
+
+The first wall is an information wall rather than a damage one: `carapace`
+resists physical and `warden` resists spells, and no single class can see both.
+
+### The measurement nothing else here can make
+
+Ten enemy families each carry a rule **no tool will ever reveal** — crystal
+reflects lightning, wisps detonate when killed, bells punish anyone healed on
+the previous tick. The only way to learn one is to set it off. Each family comes
+back later, stronger, with the same rule.
+
+That gap is longer than a context window, so what is being measured is the
+framework's memory rather than the model's attention. `the-machine` and
+`the-lock` both fit in one window, where "remembering" and "still being able to
+read it" are indistinguishable.
+
+There is deliberately no in-game bestiary and no `recall_lore` tool. Adding one
+would measure whether a model can use a lookup table.
+
+### Baselines first, model second
+
+This is the part worth copying to the next simulation. **Six scripted parties
+were built and tuned before a single model call**, and they found every balance
+defect:
+
+| policy | earned | floor | what it adds |
+|---|---|---|---|
+| `greedy-dps` | 1,220 | 7.7 | all damage, no healer |
+| `random` | 2,198 | 11.4 | legal moves, chosen without a thought |
+| `basic-tactics` | 3,754 | 14.5 | taunt, heal, swing; never opens a pack |
+| `tactics-only` | 12,350 | 22.3 | plays the fight well, ignores everything else |
+| `rule-based` | 29,007 | 31.3 | everything a competent player does |
+| `oracle` | 45,544 | 38.8 | and knows every hidden mechanic already |
+
+Twenty-four seeds, full-length runs, a 37× spread. Three readings come straight
+off it: the tactical layer is the single biggest jump; the out-of-combat layer —
+trading, pooling, equipping, reviving — is worth **+135%** on top of playing
+every fight well; and perfect recall is worth **+57%** beyond that, which is
+what says the memory diagnostic is measuring something that matters.
+
+A caveat that comes with it: those gaps need *floors* to open up. The scenario's
+own 40-round budget is about six floors, and over that span the top three rungs
+land within 5% of each other. Forty rounds resolves the bottom half of the
+ladder well and the top half barely — which is the right trade while agent runs
+are landing near `random`, and the thing to revisit when they are not.
+
+Every policy drives the same public API the tools wrap, so a bot cannot do
+anything an agent could not. A baseline that reached into simulation state
+directly would ignore mana costs, cooldowns and phase rules, and produce a
+ladder for a different game.
+
+`bench` prints this in seconds:
+
+```bash
+pnpm run eval -- bench --simulation descent --seeds 24 --days 400
+```
+
+### Four defects the ladder caught before any model ran
+
+Each of these would have cost hours of model time and been misread as an agent
+failure:
+
+- **A wall, not a curve.** The floor-5 boss carried more flat armour than the
+  whole party's attack power, so every physical attack did exactly 1. Every
+  baseline died on floor 5 regardless of how well it played. Armour is now small
+  and flat, and "immune to swords" is a *resistance*, which scales with the
+  number it modifies instead of outrunning it.
+- **A resource cliff.** Nothing regenerated mana, so the mage and cleric were
+  spent by floor 3 and played the rest of the run as bad physical attackers.
+- **A measurement that measured nothing.** With hidden mechanics that did not
+  scale with depth, an 18-point detonation on floor 40 was a rounding error and
+  the *oracle finished behind* `rule-based`. If perfect knowledge does not beat
+  no knowledge, the memory diagnostic is worthless. The mechanics scale now.
+- **A hole in the middle.** The first ladder had everything dying by floor 8 and
+  `rule-based` at floor 40, with nothing between — so any agent run landing in
+  the middle could only be described as "better than random". `basic-tactics`
+  and `tactics-only` were added to fill it.
+
+A fifth was caught by `eval watch` three minutes into the first agent run, not
+by the ladder: the clock only advanced during combat, so a party deliberating on
+the stairs advanced no time at all and the horizon counted *fights* rather than
+rounds. The baselines had silently been given forty fights where the agents get
+forty turns of everything, and the two numbers were not comparable. Watch the
+first few rounds of a new scenario — `the-lock` hid a worse defect for a full
+sixty-seven-minute run.
+
+### Diagnostics: why, not just how far
+
+Experience says how far an organisation got. It does not say what to fix. Seven
+diagnostics do, and every one is computed from an event the simulation can see
+itself — **none needs a solver**, which is the constraint that made them
+buildable at all. For `the-lock` an optimal line could be written down because
+its state space is small enough to search exhaustively; a dungeon with items,
+statuses and an economy has no such answer at any tractable cost.
+
+| diagnostic | detected from |
+|---|---|
+| tool correctness | an action the machinery refused |
+| information routing | an attack with an element the target is *known* to resist, made after somebody inspected it |
+| memory | a hidden mechanic firing again, in a later encounter with a family that already taught it |
+| allocation | an item in a pack belonging to somebody who cannot use it, while somebody who can is standing there |
+| coordination | two individually sensible actions readied in one round whose combination is worse than either |
+| conservation | a scarce consumable spent on a fight that did not need it |
+| pooling | gold moved between members and a purchase nobody could have afforded alone — *or* how widely a cache's takes were spread, since both answer the same question |
+
+Routing only counts *after* an inspection: before that, hitting a warden with
+fire is exploration, and a benchmark should not punish finding out.
+
+### Why the party starts on floor 30
+
+Measured, not chosen. A 40-round run from floor 1 reaches about floor 11, and
+floors 1–22 are survivable by a party playing *randomly* — every rung from
+`tactics-only` up finished within 15% of every other, because nothing that
+separates them has happened yet. The scenario starts in the band that
+discriminates, with the levels, purses and gear a party that walked there would
+have, fitted to what `rule-based` actually holds on arrival over twenty seeds.
+Floor 30 is where the bottom of the ladder separates best: `random` wipes on
+five runs in twelve and finishes 65% behind `basic-tactics`, where at floor 26
+the two are 19% apart.
+
+Two traps came out of this and are worth knowing about:
+
+- The first fitted curve was 15% high, which handed the party five extra levels.
+  Nothing ever died, and a random party out-scored a competent one.
+- `totalXp` includes the grant. Scoring on it would have credited a run with the
+  24,000 experience it was *given* for standing on floor 30, and every threshold
+  in the scenario would have passed on tick zero. The objective is `earnedXp`.
+
+`startFloor: 1` with roughly 150 rounds is the full-arc configuration, and the
+only thing standing in its way is the bill.
+
+### Sweep the ladder at the floor the scenario actually starts on
+
+`bench` starts a simulation at its own defaults, which for `descent` is floor 1.
+The scenario starts on floor 31, so the default sweep describes a *different
+game* — and that gap hid a pacing defect for two agent runs. Pass the scenario's
+options through:
+
+```bash
+pnpm run eval -- bench --simulation descent --seeds 24 --days 40 \
+  --sim-option startFloor=31
+```
+
+`--sim-option key=value` is repeatable and goes straight into the simulation's
+options bag; the flag is deliberately opaque, because what a simulation accepts
+is its own business and `bench` should not need to know.
+
+The defect it exposed is worth repeating as a rule. Enemy health was compounding
+at 7% a floor while the party's damage grows as a power law in depth, so by
+floor 31 an encounter took ten rounds against a forty-round budget: a run
+covered *one floor and eleven enemies*, no policy — including the omniscient one
+— ever reached a boss, and every scenario milestone needing a descent or a quiet
+moment was unreachable. The lesson is not "that number was wrong" but that the
+two curves have to be chosen against each other:
+
+- **health tracks the party's damage**, so an encounter stays three or four
+  rounds long at every depth
+- **damage outruns the party's health**, so the party gets more fragile as it
+  descends, and the run ends by dying rather than by stalling
+
+An endless benchmark ends because a *lethality* curve crosses, not because a
+health pool grew. The other kind of crossing produces a stalemate, and a
+stalemate measures patience.
+
+### What the first two agent runs did
+
+`qwen3.6-27b-vllm`, one repeat each, 40 rounds, ~15s per agent turn (about 50
+minutes a run). Both wiped, which is the expected ending — the scenario has no
+other one.
+
+| | run 1 (floor 30) | run 2 (floor 31) |
+|---|---|---|
+| earned | 6,550 | 2,883 |
+| ended | wiped, floor 31 | wiped, floor 34 |
+| floors cleared | 1 | 3 |
+| bosses | 1 | 0 |
+| milestones | 50/100 | 38/100 |
+| tool correctness | 92% | 89% |
+| gold spent | **0** of 17,180 held | 6,400 |
+
+Against the baselines on the *identical* dungeon, both land between `random`
+and `tactics-only` — and both are the only results in that band that wiped.
+`basic-tactics` earns comparably and keeps all five alive.
+
+The diagnostics say where the loss came from, and it is not the fighting:
+
+- **The economy.** Run 1 finished the run with 17,180 gold unspent, having
+  never visited a merchant. Run 2 corrected this and bought 6,400 worth — the
+  single biggest behavioural difference between the two — but neither ever
+  moved gold or an item between members. `tactics-only` is the bot that plays
+  fights well and ignores the rest, and both runs sit below it.
+- **Information routing, 71% then 44%.** The guardian reads an enemy's armour
+  aloud and the party keeps making physical attacks into it: 16 times in run 1,
+  30 in run 2. The number is *known*, posted in the room, and not acted on.
+  This is the clearest single finding the benchmark has produced.
+- **Nobody was ever revived.** The ranger starts carrying a soul stone. Ten
+  deaths across two runs, zero revives, and run 2 spent refusals discovering
+  the stone was already gone.
+
+Coordination scored 100% in run 2 with zero anti-synergies — worth reading
+narrowly rather than as praise. The party rarely used the abilities that
+interfere with each other, so there was little to get wrong.
+
+### A measurement bug the agents found
+
+Run 2 collected `bought-something-nobody-could-afford-alone` — ten points for
+pooling — while making **zero gold transfers**. The detector compared a price
+against a notional opening purse of sixty gold, which is true on floor one and
+nonsense for a party started mid-descent holding thousands each, so every
+ordinary purchase scored as pooling. Its true score is 38/100, not 48.
+
+It now records what a buyer held *before* anyone topped them up, and counts the
+purchase only if that was less than the price. The lesson generalises past this
+scenario: **a threshold calibrated against the opening state is wrong for any
+scenario that does not start at the opening state.**
+
+### What makes it hard for five agents rather than one
+
+- **Private packs.** `look` shows an ally's health and what they are wearing,
+  never their inventory or their purse. A plate cuirass in the mage's bag is
+  invisible until the mage tries to equip it, is told it is guardian-only, and
+  says so.
+- **Split sight.** `inspect_enemy` returns a different slice per class and no
+  slice is sufficient. The mage sees resistances, the guardian sees armour, and
+  whoever is swinging sees neither.
+- **Simultaneity.** Combat actions are *readied*; the whole round resolves at
+  once. A fireball into the group the rogue just put to sleep is two sensible
+  choices and one bad round, and nothing warns anybody.
+- **Individual gold.** Nobody can afford the good item alone, and nothing
+  suggests pooling.
+- **Hard caps.** A dead expedition's cache offers six things and lets the party
+  carry out two; only two trinkets can be attuned at a time. Neither can be
+  settled by whoever happens to be richest — the only way through is to agree,
+  and somebody has to concede. This replaced a merchant appearing every third
+  floor, which explained nothing about itself and let one rich agent convert
+  gold into gear with no conversation: one measured run spent 5,309 gold, every
+  coin of it by a single agent on themselves, and finished on 11,944 unspent
+  with the pooling diagnostic reading zero.
+- **A private scout.** The rogue can go ahead alone, and what they find is
+  theirs alone — the party learns it only if the rogue says so. It used to be
+  written into shared state, so the one action that could create information
+  asymmetry created none. This is most of what splitting the party would buy,
+  for one field and a cost in dread.
+
+Only one room, on purpose. `the-machine` and its split sibling already measure
+what happens when a fact has to cross a wall; splitting the party too would make
+a low score ambiguous between "could not play the dungeon" and "could not get a
+number across a room".
+
+## Watching a run happen
+
+```bash
+pnpm run eval -- watch          # newest trace, live or finished
+```
+
+Every run writes an NDJSON trace to `results/traces/` by default; `eval watch`
+serves a page at `127.0.0.1:4380` that polls it. The same page opens a finished
+run, because a trace is the same artefact either way — and a 72-turn run is read
+after the fact far more often than it is watched.
+
+**One question at a time.** A `Scope` control switches the whole view between
+**Everything**, one **Room**, or one **Agent**, rather than making you uncheck
+eleven boxes. Scoping to a room names who is in it — a room is a membership list
+before it is a transcript, and "which two of these six can hear each other" is
+most of what a reader of a multi-room run is working out. Scoping to an agent
+names the rooms it can be heard in. A tool call carries no room, so a room scope
+shows the conversation plus what that room's members did.
+
+**The page does not scroll; each column does.** The state diagram is pinned and
+the stream scrolls under it. A drawing that leaves the screen the moment the
+transcript fills is a drawing nobody sees, which is most of the reason to make
+one.
+
+**One repeat at a time.** `--repeats 3` writes three complete runs into one
+trace; the viewer shows one and offers a switcher. Rendering them together puts
+the second run's state panel under the first run's transcript.
+
+It shows five things at once:
+
+- **The state, drawn.** A simulation the viewer recognises gets a diagram — for
+  `the-lock`, the chambers with their water levels, the gates, the barge, and a
+  pip per paddle. Two dark pips under a chamber is the simultaneity failure at a
+  glance, which no amount of JSON conveys. Anything else falls back to a board of
+  its own `snapshot()` values with changed keys flashing. The fallback is the
+  important half: a new simulation is watchable the day it is written.
+- **Every action, interleaved.** Room posts and tool calls in one stream, in
+  order, coloured by agent, with refusals on a red rule. Seeing what the
+  machinery said back *next to* what the team said about it is the point.
+- **Filters** by agent, by room, and by event kind.
+- **The milestone ladder**, scored live.
+- **The facts**, and how far each got: found → said → used.
+
+### Why it exists
+
+A defect hid for a full sixty-seven-minute run: six roles were silently sharing
+one tool implementation, so every agent operated the same chamber. The
+transcript read as a team hallucinating its own capabilities, and it was
+accurate reporting of a broken world. With the tool results beside the messages
+it would have been obvious in round two.
+
+### How it is wired
+
+The harness emits; it does not write. `HarnessOptions.trace` is an optional
+sink, the worker points it at a file, and `watch` reads the file — no ports, no
+lifecycle, and nothing in the runner that knows a viewer exists. The live
+milestone ladder is scored by the **real** grader (in the worker, which already
+owns grading) against a partial outcome rebuilt from the trace, so the live
+ladder and the report can never disagree.
+
+`--trace <file>` puts it somewhere else; `--trace off` writes none.
+
 ## Restraint cases are not filler
 
 Roughly a quarter of the scenarios assert that the agent does **nothing**: passes
@@ -826,6 +1259,69 @@ The rule now is: no response at all is a failure; one failed call the loop
 recovered from is not. Worth stating because it generalises — anything that
 records the request before the response can report a green score for an endpoint
 that is not there.
+
+## The round budget is a scoring setting
+
+`--max-tool-rounds` defaults to **20**. It defaulted to 6, and that was not a
+neutral choice.
+
+A model that searches before it answers spends rounds; one that answers
+immediately does not. Under a low cap the first is cut off mid-sentence and
+scored as a stall, and the second is not — so the cap does not measure which
+model is better, it measures which one fits under it. Measured while comparing
+Qwen3.6 with Qwen3.8 on 2026-08-14:
+
+| rounds | Qwen3.6 long-session | Qwen3.8 long-session |
+|---|---|---|
+| 6 | 65% (16 stalls) | 33.3% (16 stalls) |
+| 20 | 70.8% (4 stalls) | 54.2% (5 stalls) |
+
+The same flag moved one model 6 points and the other 21. Across the whole
+difficulty 1-9 set it was worth +4.6 points to 3.6 and +7.9 to 3.8. The
+deployment this benchmark stands in for allows **100** rounds, so 6 was also
+stricter than production — a benchmark harsher than the thing it models will
+systematically prefer models that give up sooner.
+
+It is now recorded in the report meta alongside `maxTokens` and `thinking`,
+which exist for the same reason: a published number that does not say what
+budget produced it cannot be read back to notice this.
+
+**A stall is not a wrong answer.** When comparing models, read the stop-reason
+breakdown before the score — `complete`, `tool-ended`, `max-rounds`, and runs
+with no stop recorded are four different things, and only some of them are about
+the model. In the run above, 31 of one model's 58 failures never stopped
+cleanly, and 9 more were HTTP 400s that never reached it at all.
+
+Even at 20 the breakdown still tilted: 3.8 hit `max-rounds` **13 times to 3.6's
+3**, and 7 of those were failures against 3.6's 2 — five runs of an eight-run
+gap. A model that explores more is not thereby worse; under a fixed cap it just
+looks it.
+
+### Prove the setup, not only the answer
+
+`prompt_contains` / `prompt_not_contains` assert on the request the model
+actually received, and on any scenario whose premise is *"this was not
+available"* they are the difference between a measurement and a guess.
+
+`says-when-the-front-of-the-conversation-is-gone` asks for a fact its history
+deliberately trims away, and asserts the reply does not contain it. It had no
+guard on the request. A loop bug handed the fact back on the final round (see
+`docs/agent-loop.md`, "The window ratchets shut within a turn"); the model read
+it and answered it correctly, and the row scored that as a confabulation. Its
+sibling `early-detail-survives-a-marker-trim` had carried
+`prompt_not_contains` from the start — for exactly this reason, after an earlier
+version measured a fact that was still in the window — and was unaffected.
+
+A row whose premise silently stops holding does not fail. It reports a verdict
+about the model that is really a verdict about the harness, which is the most
+expensive kind of wrong number here.
+
+### Re-running a previous run's failures
+
+`--filter` takes comma-separated terms, ORed, each matched as an id substring or
+an exact category: `--filter a-row,b-row,restraint`. The set digest is still
+taken over the whole suite, so a filtered report stays comparable with a full
+one.
 
 ## Comparing runs
 
@@ -1058,6 +1554,110 @@ re-run. The per-run numbers were always there; only the total was missing.
 `compare` reports a request-size move above 5%, per run so it survives a
 differing repeat count, and stays silent across different models — where a token
 difference is tokenizers and verbosity, not code.
+
+### Against a local model, the cost is wall-clock, and the batch size sets it
+
+A locally-served model has no dollar price and a very real one: an endless run is
+an hour of GPU, and a nine-run experiment is most of a day. The lever is not the
+scenario, it is how many requests the server will run at once.
+
+Measured 2026-08-16 on `qwen3.8-27b-vllm`, running the same nine-run cohort at
+three levels of concurrency:
+
+| runs in flight | generation | scheduler |
+|---|---|---|
+| 3 | ~55 tok/s | `Running: 2-3, Waiting: 0` |
+| 9 | ~70 tok/s | `Running: 4, Waiting: 5` |
+
+Two things fall out of that. **Three concurrent runs leave the GPU idle** —
+`Waiting: 0` with KV cache at 13% means the server is asking for work nobody is
+sending, because a descent run only has one agent thinking at a time. And **nine
+runs do not go three times faster**, because `start-qwen3.8-27b-vllm.sh` caps
+`--max-num-seqs` at 4: five requests sit in a queue while four are served.
+
+So the throughput ceiling for a benchmark cohort is that cap, not the card.
+`VLLM_MAX_NUM_SEQS` overrides it, and the arithmetic for how far is in
+`llama-swap.yaml`: the KV cache holds 68,992 tokens and real requests measured
+3-9k, so eight fit with room and twelve rely on preemption. Raise it *before*
+starting a cohort — a restart mid-experiment kills every run in flight.
+
+### The benchmark inherits TAI's limits rather than inventing its own
+
+A benchmark exists to show how TAI behaves when it is connected to a problem.
+Anything it writes into the agent config for itself is a thing it measures
+itself against instead — and one of those killed a run.
+
+`buildConfig` used to hardcode `agent.maxHistoryTokens: 110000`. Core's default
+is **20,000**, and its default *window* is 32,768, so the harness was asking
+every agent to spend 5.5x the budget a deployment would and 3.4x what the window
+could hold. Nothing needed it. Every scenario that sets a budget sets a smaller
+one (1,400 through 20,000), and the sixteen of twenty scenario files that set
+none inherited a ceiling no request could reach — so `trimHistory` never bound
+and prompts grew without limit. A 40-round descent reached 44,913 tokens against
+a 32,768-token server and died at round 13.
+
+The fix is a deletion, not a feature. The harness omits the key, `loadConfig`
+supplies `DEFAULT_CONFIG`'s value, and a benchmark agent now trims and
+summarises exactly like a deployed one — `summarizeOnTrim` included, since that
+is on by default too. **The game needed no compaction code of its own**: TAI
+already had it, and the framework was switching it off.
+
+Two flags exist for the cases that genuinely differ:
+
+| Flag / target key | What it is for |
+|---|---|
+| `--max-history-tokens` | Ask for a budget other than core's. Tool schemas count against it — 40 tools are ~10,900 tokens. |
+| `--max-context-tokens` | What the server actually accepts. |
+
+`--max-context-tokens` is the one worth setting on every target. It is what makes
+`validateConfig`'s budget-versus-window warning mean anything, and the harness
+now prints those warnings as `[config] …`. Core knew about the failure above
+before the first turn ran and said so in one sentence:
+
+> agent.maxHistoryTokens (110000) is not smaller than agent.maxContextTokens
+> (32768), so a full request cannot fit the model's window with room for its
+> reply.
+
+Nothing read it. A framework that hides what TAI says about its own
+configuration is worse than one that says nothing, because the run still looks
+healthy.
+
+Worth knowing when reading prompt sizes: core estimates at ~4 chars per token,
+and a request full of structured state tokenises denser than that, so the server
+counts roughly 15% more than the budget nominally allows. That is headroom to
+leave, not a bug to chase.
+
+### A run that dies mid-horizon now stops and says so
+
+A run against an endpoint that is dead *from the start* has always been caught:
+`turnFailed` asks whether the scenario ever got a reply, and zero replies with at
+least one provider error is an error rather than a score.
+
+That check does nothing for a run that dies **halfway**, and on 2026-08-17 one
+did. A 40-round descent outgrew its server's context window at round 13; every
+request after that returned `400 context_length_exceeded`; the harness recorded
+turns that acted zero times and the simulation advanced under them anyway. The
+run played its remaining 130 turns with nobody in them. Because it *had* replied
+69 times, `turnFailed` saw a healthy run and reported no error at all — a clean
+zero, indistinguishable from a party that played badly, and eligible for a
+cohort.
+
+Two things made it hard to see from outside. The rejection came at `prepare`, so
+turns "completed" in milliseconds rather than timing out. And the narrator's own
+prompts were nowhere near the cap, so the broadcast kept producing fluent,
+accurate commentary — *"the hounds remain untouched at 46 and 51"* — about a game
+that had stopped. It reads like a stuck simulation rather than an absent one.
+
+`runIsDead` closes it: ten consecutive turns with no reply (two full five-agent
+rounds) stops the run and reports the last provider error. Consecutive is the
+load-bearing word — the loop recovers from a single failed turn by design, and
+the measured failure ramps up rather than switching over, tolerating runs of one,
+two and three dead turns before going total. It mirrors the `if (sim?.done)
+break` immediately above it in the same loop: turns taken after a bankruptcy are
+turns spent on nothing, and so are turns taken after the model stopped answering.
+
+The tell, if you are watching a run rather than reading its report, is a
+simulation that advances while every combatant's health stops changing.
 
 ## Effort — the axis that keeps moving after the score stops
 

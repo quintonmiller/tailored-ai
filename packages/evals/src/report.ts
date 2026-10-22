@@ -16,6 +16,7 @@ import { FACT_STAGES } from "./routing.js";
 import { simulationPolicies } from "./sim/index.js";
 import { summariseResponses, traceResponses } from "./sim/latency.js";
 import { runPolicy } from "./sim/sweep.js";
+import { simulationReport } from "./sim/types.js";
 import type { BenchmarkReport, FactTrace, MilestoneResult, ScenarioResult } from "./types.js";
 
 const num = (n: number) => n.toLocaleString("en-US");
@@ -246,13 +247,26 @@ function printSimulation(scenario: ScenarioResult): void {
   for (const [index, run] of runs.entries()) {
     const sim = run.outcome.simulation as NonNullable<typeof run.outcome.simulation>;
     const label = runs.length > 1 ? `run ${index + 1}: ` : "";
-    const value = sim.metrics.enterpriseValue ?? sim.objective;
+    // Read through the simulation's own declared report rather than the
+    // factory's vocabulary. Hardcoding `enterpriseValue` here did the same
+    // damage it did in `sweep.ts`: for a descent it is undefined, so every
+    // baseline in the ladder below scored zero and the run was announced as
+    // "ahead of every baseline" while sitting squarely mid-table.
+    const report = simulationReport(sim.name);
+    const show = report.format ?? ((n: number) => Math.round(n).toLocaleString("en-US"));
+    const value = sim.metrics[report.key] ?? sim.objective;
     const created = sim.metrics.valueCreated;
     const managed = sim.daysManaged < sim.days ? colour(` — managed ${sim.daysManaged} of ${sim.days} days`, DIM) : "";
+    const extra = (report.columns ?? [])
+      .map((c) => {
+        const raw = sim.metrics[c.key] ?? 0;
+        return `  ${c.label} ${c.kind === "rate" ? (raw ? "yes" : "no") : show(raw)}`;
+      })
+      .join("");
     console.log(
-      `      ${label}${money(value)}` +
+      `      ${label}${show(value)} ${report.key}` +
         (created === undefined ? "" : ` (${created >= 0 ? "+" : ""}${money(created)})`) +
-        `  service ${((sim.metrics.serviceLevel ?? 0) * 100).toFixed(0)}%` +
+        extra +
         (sim.metrics.bankrupt ? colour("  BANKRUPT", RED) : "") +
         managed,
     );
@@ -261,10 +275,15 @@ function printSimulation(scenario: ScenarioResult): void {
     // above mean anything. Re-run here rather than stored: it costs milliseconds
     // and no model, and a number remembered from another build of the economy
     // would be worse than none.
+    //
+    // `sim.options` matters as much as the seed: a descent that started the
+    // party on floor 30 compared against bots that started on floor 1 is not a
+    // comparison, it is two different games with one number each.
     const ladder = Object.entries(simulationPolicies(sim.name))
       .map(([name, make]) => ({
         name,
-        value: runPolicy(sim.name, make(), sim.seed, sim.days, sim.daysPerRound ?? 1).enterpriseValue ?? 0,
+        value:
+          runPolicy(sim.name, make(), sim.seed, sim.days, sim.daysPerRound ?? 1, sim.options ?? {})[report.key] ?? 0,
       }))
       .sort((a, b) => a.value - b.value);
     const beaten = ladder.filter((b) => value > b.value).map((b) => b.name);
@@ -272,7 +291,7 @@ function printSimulation(scenario: ScenarioResult): void {
     console.log(
       colour(
         `      ${beaten.length ? `beat ${beaten.join(", ")}` : "beat no baseline"}` +
-          `${above ? `; behind ${above.name} at ${money(above.value)}` : "; ahead of every baseline"} (same seed)`,
+          `${above ? `; behind ${above.name} at ${show(above.value)}` : "; ahead of every baseline"} (same seed)`,
         DIM,
       ),
     );

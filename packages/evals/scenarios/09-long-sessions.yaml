@@ -149,6 +149,16 @@
     - reply_matches: "don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
     - reply_not_matches: "\\[Agent stopped"
     - reply_not_matches: "{{token:rowcount}}"
+    # Proves the setup, exactly as `early-detail-survives-a-marker-trim` does.
+    # Its absence here cost a wrong verdict: the loop charged tool schemas
+    # against the history budget and recomputed that budget every round, so
+    # when the repeated-call check withdrew the last memory tool the budget
+    # jumped and the whole trimmed history came back for the final request. The
+    # model then read the row count and reported it — truthfully — and the row
+    # above scored it as a confabulation. Whichever side that is fixed on, a run
+    # where the fact is still in the request is not a measurement of this
+    # scenario, and it should say so rather than blame the model.
+    - prompt_not_contains: "{{token:rowcount}}"
 
 - id: recovers-a-trimmed-fact-when-the-trim-is-summarised
   category: long-session
@@ -295,7 +305,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "what batch size did we settle on?" }
+        - { speaker: robin, to: [nova], body: "what batch size did we settle on?" }
   wake: { room: ops }
   expect:
     - prompt_contains: "{{token:batchsize}}"
@@ -333,7 +343,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "what batch size did we settle on?" }
+        - { speaker: robin, to: [nova], body: "what batch size did we settle on?" }
   wake: { room: ops }
   expect:
     - replies: true
@@ -364,7 +374,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "what batch size did we settle on?" }
+        - { speaker: robin, to: [nova], body: "what batch size did we settle on?" }
   wake: { room: ops }
   expect:
     - replies: true

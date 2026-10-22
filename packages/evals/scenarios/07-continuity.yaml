@@ -48,7 +48,7 @@
   history:
     - role: user
       content: >
-        [Earlier conversation summary: Quinton is migrating the billing service
+        [Earlier conversation summary: {{token:owner}} is migrating the billing service
         off Heroku onto the new Hetzner box. The cutover is booked for the 19th.
         The blocker is that the Stripe webhook endpoint is still pointed at the
         old host, and {{token:owner}} owns that change.]
@@ -121,14 +121,14 @@
         Room "ops". You are nova.
 
         New messages:
-        quinton [person] (to nova): which node is the queue worker on?
+        robin [person] (to nova): which node is the queue worker on?
     - role: assistant
       content: "node-{{token:now}}. It moved off node-{{token:before}} during the incident last week."
   rooms:
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "and what was it running on before the incident?" }
+        - { speaker: robin, to: [nova], body: "and what was it running on before the incident?" }
   wake: { room: ops }
   expect:
     - replies: true
