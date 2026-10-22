@@ -6,6 +6,7 @@ import { loadPlugins } from "../plugins.js";
 import { Registry } from "../registry.js";
 import { StepExecutorRegistry } from "../resources/step-executor-registry.js";
 import { toolFactoryRegistry } from "../tools/tool-factories.js";
+import { getWatcherKind } from "../watchers/registry.js";
 
 const baseConfig = (plugins: unknown[]): AgentConfig =>
   ({
@@ -264,7 +265,40 @@ describe("loadPlugins teardown", () => {
         (seen?.[name] as { register: unknown }).register,
         `ctx.${name}.register is the base context's own, so its registrations escape collection`,
       ).not.toBe((view as { register: unknown }).register);
+      // A view is re-built by hand, so a method beside `register` (the
+      // watcher kinds' `get` and `list`, which a runner plugin reads) would
+      // silently go missing from what the plugin is handed.
+      for (const [method, fn] of Object.entries(view as Record<string, unknown>)) {
+        if (typeof fn !== "function") continue;
+        expect(
+          typeof (seen?.[name] as Record<string, unknown>)[method],
+          `ctx.${name}.${method} is missing from the context a loaded plugin gets`,
+        ).toBe("function");
+      }
     }
+  });
+
+  it("takes back a watcher kind on unload, and lets the plugin look kinds up through the same view", async () => {
+    let listed: string[] = [];
+    const [loaded] = await loadPlugins(
+      baseConfig(["fake"]),
+      moduleOf((ctx: ReturnType<typeof createPluginContext>) => {
+        ctx.watcherKinds.register({
+          kind: "p_watch",
+          description: "Checks nothing.",
+          schema: { type: "object" },
+          defaultEvery: "1h",
+          minEvery: "15m",
+          check: () => ({ snapshot: 0 }),
+        });
+        listed = ctx.watcherKinds.list().map((k) => k.kind);
+      }),
+    );
+
+    expect(listed).toContain("p_watch");
+    expect(getWatcherKind("p_watch")).toBeDefined();
+    await loaded.stop?.();
+    expect(getWatcherKind("p_watch")).toBeUndefined();
   });
 
   it("scopes collection per plugin", async () => {

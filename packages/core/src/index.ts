@@ -1231,6 +1231,24 @@ export {
   vaultSet,
 } from "./vault/vault.js";
 export {
+  getWatcherKind,
+  listWatcherKinds,
+  MAX_WATCH_CHANGE_CHARS,
+  MAX_WATCH_SNAPSHOT_BYTES,
+  MAX_WATCH_VALUE_CHARS,
+  registerWatcherKind,
+  validateWatchConfig,
+  type WatcherCheckContext,
+  WatcherError,
+  type WatcherKind,
+  type WatcherKindRegistryView,
+  type WatcherResult,
+  type WatchInterval,
+  watcherKindRegistry,
+  watcherResult,
+  watchInterval,
+} from "./watchers/registry.js";
+export {
   type AnalyticsSummary,
   type AnalyticsWindow,
   type PerWorkflowMetrics,

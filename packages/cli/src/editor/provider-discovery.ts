@@ -16,11 +16,15 @@
  */
 import {
   type AgentConfig,
+  type Disposer,
   loadPlugins,
   type PluginContext,
   type ProviderFactory,
   providerFactoryRegistry,
   TypedEventBus,
+  validateWatchConfig,
+  watcherResult,
+  watchInterval,
 } from "@tailored-ai/core";
 import { PluginManager } from "../plugins/manager.js";
 
@@ -30,24 +34,51 @@ export interface DiscoveredProvider {
   factory: ProviderFactory;
 }
 
-/** PluginContext whose only live namespace is a providers capture. */
+/**
+ * PluginContext whose only live namespace is a providers capture. Every other
+ * view is there and does nothing. It is typed rather than cast, so a view
+ * added to the context later fails to compile here instead of throwing inside
+ * a plugin, which the loader would swallow along with the providers that
+ * plugin registers after it.
+ */
 function captureContext(onProvider: (id: string, factory: ProviderFactory) => void): PluginContext {
-  const noop = { register: () => {} };
+  const none = (): Disposer => () => {};
+  const noop = { register: none };
   return {
     tools: noop,
     channels: noop,
-    providers: { register: onProvider },
+    providers: {
+      register: (id, factory) => {
+        onProvider(id, factory);
+        return () => {};
+      },
+    },
     embeddings: noop,
     memoryBackends: noop,
+    stateProviders: noop,
+    stateTypes: noop,
+    componentKinds: noop,
+    watcherKinds: {
+      register: none,
+      get: () => undefined,
+      list: () => [],
+      validate: validateWatchConfig,
+      interval: watchInterval,
+      result: watcherResult,
+    },
+    mediaStores: noop,
+    mediaRenditions: noop,
     taskBackends: noop,
     repoBackends: noop,
     sandboxBackends: noop,
     uiProviders: noop,
+    timeProviders: noop,
     stepExecutors: noop,
-    http: { register: () => {} },
+    commands: noop,
+    http: { register: none, mount: none },
     events: new TypedEventBus(),
     config: {},
-  } as unknown as PluginContext;
+  };
 }
 
 /** Run `fn` with console.log/warn silenced — loader chatter would scribble over the TUI. */
