@@ -53,6 +53,15 @@ import type { ToolFactory } from "./tools/tool-factories.js";
 import { registerToolFactory } from "./tools/tool-factories.js";
 import type { UiProviderFactory } from "./ui/registry.js";
 import { registerUiProviderFactory } from "./ui/registry.js";
+import {
+  getWatcherKind,
+  listWatcherKinds,
+  registerWatcherKind,
+  validateWatchConfig,
+  type WatcherKindRegistryView,
+  watcherResult,
+  watchInterval,
+} from "./watchers/registry.js";
 
 /**
  * Every registry view hands back a {@link Disposer} — the inverse of the
@@ -156,6 +165,13 @@ export interface PluginContext {
   stateTypes: StateTypeRegistryView;
   /** Interface component kinds an agent can send. See `docs/agent-interfaces.md`. */
   componentKinds: ComponentKindRegistryView;
+  /**
+   * Kinds of watcher: cheap checks, with no model call, that something
+   * changed (a page, a price, a sender's mail). Core ships none and runs none;
+   * a runner plugin finds them here with `get` and `list`, and checks a watch
+   * and a result with `validate`, `interval` and `result`. See `docs/watchers.md`.
+   */
+  watcherKinds: WatcherKindRegistryView;
   /**
    * Where media bytes live. An S3 or GCS store registers here.
    *
@@ -462,6 +478,14 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     stateProviders: { register: collecting(registerStateProvider) },
     stateTypes: { register: collecting(registerStateType) },
     componentKinds: { register: collecting(registerComponentKind) },
+    watcherKinds: {
+      register: collecting(registerWatcherKind),
+      get: getWatcherKind,
+      list: listWatcherKinds,
+      validate: validateWatchConfig,
+      interval: watchInterval,
+      result: watcherResult,
+    },
     mediaStores: { register: collecting(registerMediaStoreFactory) },
     mediaRenditions: { register: collecting(registerMediaRenditionFactory) },
     taskBackends: { register: collecting(registerTaskBackendFactory) },

@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 47 | 141 |
+| `agents` | object | {} | 47 | 143 |
 
 ### `autopilot`
 
@@ -62,7 +62,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `commands` | object | {} | 7 | 29 |
+| `commands` | object | {} | 7 | 30 |
 
 ### `context`
 
@@ -110,7 +110,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 91 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 92 |
 
 ### `prompts`
 
@@ -142,7 +142,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `server.host` | string | `127.0.0.1` | 20 | 5 |
+| `server.host` | string | `127.0.0.1` | 23 | 5 |
 | `server.port` | number | `3000` | 8 | 7 |
 
 ### `state`

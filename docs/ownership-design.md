@@ -11,7 +11,8 @@
 > [dashboard widgets](./dashboard-widgets.md) and the places plugin's `tend`
 > turn ([live sessions](./live-sessions.md#rooms-that-follow-the-work)).
 > Replaces the timer-driven tick of the unbuilt
-> [always-on agents](./always-on-agents.md) design.
+> [always-on agents](./always-on-agents.md) design. Of step 7,
+> [watchers](./watchers.md) are built, off by default.
 
 ## Goal
 
