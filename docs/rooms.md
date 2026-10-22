@@ -521,6 +521,12 @@ Replies are exempt. When an agent is woken because someone addressed it, its
 answer goes out through a passthrough gate: suppressing a direct answer would
 leave a visible question hanging.
 
+A plugin or config hook on `notification.outgoing` can also hold a room post
+back. The agent gets the subscriber's reason as the tool's answer, and the
+turn's closing reply isn't posted to that room either, since it's often the
+held message in other words. See
+[what the gate tells the bus](./notifications.md#what-the-gate-tells-the-bus).
+
 Tune the windows if the defaults are wrong for you:
 
 ```yaml

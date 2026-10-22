@@ -17,9 +17,11 @@ import { initDatabase } from "../db/schema.js";
 import { type EventBus, type NotificationOutgoingWaterfall, type NotificationSent, TypedEventBus } from "../events.js";
 import {
   type NotificationCandidate,
+  type NotificationDecision,
   NotificationGate,
   type NotificationGateLike,
   notificationKind,
+  OUTGOING_TIMEOUT_MS,
 } from "../notifications/dedup.js";
 import { ConfigHooks } from "../plugins/config-hooks.js";
 import { OwnerNotifier } from "../plugins/owner-notifier.js";
@@ -190,6 +192,102 @@ describe("notification.outgoing", () => {
     await gate.deliver(candidate("The nightly build is green again."), async () => {});
 
     expect(runs).toBe(2);
+  });
+
+  it("runs again for work a subscriber started that outlives it", async () => {
+    // A subscriber that posts to a room arms the woken agent's turn on a timer
+    // it created. That turn runs after the subscriber has returned, and what it
+    // sends must still pass the waterfall, or a mute stops applying to it.
+    const events = new TypedEventBus();
+    const gate = new NotificationGate(db, () => undefined, events);
+    const send = vi.fn(async () => {});
+    let runs = 0;
+    let later: Promise<NotificationDecision> | undefined;
+    events.onWaterfall("notification.outgoing", async (p, next) => {
+      runs += 1;
+      if (runs === 1) {
+        later = new Promise((resolve) => {
+          setTimeout(() => resolve(gate.deliver(candidate("Rain at noon.", { source: "cron:weather" }), send)), 10);
+        });
+      }
+      return p.kind === "cron:weather" ? { ...p, deny: "weather is muted" } : next(p);
+    });
+
+    await gate.deliver(candidate("The nightly build is red."), send);
+    const decision = await later;
+
+    expect(runs).toBe(2);
+    expect(decision).toMatchObject({ send: false, verdict: "held", reason: "weather is muted" });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a subscriber that takes too long", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("waits up to the limit, then sends anyway", async () => {
+      // A hung plugin would otherwise stop every unprompted message, and with a
+      // room post the room's turn queue behind it, until a restart.
+      const events = new TypedEventBus();
+      events.onWaterfall("notification.outgoing", () => new Promise(() => {}));
+      const gate = new NotificationGate(db, () => undefined, events);
+      const send = vi.fn(async () => {});
+      const lines: string[] = [];
+
+      const pending = gate.deliver(candidate("The nightly build is red."), send, (l) => lines.push(l));
+      await vi.advanceTimersByTimeAsync(OUTGOING_TIMEOUT_MS - 1);
+      expect(send).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      const decision = await pending;
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(decision.send).toBe(true);
+      expect(lines[0]).toContain("notification.outgoing timed out");
+      expect(rows()).toBe(1);
+    });
+
+    it("still counts a slow refusal that comes in under the limit", async () => {
+      const events = new TypedEventBus();
+      events.onWaterfall("notification.outgoing", async (p) => {
+        await new Promise((r) => setTimeout(r, OUTGOING_TIMEOUT_MS - 1000));
+        return { ...p, deny: "weather is muted" };
+      });
+      const gate = new NotificationGate(db, () => undefined, events);
+      const send = vi.fn(async () => {});
+
+      const pending = gate.deliver(candidate("Rain at noon.", { source: "cron:weather" }), send);
+      await vi.advanceTimersByTimeAsync(OUTGOING_TIMEOUT_MS);
+      const decision = await pending;
+
+      expect(decision).toMatchObject({ send: false, verdict: "held" });
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it("keeps what it sends out of the waterfall while it is still running past the limit", async () => {
+      const events = new TypedEventBus();
+      const gate = new NotificationGate(db, () => undefined, events);
+      const send = vi.fn(async () => {});
+      let runs = 0;
+      events.onWaterfall("notification.outgoing", async (p, next) => {
+        runs += 1;
+        if (runs === 1) {
+          await new Promise((r) => setTimeout(r, OUTGOING_TIMEOUT_MS + 1000));
+          await gate.deliver(candidate(`audit: ${p.preview}`, { source: "audit", target: "AUDIT" }), send);
+        }
+        return next(p);
+      });
+
+      const pending = gate.deliver(candidate("The nightly build is red."), send);
+      await vi.advanceTimersByTimeAsync(OUTGOING_TIMEOUT_MS + 1000);
+      await pending;
+
+      expect(runs).toBe(1);
+      expect(send).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

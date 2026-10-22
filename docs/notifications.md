@@ -134,15 +134,26 @@ config hook can fail closed instead ([below](#holding-a-kind-back)). A gate
 built without a bus works exactly as it did before these events existed, and
 so does `PASSTHROUGH_GATE`.
 
-The gate waits for `notification.outgoing` to finish before it sends, as core
-waits for any waterfall. A slow subscriber delays the message, and one that
-never returns holds it up.
+The gate waits for `notification.outgoing` to finish before it sends, so a
+slow subscriber delays the message. It waits five minutes at most. After that
+it logs `[notify] notification.outgoing timed out after 300000ms — sending
+anyway` and sends the message, and a refusal that comes later doesn't count.
+Five minutes is above the 120 seconds a `script` hook gets by default, so a
+slow hook's refusal still counts. The limit is fixed, not a config setting.
 
 A message a `notification.outgoing` subscriber sends while it runs, such as a
 copy to an audit room, isn't run through `notification.outgoing` again. It still
 goes through the repeat check and is announced on `notification.sent`. Without
 that, the copy would run the subscriber again, and that copy would too, before
 anything was sent.
+
+That skip ends when the subscriber finishes. What it only started goes through
+the waterfall like any other message, such as a send from a timer it set, or
+the turn of an agent its audit-room copy woke, so a mute still applies to them.
+A subscriber that sends its copy from a timer, instead of before it returns,
+runs again for that copy, and again for the copy of the copy. Send the copy
+before returning, or skip the messages you sent yourself (by `target` or
+`source`).
 
 ### What a kind is
 

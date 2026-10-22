@@ -145,10 +145,15 @@ Core no longer decides *who* to notify or *how*. The worker, the `ask_user` tool
 
 | Event | Emitted by | Owner-notifier delivery |
 |---|---|---|
-| `task.needs_human` | worker error/block path | owner DM, suppressed during quiet hours |
-| `digest.ready` | `runDigest()` | owner DM, never suppressed |
-| `question.asked` | `ask_user` tool | owner DM; the autopilot variant (carries `taskId`) is quiet-hours-suppressed, plain questions always deliver |
-| `form.completed` | `channel_message` step's implicit owner-DM fallback | owner DM |
+| `task.needs_human` | worker error/block path | owner DM through the notification gate, suppressed during quiet hours |
+| `digest.ready` | `runDigest()` | owner DM through the notification gate, at any hour |
+| `question.asked` | `ask_user` tool | owner DM through the notification gate; the autopilot variant (carries `taskId`) is quiet-hours-suppressed, plain questions go out at any hour |
+| `form.completed` | `channel_message` step's implicit owner-DM fallback | owner DM, sent directly: no gate, and not announced on the bus |
+
+Going through the [notification gate](./notifications.md) means a repeat of a
+message already sent is withheld, and a `notification.outgoing` subscriber or
+config hook can hold the message back
+([what the gate tells the bus](./notifications.md#what-the-gate-tells-the-bus)).
 
 To ship somewhere else (Slack, Telegram, email, a pager): disable the plugin (`plugins: - { module: "builtin:owner-notifier", enabled: false }`) and subscribe your own handler to these events via `ctx.events.on(...)`. The `channel_message` executor only routes through `form.completed` for the fully-implicit "DM the owner" case (no explicit `channelId` / `userId` / per-step `channel`); explicit targets stay direct deliveries.
 

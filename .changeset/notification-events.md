@@ -28,7 +28,13 @@ so put a hook that only watches on `notification.sent`.
 A room post that was held back also keeps that turn's closing reply out of the
 room, so the agent's next sentence can't undo the hold. A message a
 `notification.outgoing` subscriber sends while it runs isn't run through the
-waterfall again, so a hook that copies messages somewhere can't loop.
+waterfall again, so a hook that copies messages somewhere can't loop. That
+skip ends when the subscriber returns: a timer it set, or an agent its copy
+woke, goes through the waterfall like any other message.
+
+The gate waits for `notification.outgoing` five minutes at most, then logs a
+timeout and sends the message anyway, so a subscriber that never returns can't
+stop every unprompted message, or a room's turns, until a restart.
 
 `NotificationCandidate` gains `kind` and `agent`. A kind is coarse, one per
 sort of message: `cron:<job>`, `task-blocked`, `digest`, `question`,

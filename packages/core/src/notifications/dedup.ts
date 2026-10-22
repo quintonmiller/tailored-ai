@@ -332,8 +332,24 @@ export function resolveGate(get?: () => NotificationGateLike | undefined): Notif
  * ever sent: the repeat check comes after the waterfall, so it cannot end the
  * loop. Module-wide rather than per gate, so two gates on one bus cannot pass
  * the loop between them.
+ *
+ * The store is a token switched off once the subscribers finish, not a flag.
+ * Node carries the store into every timer and promise started inside `run`, so
+ * a flag would also cover work a subscriber only started: a room post that arms
+ * an agent's wake would hand the skip to that agent's whole turn, and to every
+ * turn it wakes in turn, and a mute would stop applying to all of them.
  */
-const insideOutgoing = new AsyncLocalStorage<true>();
+const insideOutgoing = new AsyncLocalStorage<{ live: boolean }>();
+
+/**
+ * How long the gate waits for `notification.outgoing` before sending anyway.
+ *
+ * A ceiling, not a tuning knob: it is there so a subscriber that never returns
+ * delays a message instead of stopping every unprompted message, and with them
+ * the room turn waiting on a post, until a restart. Set above the 120 seconds a
+ * `script` hook gets by default, so a slow hook's refusal still counts.
+ */
+export const OUTGOING_TIMEOUT_MS = 300_000;
 
 /** SQLite's `datetime('now')`, for a send the log couldn't give a time to. */
 function sqliteNow(): string {
@@ -505,7 +521,8 @@ export class NotificationGate implements NotificationGateLike {
     // without a bus, so a gate with none runs as it did before it had one, nor
     // for a message a subscriber sends while it runs, which would otherwise
     // run the waterfall from inside itself without end.
-    const held = this.events && !insideOutgoing.getStore() ? await this.outgoing(this.events, fields, log) : undefined;
+    const held =
+      this.events && !insideOutgoing.getStore()?.live ? await this.outgoing(this.events, fields, log) : undefined;
     if (held) {
       log?.(`[notify] suppressed ${candidate.source} -> ${candidate.target} (${held})`);
       return { send: false, verdict: "held", reason: held, suppressedCount: 0 };
@@ -556,19 +573,41 @@ export class NotificationGate implements NotificationGateLike {
    *
    * Fails open, like the rest of the gate. The bus already skips a listener
    * that throws; this covers a bus that throws itself, because a broken
-   * subscriber must not cost the message it was only looking at.
+   * subscriber must not cost the message it was only looking at, and a
+   * subscriber that takes longer than {@link OUTGOING_TIMEOUT_MS}.
    */
   private async outgoing(
     events: EventBus,
     fields: NotificationFields,
     log?: (message: string) => void,
   ): Promise<string | undefined> {
+    const token = { live: true };
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const out = await insideOutgoing.run(true, () => events.waterfall("notification.outgoing", { ...fields }));
+      const waterfall = insideOutgoing.run(token, () => events.waterfall("notification.outgoing", { ...fields }));
+      // Off when the subscribers finish rather than when the gate stops
+      // waiting, so one still running past the timeout keeps its own sends
+      // out of the waterfall. Registered first, so it is off before the
+      // await below resumes.
+      const off = () => {
+        token.live = false;
+      };
+      waterfall.then(off, off);
+      const timedOut = new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), OUTGOING_TIMEOUT_MS);
+      });
+      const out = await Promise.race([waterfall, timedOut]);
+      if (out === "timeout") {
+        log?.(`[notify] notification.outgoing timed out after ${OUTGOING_TIMEOUT_MS}ms — sending anyway`);
+        return undefined;
+      }
       return out?.deny || undefined;
     } catch (err) {
+      token.live = false;
       log?.(`[notify] notification.outgoing failed (${(err as Error).message}) — sending anyway`);
       return undefined;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
