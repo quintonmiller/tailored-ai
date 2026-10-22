@@ -50,6 +50,12 @@ agents:
     tools: [web_fetch, watch]
 ```
 
+It can add a second tool, `state`, which is offered once any world-state type
+exists. On a deployment where nothing else declared one (no avatar, no
+`state.types`, no directory), the `watch` type brings `state` in too, and
+agents can read their own watches through it. An agent with no `tools:` list
+gets both. An agent with a list that shouldn't have `state` leaves it out.
+
 Checks reach the network on the same terms as `web_fetch`, under
 `security.egress`. An address on your own network is refused unless you allow
 it, for example with `allowHosts: ["homeassistant.local"]`. While a
@@ -60,9 +66,9 @@ the same list.
 
 | Action | Does |
 |---|---|
-| `add` | starts watching: a `kind`, its settings in `config`, and optionally a `label`, how often (`every`), a `note` on what to do when it changes, and the id of the `commitment` it's for |
+| `add` | starts watching: a `kind`, its settings in `config`, and optionally a `label`, how often (`every`), and a `note` on what to do when it changes |
 | `list` | the agent's watches: what each reads now, its last change, and when it's next checked |
-| `pause`, `resume` | stops checking one, or starts again. Resuming a broken watch clears its failures and checks it within a minute |
+| `pause`, `resume` | stops checking one, or starts again. Pausing drops a wake still owed for it. Resuming a broken watch clears its failures and checks it within a minute |
 | `remove` | archives it: no more checks, and a person can bring it back on the State page |
 
 An agent names a watch by its id or its label. A small model's slips are
@@ -100,7 +106,8 @@ the part you care about with `contains`.
 `price` finds the price nearest the first place `near` appears, before or
 after it, so `€182 per night` and `Per night: €182` both read 182. Without
 `near` it takes the first price on the page. It reads `€182`, `$1,234.50`,
-`1.234,50 €`, `US$ 199` and `182 EUR`. A move under the threshold isn't
+`1.234,50 €`, `1 234,50 €` with a non-breaking space between the thousands,
+`US$ 199` and `182 EUR`. A move under the threshold isn't
 reported, but it isn't forgotten: the next move is measured from the price
 last reported, so a slow drift adds up to a change. A page with no price where
 one was expected, a sold-out page say, is a failed check, not a change.
@@ -108,18 +115,29 @@ one was expected, a sold-out page say, is a failed check, not a change.
 ### When a watch is checked
 
 The plugin looks for due watches every 30 seconds: active watches whose
-`checkAt` has passed. The schedule is the records themselves, so a restart or
-a reload picks up where the last one left off.
+`checkAt` has passed.
 
-- **Two checks at a time**, across the whole instance, and never the same
-  watch twice at once, a reload in the middle of a check included.
-- **One host at a time**: two requests to the same host are at least 10
-  seconds apart, whichever watches made them.
-- **Limits per check**: a request waits 15 seconds for an answer, as
+- **Two scheduled checks at a time**, across the whole instance, and never the
+  same watch twice at once, a reload in the middle of a check included. The
+  first look an `add` takes runs at once, outside that count, since an agent
+  is waiting on it; host spacing still applies to it.
+- **One host at a time**: a check reaches a host at least 10 seconds after the
+  last check that reached it, whichever watches made them. The wait is per
+  check: a second request to the same host within one check goes straight
+  through.
+- **Limits per check**: each request waits 15 seconds for an answer, as
   `web_fetch` does, and a check is given up after 45. An answer over 2 MB is
   refused. Every redirect is checked against the egress policy before it is
-  followed.
-- **One write per check**, carrying everything the check found.
+  followed, and one to another origin drops the `Authorization`, `Cookie` and
+  `Proxy-Authorization` headers a kind sent.
+- **A check is written down only when it found something**: a change, a new
+  reading, a failure, or a new baseline. Each write adds a full row to the
+  record's history in world state and raises `state.changed`, so a check that
+  found nothing new writes nothing, and the plugin keeps that watch's next
+  check in memory. The record's `checkAt` then stays where the last write left
+  it, in the past, until something is written again; `watch list` shows the
+  real next check. After a restart, which forgets what was kept in memory,
+  each such watch is checked once straight away.
 
 ### When the owner is woken
 
@@ -142,13 +160,19 @@ Act on it if it needs anything. If it doesn't, say so in one line and stop.
 Nobody is reading this session. If something here needs to reach a person, send it; a reply here goes nowhere on its own.
 ```
 
-The wake stops for what every turn nobody asked for stops for: the pause
+Until the owner has been told, the watch keeps `tellAt`, the time the news
+came. The wake stops for what every turn nobody asked for stops for: the pause
 switch, an online agent switched off or paused on its own, and the owner's
 hourly wake ceiling (`rooms.maxWakesPerHour`), which it shares with
-subscriptions, tends and upkeep. A wake turned away is owed: the watch keeps a
-`tellAt`, and the owner is told every five minutes until a turn runs, with the
-latest change. After a day the runner stops trying, and the change stays on
-the record.
+subscriptions, tends and upkeep. A wake turned away stays owed and is tried
+again every five minutes, without writing to the record each time. After a day
+the runner stops trying, and the change stays on the record. Pausing the watch,
+with the tool or on the State page, drops a wake still owed.
+
+An owner is woken about one watch at a time. When several of its watches
+change together, or the pause switch lifts with several owed, the next is told
+once the turn about the last one ends, so an owner never has a burst of turns
+at once.
 
 What wakes nobody:
 
@@ -158,8 +182,8 @@ What wakes nobody:
 - **A check that finds nothing new.**
 - **A failed check.** It is counted, and the last good snapshot is kept, so the
   next change is still measured from it. Three failures in a row mark the
-  watch `broken`, and its owner is told once, with the last error. A broken
-  watch isn't checked again until it's resumed.
+  watch `broken`, and its owner is told, with the last error, owed the same way
+  as a change. A broken watch isn't checked again until it's resumed.
 
 A watch whose owner is no longer an agent is paused, saying so in
 `lastError`, rather than fetched for nobody.
@@ -168,7 +192,7 @@ A watch whose owner is no longer an agent is paused, saying so in
 
 One per watch, in its owner's private scope, `agent:<owner>`, so no other
 agent sees it. Agents can't write it through `state`: the owner changes its
-own with the `watch` tool, and the runner writes each check, both as the
+own with the `watch` tool, and the runner writes what checks find, both as the
 plugin with the owner named in `source.onBehalfOf`.
 
 | Field | Holds |
@@ -176,29 +200,41 @@ plugin with the owner named in `source.onBehalfOf`.
 | `owner`, `kind`, `config` | whose it is, which kind, and the kind's settings |
 | `label`, `every`, `note` | what it watches in a few words, how often, and what to do when it changes |
 | `status` | `active`, `paused`, or `broken` after three failures in a row |
-| `checkAt`, `checkedAt` | when it is next checked, and when it last was |
+| `checkAt`, `checkedAt` | when it is next checked, as of the last write, and when a check last found something to write down |
 | `lastValue`, `lastChange` | what it read last, and the last change: `{ at, text }` |
 | `failures`, `lastError` | failed checks in a row, and why the last one failed |
-| `tellAt` | while a wake is owed, when it is tried next |
+| `tellAt` | while the owner is still to be told about a change or about the watch breaking, when that news came |
 | `snapshot` | what the next check compares against, with the settings it was taken under. The runner's |
-| `commitment` | the commitment it serves, when the agent named one. Kept for a later step to act on |
+| `commitment` | the commitment it serves, by id. A person can set it; nothing acts on it yet |
 
 A person edits any of it on the State page, and the runner reads what they
 left on its next look:
 
-- `status: paused` stops it, and `active` starts it again.
-- Setting `checkAt` to now checks it on the next look. It has to be an ISO
-  time; anything else is refused, since it would never come due.
+- `status: paused` stops it, and drops a wake still owed. `active` starts it
+  again.
+- Setting `checkAt` to now checks it on the next look, whatever the plugin
+  kept in memory. It has to be an ISO time in UTC ending in `Z`, as
+  `2026-10-22T12:00:00Z`; anything else is refused, since a time with an offset
+  would come due hours early or late, and text would never come due.
 - A record a person makes there with no `checkAt` is checked at once.
+- Settings the kind refuses, an owner that doesn't match the scope the record
+  is kept in (`owner: planner` in `agent:writer`, say), or a scope that isn't
+  an agent's: the watch is paused, with the reason in `lastError`, and nobody
+  is woken. Each would otherwise wake an agent about a watch it can't find to
+  stop.
 
 An agent keeps at most 25 watches, archived ones aside.
 
-Every check moves `checkAt`, and every write raises `state.changed`, so a
-[subscription](./world-state.md#waking-agents-on-a-change) with `when: { type: watch }`
-hears each check, not only each change. Its line names the fields that moved,
-and a change is the one where `lastChange` did, but `when` matches top-level
-fields only and can't tell the two apart. Until it can, act on changes from
-the owner's wake: the owner can pass the news on.
+Each write raises `state.changed`, so a
+[subscription](./world-state.md#waking-agents-on-a-change) with
+`when: { type: watch }` hears changes, failures, new readings and new
+baselines, and edits made with the tool or on the State page, but not checks
+that found nothing. The runner and the tool write with the owner named in
+`source.onBehalfOf`, so the owner's own subscription hears those only with
+`includeOwn: true`; another agent's, or one for a person, hears them as
+written. `when` matches top-level fields only, so it can't single out a
+change: act on changes from the owner's wake, where the owner can pass the news
+on.
 
 ## The contract
 
@@ -246,9 +282,15 @@ And the rules a kind is written to:
 - **Honour `ctx.signal`.** The runner aborts a check that runs too long.
 - **Use `ctx.fetch` when it is there**, so the runner's limits (timeouts,
   which hosts may be reached) hold for your check. Fall back to the global
-  `fetch` only when it isn't.
+  `fetch` only when it isn't. The built-in runner's waits up to 10 seconds for
+  a host's turn on the first request a check makes to it, and gives a whole
+  check 45 seconds, so keep to a few requests per check.
 - **Use `ctx.now`** rather than `new Date()`, so your check agrees with the
   runner's clock and with tests.
+- **Don't name a setting `action`, `id`, `kind`, `config`, `label`, `every`
+  or `note`** if the built-in `watch` tool is to fill it in. Those are the
+  tool's own arguments, so an agent has to send such a setting inside
+  `config`; the tool never moves one in from beside it.
 
 ## Registering a kind
 

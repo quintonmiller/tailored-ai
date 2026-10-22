@@ -1,5 +1,6 @@
 /**
- * The `fetch` a watcher check is handed as `ctx.fetch`.
+ * The `fetch` a watcher check is handed as `ctx.fetch`. The runner builds one
+ * per check.
  *
  * It reaches the network on the terms `web_fetch` does: the same egress
  * policy (`security.egress`), the same refusal while a browser-mediator
@@ -7,10 +8,14 @@
  * On top of those, because a watch runs on its own with nobody reading:
  *
  * - every redirect is followed by hand and checked against the policy, hop by
- *   hop, rather than only the address a watch was given;
- * - one host is asked at most once per `spacingMs`, across every watch and
- *   every load of the plugin, so twenty watches on one site arrive in single
- *   file rather than at once;
+ *   hop, rather than only the address a watch was given. A hop to another
+ *   origin drops the credentials a kind sent (`Authorization`, `Cookie`,
+ *   `Proxy-Authorization`), as the platform `fetch` does;
+ * - a check reaches one host at most once per `spacingMs` after the last
+ *   check that reached it, across every watch and every load of the plugin, so
+ *   twenty watches on one site arrive in single file rather than at once. The
+ *   wait is per check, not per request: a kind that asks one host twice in
+ *   one check waits its turn for the first request only;
  * - an answer bigger than `maxBytes` is refused rather than read.
  */
 import { EgressDeniedError, type EgressPolicy } from "../security/egress-policy.js";
@@ -21,15 +26,17 @@ const MAX_REDIRECTS = 5;
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 /** Statuses whose answer has no body, which `new Response` refuses one for. */
 const NO_BODY = new Set([101, 204, 205, 304]);
+/** What a redirect to another origin doesn't carry on, as the fetch standard has it. */
+const CREDENTIALS = ["authorization", "cookie", "proxy-authorization"];
 
 export interface WatchFetchOptions {
   /** The egress policy, read on every request so a reload's `security.egress` applies at once. */
   policy: () => EgressPolicy | undefined;
-  /** The least time between two requests to one host. */
+  /** The least time between two checks reaching one host. */
   spacingMs: number;
   /** The longest an answer may be, in bytes. */
   maxBytes: number;
-  /** How long to wait for an answer, body included. `web_fetch`'s by default. */
+  /** How long to wait for each answer, body included. `web_fetch`'s by default. */
   timeoutMs?: number;
   now?: () => number;
   /** The fetch underneath, the global one by default. Tests hand in their own. */
@@ -47,10 +54,21 @@ export function resetHostSpacing(): void {
   nextTurn.clear();
 }
 
+/** A `fetch` for one check. Build another for the next check: the hosts it has waited for are its own. */
 export function watchFetch(opts: WatchFetchOptions): typeof fetch {
   const now = opts.now ?? (() => Date.now());
   const timeoutMs = opts.timeoutMs ?? WEB_FETCH_TIMEOUT_MS;
   const base = opts.fetch ?? fetch;
+  /** Hosts this check has had its turn at. */
+  const admitted = new Set<string>();
+
+  async function admit(url: string, signal: AbortSignal | undefined): Promise<void> {
+    await permitted(url, opts.policy());
+    const host = new URL(url).host;
+    if (admitted.has(host)) return;
+    admitted.add(host);
+    await waitTurn(host, opts.spacingMs, now, signal);
+  }
 
   return (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     let url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -59,31 +77,32 @@ export function watchFetch(opts: WatchFetchOptions): typeof fetch {
     if (!headers.has("user-agent")) headers.set("User-Agent", WEB_FETCH_USER_AGENT);
     if (!headers.has("accept")) headers.set("Accept", "text/html, application/json, text/plain, */*");
 
-    await permitted(url, opts.policy());
-    await waitTurn(new URL(url).host, opts.spacingMs, now, signal);
-
-    return withTimeout(timeoutMs, signal, async (combined) => {
-      let method = init?.method ?? "GET";
-      let body = init?.body;
-      for (let hop = 0; ; hop++) {
-        const res = await base(url, { ...init, method, body, headers, redirect: "manual", signal: combined });
+    let method = init?.method ?? "GET";
+    let body = init?.body;
+    for (let hop = 0; ; hop++) {
+      await admit(url, signal);
+      // Each answer gets the timeout to itself; the wait for a host's turn isn't counted against it.
+      const answer = await withTimeout(timeoutMs, signal, async (combined) => {
+        const sent = new Headers(headers);
+        const res = await base(url, { ...init, method, body, headers: sent, redirect: "manual", signal: combined });
         const location = res.headers.get("location");
         if (REDIRECTS.has(res.status) && location) {
           await res.body?.cancel().catch(() => {});
-          if (hop >= MAX_REDIRECTS)
-            throw new Error(`${new URL(url).host} redirected more than ${MAX_REDIRECTS} times.`);
-          url = new URL(location, url).href;
-          await permitted(url, opts.policy());
-          // A 303, and a 301 or 302 answering anything but a GET, are followed with a GET, as browsers do.
-          if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== "GET")) {
-            method = "GET";
-            body = undefined;
-          }
-          continue;
+          return { status: res.status, location };
         }
         return capped(res, opts.maxBytes, url);
+      });
+      if (answer instanceof Response) return answer;
+      if (hop >= MAX_REDIRECTS) throw new Error(`${new URL(url).host} redirected more than ${MAX_REDIRECTS} times.`);
+      const next = new URL(answer.location, url).href;
+      if (new URL(next).origin !== new URL(url).origin) for (const name of CREDENTIALS) headers.delete(name);
+      // A 303, and a 301 or 302 answering anything but a GET, are followed with a GET, as browsers do.
+      if (answer.status === 303 || ((answer.status === 301 || answer.status === 302) && method !== "GET")) {
+        method = "GET";
+        body = undefined;
       }
-    });
+      url = next;
+    }
   }) as typeof fetch;
 }
 

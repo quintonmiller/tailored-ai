@@ -33,18 +33,38 @@ const URL_SETTING = {
  * A page's readable text, one block per line: `web_fetch`'s HTML-to-text, with
  * the entities it leaves (numeric ones, and currency names such as `&euro;`)
  * decoded too, since a price is often written that way.
+ *
+ * A non-breaking space between two digits is kept, as a narrow one, because
+ * it is how much of Europe groups thousands (`1&nbsp;234,50&nbsp;€`), and
+ * folding it to a plain space would read that price as 234.50. Every other
+ * non-breaking space becomes a plain one, so a phrase typed with spaces still
+ * finds `Opening&nbsp;hours`.
  */
 export function readableText(body: string, contentType: string): string {
   const html = contentType.includes("html") || /^\s*<(!doctype|html)/i.test(body);
-  const text = html ? stripHtmlToText(body) : body;
+  // web_fetch turns `&nbsp;` into a plain space; it is kept here until the digits around it are seen.
+  const text = html ? stripHtmlToText(body.replace(/&nbsp;/gi, "\u00a0")) : body;
   return decodeEntities(text)
     .split("\n")
-    .map((line) => line.replace(/[ \t ]+/g, " ").trim())
+    .map((line) =>
+      line
+        .replace(/(?<=\d)[\u00a0\u202f](?=\d)/g, "\u202f")
+        .replace(/[ \t\u00a0]+/g, " ")
+        .trim(),
+    )
     .filter(Boolean)
     .join("\n");
 }
 
-const NAMED: Record<string, string> = { euro: "€", pound: "£", yen: "¥", cent: "¢", nbsp: " ", ndash: "–", mdash: "—" };
+const NAMED: Record<string, string> = {
+  euro: "€",
+  pound: "£",
+  yen: "¥",
+  cent: "¢",
+  nbsp: "\u00a0",
+  ndash: "–",
+  mdash: "—",
+};
 
 function decodeEntities(text: string): string {
   return text
@@ -235,7 +255,7 @@ const SYMBOLS = "€$£¥₹₩₽₺₪฿₫₴₦₱";
 const CODES =
   "EUR|USD|GBP|JPY|CHF|CAD|AUD|NZD|SEK|NOK|DKK|PLN|CZK|HUF|INR|BRL|MXN|CNY|HKD|SGD|ZAR|TRY|ILS|THB|KRW|RON|BGN|ISK";
 const CURRENCY = `(?:[A-Z]{1,2}\\$|[${SYMBOLS}]|(?<![A-Za-z])(?:${CODES})(?![A-Za-z]))`;
-// Thousands in groups of three (with a comma, a dot or a non-breaking space), then up to two decimals.
+// Thousands in groups of three (with a comma, a dot or a non-breaking space, which `readableText` keeps), then up to two decimals.
 const AMOUNT = "\\d{1,3}(?:[.,\\u00a0\\u202f]\\d{3})+(?:[.,]\\d{1,2})?|\\d+(?:[.,]\\d{1,2})?";
 const PRICE = new RegExp(`(${CURRENCY})\\s?(${AMOUNT})|(${AMOUNT})\\s?(${CURRENCY})`, "g");
 
@@ -257,7 +277,7 @@ export function pricesIn(text: string): Array<FoundPrice & { start: number; end:
 }
 
 export function parseAmount(raw: string): number | undefined {
-  const digits = raw.replace(/[   ]/g, "");
+  const digits = raw.replace(/[\u00a0\u202f ]/g, "");
   const last = Math.max(digits.lastIndexOf("."), digits.lastIndexOf(","));
   const decimals = last >= 0 ? digits.length - last - 1 : 0;
   const normal =

@@ -13,7 +13,14 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { WakeAgentOptions, WakeOutcome } from "../agent/wake.js";
 import { TypedEventBus } from "../events.js";
 import { WATCH_TYPE, WATCH_TYPE_DEF } from "../plugins/watchers-records.js";
-import { MAX_RUNNING, OWED_FOR_MS, TELL_RETRY_MS, WatchRunner } from "../plugins/watchers-runner.js";
+import {
+  MAX_RUNNING,
+  nextCheckAt,
+  OWED_FOR_MS,
+  resetWatchSchedule,
+  TELL_RETRY_MS,
+  WatchRunner,
+} from "../plugins/watchers-runner.js";
 import type { Disposer } from "../registry.js";
 import { registerStateType } from "../state/registry.js";
 import { type StateCaller, StateService } from "../state/service.js";
@@ -21,11 +28,13 @@ import type { StateChange, StateRecord } from "../state/types.js";
 import {
   getWatcherKind,
   registerWatcherKind,
+  validateWatchConfig,
   type WatcherKind,
   watcherResult,
   watchInterval,
 } from "../watchers/registry.js";
 
+const KINDS = { get: getWatcherKind, validate: validateWatchConfig, interval: watchInterval, result: watcherResult };
 const PERSON: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "web" } };
 const START = Date.parse("2026-10-22T10:00:00.000Z");
 const HOUR = 3_600_000;
@@ -74,12 +83,12 @@ const counter: WatcherKind<{ name: string }, { v: number }> = {
 function makeRunner(): WatchRunner {
   return new WatchRunner({
     service: () => service,
-    kinds: { get: getWatcherKind, interval: watchInterval, result: watcherResult },
+    kinds: KINDS,
     wake: async (agent, opts) => {
       wakes.push({ agent, ...opts });
       return outcome;
     },
-    fetch: async () => {
+    fetchFor: () => async () => {
       throw new Error("no network in tests");
     },
     now: () => clock,
@@ -137,6 +146,7 @@ beforeEach(() => {
   gate = undefined;
   wakes = [];
   outcome = "ran";
+  resetWatchSchedule();
   runner = makeRunner();
 });
 
@@ -364,19 +374,28 @@ describe("the watchers runner", () => {
     clock += HOUR;
     await look();
     expect(wakes).toHaveLength(1);
-    expect((await watch("visits")).data.tellAt).toBe(new Date(START + HOUR + TELL_RETRY_MS).toISOString());
+    // Owed since the change; the retry is kept in memory, so turning the wake away writes nothing.
+    const owed = await watch("visits");
+    expect(owed.data.tellAt).toBe(new Date(START + HOUR).toISOString());
 
     // Not yet due again: no second try.
     clock += 60_000;
     await look();
     expect(wakes).toHaveLength(1);
-
-    outcome = "ran";
-    clock += TELL_RETRY_MS;
+    clock += TELL_RETRY_MS - 60_000;
     await look();
     expect(wakes).toHaveLength(2);
-    expect(wakes[1].prompt).toContain("The count moved from 4 to 7.");
-    expect(wakes[1].prompt).toContain("saw a change 6 minutes ago");
+    clock += TELL_RETRY_MS;
+    await look();
+    expect(wakes).toHaveLength(3);
+    expect((await watch("visits")).version).toBe(owed.version);
+
+    outcome = "ran";
+    clock += 2 * TELL_RETRY_MS;
+    await look();
+    expect(wakes).toHaveLength(4);
+    expect(wakes[3].prompt).toContain("The count moved from 4 to 7.");
+    expect(wakes[3].prompt).toContain("saw a change 20 minutes ago");
     expect((await watch("visits")).data.tellAt).toBeUndefined();
   });
 
@@ -390,13 +409,13 @@ describe("the watchers runner", () => {
     });
     runner = new WatchRunner({
       service: () => service,
-      kinds: { get: getWatcherKind, interval: watchInterval, result: watcherResult },
+      kinds: KINDS,
       wake: async (agent, opts) => {
         wakes.push({ agent, ...opts });
         if (wakes.length === 1) await turn;
         return "ran";
       },
-      fetch: async () => new Response(""),
+      fetchFor: () => async () => new Response(""),
       now: () => clock,
       log: () => {},
       warn: () => {},
@@ -417,10 +436,9 @@ describe("the watchers runner", () => {
     expect(wakes).toHaveLength(1);
     expect((await watch("visits")).data.tellAt).toBe(new Date(clock).toISOString());
 
+    // Told as soon as that turn ends, without waiting for the next tick.
     finish();
     await runner.idle();
-    expect((await watch("visits")).data.tellAt).toBeDefined();
-    await look();
     expect(wakes.map((w) => w.prompt)).toEqual([
       expect.stringContaining("The count moved from 4 to 5."),
       expect.stringContaining("The count moved from 5 to 6."),
@@ -429,19 +447,40 @@ describe("the watchers runner", () => {
   });
 
   it("stops trying to tell after a day, and leaves the change on the record", async () => {
-    await addWatch("visits", { every: "1 day" });
+    await addWatch("visits", { every: "2 days" });
     readings.visits = 4;
     await look();
     outcome = "paused";
     readings.visits = 7;
-    clock += 24 * HOUR;
+    clock += 48 * HOUR;
     await look();
+    expect(wakes).toHaveLength(1);
     clock += OWED_FOR_MS + TELL_RETRY_MS;
-    await service.patch(PERSON, { type: WATCH_TYPE, id: "visits" }, { status: "paused" });
     await look();
+    // Given up without another try.
+    expect(wakes).toHaveLength(1);
     const w = await watch("visits");
     expect(w.data.tellAt).toBeUndefined();
+    expect(w.data.status).toBe("active");
     expect(w.data.lastChange).toMatchObject({ text: "The count moved from 4 to 7." });
+  });
+
+  it("doesn't wake the owner about a watch a person paused while its wake was owed", async () => {
+    await addWatch("visits");
+    readings.visits = 4;
+    await look();
+    outcome = "at-ceiling";
+    readings.visits = 7;
+    clock += HOUR;
+    await look();
+    expect(wakes).toHaveLength(1);
+    await service.patch(PERSON, { type: WATCH_TYPE, id: "visits" }, { status: "paused" });
+
+    outcome = "ran";
+    clock += TELL_RETRY_MS;
+    await look();
+    expect(wakes).toHaveLength(1);
+    expect((await watch("visits")).data.tellAt).toBeUndefined();
   });
 
   it("pauses a watch whose owner isn't an agent any more, saying why", async () => {
@@ -461,9 +500,9 @@ describe("the watchers runner", () => {
     gate = new Promise(() => {});
     runner = new WatchRunner({
       service: () => service,
-      kinds: { get: getWatcherKind, interval: watchInterval, result: watcherResult },
+      kinds: KINDS,
       wake: async () => "ran",
-      fetch: async () => new Response(""),
+      fetchFor: () => async () => new Response(""),
       now: () => clock,
       log: () => {},
       warn: () => {},
@@ -526,5 +565,283 @@ describe("the watchers runner", () => {
     const w = await watch("visits");
     expect(w.data.status).toBe("paused");
     expect(w.data.snapshot).toBeUndefined();
+  });
+  it("writes nothing for a check that finds nothing new: no new version, no history row, no state.changed", async () => {
+    await addWatch("visits");
+    readings.visits = 4;
+    await look();
+    const baseline = await watch("visits");
+    const rows = () => (db.prepare("SELECT COUNT(*) AS n FROM state_changes").get() as { n: number }).n;
+    const before = rows();
+    const changes: StateChange[] = [];
+    events.on("state.changed", (c) => changes.push(c));
+
+    for (let i = 1; i <= 5; i++) {
+      clock += HOUR;
+      await look();
+    }
+    expect(checked).toHaveLength(6);
+    expect((await watch("visits")).version).toBe(baseline.version);
+    expect(rows()).toBe(before);
+    expect(changes).toEqual([]);
+    // The record's checkAt lags; the runner's own schedule is what a list shows.
+    expect(nextCheckAt(await watch("visits"))).toBe(new Date(START + 6 * HOUR).toISOString());
+
+    // Something new is written down, once.
+    readings.visits = 5;
+    clock += HOUR;
+    await look();
+    expect(rows()).toBe(before + 2);
+    expect(wakes).toHaveLength(1);
+    expect((await watch("visits")).data.checkAt).toBe(new Date(START + 7 * HOUR).toISOString());
+  });
+
+  it("keeps quiet checks on time by its own schedule, and lets a person's checkAt win over it", async () => {
+    await addWatch("visits");
+    readings.visits = 4;
+    await look();
+    clock += HOUR;
+    await look();
+    expect(checked).toHaveLength(2);
+
+    // The stored checkAt (an hour in) has passed, but the next check is due two hours in.
+    clock += 30 * 60_000;
+    await look();
+    expect(checked).toHaveLength(2);
+
+    // "Check now" on the State page.
+    await service.patch(PERSON, { type: WATCH_TYPE, id: "visits" }, { checkAt: new Date(clock).toISOString() });
+    await look();
+    expect(checked).toHaveLength(3);
+  });
+
+  it("checks a quietly scheduled watch once at once after a restart, which forgets that schedule", async () => {
+    await addWatch("visits");
+    readings.visits = 4;
+    await look();
+    clock += HOUR;
+    await look();
+    clock += 10 * 60_000;
+    await look();
+    expect(checked).toHaveLength(2);
+
+    resetWatchSchedule();
+    runner.stop();
+    runner = makeRunner();
+    await look();
+    expect(checked).toHaveLength(3);
+    await look();
+    expect(checked).toHaveLength(3);
+  });
+
+  it("reads every due watch, past the first page, so none waits behind quiet ones", async () => {
+    const names = Array.from({ length: 105 }, (_, i) => `w${String(i).padStart(3, "0")}`);
+    for (const name of names) await addWatch(name);
+    await look();
+    expect(new Set(checked).size).toBe(105);
+
+    checked = [];
+    clock += HOUR;
+    await look();
+    expect(checked.sort()).toEqual(names);
+  });
+
+  it("pauses a watch whose owner and scope disagree, and wakes nobody about it", async () => {
+    await addWatch("visits", { owner: "planner" }, "writer");
+    const w0 = await watch("visits");
+    expect(w0.scope).toBe("agent:writer");
+    await service.patch(PERSON, { type: WATCH_TYPE, id: "visits" }, { owner: "planner" });
+    await look();
+    const w = await watch("visits");
+    expect(checked).toEqual([]);
+    expect(wakes).toEqual([]);
+    expect(w.data.status).toBe("paused");
+    expect(w.data.lastError).toBe("Its owner field says planner, but it is kept in writer's private scope.");
+  });
+
+  it("pauses a watch whose settings a person broke, saying why, without running its kind", async () => {
+    await addWatch("visits", { config: { name: 5 } });
+    await look();
+    const w = await watch("visits");
+    expect(checked).toEqual([]);
+    expect(w.data.status).toBe("paused");
+    expect(w.data.failures).toBeUndefined();
+    expect(w.data.lastError).toContain("Its settings don't suit a counter watch:");
+    expect(w.data.lastError).toContain("`name`");
+  });
+
+  it("keeps a broken watch's notice owed while the owner is at its ceiling, and tells it once there's room", async () => {
+    await addWatch("visits");
+    readings.visits = 4;
+    await look();
+    outcome = "at-ceiling";
+    readings.visits = new Error("hotels.example answered 503.");
+    for (let i = 0; i < 3; i++) {
+      clock += HOUR;
+      await look();
+    }
+    expect((await watch("visits")).data.status).toBe("broken");
+    expect(wakes).toHaveLength(1);
+    expect((await watch("visits")).data.tellAt).toBeDefined();
+
+    outcome = "ran";
+    clock += TELL_RETRY_MS;
+    await look();
+    expect(wakes).toHaveLength(2);
+    expect(wakes[1].prompt).toContain("stopped: its last 3 checks failed");
+    expect((await watch("visits")).data.tellAt).toBeUndefined();
+    clock += TELL_RETRY_MS;
+    await look();
+    expect(wakes).toHaveLength(2);
+  });
+
+  it("drops a broken notice still owed once a person sets the watch going again, rather than retell an old change", async () => {
+    await addWatch("visits");
+    readings.visits = 4;
+    await look();
+    readings.visits = 5;
+    clock += HOUR;
+    await look();
+    expect(wakes).toHaveLength(1);
+    outcome = "at-ceiling";
+    readings.visits = new Error("down");
+    for (let i = 0; i < 3; i++) {
+      clock += HOUR;
+      await look();
+    }
+    expect(wakes).toHaveLength(2);
+    expect((await watch("visits")).data.tellAt).toBeDefined();
+
+    readings.visits = 5;
+    await service.patch(PERSON, { type: WATCH_TYPE, id: "visits" }, { status: "active", failures: 0 });
+    outcome = "ran";
+    clock += TELL_RETRY_MS;
+    await look();
+    expect(wakes).toHaveLength(2);
+    expect((await watch("visits")).data.tellAt).toBeUndefined();
+  });
+
+  it("wakes an owner about one watch at a time, and the next once that turn ends", async () => {
+    await addWatch("a", { every: "1m" });
+    await addWatch("b", { every: "1m" });
+    await addWatch("c", { every: "1m" }, "writer");
+    readings.a = 1;
+    readings.b = 1;
+    readings.c = 1;
+    await look();
+
+    let finish!: () => void;
+    const turn = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    onTestFinished(() => finish());
+    const open: Record<string, number> = {};
+    const mostOpen: Record<string, number> = {};
+    runner.stop();
+    runner = new WatchRunner({
+      service: () => service,
+      kinds: KINDS,
+      wake: async (agent, opts) => {
+        wakes.push({ agent, ...opts });
+        open[agent] = (open[agent] ?? 0) + 1;
+        mostOpen[agent] = Math.max(mostOpen[agent] ?? 0, open[agent]);
+        try {
+          if (agent === "planner") await turn;
+          return "ran";
+        } finally {
+          open[agent]--;
+        }
+      },
+      fetchFor: () => async () => new Response(""),
+      now: () => clock,
+      log: () => {},
+      warn: () => {},
+      tickMs: 10 * HOUR,
+    });
+    readings.a = 2;
+    readings.b = 2;
+    readings.c = 2;
+    clock += 60_000;
+    await runner.tick();
+    // Another owner isn't held back; the planner's second watch waits, owed, for its first turn to end.
+    await vi.waitFor(() => expect(wakes.map((w) => w.agent).sort()).toEqual(["planner", "writer"]));
+    const first = String(wakes.find((w) => w.agent === "planner")?.wake?.ref);
+    const second = first === "a" ? "b" : "a";
+    await vi.waitFor(async () => expect((await watch(second)).data.tellAt).toBeDefined());
+    expect(wakes.filter((w) => w.agent === "planner")).toHaveLength(1);
+
+    finish();
+    await runner.idle();
+    expect(wakes.filter((w) => w.agent === "planner").map((w) => w.wake?.ref)).toEqual([first, second]);
+    expect(mostOpen.planner).toBe(1);
+    expect((await watch("a")).data.tellAt).toBeUndefined();
+    expect((await watch("b")).data.tellAt).toBeUndefined();
+  });
+  it("checks from the record as it is now, not from a copy a look read before another check of it finished", async () => {
+    await addWatch("visits");
+    readings.visits = 4;
+    await look();
+    const stale = await watch("visits");
+    clock += HOUR;
+    readings.visits = 5;
+    await look();
+    expect(wakes).toHaveLength(1);
+
+    // What a look hands over when it read its list before that check wrote.
+    await (runner as unknown as { check(record: StateRecord): Promise<void> }).check(stale);
+    await runner.idle();
+    expect(checked).toHaveLength(2);
+    expect(wakes).toHaveLength(1);
+  });
+  it("looks again when a check ends during a look that has already read past the slot it freed", async () => {
+    for (const name of ["a", "b", "c"]) await addWatch(name);
+    let open!: () => void;
+    gate = new Promise((resolve) => {
+      open = resolve;
+    });
+    onTestFinished(() => open());
+    // A store slow enough that a look spans turns of the event loop: its owed read waits while held.
+    let hold: Promise<void> | undefined;
+    let release!: () => void;
+    const slow = {
+      query: async (caller: StateCaller, q: Parameters<StateService["query"]>[1]) => {
+        if (hold && q.where && "tellAt" in q.where) await hold;
+        return service.query(caller, q);
+      },
+      get: (caller: StateCaller, ref: { type: string; id: string }) => service.get(caller, ref),
+      patch: (caller: StateCaller, ref: { type: string; id: string }, changes: Record<string, unknown>) =>
+        service.patch(caller, ref, changes),
+    } as unknown as StateService;
+    runner.stop();
+    runner = new WatchRunner({
+      service: () => slow,
+      kinds: KINDS,
+      wake: async () => "ran",
+      fetchFor: () => async () => new Response(""),
+      now: () => clock,
+      log: () => {},
+      warn: () => {},
+      tickMs: 10 * HOUR,
+    });
+    await runner.tick();
+    expect(inFlight).toBe(MAX_RUNNING);
+
+    // The next look finds no room, and stops at its owed read.
+    hold = new Promise((resolve) => {
+      release = resolve;
+    });
+    void runner.tick();
+    await new Promise((resolve) => setImmediate(resolve));
+    // Both checks end while it waits there.
+    gate = undefined;
+    open();
+    await vi.waitFor(async () => {
+      expect((await watch("a")).data.snapshot).toBeDefined();
+      expect((await watch("b")).data.snapshot).toBeDefined();
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    release();
+    await runner.idle();
+    expect(checked.sort()).toEqual(["a", "b", "c"]);
   });
 });

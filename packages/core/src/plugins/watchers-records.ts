@@ -29,8 +29,12 @@ export const LABEL_CHARS = 120;
 export const NOTE_CHARS = 300;
 export const ERROR_CHARS = 300;
 
-/** An ISO time, as the runner writes it: what makes `checkAt <= now` a string comparison that holds. */
-const ISO_TIME = "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}";
+/**
+ * An ISO time in UTC, as the runner writes it (`toISOString`): what makes
+ * `checkAt <= now` a string comparison that holds. A time with an offset, or a
+ * local one with no `Z`, would compare hours early or late, so it is refused.
+ */
+const ISO_TIME = "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?Z$";
 
 export const WATCH_SCHEMA: JsonSchema = {
   type: "object",
@@ -54,9 +58,10 @@ export const WATCH_SCHEMA: JsonSchema = {
     checkAt: {
       type: "string",
       pattern: ISO_TIME,
-      description: "When it is next checked, as an ISO time. Set it to now to check it on the next look.",
+      description:
+        "When it is next checked, as an ISO time in UTC ending in Z. A check that finds nothing new leaves it as it was. Set it to now to check it on the next look.",
     },
-    checkedAt: { type: "string", description: "When it was last checked." },
+    checkedAt: { type: "string", description: "When a check last found something to write down." },
     lastValue: { type: ["string", "number"], description: "What the last check read: a price, a title." },
     lastChange: {
       type: "object",
@@ -69,13 +74,17 @@ export const WATCH_SCHEMA: JsonSchema = {
     tellAt: {
       type: "string",
       pattern: ISO_TIME,
-      description: "When to try again to tell the owner about the last change, while the wake is owed.",
+      description:
+        "Set while the owner is still to be told about the last change or about the watch breaking: when that news came.",
     },
     snapshot: {
       type: "object",
       description: "What the next check compares against, and the settings it was taken with. Kept by the runner.",
     },
-    commitment: { type: "string", description: "The commitment this watch serves, by id." },
+    commitment: {
+      type: "string",
+      description: "The commitment this watch serves, by id. Kept for a later step to act on.",
+    },
   },
 };
 
@@ -112,6 +121,24 @@ export function ownerOf(record: StateRecord): string | undefined {
   return typeof owner === "string" && owner ? owner : undefined;
 }
 
+/**
+ * Why a watch's owner can't be trusted, or undefined when it can. The owner
+ * is woken and the scope decides whose `watch` tool can reach the record, so
+ * the two must agree: a person's edit that names one agent in another's
+ * scope, or keeps a watch outside any agent's, would wake an agent about a
+ * watch it can't find to pause.
+ */
+export function ownerProblem(record: StateRecord): string | undefined {
+  const owner = ownerOf(record);
+  const kept = record.scope.startsWith("agent:") ? record.scope.slice("agent:".length) : undefined;
+  if (!owner) return "It names no owner.";
+  if (kept === owner) return undefined;
+  const why = kept
+    ? `Its owner field says ${owner}, but it is kept in ${kept}'s private scope.`
+    : `It is kept in the ${record.scope} scope, not in its owner's private scope agent:${owner}.`;
+  return clip(why, ERROR_CHARS);
+}
+
 /** A watch's status, read safely: anything unknown reads as paused, so nothing runs that wasn't meant to. */
 export function statusOf(record: StateRecord): WatchStatus {
   const status = record.data.status;
@@ -137,6 +164,11 @@ export function basisOf(kind: string, config: Record<string, unknown>): string {
     .update(`${kind}\u0000${stableJson(config)}`)
     .digest("hex")
     .slice(0, 16);
+}
+
+/** Whether two values are the same once written as JSON, whatever order their keys came in. */
+export function sameJson(a: unknown, b: unknown): boolean {
+  return stableJson(a) === stableJson(b);
 }
 
 /** JSON with object keys sorted, so the same settings always hash the same. */

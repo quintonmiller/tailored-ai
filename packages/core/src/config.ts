@@ -814,7 +814,8 @@ export const DEFAULT_DISABLED_PLUGIN_MODULES = [
   "builtin:directory",
   // Off until asked for: it fetches pages on its own schedule and wakes agents
   // when they change, and adds the `watch` tool to every agent that doesn't
-  // narrow its `tools:`. See docs/watchers.md.
+  // narrow its `tools:` (and `state` too, where nothing else had declared a
+  // world-state type). See docs/watchers.md.
   "builtin:watchers",
 ] as const;
 

@@ -21,8 +21,8 @@ import { createPluginContext } from "../plugin-context.js";
 import * as watchersPlugin from "../plugins/watchers.js";
 import { resetHostSpacing } from "../plugins/watchers-fetch.js";
 import { MAX_WATCHES, WATCH_TYPE } from "../plugins/watchers-records.js";
-import { TICK_MS } from "../plugins/watchers-runner.js";
-import { TURNED_OFF } from "../plugins/watchers-tool.js";
+import { resetWatchSchedule, TICK_MS } from "../plugins/watchers-runner.js";
+import { settingsFrom, TOOL_PARAMS, TURNED_OFF } from "../plugins/watchers-tool.js";
 import { type LoadedPlugin, loadPlugins } from "../plugins.js";
 import type { AIProvider, ChatResponse } from "../providers/interface.js";
 import { AgentRuntime } from "../runtime.js";
@@ -32,7 +32,7 @@ import type { StateRecord } from "../state/types.js";
 import type { Tool } from "../tools/interface.js";
 import { StateTool } from "../tools/state.js";
 import { toolFactoryRegistry } from "../tools/tool-factories.js";
-import { getWatcherKind } from "../watchers/registry.js";
+import { getWatcherKind, type WatcherKind } from "../watchers/registry.js";
 
 const PERSON: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "web" } };
 const MINUTE = 60_000;
@@ -66,6 +66,7 @@ beforeEach(() => {
   pages = {};
   fetched = [];
   resetHostSpacing();
+  resetWatchSchedule();
   vi.stubGlobal("fetch", stubFetch);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -209,6 +210,25 @@ describe("the watchers plugin, with a recording waker", () => {
     const [w] = await watches();
     expect(w.data.config).toEqual({ url: "https://hotels.example/lisbon", near: "per night", threshold: 5 });
     expect(w.data.label).toBe("price on hotels.example/lisbon");
+  });
+
+  it("never lifts a setting named like one of its own parameters: that one is the tool's", () => {
+    const tool = build();
+    expect([...TOOL_PARAMS].sort()).toEqual(Object.keys(tool.parameters.properties as object).sort());
+    const mail: WatcherKind = {
+      kind: "mail",
+      description: "New mail with a label.",
+      schema: { type: "object", properties: { label: { type: "string" }, from: { type: "string" } } },
+      defaultEvery: "1h",
+      minEvery: "15m",
+      check: () => ({ snapshot: {} }),
+    };
+    expect(settingsFrom(mail, { action: "add", kind: "mail", label: "Bank mail", from: "bank.example" })).toEqual({
+      from: "bank.example",
+    });
+    expect(settingsFrom(mail, { action: "add", kind: "mail", label: "Bank mail", config: { label: "Bank" } })).toEqual({
+      label: "Bank",
+    });
   });
 
   it("raises an interval under the kind's floor, and says so", async () => {

@@ -191,6 +191,19 @@ describe("finding a price", () => {
     expect(findPrice("Was £120, now £99 per night", "per night")?.amount).toBe(99);
     expect(findPrice("No numbers here", "per night")).toBeUndefined();
   });
+
+  it("reads thousands grouped with a non-breaking space, however the page writes it", async () => {
+    for (const nbsp of ["&nbsp;", "&#160;", "&#xA0;", "\u00a0", "\u202f"]) {
+      body = hotel(`<p>Total 1${nbsp}234,50${nbsp}€ per night</p>`);
+      const { value, snapshot } = await priceKind.check({ url: URL_, near: "per night" }, undefined, ctx());
+      expect(snapshot.amount, nbsp).toBe(1234.5);
+      expect(value, nbsp).toBe("1 234,50 €");
+    }
+    // Anywhere else it is a plain space, so a phrase typed with spaces still finds it.
+    const text = readableText("<p>Opening&nbsp;hours: 9&nbsp;to&nbsp;5</p>", "text/html");
+    expect(text).toBe("Opening hours: 9 to 5");
+    expect(partAround(text, "opening hours")).toBe("Opening hours: 9 to 5");
+  });
 });
 
 describe("the price kind", () => {
@@ -293,11 +306,11 @@ describe("the fetch a check is handed", () => {
     await expect(guarded()(URL_)).rejects.toThrow("hotels.example sent 5 KB, over the 1 KB a watch reads.");
   });
 
-  it("asks one host at most once per spacing, queueing the rest", async () => {
+  it("lets a check reach one host at most once per spacing after the last check that did, queueing the rest", async () => {
     vi.useFakeTimers();
-    const get = guarded();
-    await get(URL_);
-    const second = get(`${URL_}?b`);
+    await guarded()(URL_);
+    // The next check waits its turn.
+    const second = guarded()(`${URL_}?b`);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(fake).toHaveBeenCalledTimes(1);
     clock = 10_000;
@@ -305,7 +318,48 @@ describe("the fetch a check is handed", () => {
     await second;
     expect(fake).toHaveBeenCalledTimes(2);
     // Another host doesn't wait.
-    await get("https://cdn.example/");
+    await guarded()("https://cdn.example/");
     expect(fake).toHaveBeenCalledTimes(3);
+  });
+
+  it("waits per check, not per request: a second request to a host in the same check goes straight through", async () => {
+    vi.useFakeTimers();
+    const check = guarded();
+    await check(URL_);
+    await check(`${URL_}/messages/1`);
+    await check(`${URL_}/messages/2`);
+    expect(fake).toHaveBeenCalledTimes(3);
+  });
+
+  it("waits a host's turn for a redirect too, when the check hasn't reached that host yet", async () => {
+    vi.useFakeTimers();
+    await guarded()("https://cdn.example/");
+    fake.mockImplementationOnce(
+      async () => new Response(null, { status: 302, headers: { location: "https://cdn.example/x" } }),
+    );
+    const redirected = guarded()(URL_);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fake).toHaveBeenCalledTimes(2);
+    clock = 10_000;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await redirected;
+    expect(fake.mock.calls.map((c) => String(c[0]))).toEqual(["https://cdn.example/", URL_, "https://cdn.example/x"]);
+  });
+
+  it("drops the credentials a kind sent when a redirect leads to another origin, and keeps them on the same one", async () => {
+    const credentials = { Authorization: "Bearer t0ken", Cookie: "sid=1", "Proxy-Authorization": "Basic x" };
+    fake.mockImplementationOnce(
+      async () => new Response(null, { status: 302, headers: { location: "https://hotels.example/next" } }),
+    );
+    fake.mockImplementationOnce(
+      async () => new Response(null, { status: 307, headers: { location: "https://cdn.example/x" } }),
+    );
+    await guarded()(URL_, { headers: credentials });
+    const sent = fake.mock.calls.map((c) => new Headers(c[1]?.headers));
+    expect(sent.map((h) => h.get("authorization"))).toEqual(["Bearer t0ken", "Bearer t0ken", null]);
+    expect(sent.map((h) => h.get("cookie"))).toEqual(["sid=1", "sid=1", null]);
+    expect(sent.map((h) => h.get("proxy-authorization"))).toEqual(["Basic x", "Basic x", null]);
+    // What isn't a credential goes on.
+    expect(sent[2].get("user-agent")).toBe("autonomous-agent/0.1 (bot)");
   });
 });

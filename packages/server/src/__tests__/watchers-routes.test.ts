@@ -24,6 +24,7 @@ import {
   toolFactoryRegistry,
 } from "@tailored-ai/core";
 import { resetHostSpacing } from "@tailored-ai/core/plugins/watchers-fetch";
+import { resetWatchSchedule } from "@tailored-ai/core/plugins/watchers-runner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../index.js";
 
@@ -134,6 +135,7 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.stubGlobal("fetch", stubFetch);
   resetHostSpacing();
+  resetWatchSchedule();
   originalHome = process.env.HOME;
   tmpDir = mkdtempSync(join(tmpdir(), "watchers-routes-"));
   process.env.HOME = tmpDir;
@@ -216,18 +218,32 @@ describe("watches through the state routes", () => {
     expect(fetched).toHaveLength(before);
   });
 
-  it("refuses a malformed checkAt from the State page, which would otherwise never come due", async () => {
+  it("refuses a checkAt that isn't an ISO time in UTC, which would come due at the wrong time or never", async () => {
     const app = await start();
-    const res = await app.fetch(
-      new Request(
-        "http://t/api/state/watch",
-        json("POST", {
-          scope: "agent:planner",
-          data: { owner: "planner", kind: "page", config: { url: PAGE }, status: "active", checkAt: "tomorrow" },
-        }),
-      ),
-    );
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain("`checkAt` must match the pattern");
+    for (const checkAt of ["tomorrow", "2026-10-22T12:00+02:00", "2026-10-22T12:00:00"]) {
+      const res = await app.fetch(
+        new Request(
+          "http://t/api/state/watch",
+          json("POST", {
+            scope: "agent:planner",
+            data: { owner: "planner", kind: "page", config: { url: PAGE }, status: "active", checkAt },
+          }),
+        ),
+      );
+      expect(res.status, checkAt).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain("`checkAt` must match the pattern");
+    }
+    for (const checkAt of ["2026-10-22T12:00Z", "2026-10-22T12:00:00Z", "2026-10-22T12:00:00.000Z"]) {
+      const res = await app.fetch(
+        new Request(
+          "http://t/api/state/watch",
+          json("POST", {
+            scope: "agent:planner",
+            data: { owner: "planner", kind: "page", config: { url: `${PAGE}?${checkAt}` }, status: "paused", checkAt },
+          }),
+        ),
+      );
+      expect(res.status, checkAt).toBe(201);
+    }
   });
 });

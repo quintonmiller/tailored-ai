@@ -1,29 +1,35 @@
 /**
- * The runner: checks every active watch when its `checkAt` comes due, keeps
- * what it found on the record, and wakes the owner when something changed.
- * See `docs/watchers.md`.
+ * The runner: checks every active watch when it comes due, keeps what it
+ * found on the record, and wakes the owner when something changed. See
+ * `docs/watchers.md`.
  *
- * The schedule is the records themselves. Each look asks world state for
- * active watches with `checkAt <= now`, so a restart or a reload picks up
- * exactly where the last process left off, and a person who sets `checkAt` to
- * now on the State page gets a check on the next look.
+ * The schedule starts from the records. Each look asks world state for active
+ * watches whose `checkAt` has passed, so a person who sets `checkAt` to now on
+ * the State page gets a check on the next look, and a restart checks every
+ * watch it finds due.
  *
  * Its limits:
  *
  * - **Two checks at a time**, counted across every runner a reload has built,
  *   and never the same watch twice at once.
- * - **One record write per check**, carrying everything the check produced.
+ * - **A check is written down only when it found something**: a change, a new
+ *   reading, a failure, a new baseline. Every write is a full row in the
+ *   record's history and a `state.changed`, so a check that found nothing new
+ *   keeps its next due time in memory instead ({@link schedule}). The stored
+ *   `checkAt` then lags until the next write, and a restart, with that memory
+ *   gone, checks each such watch once at once.
  * - **A change wakes the owner** through `runtime.wakeAgent`, so the wake
  *   stops for the pause switch and counts toward the owner's hourly ceiling
- *   like every turn nobody asked for. A wake turned away is owed (`tellAt`)
- *   and tried again every few minutes for a day.
+ *   like every turn nobody asked for. Until the owner is told, the watch keeps
+ *   `tellAt`, and a wake turned away is tried again every few minutes for a
+ *   day. An owner is woken about one watch at a time.
  * - **The first check sets a baseline** and wakes nobody, as does the first
  *   check after a person changes a watch's settings.
- * - **Three failures in a row** mark a watch `broken`, and its owner is told
- *   once.
+ * - **Three failures in a row** mark a watch `broken`, and its owner is told,
+ *   owed the same way as a change.
  */
 import type { Wake, WakeAgentOptions, WakeOutcome } from "../agent/wake.js";
-import type { StateService } from "../state/service.js";
+import type { StateQueryInput, StateService } from "../state/service.js";
 import type { StateRecord } from "../state/types.js";
 import type { WatcherKind, WatcherKindRegistryView, WatcherResult } from "../watchers/registry.js";
 import {
@@ -33,8 +39,10 @@ import {
   ERROR_CHARS,
   MAX_FAILURES,
   ownerOf,
+  ownerProblem,
   previousOf,
   READER,
+  sameJson,
   statusOf,
   WATCH_TYPE,
   whereOf,
@@ -53,27 +61,61 @@ export const TELL_RETRY_MS = 5 * 60_000;
 export const OWED_FOR_MS = 24 * 3_600_000;
 /** How long until a watch whose kind no plugin brings is looked at again. */
 const NO_KIND_RETRY_MS = 3_600_000;
-/** Due watches read per look. */
-const DUE_READ = 20;
+/** How long until a watch whose check couldn't be written down is tried again. */
+const STUCK_RETRY_MS = 15 * 60_000;
+/** Records read per page while looking, and the most read in one look. */
+const READ_PAGE = 100;
+const READ_MOST = 2_000;
 
 /**
- * Watches being checked now, by id, and owners being told about one. Kept at
- * module level so a reload, which disposes this runner and builds another,
- * can't start a check or a wake the old one is still in the middle of.
+ * Kept at module level so a reload, which disposes this runner and builds
+ * another, carries them over:
+ *
+ * - `running`: watches being checked now, by id, so the new runner can't
+ *   start a check the old one is in the middle of;
+ * - `telling`: owners being woken about a watch now, by name, so an owner is
+ *   woken about one watch at a time, its own sessions or not;
+ * - `schedule`: a watch's next due time when its last check found nothing to
+ *   write, with the stored `checkAt` it was worked out against. A `checkAt`
+ *   that differs from that one was written since, by a person or the `watch`
+ *   tool, and wins;
+ * - `retries`: when a watch's owed wake may next be tried.
  */
 const running = new Map<string, Promise<void>>();
 const telling = new Map<string, Promise<void>>();
+const schedule = new Map<string, { at: number; checkAt: unknown }>();
+const retries = new Map<string, number>();
 
-/** What the runner needs of the registry: the kind a watch names, its interval, and a check's result made safe. */
-export type KindsView = Pick<WatcherKindRegistryView, "get" | "interval" | "result">;
+/** For tests: forget the next due times and retries kept in memory, as a restart does. */
+export function resetWatchSchedule(): void {
+  schedule.clear();
+  retries.clear();
+}
+
+/** When a watch is next due, in milliseconds: the time kept in memory when it still holds, else its stored `checkAt`. Zero when it has none. */
+function dueAt(record: StateRecord): number {
+  const kept = schedule.get(record.id);
+  if (kept && kept.checkAt === record.data.checkAt) return kept.at;
+  const stored = typeof record.data.checkAt === "string" ? Date.parse(record.data.checkAt) : Number.NaN;
+  return Number.isFinite(stored) ? stored : 0;
+}
+
+/** When a watch is next checked, as an ISO time, for a list line: the runner's own schedule, which the record lags. */
+export function nextCheckAt(record: StateRecord): string | undefined {
+  const at = dueAt(record);
+  return at > 0 ? new Date(at).toISOString() : undefined;
+}
+
+/** What the runner needs of the registry: the kind a watch names, its settings checked, its interval, and a check's result made safe. */
+export type KindsView = Pick<WatcherKindRegistryView, "get" | "validate" | "interval" | "result">;
 
 export interface WatchRunnerOptions {
   service: () => StateService;
   kinds: KindsView;
   /** `runtime.wakeAgent`. */
   wake: (agent: string, opts: WakeAgentOptions) => Promise<WakeOutcome>;
-  /** The `fetch` a check is handed (`watchFetch`). */
-  fetch: typeof fetch;
+  /** The `fetch` one check is handed (`watchFetch`), built anew for each check. */
+  fetchFor: () => typeof fetch;
   now?: () => number;
   log?: (line: string) => void;
   warn?: (line: string) => void;
@@ -87,6 +129,10 @@ export type FirstLook = { ok: true; result: WatcherResult; at: string } | { ok: 
 export class WatchRunner {
   private timer: ReturnType<typeof setInterval> | undefined;
   private looking: Promise<void> | undefined;
+  /** Whether another look was asked for while one was going. */
+  private again = false;
+  /** A look asked for after a check or a wake ended, waiting for the event loop's next turn. */
+  private soon: Promise<void> | undefined;
   private stopped = false;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
@@ -117,62 +163,114 @@ export class WatchRunner {
 
   /** Resolves once every check and wake going now has finished: what a test waits for. */
   async idle(): Promise<void> {
-    while (this.looking || running.size || telling.size) {
-      await Promise.allSettled([this.looking, ...running.values(), ...telling.values()]);
+    while (this.looking || this.soon || running.size || telling.size) {
+      await Promise.allSettled([this.looking, this.soon, ...running.values(), ...telling.values()]);
     }
   }
 
   /**
+   * Look again once the event loop has had a turn: after a check or a wake
+   * ends, which may have freed a slot or an owner. Deferred rather than
+   * chained, so that a look that keeps finding work never runs as one unbroken
+   * chain of promises, which would starve every timer and socket in the process.
+   */
+  private lookSoon(): void {
+    if (this.stopped || this.soon) return;
+    this.soon = new Promise<void>((resolve) => setImmediate(resolve)).then(() => {
+      this.soon = undefined;
+      return this.tick();
+    });
+  }
+
+  /**
    * One look: start checks for due watches while there's room, and try again
-   * to tell owners whose wake is owed. Only one look at a time per runner; a
-   * look asked for while one is going is folded into it.
+   * to tell owners whose wake is owed. Only one look at a time per runner. A
+   * look asked for while one is going runs once that one ends, since the one
+   * going may already have read past what the asker freed: a check slot, or
+   * an owner's turn.
    */
   tick(): Promise<void> {
     if (this.stopped) return Promise.resolve();
-    if (!this.looking) {
-      this.looking = this.look()
-        .catch((err: unknown) => this.warn(`couldn't look for due watches: ${(err as Error).message}`))
-        .finally(() => {
-          this.looking = undefined;
-        });
+    if (this.looking) {
+      this.again = true;
+      return this.looking;
     }
+    this.looking = this.look()
+      .catch((err: unknown) => this.warn(`couldn't look for due watches: ${(err as Error).message}`))
+      .finally(() => {
+        this.looking = undefined;
+        if (this.again) {
+          this.again = false;
+          void this.tick();
+        }
+      });
     return this.looking;
   }
 
   private async look(): Promise<void> {
-    const iso = new Date(this.now()).toISOString();
+    const now = this.now();
+    const iso = new Date(now).toISOString();
     const service = this.opts.service();
     if (running.size < MAX_RUNNING) {
-      const due = await service.query(READER, {
+      // Due by the record, and among those, due by the schedule kept in memory too. One a
+      // person made on the State page may have no checkAt at all: due now.
+      const stored = await this.readAll(service, {
         type: WATCH_TYPE,
         where: { status: "active", checkAt: { lte: iso } },
-        orderBy: { field: "checkAt", direction: "asc" },
-        limit: DUE_READ,
       });
-      // One a person made on the State page may have no checkAt at all: due now.
-      const unscheduled = await service.query(READER, {
-        type: WATCH_TYPE,
-        where: { status: "active", checkAt: null },
-        limit: DUE_READ,
-      });
-      for (const record of [...unscheduled, ...due]) {
+      const unscheduled = await this.readAll(service, { type: WATCH_TYPE, where: { status: "active", checkAt: null } });
+      const due = [...unscheduled, ...stored]
+        .filter((record) => !running.has(record.id) && dueAt(record) <= now)
+        .sort((a, b) => dueAt(a) - dueAt(b));
+      for (const record of due) {
         if (this.stopped || running.size >= MAX_RUNNING) break;
-        if (running.has(record.id)) continue;
         const job = this.check(record)
-          .catch((err: unknown) => this.warn(`watch ${record.id} wasn't recorded: ${(err as Error).message}`))
+          .catch((err: unknown) => {
+            this.warn(`watch ${record.id} wasn't recorded: ${(err as Error).message}`);
+            // Not straight back into a check that will fail the same way.
+            schedule.set(record.id, { at: this.now() + STUCK_RETRY_MS, checkAt: record.data.checkAt });
+          })
           .finally(() => {
             running.delete(record.id);
             // A slot just came free: look again rather than leave it empty until the next tick.
-            if (!this.stopped) void this.tick();
+            this.lookSoon();
           });
         running.set(record.id, job);
       }
     }
-    const owed = await service.query(READER, { type: WATCH_TYPE, where: { tellAt: { lte: iso } }, limit: DUE_READ });
+    const owed = await this.readAll(service, { type: WATCH_TYPE, where: { tellAt: { lte: iso } } });
     for (const record of owed) {
       if (this.stopped) break;
-      this.tellChange(record);
+      if ((retries.get(record.id) ?? 0) > now) continue;
+      this.tellOwner(record);
     }
+  }
+
+  /**
+   * Every record a query matches, read a page at a time until one comes back
+   * empty, so a store that caps its pages lower than asked is still read to
+   * the end. Stops too at a page with nothing new, for a store that ignores
+   * `offset`, and at {@link READ_MOST}.
+   */
+  private async readAll(service: StateService, query: StateQueryInput): Promise<StateRecord[]> {
+    const seen = new Map<string, StateRecord>();
+    for (let offset = 0; seen.size < READ_MOST; ) {
+      const page = await service.query(READER, {
+        ...query,
+        orderBy: { field: "id", direction: "asc" },
+        limit: READ_PAGE,
+        offset,
+      });
+      let fresh = 0;
+      for (const record of page) {
+        if (seen.has(record.id)) continue;
+        seen.set(record.id, record);
+        fresh++;
+      }
+      if (fresh === 0) break;
+      offset += page.length;
+    }
+    return [...seen.values()];
   }
 
   /**
@@ -209,7 +307,7 @@ export class WatchRunner {
           kind.check(config, previous, {
             now: new Date(this.now()),
             signal: controller.signal,
-            fetch: this.opts.fetch,
+            fetch: this.opts.fetchFor(),
           }),
         ),
         timedOut,
@@ -220,15 +318,27 @@ export class WatchRunner {
     }
   }
 
-  /** Check one due watch and write down what it found. */
-  private async check(record: StateRecord): Promise<void> {
+  /** Check one due watch and write down what it found, when it found anything. */
+  private async check(listed: StateRecord): Promise<void> {
+    const service = this.opts.service();
+    const ref = { type: WATCH_TYPE, id: listed.id };
+    // Read again: the look's copy may be from before another check of it finished, and
+    // checking from that copy's snapshot would report the same change twice.
+    const record = await service.get(READER, ref);
+    if (!record || record.archivedAt || statusOf(record) !== "active" || dueAt(record) > this.now()) return;
     const started = this.now();
     const at = new Date(started).toISOString();
     const owner = ownerOf(record);
     const writer = writerFor(owner ?? "");
-    const service = this.opts.service();
-    const ref = { type: WATCH_TYPE, id: record.id };
     const name = String(record.data.kind ?? "");
+
+    // Things only a person can put right pause the watch, saying why, rather than wake anyone.
+    const mismatch = ownerProblem(record);
+    if (mismatch) {
+      this.warn(`watch ${record.id} is paused: ${mismatch}`);
+      await service.patch(writer, ref, { status: "paused", tellAt: null, lastError: mismatch });
+      return;
+    }
 
     const kind = this.opts.kinds.get(name);
     if (!kind) {
@@ -236,21 +346,37 @@ export class WatchRunner {
         this.warnedKinds.add(name);
         this.warn(`no loaded plugin brings the "${name}" kind, so watches of it wait`);
       }
+      const waiting = `No loaded plugin brings the "${name}" kind, so it can't be checked.`;
+      if (record.data.lastError === waiting) {
+        schedule.set(record.id, { at: started + NO_KIND_RETRY_MS, checkAt: record.data.checkAt });
+        return;
+      }
+      schedule.delete(record.id);
       await service.patch(writer, ref, {
         checkAt: new Date(started + NO_KIND_RETRY_MS).toISOString(),
-        lastError: `No loaded plugin brings the "${name}" kind, so it can't be checked.`,
+        lastError: waiting,
       });
       return;
     }
 
     const config = configOf(record);
+    // The tool checks settings before it saves them; a person's edit on the State page can still break them.
+    const problems = this.opts.kinds.validate(kind, config);
+    if (problems.length) {
+      const why = clip(`Its settings don't suit a ${kind.kind} watch: ${problems.join(" ")}`, ERROR_CHARS);
+      this.warn(`watch ${record.id} is paused: ${why}`);
+      await service.patch(writer, ref, { status: "paused", tellAt: null, lastError: why });
+      return;
+    }
+
     const basis = basisOf(kind.kind, config);
     const previous = previousOf(record, basis);
     const interval = this.opts.kinds.interval(kind, record.data.every);
     const fallback = this.opts.kinds.interval(kind);
     const everyMs =
       typeof interval === "string" ? (typeof fallback === "string" ? NO_KIND_RETRY_MS : fallback.ms) : interval.ms;
-    const checkAt = new Date(started + everyMs).toISOString();
+    const nextAt = started + everyMs;
+    const checkAt = new Date(nextAt).toISOString();
 
     let result: WatcherResult | undefined;
     let error: string | undefined;
@@ -262,88 +388,130 @@ export class WatchRunner {
 
     // What a person or the owner did while it ran wins: paused, removed, or its settings changed.
     const now = await service.get(READER, ref);
-    if (!now || now.archivedAt || statusOf(now) !== "active") return;
+    if (!now || now.archivedAt || statusOf(now) !== "active") {
+      schedule.delete(record.id);
+      return;
+    }
     if (now.data.kind !== record.data.kind || basisOf(kind.kind, configOf(now)) !== basis) return;
 
     if (error !== undefined) {
       const failures = (typeof now.data.failures === "number" ? now.data.failures : 0) + 1;
       const broken = failures >= MAX_FAILURES;
+      schedule.delete(record.id);
       const saved = await service.patch(writer, ref, {
         checkAt,
         failures,
         lastError: clip(error, ERROR_CHARS),
-        ...(broken ? { status: "broken" } : {}),
+        // Broken is news the owner is owed, like a change.
+        ...(broken ? { status: "broken", tellAt: at } : {}),
       });
       this.log(`watch ${record.id} failed (${failures} in a row): ${error}`);
-      if (broken) this.tellBroken(saved);
+      if (broken) this.tellOwner(saved);
       return;
     }
 
     const found = result as WatcherResult;
-    // A change found while the owner is still in a turn about the last one is owed now, and told when that turn ends.
-    const busy = found.change !== undefined && telling.has(record.id);
+    const snapshot = { basis, data: found.snapshot };
+    const quiet =
+      found.change === undefined &&
+      sameJson(snapshot, now.data.snapshot) &&
+      sameJson(found.value ?? null, now.data.lastValue ?? null) &&
+      !now.data.failures &&
+      now.data.lastError === undefined;
+    if (quiet) {
+      // Nothing to write down: the next due time is kept here, against the checkAt the record has now.
+      schedule.set(record.id, { at: nextAt, checkAt: now.data.checkAt });
+      return;
+    }
+
+    schedule.delete(record.id);
     const saved = await service.patch(writer, ref, {
       checkAt,
       checkedAt: at,
-      snapshot: { basis, data: found.snapshot },
+      snapshot,
       lastValue: found.value ?? null,
       failures: 0,
       lastError: null,
-      ...(found.change ? { lastChange: { at, text: found.change }, tellAt: busy ? at : null } : {}),
+      ...(found.change ? { lastChange: { at, text: found.change }, tellAt: at } : {}),
     });
     if (found.change) {
       this.log(`watch ${record.id} changed: ${found.change}`);
-      this.tellChange(saved);
+      this.tellOwner(saved);
     }
   }
 
-  /** Wake the owner about the watch's last change, once at a time per watch. */
-  private tellChange(record: StateRecord): void {
-    if (telling.has(record.id)) return;
-    const job = this.tell(record).finally(() => telling.delete(record.id));
-    telling.set(record.id, job);
-  }
-
-  private async tell(record: StateRecord): Promise<void> {
+  /**
+   * Wake the owner about what its watch is owed: the last change, or that it
+   * broke. One watch at a time per owner; another owed meanwhile keeps its
+   * `tellAt`, and is told on the look after this turn ends.
+   */
+  private tellOwner(record: StateRecord): void {
     const owner = ownerOf(record);
-    const change = record.data.lastChange as { at?: unknown; text?: unknown } | undefined;
-    if (!owner || typeof change?.text !== "string") return this.settle(record, { tellAt: null });
-    const outcome = await this.wakeOwner(owner, record, changePrompt(record, this.now()));
-    if (outcome === "paused" || outcome === "at-ceiling") {
-      const since = typeof change.at === "string" ? Date.parse(change.at) : Number.NaN;
-      if (Number.isFinite(since) && this.now() - since > OWED_FOR_MS) {
-        this.log(
-          `gave up telling ${owner} about watch ${record.id}: it has been a day; the change stays on the record`,
-        );
-        return this.settle(record, { tellAt: null });
-      }
-      this.log(`${owner} wasn't woken for watch ${record.id} (${outcome}); trying again in a few minutes`);
-      return this.settle(record, { tellAt: new Date(this.now() + TELL_RETRY_MS).toISOString() });
+    if (!owner) {
+      void this.settle(record, { tellAt: null });
+      return;
     }
-    if (outcome === "gone") return this.ownerGone(owner, record);
-    // Told. A newer change found while the turn ran is still owed, so its tellAt stays.
+    if (telling.has(owner)) return;
+    const job = this.tell(record, owner)
+      .catch((err: unknown) => this.warn(`couldn't tell ${owner} about watch ${record.id}: ${(err as Error).message}`))
+      .finally(() => {
+        telling.delete(owner);
+        this.lookSoon();
+      });
+    telling.set(owner, job);
+  }
+
+  private async tell(record: StateRecord, owner: string): Promise<void> {
+    const now = this.now();
+    // Whatever happens below, not tried again before the retry is due.
+    retries.set(record.id, now + TELL_RETRY_MS);
+    // Read again: a person may have paused it, or a newer change come in, since this was owed.
     const current = await this.opts
       .service()
       .get(READER, { type: WATCH_TYPE, id: record.id })
       .catch(() => null);
-    const latest = current?.data.lastChange as { at?: unknown } | undefined;
-    if (current && current.data.tellAt !== undefined && latest?.at === change.at) {
-      await this.settle(record, { tellAt: null });
+    if (!current || current.archivedAt || current.data.tellAt === undefined) {
+      retries.delete(record.id);
+      return;
     }
-  }
+    const status = statusOf(current);
+    const problem = ownerProblem(current);
+    if (status === "paused" || problem) {
+      retries.delete(record.id);
+      return this.settle(current, problem ? { status: "paused", tellAt: null, lastError: problem } : { tellAt: null });
+    }
+    // tellAt is when the news came, so a change owed is the one seen then. Anything else (a
+    // broken watch resumed before its notice went out, say) leaves nothing standing to tell.
+    const change = current.data.lastChange as { at?: unknown; text?: unknown } | undefined;
+    const broken = status === "broken";
+    if (!broken && (typeof change?.text !== "string" || change.at !== current.data.tellAt)) {
+      retries.delete(record.id);
+      return this.settle(current, { tellAt: null });
+    }
+    const since = Date.parse(String(current.data.tellAt));
+    if (Number.isFinite(since) && now - since > OWED_FOR_MS) {
+      this.log(`gave up telling ${owner} about watch ${record.id}: it has been a day; the record keeps what happened`);
+      retries.delete(record.id);
+      return this.settle(current, { tellAt: null });
+    }
 
-  /** Tell the owner, once, that its watch stopped. The record says so too, and stays broken until resumed. */
-  private tellBroken(record: StateRecord): void {
-    const owner = ownerOf(record);
-    if (!owner || telling.has(record.id)) return;
-    const job = this.wakeOwner(owner, record, brokenPrompt(record))
-      .then((outcome) => {
-        if (outcome === "gone") return this.ownerGone(owner, record);
-        if (outcome !== "ran")
-          this.log(`${owner} wasn't told watch ${record.id} broke (${outcome}); the record says so`);
-      })
-      .finally(() => telling.delete(record.id));
-    telling.set(record.id, job);
+    const prompt = broken ? brokenPrompt(current) : changePrompt(current, now);
+    const outcome = await this.wakeOwner(owner, current, prompt);
+    if (outcome === "paused" || outcome === "at-ceiling") {
+      // Still owed, and nothing written: the retry is kept in memory, and tellAt already says it's owed.
+      this.log(`${owner} wasn't woken for watch ${record.id} (${outcome}); trying again in a few minutes`);
+      return;
+    }
+    retries.delete(record.id);
+    if (outcome === "gone") return this.ownerGone(owner, current);
+    // Told. News that came in while the turn ran has its own tellAt, which stays owed.
+    const after = await this.opts
+      .service()
+      .get(READER, { type: WATCH_TYPE, id: record.id })
+      .catch(() => null);
+    if (after && !after.archivedAt && after.data.tellAt === current.data.tellAt) {
+      await this.settle(after, { tellAt: null });
+    }
   }
 
   private async wakeOwner(owner: string, record: StateRecord, prompt: string): Promise<WakeOutcome | "failed"> {
@@ -367,7 +535,7 @@ export class WatchRunner {
     });
   }
 
-  /** A bookkeeping write after a wake, which may find the watch removed in the turn it started. */
+  /** A bookkeeping write around a wake, which may find the watch removed in the turn it started. */
   private async settle(record: StateRecord, changes: Record<string, unknown>): Promise<void> {
     try {
       await this.opts.service().patch(writerFor(ownerOf(record) ?? ""), { type: WATCH_TYPE, id: record.id }, changes);

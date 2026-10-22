@@ -31,7 +31,7 @@ import { WatchTool } from "./watchers-tool.js";
 
 /** The most a check reads of one answer. A page past this is refused, and the check fails. */
 export const MAX_PAGE_BYTES = 2 * 1_048_576;
-/** The least time between two requests to one host, across every watch. */
+/** The least time between two checks reaching one host, across every watch. */
 export const HOST_SPACING_MS = 10_000;
 
 /**
@@ -72,12 +72,14 @@ const plugin: Plugin = (ctx) => {
     service: () => runtime.getStateService(),
     kinds: ctx.watcherKinds,
     wake: (agent, opts) => runtime.wakeAgent(agent, opts),
-    // The policy is read per request, so a reload that changes `security.egress` applies to the next check.
-    fetch: watchFetch({
-      policy: () => createEgressPolicy(runtime.getConfig().security?.egress),
-      spacingMs: HOST_SPACING_MS,
-      maxBytes: MAX_PAGE_BYTES,
-    }),
+    // One per check, so host spacing admits a check once per host. The policy is read per
+    // request, so a reload that changes `security.egress` applies to the next check.
+    fetchFor: () =>
+      watchFetch({
+        policy: () => createEgressPolicy(runtime.getConfig().security?.egress),
+        spacingMs: HOST_SPACING_MS,
+        maxBytes: MAX_PAGE_BYTES,
+      }),
   });
   live = runner;
   disposers.push(() => {

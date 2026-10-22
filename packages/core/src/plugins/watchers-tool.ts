@@ -28,9 +28,16 @@ import {
   whereOf,
   writerFor,
 } from "./watchers-records.js";
-import type { WatchRunner } from "./watchers-runner.js";
+import { nextCheckAt, type WatchRunner } from "./watchers-runner.js";
 
 export const WATCH_ACTIONS = ["add", "list", "pause", "resume", "remove"];
+
+/**
+ * The tool's own parameters. A kind's setting of one of these names is never
+ * lifted from beside `config`, since the argument is the tool's: a mail kind's
+ * `label` setting has to be sent inside `config`.
+ */
+export const TOOL_PARAMS: ReadonlySet<string> = new Set(["action", "id", "kind", "config", "label", "every", "note"]);
 
 /** What a call says once the plugin is turned off: only a call already running when it went can see this. */
 export const TURNED_OFF = "Watchers are turned off, so this tool does nothing now.";
@@ -85,7 +92,6 @@ export class WatchTool implements Tool {
           type: "string",
           description: "add: what to do when it changes, such as who to tell. You'll see it then.",
         },
-        commitment: { type: "string", description: "add: the id of a commitment this watch is for." },
       },
       required: ["action"],
     };
@@ -146,7 +152,6 @@ export class WatchTool implements Tool {
     if (label.length > LABEL_CHARS) return fail(`Keep the label to ${LABEL_CHARS} characters.`);
     const note = text(args.note);
     if (note && note.length > NOTE_CHARS) return fail(`Keep the note to ${NOTE_CHARS} characters.`);
-    const commitment = text(args.commitment);
 
     const service = this.opts.service();
     const mine = await this.mine(caller);
@@ -182,7 +187,6 @@ export class WatchTool implements Tool {
       failures: 0,
       ...(look.result.value !== undefined ? { lastValue: look.result.value } : {}),
       ...(note ? { note } : {}),
-      ...(commitment ? { commitment } : {}),
     };
     const record = await service.put(writerFor(me, this.name), { type: WATCH_TYPE, scope: `agent:${me}`, data });
     const lines = [
@@ -222,6 +226,8 @@ export class WatchTool implements Tool {
       status: "active",
       failures: 0,
       lastError: null,
+      // A notice that it broke, still owed, is moot once its owner has resumed it.
+      tellAt: null,
       checkAt: new Date(this.now()).toISOString(),
     });
     return ok(`Resumed ${record.id}. It's checked again within a minute.`);
@@ -270,7 +276,8 @@ export class WatchTool implements Tool {
 
 /**
  * A watch's settings from a call: `config` as an object, as JSON text, or as
- * a bare address; then any of the kind's own settings sent beside it moved in,
+ * a bare address; then any of the kind's own settings sent beside it moved in
+ * (except one named like a parameter of the tool, see {@link TOOL_PARAMS}),
  * and numbers sent as text ("5", "5%") read as numbers. A string back is the
  * correction to send.
  */
@@ -294,7 +301,8 @@ export function settingsFrom(kind: WatcherKind, args: Record<string, unknown>): 
   const config: Record<string, unknown> = { ...((raw as Record<string, unknown> | undefined) ?? {}) };
   const properties = kind.schema.properties ?? {};
   for (const [name, schema] of Object.entries(properties)) {
-    if (config[name] === undefined && args[name] !== undefined && args[name] !== null && args[name] !== "") {
+    const lift = !TOOL_PARAMS.has(name) && args[name] !== undefined && args[name] !== null && args[name] !== "";
+    if (config[name] === undefined && lift) {
       config[name] = args[name];
     }
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
@@ -343,7 +351,7 @@ export function watchLine(record: StateRecord, now: number): string {
   if (status === "active") {
     if (typeof d.failures === "number" && d.failures > 0)
       parts.push(`last check failed: ${clip(String(d.lastError ?? ""), 100)}`);
-    const next = relative(d.checkAt, now);
+    const next = relative(nextCheckAt(record), now);
     if (next) parts.push(`next check ${next.endsWith("ago") ? "now" : next}`);
   }
   return parts.join(", ");
