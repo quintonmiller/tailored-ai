@@ -32,7 +32,7 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { pinnedLoad } from "../agent/memory-inject.js";
-import type { WakeOutcome } from "../agent/wake.js";
+import type { WakeRefusal } from "../agent/wake.js";
 import type { MemoryBackend, MemoryFragment } from "../memory/interface.js";
 import { memoryScope } from "../memory/scope.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
@@ -54,7 +54,7 @@ import {
   UPKEEP_SESSIONS,
 } from "./directory-records.js";
 import { type RoomInfo, roomOwner } from "./directory-rooms.js";
-import { parseTend, parseTime, REFUSED_WORDS, type TendSettings, type TurnOutcome } from "./places-tend.js";
+import { parseTend, parseTime, type TendSettings, type TurnOutcome } from "./places-tend.js";
 
 /** Upkeep as configured: when it runs by itself, and the bars its evidence is counted against. */
 export interface UpkeepSettings {
@@ -637,9 +637,10 @@ export interface UpkeepOptions {
   session: (agent: string) => { id: string };
   /**
    * Run the agent's turn in that session with `message`, taking at most
-   * `maxRounds` rounds of tool calls: "ran", or why the waker turned it away.
+   * `maxRounds` rounds of tool calls: "ran", or what the waker said when it
+   * turned the turn away, with why in words for the page.
    */
-  run: (agent: string, session: { id: string }, message: string, maxRounds: number) => Promise<WakeOutcome>;
+  run: (agent: string, session: { id: string }, message: string, maxRounds: number) => Promise<"ran" | WakeRefusal>;
 }
 
 /** What upkeep found for one agent. */
@@ -996,24 +997,24 @@ export class Upkeep {
       });
       const session = this.opts.session(agent);
       UPKEEP_SESSIONS.add(session.id);
-      let outcome: WakeOutcome;
+      let ran: "ran" | WakeRefusal;
       try {
-        outcome = await this.opts.run(agent, session, message, this.opts.settings.maxRounds);
+        ran = await this.opts.run(agent, session, message, this.opts.settings.maxRounds);
       } finally {
         UPKEEP_SESSIONS.delete(session.id);
       }
-      if (outcome !== "ran") {
+      if (ran !== "ran") {
         const was = record?.data ?? {};
         await directory.saveUpkeep(agent, () =>
           opts.force
-            ? { error: REFUSED_WORDS[outcome], failedAt: directory.now().toISOString() }
+            ? { error: ran.why, failedAt: directory.now().toISOString() }
             : {
                 started: text(was.started) ?? null,
                 error: text(was.error) ?? null,
                 failedAt: text(was.failedAt) ?? null,
               },
         );
-        return outcome;
+        return ran.outcome;
       }
 
       const changed = await this.changes(agent, started);

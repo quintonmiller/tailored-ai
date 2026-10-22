@@ -376,9 +376,12 @@ describe("runtime.wakeAgent", () => {
     for (let i = 0; i < 3; i++) expect(runtime.wakeRefusal("planner", where)).toBeUndefined();
     expect(requests).toBe(0);
     expect(await wakeOf(runtime)).toBe("ran");
+    // Ten minutes on, it says when the hour has room: an hour after the wake that fills it.
+    vi.setSystemTime(new Date("2026-10-21T09:10:00Z"));
     expect(runtime.wakeRefusal("planner", where)).toEqual({
       outcome: "at-ceiling",
       why: "it's at its wake ceiling: 1 wake in the last hour",
+      until: Date.parse("2026-10-21T10:00:00Z"),
     });
     expect(runtime.wakeRefusal("reviewer", { sessionKey: "upkeep:reviewer" })).toBeUndefined();
     expect(runtime.wakeRefusal("nobody", where)).toEqual({ outcome: "gone", why: "there's no agent called nobody" });
@@ -419,6 +422,23 @@ describe("runtime.wakeAgent", () => {
         AgentRuntime["wakeAgent"]
       >[1]),
     ).rejects.toThrow(/needs a sessionKey, a sessionId or a room/);
+  });
+
+  it("refuses what it can't honour rather than dropping it: two places at once, or a round budget for a room", async () => {
+    const runtime = makeRuntime();
+    const session = runtime.findOrCreateSession({ key: "web:planner" });
+    const untyped = (opts: Record<string, unknown>) =>
+      runtime.wakeAgent("planner", { prompt: "x", wake: upkeep, ...opts } as unknown as Parameters<
+        AgentRuntime["wakeAgent"]
+      >[1]);
+    await expect(untyped({ sessionKey: "upkeep:planner", sessionId: session.id })).rejects.toThrow(
+      /takes one of sessionKey, sessionId and room, not several/,
+    );
+    await expect(untyped({ sessionKey: "upkeep:planner", room: "kitchen" })).rejects.toThrow(/not several/);
+    await expect(untyped({ room: "kitchen", maxToolRounds: 2 })).rejects.toThrow(
+      /maxToolRounds applies to a session turn, not a room's/,
+    );
+    expect(requests).toBe(0);
   });
 });
 
@@ -554,6 +574,20 @@ describe("notify_owner", () => {
       preview: "The nightly build is red.",
     });
     expect(announced[0].logId).toEqual(expect.any(Number));
+  });
+
+  it("sends a reminder the agent booked every time it comes round, the same words or not", async () => {
+    const runtime = makeRuntime();
+    const sent = withOutbound(runtime);
+    const reminder = [{ name: "notify_owner", arguments: { message: "Time to stretch." } }];
+    const booked = { prompt: "Act on the note.", sessionKey: "web:planner", wake: { kind: "schedule", ref: "sch_1" } };
+
+    queue = [reminder];
+    expect(await runtime.wakeAgent("planner", booked)).toBe("ran");
+    queue = [reminder];
+    expect(await runtime.wakeAgent("planner", booked)).toBe("ran");
+
+    expect(sent).toEqual(["Time to stretch.", "Time to stretch."]);
   });
 
   it("sends every time a person asks in their own chat", async () => {

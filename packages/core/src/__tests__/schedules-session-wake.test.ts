@@ -180,7 +180,7 @@ describe("a wake booked in a session", () => {
     ).toBe("at-ceiling");
   });
 
-  it("is deferred at the agent's hourly ceiling, as a room's is, and runs once the hour has room", async () => {
+  it("waits at the agent's hourly ceiling until the hour has room, without giving up, and says how late it is", async () => {
     const runtime = makeRuntime(1);
     const runner = runnerFor(runtime);
     const session = runtime.findOrCreateSession({ key: "web:planner" });
@@ -190,21 +190,45 @@ describe("a wake booked in a session", () => {
     asked = [];
     probed = [];
     const row = booked("planner", session.id);
+    const due = store.get(row.id)?.next_run_at;
+    const asks = vi.spyOn(runtime, "wakeAgent");
 
     await runner.tick();
     expect(asked).toEqual([]);
+    // Back in the due set, as late as it is, without counting toward the retries that give up on a room.
+    expect(store.get(row.id)).toMatchObject({ status: "pending", deferrals: 0, run_count: 0, next_run_at: due });
+    expect(logs).toContain(
+      `[schedules] ${row.id} (planner) held for 60m: it's at its wake ceiling: 1 wake in the last hour`,
+    );
+
+    // Every tick of the hour, thirty seconds apart: it isn't asked again before the hour has room, and isn't dropped.
+    for (let i = 0; i < 119; i++) {
+      later(30_000);
+      await runner.tick();
+    }
+    expect(asks).toHaveBeenCalledTimes(1);
+    expect(asked).toEqual([]);
+    expect(store.get(row.id)).toMatchObject({ status: "pending", deferrals: 0, next_run_at: due });
+
+    later(30_000);
+    await runner.tick();
+    expect(probed).toEqual([{ kind: "schedule", ref: row.id }]);
+    expect(asked[0]).toContain("This fired 1h late.");
+    expect(store.get(row.id)).toMatchObject({ status: "done", run_count: 1, deferrals: 0 });
+  });
+
+  it("defers a recurring occurrence at the ceiling a few times, as a room's is, since the next one comes round", async () => {
+    const runtime = makeRuntime(1);
+    const session = runtime.findOrCreateSession({ key: "web:planner" });
+    expect(
+      await runtime.wakeAgent("planner", { prompt: "x", sessionKey: "watch:planner", wake: { kind: "watch" } }),
+    ).toBe("ran");
+    const row = booked("planner", session.id, { kind: "repeat", intervalSeconds: 3600, source: "every hour" });
+
+    await runnerFor(runtime).tick();
     const deferred = store.get(row.id);
     expect(deferred).toMatchObject({ status: "pending", deferrals: 1, run_count: 0 });
     expect(fromDbTime(deferred?.next_run_at ?? "").getTime()).toBe(Date.now() + 5 * MINUTE);
-
-    // Within the hour the next try is deferred again; past it, the wake runs.
-    later(5 * MINUTE);
-    await runner.tick();
-    expect(store.get(row.id)).toMatchObject({ status: "pending", deferrals: 2 });
-    later(56 * MINUTE);
-    await runner.tick();
-    expect(probed).toEqual([{ kind: "schedule", ref: row.id }]);
-    expect(store.get(row.id)).toMatchObject({ status: "done", run_count: 1, deferrals: 0 });
   });
 
   it("waits while its online agent is switched off on its own, as for a pause, and still says how late it is", async () => {

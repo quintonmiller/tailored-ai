@@ -23,7 +23,6 @@ import {
   Tender,
   type TurnOutcome,
   tendMessage,
-  turnRunning,
   turnSession,
   UPKEEP_KIND,
 } from "../plugins/places-tend.js";
@@ -444,7 +443,6 @@ describe("tending, as time goes by", () => {
     );
     expect(first).toBeDefined();
     expect(busy("upkeep", "writer")).toBe(true);
-    expect(turnRunning()).toBe(true);
     expect(runNow("upkeep", "writer", async () => "again")).toBeUndefined();
     // One at a time holds for every kind and agent, not only this one.
     expect(runNow("upkeep", "planner", async () => "beside")).toBeUndefined();
@@ -469,7 +467,6 @@ describe("tending, as time goes by", () => {
     release();
     expect(await first).toBe("woken");
     expect(busy("upkeep", "writer")).toBe(false);
-    expect(turnRunning()).toBe(false);
   });
 
   it("skips a turn while an agent can't be tended, and doesn't save it up for after", async () => {

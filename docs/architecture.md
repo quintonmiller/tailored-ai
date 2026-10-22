@@ -112,11 +112,15 @@ the same things. The outcome says which:
   A room wake resolves once the room's queued turns ahead of it have run, so a
   tool can't wait on one in the room its own turn is in: that wake comes back
   `at-ceiling` straight away.
+- Give one of `sessionKey`, `sessionId` and `room`. More than one, or
+  `maxToolRounds` with a room, throws rather than running the turn somewhere
+  you didn't mean or without its cap.
 - **`wake`** says why the turn runs: `kind` in your own word, `ref` for which
   one. The turn's tools see it as `ToolContext.wake`,
   [`agent.pre_tool_use`](#agentpre_tool_use-and-agentpost_tool_use) carries it,
   and `notify_owner` treats the turn as unprompted, so a repeat goes through the
-  [repeat gate](./notifications.md). It carries over to an agent the turn
+  [repeat gate](./notifications.md); a wake an agent booked (`schedule`) is the
+  exception, since a reminder repeats on purpose. It carries over to an agent the turn
   delegates to or messages, and a room's activity line shows it as why the
   agent woke.
 - **`agent.woken`** is emitted once a wake has passed the pause and the ceiling
@@ -136,7 +140,11 @@ if (refused) return { status: 409, json: { error: `planner can't tidy up now: ${
 
 It's for a caller that answers before its turn starts, like a route that
 replies and runs the turn after, or one with a lot to read before it wakes the
-agent. The wake checks again when it comes.
+agent. The wake checks again when it comes. At the hourly ceiling the refusal
+also has `until`, when the hour next has room (ms since the epoch), for a
+caller that waits rather than giving up. The waker turns a wake away before it
+lets go of the event loop, so asking straight after a refused wake gives its
+reason.
 
 The places plugin's [tend](./live-sessions.md#rooms-that-follow-the-work), the
 directory's [upkeep](./directory.md#upkeep) and the wakes agents
@@ -144,7 +152,8 @@ directory's [upkeep](./directory.md#upkeep) and the wakes agents
 through here too, so each takes one of the agent's wakes for the hour, and its
 tools see why it runs (`tend`, `upkeep`, `schedule`). At the ceiling a tend or
 an upkeep is skipped until the agent's next time, **Tidy up now** answers with
-why, and a booked wake is deferred the way a room's is.
+why, a one-shot booked in a session waits until the hour has room, and a
+recurring one is deferred the way a room's is.
 
 ## Factories (`packages/core/src/factories.ts`)
 

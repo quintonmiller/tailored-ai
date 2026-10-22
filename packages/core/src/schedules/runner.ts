@@ -18,7 +18,8 @@
  * **A session wake goes through `runtime.wakeAgent`.** It stops for what every
  * turn nobody asked for stops for, counts toward the agent's hourly wake
  * ceiling, and its tools see it as `{ kind: "schedule", ref: <schedule id> }`.
- * A room wake goes through the room watcher, which applies the room's own.
+ * A one-shot the waker turns away waits until it can run rather than being
+ * lost. A room wake goes through the room watcher, which applies the room's own.
  */
 
 import type { WakeOutcome } from "../agent/wake.js";
@@ -46,6 +47,9 @@ const FALLBACK_MAX_DEFERRALS = 3;
 /** How long a wake refused by a wake ceiling, or held while its agent is paused, waits before trying again. */
 const DEFER_MINUTES = 5;
 
+/** What a held one-shot waits for: its agent's own pause to lift, or its hourly wake ceiling to have room. */
+type HeldFor = "paused" | "at-ceiling";
+
 export class ScheduleRunner {
   private readonly runtime: AgentRuntime;
   private readonly store: ScheduleStore;
@@ -55,10 +59,11 @@ export class ScheduleRunner {
   /** In-flight ids, so a long turn is not counted twice by overlapping ticks. */
   private running = new Set<string>();
   /**
-   * One-shots held because their agent is switched off or paused on its own,
-   * by id, with when to look again. In memory: a restart looks at once.
+   * One-shots booked in a session that are waiting, by id, with when to look
+   * again and what for: their agent switched off or paused on its own, or its
+   * hourly wake ceiling. In memory: a restart looks at once.
    */
-  private readonly held = new Map<string, number>();
+  private readonly held = new Map<string, { at: number; for: HeldFor }>();
 
   constructor(opts: ScheduleRunnerOptions) {
     this.runtime = opts.runtime;
@@ -110,7 +115,7 @@ export class ScheduleRunner {
     const now = this.now();
     for (const row of this.store.listDue(now)) {
       if (this.running.has(row.id)) continue;
-      if ((this.held.get(row.id) ?? 0) > now.getTime()) continue;
+      if ((this.held.get(row.id)?.at ?? 0) > now.getTime()) continue;
       try {
         await this.fire(row);
       } catch (err) {
@@ -164,7 +169,7 @@ export class ScheduleRunner {
     try {
       const lateBy = now.getTime() - due.getTime();
       const outcome = await this.dispatch(row, lateBy);
-      if (outcome !== "paused") this.held.delete(row.id);
+      if (outcome === "ran" || outcome === "gone") this.held.delete(row.id);
       if (outcome === "at-ceiling") this.handleDeferral(row);
       if (outcome === "paused") this.holdWhilePaused(row);
       if (outcome === "gone") {
@@ -201,12 +206,19 @@ export class ScheduleRunner {
    * ceiling, or a turn is still running where it would land. Try again
    * shortly rather than dropping it, but not forever: an agent permanently at
    * its limit would otherwise collect a retry every five minutes for ever.
+   * A one-shot booked in a session waits instead (`holdAtCeiling`).
    */
   private handleDeferral(row: ScheduleRow): void {
+    if (row.target_kind === "session" && row.kind === "once") {
+      this.holdAtCeiling(row);
+      return;
+    }
     const max = this.settings()?.maxDeferrals ?? FALLBACK_MAX_DEFERRALS;
     if (row.deferrals >= max) {
+      // A session's ceiling is its agent's own; a room's is the room's.
+      const full = row.target_kind === "session" ? row.agent : row.target;
       console.warn(
-        `[schedules] ${row.id} (${row.agent}) gave up after ${max} deferrals — ${row.target} is at its wake ceiling`,
+        `[schedules] ${row.id} (${row.agent}) gave up after ${max} deferrals — ${full} is at its wake ceiling`,
       );
       if (row.kind === "once") this.store.setStatus(row.id, "expired");
       return;
@@ -237,10 +249,30 @@ export class ScheduleRunner {
       console.log(`[schedules] ${row.id} (${row.agent}) skipped: ${row.agent} is paused`);
       return;
     }
-    if (!this.held.has(row.id)) {
-      console.log(`[schedules] ${row.id} (${row.agent}) held until ${row.agent} is no longer paused`);
-    }
-    this.held.set(row.id, this.now().getTime() + DEFER_MINUTES * 60_000);
+    this.hold(row, DEFER_MINUTES * 60_000, "paused", `held until ${row.agent} is no longer paused`);
+  }
+
+  /**
+   * A one-shot booked in a session that the waker turned away: its agent is
+   * at its hourly wake ceiling, or a woken turn is still running in that
+   * session. Both pass within the hour, and a one-shot is a commitment that
+   * a few retries would give up on, so it waits like a paused one: until the
+   * hour has room, when the waker can say, or a few minutes when it can't,
+   * with its due time kept so the agent hears how late it is. A recurring
+   * occurrence keeps the retries, since the next one comes round anyway.
+   */
+  private holdAtCeiling(row: ScheduleRow): void {
+    const refusal = this.runtime.wakeRefusal(row.agent, { sessionId: row.target });
+    // The waker keeps real time and this runner its time provider's, so what carries over is how long, not when.
+    const wait = refusal?.until !== undefined ? Math.max(0, refusal.until - Date.now()) : DEFER_MINUTES * 60_000;
+    const why = refusal?.why ?? `${row.agent}'s wake was turned away`;
+    this.hold(row, wait, "at-ceiling", `held for ${Math.ceil(wait / 60_000)}m: ${why}`);
+  }
+
+  /** Keeps a one-shot due, as late as it is, and looks at it again after `wait` ms. Said once for each reason. */
+  private hold(row: ScheduleRow, wait: number, reason: HeldFor, line: string): void {
+    if (this.held.get(row.id)?.for !== reason) console.log(`[schedules] ${row.id} (${row.agent}) ${line}`);
+    this.held.set(row.id, { at: this.now().getTime() + wait, for: reason });
     // claim() marked it done and left its due time as it was: back in the due set, still as late as it is.
     this.store.setStatus(row.id, "pending");
   }

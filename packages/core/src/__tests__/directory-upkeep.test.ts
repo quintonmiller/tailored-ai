@@ -38,7 +38,6 @@ import {
   type UpkeepSettings,
   upkeepMessage,
 } from "../plugins/directory-upkeep.js";
-import { REFUSED_WORDS } from "../plugins/places-tend.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
 import type { Disposer } from "../registry.js";
 import { registerStateType } from "../state/registry.js";
@@ -539,7 +538,7 @@ describe("an upkeep turn", () => {
       embedder: () => embedder,
       session: (agent) => ({ id: `upkeep-${agent}` }),
       run: async (agent, session, message, maxRounds) => {
-        if (waker !== "ran") return waker;
+        if (waker !== "ran") return { outcome: waker, why: `the waker said ${waker}` };
         runs.push({ agent, session: session.id, message, maxRounds });
         await turn(agent, session.id);
         return "ran";
@@ -754,12 +753,12 @@ describe("an upkeep turn", () => {
     const ran = (await directory.upkeep("planner"))?.data ?? {};
     expect(ran.error).toBeUndefined();
 
-    // Asked for by a person and turned away: why is kept for the page; what the last turn counted stays.
+    // Asked for by a person and turned away: the waker's reason is kept for the page; what the last turn counted stays.
     waker = "at-ceiling";
     clock = new Date(NOW.getTime() + 120_000);
     expect(await keeper.turn("planner", { force: true })).toBe("at-ceiling");
     expect((await directory.upkeep("planner"))?.data).toMatchObject({
-      error: REFUSED_WORDS["at-ceiling"],
+      error: "the waker said at-ceiling",
       failedAt: clock.toISOString(),
       at: ran.at,
       fingerprint: ran.fingerprint,

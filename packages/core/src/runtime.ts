@@ -1334,7 +1334,9 @@ export class AgentRuntime {
    * it would come to and why in words for a person, or undefined when it
    * would run. Nothing runs and nothing counts toward the hour. For a caller
    * that answers before its turn starts, such as a route that replies and
-   * runs the turn after; `wakeAgent` checks again when the turn comes.
+   * runs the turn after; `wakeAgent` checks again when the turn comes. At the
+   * hourly ceiling, `until` says when the hour next has room, for a caller
+   * that waits rather than giving up.
    */
   wakeRefusal(agent: string, where: WakeSession): WakeRefusal | undefined {
     return this._waker.refusal(agent, where);

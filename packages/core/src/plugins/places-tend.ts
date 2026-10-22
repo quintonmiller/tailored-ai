@@ -367,11 +367,6 @@ export function busy(kind: string, agent: string): boolean {
   return inFlight.has(flightKey(kind, agent));
 }
 
-/** Whether any turn on an interval is running now, of any kind and for any agent, from a tender or by hand. */
-export function turnRunning(): boolean {
-  return inFlight.size > 0;
-}
-
 /**
  * Run one turn now, outside any tender's times: a person asked for it. It
  * counts as in flight while it runs, so no tender starts a turn beside it.

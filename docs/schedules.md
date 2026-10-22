@@ -101,10 +101,9 @@ the tools that would actually reach someone. Going through the waker, it stops
 for what every turn nobody asked for stops for: it counts as one of the agent's
 wakes for the hour (`rooms.maxWakesPerHour`, shared with its subscriptions, its
 tend and its upkeep), and its tools see `{ kind: "schedule", ref: <schedule id> }`
-as why the turn runs. So `notify_owner` in it goes through the
-[repeat gate](./notifications.md), as in any turn nobody asked for: a reminder
-that says the same thing word for word within the gate's window is held back,
-and the agent is told so and can say something new.
+as why the turn runs. Its `notify_owner` is not held back by the
+[repeat gate](./notifications.md), as a room wake's isn't: a reminder says the
+same thing each time it comes round, and each time is wanted.
 
 ## Firing
 
@@ -142,12 +141,19 @@ again every five minutes with its due time kept, so when it runs the agent hears
 how late it is; a recurring occurrence is skipped. A restart looks at a waiting
 one-shot again straight away.
 
+A one-shot booked in a session that its agent's hourly wake ceiling turns away
+waits too, rather than being given up after `maxDeferrals`: the ceiling is a
+rolling hour, so it always has room again within the hour, and a reminder that
+lapses while it's full would be lost for good. It's looked at again when the
+hour has room, or after five minutes when a woken turn is still running in its
+session, and it keeps its due time, so the agent hears how late it is.
+
 ### Refusals
 
 | Outcome | Meaning | What the scheduler does |
 |---|---|---|
 | `ran` | the turn happened | records the run |
-| `at-ceiling` | temporarily refused: the agent is at its wake ceiling (the room's, or for a session wake its own hourly one), agents are paused (a room wake), or a turn is in flight where it would land | retries in 5 minutes, up to `maxDeferrals` |
+| `at-ceiling` | temporarily refused: the agent is at its wake ceiling (the room's, or for a session wake its own hourly one), agents are paused (a room wake), or a turn is in flight where it would land | retries in 5 minutes, up to `maxDeferrals`, then gives up on that occurrence, retiring a one-shot. A one-shot booked in a session waits until it can run instead (see [Pauses](#pauses)) |
 | `paused` | a session wake whose online agent is switched off or paused on the Agents page | holds a one-shot until it lifts, skips a recurring occurrence (see [Pauses](#pauses)) |
 | `gone` | the agent left the room, the room was archived, or the session it was booked in or the agent itself is gone | retires the schedule |
 
@@ -168,7 +174,7 @@ schedules:
   maxPerAgent: 20          # live schedules one agent may hold
   minIntervalMinutes: 15   # floor on how often a recurrence may fire
   maxHorizonDays: 365      # furthest a one-shot may be booked
-  maxDeferrals: 3          # retries when a wake ceiling turns a wake away
+  maxDeferrals: 3          # retries when a wake ceiling turns a wake away (not a session one-shot, which waits)
 ```
 
 Timezone precedence is explicit config, then a plugin provider's timezone,

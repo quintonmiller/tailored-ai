@@ -73,6 +73,12 @@ export interface WakeRefusal {
   outcome: Exclude<WakeOutcome, "ran">;
   /** "agents are paused", "it's at its wake ceiling: 12 wakes in the last hour". */
   why: string;
+  /**
+   * At the hourly ceiling, when the hour next has room, in ms since the epoch:
+   * when the oldest wake that counts leaves it. Absent for any other refusal,
+   * whose end nobody can tell.
+   */
+  until?: number;
 }
 
 /** Runs a woken turn in a room. The host sets one once its room watcher is running. */
@@ -119,10 +125,15 @@ export class AgentWaker {
 
   async wake(agent: string, opts: WakeAgentOptions): Promise<WakeOutcome> {
     const host = this.host;
-    if (opts.room === undefined && opts.sessionKey === undefined && opts.sessionId === undefined) {
-      throw new Error(`wakeAgent("${agent}") needs a sessionKey, a sessionId or a room.`);
-    }
+    // The types allow one place and no round budget for a room, but a plugin in plain JS gets no say from them,
+    // and an option dropped without a word would run a turn somewhere else, or uncapped.
+    const places = [opts.room, opts.sessionKey, opts.sessionId].filter((p) => p !== undefined).length;
+    if (places === 0) throw new Error(`wakeAgent("${agent}") needs a sessionKey, a sessionId or a room.`);
+    if (places > 1) throw new Error(`wakeAgent("${agent}") takes one of sessionKey, sessionId and room, not several.`);
     const rounds = opts.maxToolRounds;
+    if (rounds !== undefined && opts.room !== undefined) {
+      throw new Error(`wakeAgent("${agent}"): maxToolRounds applies to a session turn, not a room's.`);
+    }
     if (rounds !== undefined && !(Number.isInteger(rounds) && rounds >= 1)) {
       throw new Error(`wakeAgent("${agent}"): maxToolRounds is a whole number, at least 1.`);
     }
@@ -202,7 +213,9 @@ export class AgentWaker {
     const standing = this.standing(agent, this.host.getAgentDefinition(agent));
     if (standing) return standing;
     const refused = this.sessionRefusal(agent, where, this.existing(where), this.recent(agent, this.now()));
-    return refused && { outcome: refused.outcome, why: refused.why };
+    if (!refused) return undefined;
+    const { outcome, why, until } = refused;
+    return { outcome, why, ...(until !== undefined ? { until } : {}) };
   }
 
   /** What every wake stops for first, a room's too: the pause switches, and an agent to wake. */
@@ -243,9 +256,13 @@ export class AgentWaker {
     }
     const limit = this.limit();
     if (recent.length >= limit) {
+      // The hour has room once enough of these leave it to bring the count under the limit. A limit of none never
+      // has room, so there's no time to give.
+      const oldest = limit > 0 ? [...recent].sort((a, b) => a - b)[recent.length - limit] : undefined;
       return {
         outcome: "at-ceiling",
         why: `it's at its wake ceiling: ${limit} ${limit === 1 ? "wake" : "wakes"} in the last hour`,
+        ...(oldest !== undefined ? { until: oldest + HOUR_MS } : {}),
         ceiling: true,
       };
     }

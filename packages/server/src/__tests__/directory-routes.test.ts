@@ -538,6 +538,54 @@ describe("the directory routes", () => {
       await finished(app, "planner");
     });
 
+    it("gives the agent's own ceiling as the reason, not another agent's turn that happens to be running", async () => {
+      maxWakes = 1;
+      const app = await start();
+      await finishedLongAgo();
+      const other = { prompt: "x", sessionKey: "watch:trip-planner", wake: { kind: "watch" } };
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("ran");
+      // The planner's upkeep takes its time, so turns on an interval are busy while trip-planner asks.
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      script = [
+        async () => {
+          await gate;
+          return { content: "ok", usage: { input: 0, output: 0 }, finishReason: "stop" };
+        },
+      ];
+      expect((await app.fetch(upkeep("planner"))).status).toBe(202);
+      await new Promise((r) => setTimeout(r, 20));
+      expect((await view(app, "planner")).running).toBe(true);
+
+      // Waiting a minute for the planner wouldn't help: trip-planner's hour is what's full.
+      const res = await app.fetch(upkeep("trip-planner"));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "trip-planner can't tidy up now: it's at its wake ceiling: 1 wake in the last hour. Try again later.",
+      });
+      release();
+      await finished(app, "planner");
+    });
+
+    it("keeps the waker's own reason for the page when the turn is turned away after the answer", async () => {
+      maxWakes = 1;
+      const app = await start();
+      await finishedLongAgo();
+      const other = { prompt: "x", sessionKey: "watch:trip-planner", wake: { kind: "watch" } };
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("ran");
+      chats = [];
+      // The hour fills while the evidence is read: the route's look finds room, the wake itself doesn't.
+      vi.spyOn(runtime, "wakeRefusal").mockReturnValueOnce(undefined);
+
+      expect((await app.fetch(upkeep("trip-planner"))).status).toBe(202);
+      const done = await finished(app, "trip-planner");
+      expect(done.error).toBe("it's at its wake ceiling: 1 wake in the last hour");
+      expect(done.at).toBeUndefined();
+      expect(chats).toEqual([]);
+    });
+
     it("skips a scheduled upkeep at the hourly ceiling before reading its evidence, and runs it at its next time", async () => {
       vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
       const HOUR = 3_600_000;

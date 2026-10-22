@@ -72,7 +72,6 @@ import {
   refused,
   runNow,
   Tender,
-  turnRunning,
   turnSession,
   UPKEEP_KIND,
   whyAsleep,
@@ -235,13 +234,18 @@ function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: Upkeep
     },
     // By the session's id, so the turn runs in the session whose writes upkeep counts. The waker holds it to the
     // pause and the hourly ceiling, and caps its rounds: an agent configured for fewer keeps its own.
-    run: (agent, session, message, maxRounds) =>
-      runtime.wakeAgent(agent, {
+    run: async (agent, session, message, maxRounds) => {
+      const where = { sessionId: session.id };
+      const outcome = await runtime.wakeAgent(agent, {
         prompt: message,
-        sessionId: session.id,
+        ...where,
         wake: { kind: UPKEEP_KIND, ref: `${UPKEEP_TYPE}/${agent}` },
         maxToolRounds: maxRounds,
-      }),
+      });
+      if (outcome === "ran") return outcome;
+      // The waker turns a wake away before it lets go of the event loop, so asking straight after gets its reason.
+      return { outcome, why: runtime.wakeRefusal(agent, where)?.why ?? REFUSED_WORDS[outcome] };
+    },
   });
 }
 
@@ -614,11 +618,12 @@ const plugin: Plugin = (ctx) => {
       const started = refusal ? undefined : runNow(UPKEEP_KIND, agent, () => upkeep.turn(agent, { force: true }));
       if (!started) {
         // Turns on an interval go one at a time, a person's included: one is going now, this agent's or another's.
+        // The waker's reason comes before another turn's, since it lasts longer: a minute's wait wouldn't help.
         const error = busy(UPKEEP_KIND, agent)
           ? `${agent} is already tidying up.`
-          : turnRunning() || !refusal
-            ? "Another turn is running now: tends and upkeep go one at a time. Try again in a minute."
-            : `${agent} can't tidy up now: ${refusal.why}. Try again later.`;
+          : refusal
+            ? `${agent} can't tidy up now: ${refusal.why}. Try again later.`
+            : "Another turn is running now: tends and upkeep go one at a time. Try again in a minute.";
         return { status: 409, json: { error } };
       }
       started.then(
