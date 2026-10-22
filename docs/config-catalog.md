@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 47 | 141 |
+| `agents` | object | {} | 47 | 143 |
 
 ### `autopilot`
 
@@ -68,7 +68,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `context.directory` | string | `./data/context` | 10 | 1 |
+| `context.directory` | string | `./data/context` | 11 | 1 |
 | `context.kbDirectory` | string | `./data/kb` | 1 | 1 |
 | `context.warnTokens` | number | `4000` | 2 | 2 |
 
@@ -196,7 +196,7 @@ Fields: **79** · with no read site found: **0**
 | `tools.facts.enabled` | boolean | `true` | 49 | 1 |
 | `tools.interface.enabled` | boolean | `true` | 49 | 1 |
 | `tools.memory.enabled` | boolean | `true` | 49 | 1 |
-| `tools.projects.directory` | string | `./data/projects` | 10 | 2 |
+| `tools.projects.directory` | string | `./data/projects` | 11 | 2 |
 | `tools.projects.enabled` | boolean | `true` | 49 | 1 |
 | `tools.read.enabled` | boolean | `true` | 49 | 1 |
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |

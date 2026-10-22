@@ -59,8 +59,11 @@ export function pageOrder(data: Record<string, unknown> | undefined): string[] {
 /** When a commitment last moved: its newest update, or the record's last change. */
 export function lastMoved(record: StateRecordInfo): string {
   const updates = record.data.updates;
-  const newest = Array.isArray(updates) ? (updates[0] as { at?: unknown } | undefined) : undefined;
-  return typeof newest?.at === "string" ? newest.at : record.updatedAt;
+  // A check that changed nothing says the agent looked, not that the work moved. Mirrors the directory's words.
+  const moved = Array.isArray(updates)
+    ? (updates as Array<{ at?: unknown; text?: unknown } | undefined>).find((u) => u?.text !== "Checked; no change.")
+    : undefined;
+  return typeof moved?.at === "string" ? moved.at : record.updatedAt;
 }
 
 /** A commitment's dated updates, newest first, as the record keeps them. `by` says who wrote one, on a room's. */

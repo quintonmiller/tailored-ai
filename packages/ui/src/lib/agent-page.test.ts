@@ -5,7 +5,15 @@
  */
 import { describe, expect, it } from "vitest";
 import type { StateRecordInfo } from "../api";
-import { checkWhen, groupCommitments, pageOrder, pageSections, progressOf, recentMisses } from "./agent-page";
+import {
+  checkWhen,
+  groupCommitments,
+  lastMoved,
+  pageOrder,
+  pageSections,
+  progressOf,
+  recentMisses,
+} from "./agent-page";
 
 const NOW = new Date("2026-10-21T12:00:00Z");
 const daysAgo = (d: number) => new Date(NOW.getTime() - d * 86_400_000).toISOString();
@@ -91,6 +99,16 @@ describe("a commitment's check", () => {
     );
     // Moved on by the directory after a check that changed nothing: the text is older than the time.
     expect(checkWhen({ checkAt: hoursOn(24) }, NOW)?.label).toBe("check in 1d");
+  });
+
+  it("doesn't count a check that changed nothing as the work moving", () => {
+    const r = rec("a", {
+      updates: [
+        { at: hoursOn(-1), text: "Checked; no change." },
+        { at: hoursOn(-30), text: "Asked the hotel." },
+      ],
+    });
+    expect(lastMoved(r)).toBe(hoursOn(-30));
   });
 
   it("lets a check on a change say itself, and marks text it couldn't read as a note", () => {

@@ -247,7 +247,10 @@ export function commitmentItems(
     const moved = daysSince(lastUpdate(r), now);
     if ((ACTIVE as readonly string[]).includes(status)) {
       const check = text(r.data.nextCheck);
-      const due = checkDate(check);
+      // A check the directory read wakes the agent itself when it comes (`directory-checks.ts`); only one written
+      // before it read them is left for upkeep to notice.
+      const read = ["checkAt", "checkOn", "checkedAt"].some((key) => r.data[key] !== undefined);
+      const due = read ? undefined : checkDate(check);
       if (due !== undefined && due <= now.getTime()) add("check", `its next check, ${check}, has come`);
       if (status === "waiting") {
         const waited = daysSince(waitingSince.get(r.id) ?? lastUpdate(r), now);

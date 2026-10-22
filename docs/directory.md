@@ -5,13 +5,14 @@ things up for each other. Other agents ask about any of it with one tool. It
 all lives in [world state](./world-state.md), so people see and edit the same
 records on the State page.
 
-This is steps 2 to 5 of [ownership and upkeep](./ownership-design.md). What
-works today: the records, the three tools, the similar-work check, misses, a
-"Your commitments" block in the prompt, a page for every agent in the web UI
-that the agent arranges and you can hand work through, an
-[upkeep turn](#upkeep) in which an agent looks after what it owns, and
-[rooms](#rooms) with a lead and records of their own. Nothing acts on a
-commitment by itself yet; see [Not yet](#not-yet).
+This is steps 2 to 5 of [ownership and upkeep](./ownership-design.md), and
+the first of step 7. What works today: the records, the three tools, the
+similar-work check, misses, a "Your commitments" block in the prompt, a page
+for every agent in the web UI that the agent arranges and you can hand work
+through, an [upkeep turn](#upkeep) in which an agent looks after what it owns,
+[rooms](#rooms) with a lead and records of their own, and
+[checks](#checks) that wake a commitment's owner when its `nextCheck` comes
+due. What's still to come is under [Not yet](#not-yet).
 
 ## Turn it on
 
@@ -167,8 +168,8 @@ commitment(action: "open", goal: "Lisbon trip planning for November", doneWhen: 
 
 `autonomy` says how much the agent may do about a commitment without asking:
 `suggest` asks first, `tell` acts on what's reversible and reports, `quiet`
-acts and logs. Nothing acts on it yet; it's recorded for the pieces still to
-come. **An agent can set `suggest` and nothing more.** `tell` and `quiet` are
+acts and logs. For now a [check's turn](#when-a-check-comes-due) asks first
+whatever it says, so `tell` and `quiet` behave like `suggest`. **An agent can set `suggest` and nothing more.** `tell` and `quiet` are
 a person's to grant: on the State page, in the hand-over form on the agent's
 page, or on a commitment in its Working on list. An agent that asks for more,
 opening a commitment or updating one, gets one plain sentence back:
@@ -222,6 +223,85 @@ way, and clearing it takes the check away. On a room's commitment, a person's
 `nextCheck` holds like their other edits; the fields beside it never do.
 Commitments written before this keep their text with nothing beside it until
 it's next written; [upkeep](#upkeep) still notices a dated one that has come.
+
+#### When a check comes due
+
+Every thirty seconds the directory looks for open and waiting commitments
+whose `checkAt` has come, oldest first, and wakes each one's owner, one at a
+time, through `runtime.wakeAgent`: the one way TAI wakes an agent nobody
+asked, so the pause switch, an online agent's own switch and its hourly wake
+ceiling (`rooms.maxWakesPerHour`, shared with its subscriptions, tends and
+upkeep) apply. A room's own commitment wakes the room's lead. The turn runs in
+the commitment's own session, `commitment:<id>`, so each check sees the last,
+and the log says so:
+
+```
+[wake] waking planner in commitment:planner-watch-hotel-prices for commitment (planner-watch-hotel-prices)
+```
+
+- **Claimed first.** Before the turn, the check is taken off the record
+  (`checkAt` cleared, `checkedAt` set), so a slow turn is never started twice,
+  however many looks, or reloads, come while it runs.
+- **Paused, it stays due**, and nothing is written; it runs at the first look
+  after the pause lifts. **At the hourly ceiling** it comes round five
+  minutes on. A commitment with nobody to wake (a room with no lead) gets
+  "Couldn't check on it: …" in its updates and no further check.
+- **A change it watches for** makes it due at once, with the change's line
+  kept in `checkEvents`: a burst of changes is gathered for a second and
+  becomes one wake that lists them (the five newest, then a count). A change
+  counts only when the agent it wakes can read what changed, and never when
+  it's that agent's own. A check on a change that has seen none for a week
+  wakes the agent anyway.
+- **Finished, dropped and archived commitments never wake.** An agent with no
+  `commitment` tool isn't woken either, since it couldn't write down what it
+  found; its check waits a day at a time.
+- Changes a check sees are the world-state changes `state.changed` carries.
+  The directory listens once for all of them, whatever its commitments watch.
+
+What a check's turn is told, kept to about 120 tokens:
+
+```
+Time to check on your commitment planner-watch-hotel-prices "Watch hotel prices" (open, 2/3).
+Done when: Three hotels under budget shortlisted
+Next step: Compare Friday's list
+Latest:
+- 2026-10-21: Two shortlisted.
+- 2026-10-20: Found five.
+- 2026-10-19: Asked for dates.
+Why now: its check was due Fri, Oct 23, 09:00 ("Friday 9am").
+It asks first: read anything and update your commitments and docs, but put anything else that would change something in nextStep and set the commitment waiting on a person.
+Do the next step, then update the commitment with progress and a new check (commitment update, id planner-watch-hotel-prices).
+```
+
+For a check on a change, "Why now" lists what changed. **After the turn:**
+
+- If the agent set a new check, that's the one kept.
+- If it wrote no update, the directory writes "Checked; no change." for it.
+  That says the agent looked, not that the work moved: "last update" in its
+  line and on its page, and upkeep's "no update in a while", go by the last
+  update that wasn't one of these.
+- With no new check, a check on a time comes round again 1 day on, then 2,
+  then 4, then every 7 days while each one changes nothing (an update from
+  the agent starts the count again); a check on a change goes back to waiting
+  for one, with its week's backstop.
+- A turn that fails says so in the updates ("The check stopped with an error:
+  …") and comes round again the same way, a day on for a check on a time.
+
+**Every check asks first, for now.** Until autonomy is enforced, a check's
+turn acts as `suggest` whatever its commitment's `autonomy` says, so `tell`
+and `quiet` behave like `suggest`. Through the `agent.pre_tool_use` waterfall,
+a call in a turn woken with `wake.kind: "commitment"` that writes, can't be
+undone, or declares no effect at all is refused, and the agent reads one
+sentence in its place:
+
+```
+This commitment asks first: put it in nextStep and set the commitment waiting on a person.
+```
+
+Calls that declare they only read go through, and so do the agent's own
+`commitment`, `writeup` and `directory`, which is how it records what it
+found. Most tools declare no effect yet, so most are refused in a check's
+turn. A person's chat, and every other turn, is left alone.
 
 ## What an agent writes up: `writeup`
 
@@ -493,7 +573,7 @@ commitments with `commitment`, docs with `writeup`, the page with
 
 | Evidence | Counts when | Default |
 |---|---|---|
-| Next check passed | an open or waiting commitment's `nextCheck` reads as a date (an ISO date like "2026-10-25", or a month named with its day and year, like "Oct 25, 2026" or "25 October 2026") and it has come. "Friday", "end of 2026" or "when the hotel replies" count for nothing | |
+| Next check passed | an open or waiting commitment's `nextCheck` was written before the directory read checks, reads as a date (an ISO date like "2026-10-25", or a month named with its day and year, like "Oct 25, 2026" or "25 October 2026") and it has come. A check the directory read wakes the agent itself ([Checks](#checks)), so upkeep leaves those alone | |
 | Waiting too long | waiting for `waitingDays` or more, since its history says it started waiting | 7 days |
 | No update | open or waiting, with no update for `quietDays` or more | 14 days |
 | Finished, not archived | done or dropped `archiveAfterDays` or more ago, and still not archived | 7 days |
@@ -796,13 +876,14 @@ request already on its way when a reload turns the directory off answers
 
 ## Not yet
 
-- **Nothing acts on a commitment.** `autonomy` is a label, and no turn is
-  started when a `nextCheck` comes due: upkeep only notices it on its next
-  turn. Watchers and schedules come later in the
+- **Autonomy isn't enforced.** Every check's turn asks first, so `tell` and
+  `quiet` behave like `suggest`, and most tools are refused in it because
+  they don't yet declare what they do. Watchers, reactions and the daily
+  batch of questions come later in the
   [build order](./ownership-design.md#build-order).
-- **Upkeep runs on an interval only.** It doesn't yet start when a
-  commitment's check comes due, a watcher fires or a person edits something
-  the agent owns. Its evidence doesn't yet include notes a newer note or doc
+- **Upkeep runs on an interval only.** It doesn't yet start when a watcher
+  fires or a person edits something the agent owns; a commitment's check
+  wakes the agent for that commitment alone. Its evidence doesn't yet include notes a newer note or doc
   contradicts, what people corrected or waved away, or which page sections
   people opened, and it raises no questions for a person.
 - **Rooms don't wake their lead for their records.** A room's upkeep runs in

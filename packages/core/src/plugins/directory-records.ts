@@ -1602,11 +1602,23 @@ export function ago(iso: string | undefined, now: Date): string | undefined {
   return `on ${iso.slice(0, 10)}`;
 }
 
-/** When a commitment last moved: its newest update, or the record's last change. */
+/**
+ * What a check that ended with no update to its commitment writes for it
+ * (`directory-checks.ts`). It says the owner looked, not that the work moved.
+ */
+export const NO_CHANGE = "Checked; no change.";
+
+/**
+ * When a commitment last moved: its newest update, or the record's last
+ * change. A check that changed nothing isn't a move, so work that only gets
+ * looked at still reads as stalled, to its owner and to upkeep.
+ */
 export function lastUpdate(record: StateRecord): string {
   const updates = record.data.updates;
-  const newest = Array.isArray(updates) ? (updates[0] as { at?: unknown } | undefined) : undefined;
-  return typeof newest?.at === "string" ? newest.at : record.updatedAt;
+  const moved = Array.isArray(updates)
+    ? (updates as Array<{ at?: unknown; text?: unknown } | undefined>).find((u) => u?.text !== NO_CHANGE)
+    : undefined;
+  return typeof moved?.at === "string" ? moved.at : record.updatedAt;
 }
 
 /** A list of strings from an array, or from one string split on commas, semicolons or new lines. */

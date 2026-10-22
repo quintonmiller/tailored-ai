@@ -7,10 +7,11 @@
  * It brings six record types (`profile`, `commitment`, `doc`, `miss`,
  * `page`, `upkeep`), three tools (`directory`, `commitment`, `writeup`), a
  * "Your commitments" block in the prompt of every agent that has the
- * `commitment` tool, and the routes the agent and room pages in the web UI
- * read and hand work over through. Rooms keep the same records, led by an
- * agent (`directory-rooms.ts`). It registers through the same seams a
- * third-party plugin would, and core knows nothing about it.
+ * `commitment` tool, checks that wake a commitment's owner when its
+ * `nextCheck` comes due (`directory-checks.ts`), and the routes the agent and
+ * room pages in the web UI read and hand work over through. Rooms keep the
+ * same records, led by an agent (`directory-rooms.ts`). It registers through
+ * the same seams a third-party plugin would, and core knows nothing about it.
  *
  * Config (`plugins: [{ module: builtin:directory, config: {...} }]`):
  *   - `pin` (default true): the prompt block. `false` leaves it out.
@@ -44,7 +45,7 @@ import type { AgentRuntime } from "../runtime.js";
 import type { StateCaller, StateService } from "../state/service.js";
 import { StateError, type StateRecord, type StateTypeDef } from "../state/types.js";
 import { systemTimeZone } from "../time/provider.js";
-import { rederive } from "./directory-checks.js";
+import { asksFirst, Checker, rederive } from "./directory-checks.js";
 import {
   ACTIVE,
   AUTONOMY,
@@ -437,14 +438,42 @@ const plugin: Plugin = (ctx) => {
 
   const directory = directoryFor(() => runtime.getStateService());
 
-  // A person's edit of a commitment's nextCheck, on the State page or an agent or room page, is read again here,
-  // so what wakes the agent follows what the person wrote. The tools read it as they write it.
-  const edits = ctx.events.on("state.changed", (change) => {
+  // Commitment checks (`directory-checks.ts`): each due check wakes the commitment's owner through the runtime's
+  // waker, one at a time. A runtime with no waker can't wake anyone, so it gets no runner.
+  const checker =
+    typeof runtime.wakeAgent === "function"
+      ? new Checker({
+          directory,
+          wake: (agent, opts) => runtime.wakeAgent(agent, opts),
+          refusal: (agent, where) => runtime.wakeRefusal(agent, where),
+          canUpdate: (agent) => hasCommitmentTool(runtime, agent),
+        })
+      : undefined;
+  if (checker) {
+    void checker.start();
+    disposers.push(() => void checker.stop());
+  }
+
+  // One listener for every change in world state. A person's edit of a commitment's nextCheck, on the State page or
+  // an agent or room page, is read again, so what wakes the agent follows what the person wrote (the tools read it
+  // as they write it); and a change a commitment watches for makes its check due.
+  const changes = ctx.events.on("state.changed", (change) => {
     rederive(directory, change).catch((err: unknown) =>
       console.warn(`[directory] couldn't read the check on ${change.id}: ${(err as Error).message}`),
     );
+    checker?.onChange(change);
   });
-  disposers.push(() => edits.dispose());
+  disposers.push(() => changes.dispose());
+
+  // Until autonomy is enforced, a check's turn asks first whatever its commitment's autonomy says: a call that
+  // changes something outside the directory's own tools is refused, in one sentence the agent can act on.
+  const guard = ctx.events.onWaterfall("agent.pre_tool_use", async (call, next) => {
+    const deny = asksFirst(call);
+    if (!deny) return next(call);
+    const out = await next({ ...call, deny });
+    return out.deny ? out : { ...out, deny };
+  });
+  disposers.push(() => guard.dispose());
 
   // A reload disposes this load, which takes the block out, and loads the plugin again, which puts it back.
   if (config.pin) {
@@ -873,7 +902,7 @@ const plugin: Plugin = (ctx) => {
 export const meta: PluginMeta = {
   name: "Directory",
   description:
-    "What agents and rooms are for, the work they've taken on and what they've written up: profile, commitment, doc and page records, the directory, commitment and writeup tools, a commitments block in the prompt, upkeep turns, room leads, and the routes behind agent and room pages.",
+    "What agents and rooms are for, the work they've taken on and what they've written up: profile, commitment, doc and page records, the directory, commitment and writeup tools, a commitments block in the prompt, checks that wake a commitment's owner, upkeep turns, room leads, and the routes behind agent and room pages.",
   registers: [
     { kind: "tool", id: "directory" },
     { kind: "tool", id: "commitment" },
