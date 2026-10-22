@@ -147,6 +147,8 @@ let container: HTMLDivElement;
 let room: ReturnType<typeof travel>;
 let list: ReturnType<typeof summaries>;
 let off: boolean;
+/** What the server answers with the directory off: a plain 404, or the plugin routes' own JSON one. */
+let offBody: string;
 let roomReads: number;
 const calls: { method: string; url: string; body?: unknown }[] = [];
 
@@ -157,6 +159,7 @@ beforeEach(() => {
   room = travel();
   list = summaries();
   off = false;
+  offBody = "Not Found";
   roomReads = 0;
   calls.length = 0;
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -165,11 +168,13 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       calls.push({ method, url, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
-      if (off) return new Response("Not Found", { status: 404 });
+      if (off) return new Response(offBody, { status: 404 });
       const path = url.replace("/api/ext/builtin:directory/", "");
       if (path === "rooms") return new Response(JSON.stringify({ rooms: list }));
       if (path === "rooms/attic") {
-        return new Response(JSON.stringify({ error: 'There\'s no room called "attic".' }), { status: 404 });
+        return new Response(JSON.stringify({ error: 'There\'s no room called "attic".', room: "attic" }), {
+          status: 404,
+        });
       }
       if (method === "GET" && path === "rooms/travel") {
         roomReads++;
@@ -237,6 +242,19 @@ describe("the rooms list", () => {
     expect(container.textContent).toContain("Turn on the directory");
   });
 
+  it("says how to turn the directory on from a room's page, whatever 404 the server gives with it off", async () => {
+    off = true;
+    // The server answers a plugin path nobody serves with JSON, and a reload mid-request says it's turned off.
+    for (const body of [{ error: "not_found" }, { error: "The directory is turned off." }]) {
+      offBody = JSON.stringify(body);
+      await render("travel");
+      expect(container.textContent).toContain("Turn on the directory");
+      expect(container.textContent).not.toContain("Couldn't load the room");
+      act(() => root.unmount());
+      root = createRoot(container);
+    }
+  });
+
   it("reads itself again when a room's records change", async () => {
     await render();
     const before = calls.filter((c) => c.url.endsWith("/rooms")).length;
@@ -256,7 +274,16 @@ describe("a room's page", () => {
     expect(about.querySelector(".agent-page-purpose .room-held")?.textContent).toBe("set by you");
     expect(about.querySelector("blockquote")?.textContent).toBe("Ask us before you book.");
     expect(about.textContent).toContain("In its members' words");
+    expect(about.querySelector("figcaption .room-held")).toBeNull();
     expect([...about.querySelectorAll(".agent-tool-chip")].map((c) => c.textContent)).toEqual(["flights", "ferries"]);
+  });
+
+  it("says a note a person wrote is in their words, not its members'", async () => {
+    room = { ...travel(), held: { [`room:${TRAVEL}`]: ["note"] } };
+    await render("travel");
+    const caption = section("What it's for").querySelector("figcaption") as HTMLElement;
+    expect(caption.textContent).toBe("In your words set by you");
+    expect(caption.textContent).not.toContain("members");
   });
 
   it("falls back to the purpose the room was given, marked as such, when nobody wrote its profile", async () => {
@@ -285,6 +312,25 @@ describe("a room's page", () => {
       url: "/api/ext/builtin:directory/rooms/travel/lead",
       body: { lead: "writer" },
     });
+  });
+
+  it("says who handing a person's choice back gives: config's lead, the room's creator, or nobody", async () => {
+    const first = async (lead: Record<string, unknown>) => {
+      room = { ...travel(), lead };
+      await render("travel");
+      const text = (section("Lead and members").querySelector("select option") as HTMLOptionElement).textContent;
+      act(() => root.unmount());
+      root = createRoot(container);
+      return text;
+    };
+    const chosen = { agent: "writer", source: "person" };
+    expect(
+      await first({ ...chosen, configured: "trip-planner", fallback: { agent: "trip-planner", source: "config" } }),
+    ).toBe("Back to trip-planner, named in config");
+    expect(await first({ ...chosen, fallback: { agent: "planner", source: "creator" } })).toBe(
+      "Back to planner, who made the room",
+    );
+    expect(await first(chosen)).toBe("Back to nobody");
   });
 
   it("shows its work: its own and its lead's for it, what a person set, who wrote each update, and what's waiting", async () => {
@@ -326,6 +372,23 @@ describe("a room's page", () => {
       url: "/api/ext/builtin:directory/rooms/travel/commitments/room-travel-ferry",
       body: { nextStep: "Book the early boat", status: "done" },
     });
+  });
+
+  it("marks what a person set on a commitment its lead took on for it, the same as on the room's own", async () => {
+    room = { ...travel(), held: { "trip-planner-dog-sitter": ["nextStep"] } };
+    room.commitments = room.commitments.map((c) =>
+      c.id === "trip-planner-dog-sitter" ? { ...c, data: { ...c.data, nextStep: "Ask Sam" } } : c,
+    );
+    await render("travel");
+    const sitter = [...section("Working on").querySelectorAll(".agent-page-item")].find((i) =>
+      i.textContent?.includes("Find a dog sitter"),
+    ) as HTMLElement;
+    expect(sitter.querySelector(".agent-page-line")?.textContent).toBe("Next Ask Sam set by you");
+    await act(async () => (sitter.querySelector(".room-edit") as HTMLButtonElement).click());
+    // The form says what holds and what doesn't.
+    expect(sitter.querySelector("form")?.textContent).toContain(
+      "Agents leave the next step and what it waits on as you set them; clear one to hand it back.",
+    );
   });
 
   it("lets a person change what it's for and its note", async () => {

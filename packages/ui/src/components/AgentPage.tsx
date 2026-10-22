@@ -103,7 +103,9 @@ export function AgentPage({ name, description }: { name: string; description?: s
       if (!PAGE_TYPES.has(c.type)) return;
       // Its own records, or one just reassigned to or from it.
       const mine = c.after?.owner === name || c.before?.owner === name || (c.type === "page" && c.id === name);
-      if (!mine) return;
+      // A room's profile carries a person's choice of lead, which can make this agent a room's lead or not.
+      const room = c.type === "profile" && (typeof c.after?.room === "string" || typeof c.before?.room === "string");
+      if (!mine && !room) return;
       clearTimeout(timer);
       timer = setTimeout(load, SETTLE_MS);
     });

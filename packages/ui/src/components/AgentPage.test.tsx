@@ -518,6 +518,31 @@ describe("an agent's page", () => {
     await settle();
     expect(calls.filter((c) => c.url === "/api/ext/builtin:directory/agents/trip-planner").length).toBe(before + 1);
     expect(container.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("80");
+
+    // A room's profile carries a person's choice of lead, so a change to one may change what this agent leads.
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "profile",
+        id: "room:local:garden",
+        op: "update",
+        before: { owner: "room:local:garden", room: "local:garden", lead: "trip-planner" },
+        after: { owner: "room:local:garden", room: "local:garden" },
+      }),
+    );
+    await settle();
+    expect(calls.filter((c) => c.url === "/api/ext/builtin:directory/agents/trip-planner").length).toBe(before + 2);
+    // Another agent's own profile is still nothing to this page.
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "profile",
+        id: "planner",
+        op: "update",
+        before: { owner: "planner" },
+        after: { owner: "planner" },
+      }),
+    );
+    await settle();
+    expect(calls.filter((c) => c.url === "/api/ext/builtin:directory/agents/trip-planner").length).toBe(before + 2);
   });
 
   it("shows the configured description and how to turn the directory on, when it's off", async () => {

@@ -601,20 +601,33 @@ The room's commitments and docs don't exist for it at all: not in `about`,
 record. Its profile it can read, and `about` tells it the rest is for the
 members.
 
-**Membership, not the turn, decides what an agent sees.** World state shows
-an agent a room's scope only in a turn woken in that room. The directory's
-own tools follow membership instead: an agent in the travel room sees the
-room's commitments and docs from its upkeep turn, a direct message, or
-another room, because that's where it looks after them. The `state` tool is
-unchanged, so `state query` from outside the room still shows none of them.
-An archived room's records drop out of its members' searches; `about` and
-`list` with its name still read them, and every change is refused.
+**Membership decides what an agent sees, outside other rooms.** World state
+shows an agent a room's scope only in a turn woken in that room. The
+directory's own tools go further for a turn woken in no room: an agent in
+the travel room sees the room's commitments and docs from its upkeep turn or
+a direct message, because that's where a lead looks after them. A turn woken
+in another room keeps world state's rule, so the travel room's work doesn't
+spread into a conversation with agents who aren't in it. There, `about`
+shows the room's profile and members and says why the rest stays out,
+search doesn't find its records, and anything else with the room or one of
+its records gets one sentence back:
+
+```
+This turn is in the garden room, so the travel room's records stay out of it. Work on them from the travel room itself, a direct message or your upkeep.
+```
+
+The `state` tool is unchanged, so `state query` from outside the room still
+shows none of them. An archived room's records drop out of its members'
+searches; `about` and `list` with its name still read them, and every change
+is refused.
 
 ### A person's edit stays
 
 When you change a field of a room's record, on the room's page, on the State
-page, or through `/api/state`, agents leave that field as you left it. A
-member that tries to change it is refused, with the field named:
+page, or through `/api/state`, agents leave that field as you left it. That
+covers the room's own records and the commitments its lead took on for it,
+which the room's page lists alongside them. A member that tries to change
+such a field is refused, with the field named:
 
 ```
 A person set nextStep on room-travel-ferry-tickets-for-august, so it stays as they left it. Ask them if it should change.
@@ -623,7 +636,15 @@ A person set nextStep on room-travel-ferry-tickets-for-august, so it stays as th
 The rest of the call doesn't go through, and the other fields stay the
 members' to change. What finishing a commitment tidies by the way (clearing
 what it waited on, filling its progress bar) is skipped for a field you set,
-rather than refused.
+rather than refused. Archiving a record with a field you set is refused too
+("…so whether it's put away is theirs to say. Ask them before archiving
+it."), except a finished commitment: once it's done or dropped, what you set
+no longer steers it, and upkeep can tidy it away.
+
+**A commitment's status never holds.** It's the work's own progress, so when
+you set it on the room's page it goes in the commitment's updates ("A person
+set the status to waiting.") and the members carry the work on from there,
+finishing it included. What it waits on does hold.
 
 The rule is read from the record's history: a field holds when its latest
 change was a person's edit and it still has a value. So:
@@ -631,8 +652,13 @@ change was a person's edit and it still has a value. So:
 - **Creating a record isn't an edit.** A room's commitment you create on the
   State page holds nothing; change a field afterwards and that field holds.
 - **Clearing a field hands it back** to the agents.
-- **It's for room records only.** An agent's own records keep their rules
+- **It's for a room's records only:** its own, and the commitments its lead
+  took on for it. An agent's other records keep their rules
   ([autonomy](#work-an-agent-owns-commitment), for one).
+- **Archiving or bringing back a record changes none of its fields.** A
+  write over an archived record does, and the fields it changed are its
+  writer's. Agents can't write over a room's profile you archived; it stays
+  archived until you bring it back.
 - **A store that keeps no history can't tell who set what,** so nothing holds
   there. The built-in SQLite store keeps history. The rule reads a record's
   last 500 changes.
@@ -652,8 +678,9 @@ with the room named:
 ```
 
 It shows on the lead's page, linked to the room, and on the room's page under
-Working on, "taken on by trip-planner". A room with no lead can't be handed
-anything until you choose one.
+Working on, "taken on by trip-planner", where you edit it like the room's
+own and what you set holds the same way. A room with no lead can't be
+handed anything until you choose one.
 
 ### The lead's upkeep
 
@@ -707,7 +734,7 @@ Behind the usual bearer auth, as a person: every scope.
 | `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses, upkeep, rooms, leads }`: the profile and page records or `null`, and lists of full records, private ones included. `upkeep` is `{ running, at?, changed?, error?, failedAt?, every? }`, or `null` for an agent upkeep can't run for (no `commitment` tool, or only a profile left). `rooms` names the rooms its commitments were taken on for, by ref, and `leads` the rooms it leads. `404` for a name that is neither an agent nor a profile |
 | `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen?, autonomy? }`; `autonomy` is `suggest` (the default), `tell` or `quiet`. `201` with `{ commitment, inPrompt, why? }`, where `inPrompt` says whether the agent will see it in its prompt block and, when it won't, `why` is `"tool"` (no `commitment` tool) or `"pin"` (the block is off). `400` without a goal, one longer than 300 characters, or an unknown autonomy. `404` for a name that is no agent, including one that only has a profile left |
 | `GET /api/ext/builtin:directory/rooms` | `{ rooms: [{ ref, name, purpose, lead, leadFrom?, members, commitments: { open, waiting, done }, docs }] }`: every live room. `purpose` is the profile's, or the room's own, or `null`; `lead` is `null` with nobody to lead it; `leadFrom` is `person`, `config` or `creator`. Commitments count the room's own and those its lead took on for it |
-| `GET /api/ext/builtin:directory/rooms/:room` | `{ ref, name, purpose?, createdBy?, archived, profile, lead: { agent?, source?, configured? }, members, agents, commitments, docs, misses, held }` for a room by name or ref, archived ones too. `agents` is everyone who could lead it; `held` maps a record's id to the fields a person set. `404` for no such room |
+| `GET /api/ext/builtin:directory/rooms/:room` | `{ ref, name, purpose?, createdBy?, archived, profile, lead: { agent?, source?, configured?, fallback? }, members, agents, commitments, docs, misses, held }` for a room by name or ref, archived ones too. With a lead you chose, `fallback` is `{ agent, source }`: who setting it back gives, from `config` or the room's `creator`. `agents` is everyone who could lead it; `held` maps a record's id to the fields a person set. `404` with `{ error, room }` for no such room |
 | `POST /api/ext/builtin:directory/rooms/:room/commitments` | Hands the room's lead a commitment for the room. Body as for an agent. `201` with `{ commitment, lead, inPrompt, why? }`. `409` when the room has no lead or is archived |
 | `PUT /api/ext/builtin:directory/rooms/:room/lead` | Body `{ lead }`: an agent, or `null` to go back to config's choice and then the room's creator. `200` with `{ lead }` as `GET` gives it. `400` for no such agent |
 | `PATCH /api/ext/builtin:directory/rooms/:room/profile` | Body with any of `purpose`, `takesOn`, `howToAsk`, `note`; an empty one clears it. Written as you, so the fields you change hold. `200` with `{ profile }` |

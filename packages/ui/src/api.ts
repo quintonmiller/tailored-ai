@@ -2160,6 +2160,8 @@ export interface RoomLead {
   agent?: string;
   source?: RoomLeadSource;
   configured?: string;
+  /** With a person's choice, who handing it back would give, and why. */
+  fallback?: { agent: string; source: Exclude<RoomLeadSource, "person"> };
 }
 
 /** One room's records, as its page draws them. */
@@ -2209,13 +2211,17 @@ export async function fetchDirectoryRooms(): Promise<DirectoryRoomSummary[] | nu
 
 /**
  * One room's records, or null when the directory is off. A room that isn't
- * there throws, with the server's words, rather than reading as "off".
+ * there throws, with the server's words, rather than reading as "off": the
+ * directory names the room in that answer, and nothing else that answers
+ * 404 here does (the plugin routes' own "not found", or "turned off").
  */
 export async function fetchDirectoryRoom(name: string): Promise<DirectoryRoom | null> {
   const res = await fetch(`${DIRECTORY}/rooms/${encodeURIComponent(name)}`);
-  const json = (await res.json().catch(() => undefined)) as (DirectoryRoom & { error?: string }) | undefined;
+  const json = (await res.json().catch(() => undefined)) as
+    | (DirectoryRoom & { error?: string; room?: unknown })
+    | undefined;
   if (res.status === 404) {
-    if (json?.error && !json.error.includes("turned off")) throw new Error(json.error);
+    if (json?.error && typeof json.room === "string") throw new Error(json.error);
     return null;
   }
   if (json === undefined) {

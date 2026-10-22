@@ -31,6 +31,7 @@ import {
   type StateTypeDef,
 } from "../state/types.js";
 import {
+  heldArchiveRefusal,
   heldFields,
   heldRefusal,
   type Lead,
@@ -404,6 +405,14 @@ export const PERSON: StateCaller = { actor: { kind: "user", name: "owner" }, sou
 const READER: StateCaller = { actor: { kind: "plugin", name: "directory" }, source: { surface: "directory" } };
 
 /**
+ * Marks a caller {@link Directory.widen} gave its rooms to: its turn was
+ * woken in none, so the rooms it holds are the ones it's in, not the ones it
+ * was woken in. A symbol, so the copies the reads make of a caller keep it.
+ */
+const WIDENED = Symbol("directory.widened");
+type Widened = StateCaller & { [WIDENED]?: true };
+
+/**
  * Writes made for an agent through one of the tools. The plugin is the actor,
  * since agents can't write these types themselves; the source names the tool
  * and the agent whose doing it was, so a subscription doesn't wake an agent
@@ -475,6 +484,8 @@ export interface RoomEntry {
   members: string[];
   /** Whether the asker is in it, and so sees its commitments, docs and misses. People always are. */
   member: boolean;
+  /** Why a member's turn doesn't see them: it was woken in another room. */
+  away?: string;
   /** Its open and waiting commitments, its own and those its lead took on for it. */
   working: StateRecord[];
   docs: StateRecord[];
@@ -669,16 +680,46 @@ export class Directory {
 
   /**
    * The caller as the directory reads for it. World state shows an agent a
-   * room's scope only in a turn woken in that room; the directory's own
-   * records follow membership instead, so an agent sees the commitments and
-   * docs of every live room it's in, wherever its turn is: its upkeep, a
-   * direct message, another room. People and plugins see everything already.
+   * room's scope only in a turn woken in that room. A turn woken in no room,
+   * its upkeep or a direct message, sees the commitments and docs of every
+   * live room it's in, since that's where a lead looks after them. A turn
+   * woken in a room keeps world state's rule, so another room's work stays
+   * out of a conversation with agents who aren't in it. People and plugins
+   * see everything already.
    */
   async widen(caller: StateCaller): Promise<StateCaller> {
-    if (caller.actor.kind !== "agent") return caller;
+    if (caller.actor.kind !== "agent" || (caller.rooms?.length ?? 0) > 0) return caller;
     const mine = (await this.roomsOf(caller.actor.name)).map((r) => r.ref);
     if (mine.length === 0) return caller;
-    return { ...caller, rooms: [...new Set([...(caller.rooms ?? []), ...mine])] };
+    return { ...caller, rooms: mine, [WIDENED]: true } as Widened;
+  }
+
+  /**
+   * Why a member's turn can't reach a room's records, or undefined when it
+   * can: people can, and so can a turn woken in that room or in none. A turn
+   * woken in another room can't, by world state's rule.
+   */
+  private away(caller: StateCaller, room: RoomInfo): string | undefined {
+    if (caller.actor.kind !== "agent" || (caller as Widened)[WIDENED]) return undefined;
+    const woken = caller.rooms ?? [];
+    if (woken.length === 0 || woken.includes(room.ref)) return undefined;
+    const here = woken.map((ref) => this.room(ref)?.name).find((n) => !!n);
+    return `This turn is in ${here ? `the ${here} room` : "another room"}, so the ${room.name} room's records stay out of it. Work on them from the ${room.name} room itself, a direct message or your upkeep.`;
+  }
+
+  /**
+   * What a caller is told about a record it can't see: that there's none,
+   * or, for one of a room it's in that this turn can't reach, why. Anyone
+   * else learns nothing of what a room holds.
+   */
+  async absent(caller: StateCaller, type: string, id: string, noun: string): Promise<string> {
+    const none = `There is no ${noun} "${id}".`;
+    if (caller.actor.kind !== "agent" || !caller.rooms?.length || (caller as Widened)[WIDENED]) return none;
+    const hidden = await this.service().get(READER, { type, id });
+    const ref = hidden?.scope.startsWith("room:") ? hidden.scope.slice("room:".length) : undefined;
+    const room = ref ? this.room(ref) : undefined;
+    if (!room || !(await this.members(room)).includes(caller.actor.name)) return none;
+    return this.away(caller, room) ?? none;
   }
 
   /**
@@ -701,14 +742,17 @@ export class Directory {
         `You're not in the ${room.name} room, so you can't change its records.${members.length ? ` Its members can: ${members.join(", ")}.` : " Nobody is in it yet."}`,
       );
     }
+    const away = this.away(caller, room);
+    if (away) throw new StateError(away);
     return room;
   }
 
   /**
    * The room `nameOrRef` names, when the caller may read its commitments and
-   * docs: people may, and agents in it, archived or not. The caller comes
-   * back with the room's scope in its view, so its records can be read from
-   * anywhere. Refused in a sentence otherwise.
+   * docs: people may, and agents in it, archived or not, from a turn woken in
+   * it or in none. The caller comes back with the room's scope in its view,
+   * so an archived room's records can be read too. Refused in a sentence
+   * otherwise.
    */
   async readable(
     caller: StateCaller,
@@ -728,6 +772,8 @@ export class Directory {
         `You're not in the ${room.name} room, so its ${what} aren't yours to see; its members' are. directory about with room ${room.name} says what it's for.`,
       );
     }
+    const away = this.away(caller, room);
+    if (away) throw new StateError(away);
     return { room, caller: { ...caller, rooms: [...new Set([...(caller.rooms ?? []), room.ref])] } };
   }
 
@@ -762,7 +808,9 @@ export class Directory {
     const member = caller.actor.kind !== "agent" || members.includes(caller.actor.name);
     const none = { working: [], docs: [], misses: [], full: { commitments: false, docs: false } };
     if (!member) return { room, profile, lead, members, member, ...none };
-    // A member reads the room's scope from anywhere, an archived room's too.
+    const away = this.away(caller, room);
+    if (away) return { room, profile, lead, members, member, away, ...none };
+    // A member reads the room's scope from a turn woken in it or in none, an archived room's too.
     const inside = caller.actor.kind === "agent" ? { ...caller, rooms: [...(caller.rooms ?? []), room.ref] } : caller;
     const fortnight = new Date(this.now().getTime() - 14 * 86_400_000);
     const [working, docs, misses] = await Promise.all([
@@ -785,11 +833,14 @@ export class Directory {
 
   /**
    * The fields of a room's record that a person's edit holds, which no agent
-   * may change. None for an agent's own records, and none from a store that
-   * keeps no history, which can't say who set what.
+   * may change: the room's own records, and the commitments its lead took on
+   * for it, which its page shows and a person edits there alike. None for an
+   * agent's other records, and none from a store that keeps no history,
+   * which can't say who set what.
    */
   async held(record: StateRecord): Promise<string[]> {
-    if (!roomOfOwner(ownerOf(record))) return [];
+    const room = typeof record.data.room === "string" && record.data.room;
+    if (!roomOfOwner(ownerOf(record)) && !room) return [];
     try {
       const history = await this.service().history(
         READER,
@@ -839,6 +890,12 @@ export class Directory {
     for (let attempt = 0; ; attempt++) {
       let existing = await service.get(READER, ref);
       try {
+        // A person put it away; bringing it back is theirs too, so a member's write doesn't undo that.
+        if (!person && existing?.archivedAt) {
+          throw new StateError(
+            `The ${room.name} room's profile is archived. A person can bring it back on the State page.`,
+          );
+        }
         if (person && (!existing || existing.archivedAt)) {
           existing = await service.put(
             READER,
@@ -1201,7 +1258,7 @@ export class Directory {
    */
   async own(caller: StateCaller, type: string, id: string, noun: string): Promise<StateRecord> {
     const record = await this.service().get(caller, { type, id });
-    if (!record) throw new StateError(`There is no ${noun} "${id}".`);
+    if (!record) throw new StateError(await this.absent(caller, type, id, noun));
     const owner = ownerOf(record);
     const room = roomOfOwner(owner);
     if (room) {
@@ -1251,10 +1308,19 @@ export class Directory {
     }
   }
 
-  /** Archive one of the caller's records. */
+  /**
+   * Archive one of the caller's records, or one of a room's it is in. One
+   * with fields a person set is theirs to put away, unless it's a finished
+   * commitment, whose fields no longer steer anything.
+   */
   async archive(caller: StateCaller, tool: string, type: string, id: string, noun: string, reason?: string) {
     const record = await this.own(caller, type, id, noun);
     if (record.archivedAt) return record;
+    const finished = type === COMMITMENT_TYPE && !ACTIVE.includes(String(record.data.status ?? "open") as Status);
+    if (!finished) {
+      const held = await this.held(record);
+      if (held.length) throw new StateError(heldArchiveRefusal(id, held));
+    }
     const archived = await this.service().archive(writerFor(caller, tool), { type, id }, reason, record.version);
     if (!archived) throw new StateError(`There is no ${noun} "${id}".`);
     return archived;

@@ -610,9 +610,10 @@ const plugin: Plugin = (ctx) => {
 
   /** The room a route names, by name or ref, archived ones too. */
   const roomFrom = (req: { params: Record<string, string> }) => directory.room(req.params.room ?? "");
+  // Names the room asked for, so a page can tell "no such room" from routes that aren't there at all.
   const noRoom = (req: { params: Record<string, string> }): TaiHttpResponse => ({
     status: 404,
-    json: { error: `There's no room called "${req.params.room ?? ""}".` },
+    json: { error: `There's no room called "${req.params.room ?? ""}".`, room: req.params.room ?? "" },
   });
   const archived = (room: RoomInfo): TaiHttpResponse => ({
     status: 409,

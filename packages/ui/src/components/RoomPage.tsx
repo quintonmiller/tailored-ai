@@ -268,7 +268,15 @@ function About({ room, reload }: { room: DirectoryRoom; reload: () => void }) {
           {note && (
             <figure className="agent-page-note">
               <blockquote>{note}</blockquote>
-              <figcaption>In its members' words {held.has("note") && <Held />}</figcaption>
+              <figcaption>
+                {held.has("note") ? (
+                  <>
+                    In your words <Held />
+                  </>
+                ) : (
+                  "In its members' words"
+                )}
+              </figcaption>
             </figure>
           )}
           {(takesOn.length > 0 || howToAsk) && (
@@ -377,11 +385,12 @@ function People({ room, reload }: { room: DirectoryRoom; reload: () => void }) {
   const chosen = lead.source === "person" ? (lead.agent ?? "") : "";
   const from = leadFrom(lead);
   // The first choice is what the room gets with nobody chosen: config's lead, then the agent that made it.
+  const back = lead.fallback;
   const fallback =
     lead.source === "person"
-      ? lead.configured
-        ? `Back to ${lead.configured}, named in config`
-        : "Back to config's choice, then its creator"
+      ? back
+        ? `Back to ${back.agent}, ${back.source === "config" ? "named in config" : "who made the room"}`
+        : "Back to nobody"
       : lead.agent
         ? `${lead.agent} (${lead.source === "config" ? "config" : "its creator"})`
         : "Nobody";
@@ -604,6 +613,10 @@ function ItemForm({ room, record, done }: { room: DirectoryRoom; record: StateRe
           <input type="text" value={waitingOn} maxLength={200} onChange={(e) => setWaitingOn(e.target.value)} />
         </label>
       )}
+      <p className="agent-page-hint">
+        Agents leave the next step and what it waits on as you set them; clear one to hand it back. The status goes in
+        its updates, and its members carry the work on from there.
+      </p>
       <div className="room-form-actions">
         <button type="submit" className="primary" disabled={busy}>
           {busy ? "Saving…" : "Save"}

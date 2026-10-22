@@ -85,8 +85,8 @@ async function run(agent: string, name: string, args: Record<string, unknown>, r
   return r.text;
 }
 
-async function refused(agent: string, name: string, args: Record<string, unknown>): Promise<string> {
-  const r = await call(agent, name, args);
+async function refused(agent: string, name: string, args: Record<string, unknown>, rooms = ""): Promise<string> {
+  const r = await call(agent, name, args, rooms);
   if (r.ok) throw new Error(`${name} ${JSON.stringify(args)} should have failed, said: ${r.text}`);
   return r.text;
 }
@@ -173,6 +173,21 @@ describe("a room's lead", () => {
       agent: "trip-planner",
       source: "person",
       configured: "writer",
+      fallback: { agent: "writer", source: "config" },
+    });
+    // Handing the choice back gives config's lead, or the room's creator, or nobody, whoever the person chose.
+    expect(leadOf(room(), { chosen: "writer", leads: { travel: "writer" }, agents: roster })).toEqual({
+      agent: "writer",
+      source: "person",
+      fallback: { agent: "writer", source: "config" },
+    });
+    expect(leadOf(room(), { chosen: "writer", leads: {}, agents: roster }).fallback).toEqual({
+      agent: "planner",
+      source: "creator",
+    });
+    expect(leadOf(room({ createdBy: "alex" }), { chosen: "writer", leads: {}, agents: roster })).toEqual({
+      agent: "writer",
+      source: "person",
     });
     // A lead since removed, or a room a person opened, falls through to the next.
     expect(leadOf(room(), { chosen: "ghost", leads: { travel: "gone" }, agents: roster })).toEqual({
@@ -203,7 +218,12 @@ describe("a room's lead", () => {
 
     const chose = await http("PUT", "rooms/:room/lead", { room: "travel" }, { lead: "writer" });
     expect(chose.status).toBe(200);
-    expect(chose.json.lead).toEqual({ agent: "writer", source: "person", configured: "trip-planner" });
+    expect(chose.json.lead).toEqual({
+      agent: "writer",
+      source: "person",
+      configured: "trip-planner",
+      fallback: { agent: "trip-planner", source: "config" },
+    });
     // Kept on the room's profile, as the person: seeded from the room's purpose by the directory first.
     const profile = await record(PROFILE_TYPE, `room:${TRAVEL}`);
     expect(profile?.data).toMatchObject({
@@ -374,31 +394,100 @@ describe("what a person sets on a room's record", () => {
     expect(page.json.held).toEqual({ "room-travel-book-the-lisbon-flights": ["nextStep"] });
   });
 
-  it("is left alone by what finishing tidies by the way, and a person who clears a field hands it back", async () => {
+  it("leaves its status to the members, is left alone by what finishing tidies, and a cleared field is handed back", async () => {
+    const id = "room-travel-book-the-lisbon-flights";
     await http(
       "PATCH",
       "rooms/:room/commitments/:id",
-      { room: "travel", id: "room-travel-book-the-lisbon-flights" },
+      { room: "travel", id },
       { status: "waiting", waitingOn: "the school calendar" },
     );
-    // Marking it done is refused: a person set its status.
-    expect(
-      await refused("planner", "commitment", { action: "done", id: "room-travel-book-the-lisbon-flights" }),
-    ).toContain("A person set status");
+    // Status is the work's progress: the person's change goes in the log, and only what it waits on holds.
+    expect((await http("GET", "rooms/:room", { room: "travel" })).json.held).toEqual({ [id]: ["waitingOn"] });
     // Cleared by the person, the field is the members' again.
-    await http(
-      "PATCH",
-      "rooms/:room/commitments/:id",
-      { room: "travel", id: "room-travel-book-the-lisbon-flights" },
-      { nextStep: null },
+    await http("PATCH", "rooms/:room/commitments/:id", { room: "travel", id }, { nextStep: null });
+    await run("planner", "commitment", { action: "update", id, nextStep: "Ask about half term" });
+    // Finishing goes through, and leaves what a person said it waits on as they left it.
+    expect(await run("trip-planner", "commitment", { action: "done", id })).toBe(
+      'Done: room-travel-book-the-lisbon-flights "Book the Lisbon flights".',
     );
-    await run("planner", "commitment", {
-      action: "update",
-      id: "room-travel-book-the-lisbon-flights",
+    const after = await record(COMMITMENT_TYPE, id);
+    expect(after?.data).toMatchObject({
+      status: "done",
       nextStep: "Ask about half term",
+      waitingOn: "the school calendar",
     });
-    const after = await record(COMMITMENT_TYPE, "room-travel-book-the-lisbon-flights");
-    expect(after?.data).toMatchObject({ nextStep: "Ask about half term", waitingOn: "the school calendar" });
+    expect((after?.data.updates as { text: string }[]).map((u) => u.text)).toContain(
+      'A person set the waiting-on to "the school calendar" and set the status to waiting.',
+    );
+  });
+
+  it("holds on a commitment the lead took on for the room, edited on the room's page", async () => {
+    await http(
+      "POST",
+      "rooms/:room/commitments",
+      { room: "travel" },
+      { goal: "Find a dog sitter", doneWhen: "Booked" },
+    );
+    const id = "trip-planner-find-a-dog-sitter";
+    const edit = await http("PATCH", "rooms/:room/commitments/:id", { room: "travel", id }, { nextStep: "Ask Sam" });
+    expect(edit.status).toBe(200);
+    expect(await refused("trip-planner", "commitment", { action: "update", id, nextStep: "Book the kennel" })).toBe(
+      `A person set nextStep on ${id}, so it stays as they left it. Ask them if it should change.`,
+    );
+    expect((await http("GET", "rooms/:room", { room: "travel" })).json.held).toEqual({ [id]: ["nextStep"] });
+    // Its lead still carries it on and finishes it.
+    expect(await run("trip-planner", "commitment", { action: "done", id })).toContain("Done");
+
+    // A commitment of an agent's own that names no room keeps its own rules: a person's edit there doesn't hold.
+    await run("trip-planner", "commitment", { action: "open", goal: "Renew passport", doneWhen: "Passport back" });
+    await service.patch(PERSON, { type: COMMITMENT_TYPE, id: "trip-planner-renew-passport" }, { nextStep: "Photos" });
+    await run("trip-planner", "commitment", {
+      action: "update",
+      id: "trip-planner-renew-passport",
+      nextStep: "Post it",
+    });
+    expect((await record(COMMITMENT_TYPE, "trip-planner-renew-passport"))?.data.nextStep).toBe("Post it");
+  });
+
+  it("can't be put away by an agent, unless it's finished work", async () => {
+    const id = "room-travel-book-the-lisbon-flights";
+    await http("PATCH", "rooms/:room/commitments/:id", { room: "travel", id }, { nextStep: "Wait for the calendar" });
+    expect(await refused("trip-planner", "commitment", { action: "archive", id })).toBe(
+      `A person set nextStep on ${id}, so whether it's put away is theirs to say. Ask them before archiving it.`,
+    );
+    expect((await record(COMMITMENT_TYPE, id))?.archivedAt).toBeFalsy();
+
+    await run("planner", "writeup", {
+      action: "write",
+      room: "travel",
+      title: "Visa rules",
+      summary: "Who in the family needs one.",
+      body: "- Nobody yet",
+    });
+    await service.patch(PERSON, { type: DOC_TYPE, id: "room-travel-visa-rules" }, { body: "- The kids need one" });
+    expect(await refused("planner", "writeup", { action: "archive", id: "room-travel-visa-rules" })).toBe(
+      "A person set body on room-travel-visa-rules, so whether it's put away is theirs to say. Ask them before archiving it.",
+    );
+
+    // Once it's finished, what a person set no longer steers it, so it can go.
+    await run("trip-planner", "commitment", { action: "done", id });
+    expect(await run("trip-planner", "commitment", { action: "archive", id })).toContain(`Archived ${id}.`);
+  });
+
+  it("leaves a room's profile a person archived as it is", async () => {
+    await http("PATCH", "rooms/:room/profile", { room: "travel" }, { purpose: "Family trips.", note: "Ask first." });
+    await http("PUT", "rooms/:room/lead", { room: "travel" }, { lead: "writer" });
+    await service.archive(PERSON, { type: PROFILE_TYPE, id: `room:${TRAVEL}` });
+    expect(
+      await refused("trip-planner", "directory", { action: "profile", room: "travel", purpose: "Business trips." }),
+    ).toBe("The travel room's profile is archived. A person can bring it back on the State page.");
+    expect(await refused("trip-planner", "directory", { action: "page", room: "travel", note: "Ours now." })).toBe(
+      "The travel room's profile is archived. A person can bring it back on the State page.",
+    );
+    const kept = await record(PROFILE_TYPE, `room:${TRAVEL}`);
+    expect(kept?.archivedAt).toBeTruthy();
+    expect(kept?.data).toMatchObject({ purpose: "Family trips.", note: "Ask first.", lead: "writer" });
   });
 
   it("holds a room's purpose a person wrote on its page, and nothing a person merely created", async () => {
@@ -421,20 +510,37 @@ describe("what a person sets on a room's record", () => {
   });
 
   it("is read from history: the latest change to each field, a person's edit only, and only while it has a value", () => {
-    const change = (actor: "user" | "plugin", before: Record<string, unknown>, after: Record<string, unknown>) =>
+    type Kind = "user" | "plugin" | "agent";
+    const change = (actor: Kind, before: Record<string, unknown>, after: Record<string, unknown>) =>
       ({ op: "update", actor: { kind: actor, name: "x" }, before, after }) as StateChange;
     const history = [
       change("plugin", { nextStep: "a" }, { nextStep: "b" }),
       change("user", { nextStep: "x", goal: "g" }, { nextStep: "a", goal: "h", updates: [1] }),
+      change("user", {}, { waitingOn: "the visas" }),
+      // Status is the work's progress, and never holds.
       change("user", { status: "open" }, { status: "waiting" }),
       { op: "create", actor: { kind: "user", name: "owner" }, after: { doneWhen: "d" } } as StateChange,
       change("user", { doneWhen: "old" }, { doneWhen: "older life" }),
     ];
-    expect(heldFields(history, { nextStep: "b", goal: "h", status: "waiting", doneWhen: "d" })).toEqual([
-      "goal",
-      "status",
-    ]);
-    expect(heldFields(history, { nextStep: "b", goal: "", status: "waiting" })).toEqual(["status"]);
+    const data = { nextStep: "b", goal: "h", status: "waiting", waitingOn: "the visas", doneWhen: "d" };
+    expect(heldFields(history, data)).toEqual(["goal", "waitingOn"]);
+    expect(heldFields(history, { ...data, goal: "" })).toEqual(["waitingOn"]);
+
+    // Archiving changes no field; a write over an archived record is its writer's, never a person's older edit.
+    const lifecycle = (c: StateChange, l: "archived" | "unarchived") => ({ ...c, lifecycle: l }) as StateChange;
+    const archived = [
+      lifecycle(change("user", { purpose: "Trips." }, { purpose: "Trips." }), "archived"),
+      change("user", { purpose: "Family trips." }, { purpose: "Trips." }),
+    ];
+    expect(heldFields(archived, { purpose: "Trips." })).toEqual(["purpose"]);
+    const rewritten = [lifecycle(change("agent", { purpose: "Trips." }, { purpose: "Business." }), "unarchived")];
+    expect(heldFields([...rewritten, ...archived], { purpose: "Business." })).toEqual([]);
+    // A store that logs an archive without both sides changes nothing by it.
+    const oneSided = lifecycle(
+      { op: "update", actor: { kind: "user", name: "x" }, before: { purpose: "Trips." } },
+      "archived",
+    );
+    expect(heldFields([oneSided], { purpose: "Trips." })).toEqual([]);
   });
 });
 
@@ -479,6 +585,11 @@ describe("handing a room something", () => {
     expect(none.json.error).toBe("The attic room has no lead to hand this to. Choose one first.");
     expect((await http("POST", "rooms/:room/commitments", { room: "travel" }, { doneWhen: "x" })).status).toBe(400);
     expect((await http("POST", "rooms/:room/commitments", { room: "nowhere" }, { goal: "x" })).status).toBe(404);
+    // A room that isn't there says which, so a page tells it from a directory that's off.
+    expect((await http("GET", "rooms/:room", { room: "nowhere" })).json).toEqual({
+      error: 'There\'s no room called "nowhere".',
+      room: "nowhere",
+    });
   });
 });
 
@@ -495,8 +606,8 @@ describe("seeing a room", () => {
     });
   });
 
-  it("gives every agent its profile, and its commitments and docs only to its members, wherever their turn is", async () => {
-    // A member, in a turn woken outside the room: the directory follows membership.
+  it("gives every agent its profile, and its commitments and docs only to its members", async () => {
+    // A member, in a turn woken in no room (its upkeep, a direct message): the directory follows membership.
     const member = await run("planner", "directory", { action: "about", room: "travel" });
     expect(member).toContain("The travel room (no profile yet; this is the purpose it was given): Family trips");
     expect(member).toContain("Lead: trip-planner (named in config).");
@@ -515,6 +626,41 @@ describe("seeing a room", () => {
     );
     // A room named where an agent was asked for is still the one meant.
     expect(await run("writer", "directory", { action: "about", agent: "travel" })).toContain("The travel room");
+  });
+
+  it("keeps a room's records out of a member's turn woken in another room, as world state does", async () => {
+    // planner is in both rooms. Woken in the garden, the travel room's work stays out of that conversation.
+    const away =
+      "This turn is in the garden room, so the travel room's records stay out of it. Work on them from the travel room itself, a direct message or your upkeep.";
+    const about = await run("planner", "directory", { action: "about", room: "travel" }, GARDEN);
+    expect(about).toContain("Members: planner, trip-planner.");
+    expect(about).toContain(away);
+    expect(about).not.toContain("room-travel-lisbon");
+    expect(await run("planner", "directory", { action: "search", q: "Lisbon hotels" }, GARDEN)).not.toContain(
+      "room-travel",
+    );
+    expect(await refused("planner", "commitment", { action: "list", room: "travel" }, GARDEN)).toBe(away);
+    expect(await refused("planner", "writeup", { action: "list", room: "travel" }, GARDEN)).toBe(away);
+    expect(
+      await refused("planner", "writeup", { action: "read", id: "room-travel-lisbon-hotel-shortlist" }, GARDEN),
+    ).toBe(away);
+    expect(
+      await refused("planner", "commitment", { action: "update", id: "room-travel-lisbon-hotels", note: "x" }, GARDEN),
+    ).toBe(away);
+    expect(
+      await refused("planner", "commitment", { action: "open", room: "travel", goal: "G", doneWhen: "x" }, GARDEN),
+    ).toBe(away);
+    // An outsider woken in another room learns nothing more than it would anywhere.
+    expect(
+      await refused("writer", "writeup", { action: "read", id: "room-travel-lisbon-hotel-shortlist" }, GARDEN),
+    ).toBe('There is no doc "room-travel-lisbon-hotel-shortlist".');
+    // Woken in the travel room itself, or in no room, it's all there.
+    expect(await run("planner", "directory", { action: "about", room: "travel" }, TRAVEL)).toContain(
+      "room-travel-lisbon-hotels",
+    );
+    expect(await run("planner", "commitment", { action: "list", room: "travel" })).toContain(
+      "room-travel-lisbon-hotels",
+    );
   });
 
   it("finds a room's records in search for its members only, named as the room's", async () => {

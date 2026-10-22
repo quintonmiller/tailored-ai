@@ -58,6 +58,8 @@ export interface Lead {
   source?: LeadSource;
   /** The agent config names, when a person's choice stands in front of it. */
   configured?: string;
+  /** Who would lead it without a person's choice, and why: what handing the choice back gives. */
+  fallback?: { agent: string; source: Exclude<LeadSource, "person"> };
 }
 
 /** The agent `leads` in config names for a room, by its ref first and then its name. */
@@ -69,28 +71,45 @@ export function configuredLead(room: RoomInfo, leads: Record<string, string>): s
  * Who leads a room: the agent a person chose on its page, then the one config
  * names, then the agent that created it. Only an agent that exists counts, so
  * a lead since removed, or a room a person opened, falls through to the next.
+ * With a person's choice, `fallback` says who handing it back would give.
  */
 export function leadOf(room: RoomInfo, at: { chosen?: string; leads: Record<string, string>; agents: string[] }): Lead {
   const exists = (name: string | undefined): name is string => !!name && at.agents.includes(name);
   const configured = configuredLead(room, at.leads);
+  const fallback = (): Lead["fallback"] => {
+    if (exists(configured)) return { agent: configured, source: "config" };
+    if (exists(room.createdBy)) return { agent: room.createdBy, source: "creator" };
+    return undefined;
+  };
   if (exists(at.chosen)) {
+    const back = fallback();
     return {
       agent: at.chosen,
       source: "person",
       ...(exists(configured) && configured !== at.chosen ? { configured } : {}),
+      ...(back ? { fallback: back } : {}),
     };
   }
-  if (exists(configured)) return { agent: configured, source: "config" };
-  if (exists(room.createdBy)) return { agent: room.createdBy, source: "creator" };
-  return {};
+  const back = fallback();
+  return back ? { agent: back.agent, source: back.source } : {};
 }
 
 /**
  * Fields that never hold: who a record belongs to and which room, the dated
- * log members add to, the times kept alongside the fields they date, and the
- * lead, which no agent can set.
+ * log members add to, the times kept alongside the fields they date, the
+ * lead, which no agent can set, and a commitment's status. Status is the
+ * work's own progress: a person's change to it goes in the log as a dated
+ * update, and members carry the work on from there, finishing it included.
  */
-export const UNHELD: ReadonlySet<string> = new Set(["owner", "room", "updates", "reviewedAt", "noteAt", "lead"]);
+export const UNHELD: ReadonlySet<string> = new Set([
+  "owner",
+  "room",
+  "updates",
+  "reviewedAt",
+  "noteAt",
+  "lead",
+  "status",
+]);
 
 /**
  * The fields of a room's record that a person's edit holds, read from its
@@ -99,12 +118,19 @@ export const UNHELD: ReadonlySet<string> = new Set(["owner", "room", "updates", 
  * existed, so creating one holds nothing, and a person who clears a field
  * hands it back. Changes before the record was last created belong to an
  * earlier record of the same id and are not read.
+ *
+ * Archiving a record, or bringing it back, changes none of its fields. A
+ * write over an archived record does, and the fields it changed are its
+ * writer's, so an agent's text written there is never taken for a person's
+ * older edit. A store that logs an archive without both sides is read as
+ * changing nothing.
  */
 export function heldFields(history: StateChange[], data: Record<string, unknown>): string[] {
   const byPerson = new Map<string, boolean>();
   for (const change of history) {
     if (change.op === "create") break;
-    if (change.op !== "update" || change.lifecycle) continue;
+    if (change.op !== "update") continue;
+    if (change.lifecycle && (!change.before || !change.after)) continue;
     const before = change.before ?? {};
     const after = change.after ?? {};
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
@@ -119,10 +145,19 @@ export function heldFields(history: StateChange[], data: Record<string, unknown>
     .sort();
 }
 
+/** "nextStep", or "goal and nextStep", or "goal, doneWhen and nextStep". */
+function named(fields: string[]): string {
+  return fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}` : (fields[0] ?? "");
+}
+
 /** What an agent is told when it would change fields a person set. */
 export function heldRefusal(id: string, fields: string[]): string {
-  const named = fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}` : fields[0];
-  return `A person set ${named} on ${id}, so it stays as they left it. Ask them if it should change.`;
+  return `A person set ${named(fields)} on ${id}, so it stays as they left it. Ask them if it should change.`;
+}
+
+/** What an agent is told when it would archive a record with fields a person set. */
+export function heldArchiveRefusal(id: string, fields: string[]): string {
+  return `A person set ${named(fields)} on ${id}, so whether it's put away is theirs to say. Ask them before archiving it.`;
 }
 
 /**

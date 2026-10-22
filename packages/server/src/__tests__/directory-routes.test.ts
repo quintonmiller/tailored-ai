@@ -344,6 +344,7 @@ describe("the directory routes", () => {
         agent: "planner",
         source: "person",
         configured: "trip-planner",
+        fallback: { agent: "trip-planner", source: "config" },
       });
       await app.fetch(api("rooms/travel/lead", json("PUT", { lead: null })));
 

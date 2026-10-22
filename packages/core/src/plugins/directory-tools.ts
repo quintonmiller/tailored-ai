@@ -254,6 +254,10 @@ export function formatRoomAbout(entry: RoomEntry, now: Date, name: (owner: strin
     lines.push(`Its commitments and docs are for its members, and you're not in it.`);
     return lines.join("\n");
   }
+  if (entry.away) {
+    lines.push(entry.away);
+    return lines.join("\n");
+  }
   if (!note && !room.archived) lines.push("Its page has no note yet; directory page with room adds one.");
   const { commitments: moreWork, docs: moreDocs } = entry.full;
   lines.push(
@@ -1094,7 +1098,7 @@ export class WriteupTool implements Tool {
         return fail(`${action} needs the doc's \`id\`. Action list shows yours; directory search finds others'.`);
       if (action === "read") {
         const record = await this.directory.service().get(caller, { type: DOC_TYPE, id });
-        if (!record) return fail(`There is no doc "${id}".`);
+        if (!record) return fail(await this.directory.absent(caller, DOC_TYPE, id, "doc"));
         // Another agent reading it is evidence for its owner's upkeep that it's worth keeping current.
         await this.directory.countRead(record, me);
         return ok(formatDoc(record, me, name));
