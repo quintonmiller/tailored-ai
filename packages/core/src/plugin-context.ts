@@ -57,7 +57,10 @@ import {
   getWatcherKind,
   listWatcherKinds,
   registerWatcherKind,
+  validateWatchConfig,
   type WatcherKindRegistryView,
+  watcherResult,
+  watchInterval,
 } from "./watchers/registry.js";
 
 /**
@@ -165,7 +168,8 @@ export interface PluginContext {
   /**
    * Kinds of watcher: cheap checks, with no model call, that something
    * changed (a page, a price, a sender's mail). Core ships none and runs none;
-   * a runner plugin finds them here with `get` and `list`. See `docs/watchers.md`.
+   * a runner plugin finds them here with `get` and `list`, and checks a watch
+   * and a result with `validate`, `interval` and `result`. See `docs/watchers.md`.
    */
   watcherKinds: WatcherKindRegistryView;
   /**
@@ -474,7 +478,14 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     stateProviders: { register: collecting(registerStateProvider) },
     stateTypes: { register: collecting(registerStateType) },
     componentKinds: { register: collecting(registerComponentKind) },
-    watcherKinds: { register: collecting(registerWatcherKind), get: getWatcherKind, list: listWatcherKinds },
+    watcherKinds: {
+      register: collecting(registerWatcherKind),
+      get: getWatcherKind,
+      list: listWatcherKinds,
+      validate: validateWatchConfig,
+      interval: watchInterval,
+      result: watcherResult,
+    },
     mediaStores: { register: collecting(registerMediaStoreFactory) },
     mediaRenditions: { register: collecting(registerMediaRenditionFactory) },
     taskBackends: { register: collecting(registerTaskBackendFactory) },

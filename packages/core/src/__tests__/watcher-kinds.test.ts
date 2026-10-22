@@ -133,6 +133,8 @@ describe("the watcher-kind registry", () => {
       [{ kind: "Page" }, /lowercase and starts with a letter/],
       [{ kind: "" }, /lowercase/],
       [{ description: " " }, /needs a description/],
+      [{ description: "Checks a page.\nUse it for news." }, /description is one line of at most 160 characters/],
+      [{ description: "x".repeat(161) }, /description is one line of at most 160 characters/],
       [{ schema: undefined as never }, /needs a schema/],
       [{ check: undefined as never }, /needs a check function/],
       [{ minEvery: "often" }, /minEvery is a length of time .* not "often"/],
@@ -143,6 +145,11 @@ describe("the watcher-kind registry", () => {
       expect(() => register(stub(over)), JSON.stringify(over)).toThrow(message);
     }
     expect(watcherKindRegistry.has("test_stub")).toBe(false);
+  });
+
+  it("takes a description of one line up to the cap, with space around it", () => {
+    register(stub({ description: ` ${"x".repeat(160)}\n` }));
+    expect(getWatcherKind("test_stub")).toBeDefined();
   });
 
   it("says which schema keywords it can't check, and registers the kind anyway", () => {
@@ -193,8 +200,17 @@ describe("a watch's interval", () => {
     expect(watchInterval(price, "30 seconds")).toEqual({ ms: 15 * MINUTE, raisedFrom: 30_000 });
   });
 
+  it("reads a leading every, as the schedule tool writes it", () => {
+    expect(watchInterval(price, "every 30 minutes")).toEqual({ ms: 30 * MINUTE });
+    expect(watchInterval(price, " Every 2h")).toEqual({ ms: 2 * HOUR });
+    expect(watchInterval(price, "every 5m")).toEqual({ ms: 15 * MINUTE, raisedFrom: 5 * MINUTE });
+    expect(watchInterval(stub({ defaultEvery: "every 2 hours", minEvery: "every 15 minutes" }))).toEqual({
+      ms: 2 * HOUR,
+    });
+  });
+
   it("comes back as a correction when it isn't a length of time", () => {
-    for (const every of ["soon", "weekdays at 9am", 30, "every 2h"]) {
+    for (const every of ["soon", "weekdays at 9am", 30, "every", "every weekday"]) {
       expect(watchInterval(price, every), String(every)).toMatch(/^every is a length of time like "15m"/);
     }
   });
@@ -233,6 +249,15 @@ describe("what a check returns", () => {
     expect(() => watcherResult("changed", null)).toThrow(/returns \{ snapshot/);
   });
 
+  it("refuses a snapshot that becomes null as JSON, which would read as no snapshot next time", () => {
+    const nulls = [Number.NaN, Number.POSITIVE_INFINITY, new Date("no date"), { toJSON: () => null }];
+    for (const snapshot of nulls) {
+      expect(() => watcherResult({ snapshot, change: "It moved." }, { price: 8 }), String(snapshot)).toThrow(
+        /null once serialized/,
+      );
+    }
+  });
+
   it("hands back the snapshot as the plain JSON the next check will get", () => {
     const at = new Date("2026-10-21T12:00:00Z");
     expect(watcherResult({ snapshot: { at, skip: undefined, n: Number.NaN } }, null).snapshot).toEqual({
@@ -246,6 +271,14 @@ describe("what a check returns", () => {
     const long = watcherResult({ snapshot: 1, change: "word ".repeat(200) }, 0).change ?? "";
     expect(long.length).toBeLessThanOrEqual(MAX_WATCH_CHANGE_CHARS);
     expect(long.endsWith("…")).toBe(true);
+  });
+
+  it("never cuts a change through the middle of a character", () => {
+    const change = `${"a".repeat(MAX_WATCH_CHANGE_CHARS - 2)}\u{1F600}\u{1F600}`;
+    const out = watcherResult({ snapshot: 1, change }, 0).change ?? "";
+    expect(out.endsWith("…")).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(MAX_WATCH_CHANGE_CHARS);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(out), JSON.stringify(out)).toBe(false);
   });
 
   it("reads a blank change as no change", () => {
@@ -318,6 +351,21 @@ describe("ctx.watcherKinds", () => {
     expect(ctx.watcherKinds.list().map((k) => k.kind)).toContain("test_stub");
   });
 
+  it("hands a runner the checks it needs, so it imports nothing from core at run time", () => {
+    const { watcherKinds } = createPluginContext();
+    expect(watcherKinds.validate(price, {})).toEqual(["`url` is required"]);
+    expect(watcherKinds.interval(price, "5m")).toEqual({ ms: 15 * MINUTE, raisedFrom: 5 * MINUTE });
+    expect(watcherKinds.result({ snapshot: { price: 9 }, change: "It moved." }, { price: 8 }).change).toBe("It moved.");
+    // Caught by name: a runner's own copy of core has its own WatcherError class.
+    let thrown: unknown;
+    try {
+      watcherKinds.result({ snapshot: Number.NaN }, null);
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as Error).name).toBe("WatcherError");
+  });
+
   it("takes a plugin's kinds back when the plugin is unloaded, and offers get and list through the loader", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     let found: string[] = [];
@@ -326,6 +374,9 @@ describe("ctx.watcherKinds", () => {
         ctx.watcherKinds.register(price);
         found = ctx.watcherKinds.list().map((k) => k.kind);
         expect(ctx.watcherKinds.get("test_price")).toBe(price);
+        expect(ctx.watcherKinds.validate(price, { url: "https://shop.example" })).toEqual([]);
+        expect(ctx.watcherKinds.interval(price)).toEqual({ ms: HOUR });
+        expect(ctx.watcherKinds.result({ snapshot: 1 }, undefined)).toEqual({ snapshot: 1 });
       },
     }));
     expect(loaded.error).toBeUndefined();

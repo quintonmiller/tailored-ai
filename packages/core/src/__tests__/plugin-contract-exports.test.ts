@@ -275,6 +275,10 @@ describe("plugin contract — watcher kinds", () => {
       expect(core.watcherResult({ snapshot: { hash: "b" }, change: "The page changed." }, { hash: "a" }).change).toBe(
         "The page changed.",
       );
+      // The same checks through the context, for a runner that imports core as types only.
+      expect(ctx.watcherKinds.validate(page, {})).toEqual(["`url` is required"]);
+      expect(ctx.watcherKinds.interval(page, "every 2h")).toEqual({ ms: 2 * 60 * 60_000 });
+      expect(ctx.watcherKinds.result({ snapshot: { hash: "b" } }, undefined)).toEqual({ snapshot: { hash: "b" } });
     } finally {
       dispose();
     }

@@ -261,8 +261,8 @@ and silently escapes teardown. The three world-state views (`stateProviders`,
 `stateTypes`, `componentKinds`) were, so a plugin turned off by reload kept its
 world-state types until a restart. A test in `registration-disposers.test.ts`
 now fails for any view on the context that the collector doesn't wrap, and for
-any method beside `register` (the watcher kinds' `get` and `list`) that the
-re-built view leaves out.
+any method beside `register` (the watcher kinds' `get`, `list` and the checks a
+runner calls) that the re-built view leaves out.
 
 ### Runtime plugins across a reload
 

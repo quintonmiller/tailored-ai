@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentConfig, AIProvider, ChatResponse } from "@tailored-ai/core";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { buildProbeConfig, discoverProviders, listModelsFor } from "../editor/provider-discovery.js";
 
 function fakeProvider(models?: string[]): AIProvider {
@@ -28,6 +31,34 @@ describe("discoverProviders", () => {
     const config = { plugins: ["builtin:stall-guard"], providers: {} } as unknown as AgentConfig;
     const found = await discoverProviders("/tmp/does-not-matter", config);
     expect(found.every((p) => p.source === "builtin")).toBe(true);
+  });
+
+  describe("a plugin that registers more than providers", () => {
+    const home = mkdtempSync(join(tmpdir(), "tai-discovery-"));
+    afterAll(() => rmSync(home, { recursive: true, force: true }));
+
+    it("still has its provider found when it uses other views first", async () => {
+      // A plugin bringing a watcher kind, a state type and a time provider
+      // before its provider. A view missing from the capture context throws
+      // inside the plugin, the loader swallows it, and the provider registered
+      // after it never reaches the picker.
+      const dir = join(home, "plugins", "node_modules", "many-views-plugin");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "many-views-plugin", main: "index.mjs" }));
+      writeFileSync(
+        join(dir, "index.mjs"),
+        `export default (ctx) => {
+          ctx.watcherKinds.register({ kind: "page" });
+          ctx.watcherKinds.list();
+          ctx.stateTypes.register({ name: "note" });
+          ctx.timeProviders.register("fixed", () => ({}));
+          ctx.providers.register("many_views", () => ({}));
+        };`,
+      );
+      const config = { plugins: ["many-views-plugin"], providers: {} } as unknown as AgentConfig;
+      const found = await discoverProviders(home, config);
+      expect(found.find((p) => p.id === "many_views")?.source).toBe("plugin");
+    });
   });
 });
 

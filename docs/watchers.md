@@ -24,7 +24,7 @@ registered kind is listed and nothing calls it.
 ```ts
 interface WatcherKind<C, S> {
   kind: string;          // "price": lowercase, what a watch names
-  description: string;   // one line on what it checks
+  description: string;   // one line on what it checks, 160 characters at most
   schema: JsonSchema;    // a watch's config
   defaultEvery: string;  // "1h": when a watch names no interval
   minEvery: string;      // "15m": the shortest a watch may ask for
@@ -37,10 +37,12 @@ interface WatcherKind<C, S> {
   state checks: types, enums, required and nested fields, bounds and patterns.
   A keyword outside that subset is named in a warning when the kind registers,
   because it would otherwise look enforced and enforce nothing.
-- **`defaultEvery` and `minEvery`** are lengths of time in the words `tend`
-  and schedules use: `"30m"`, `"2 hours"`, `"1 day"`. A watch asking for less
-  than `minEvery` is raised to it. The floor protects the site or account
-  being checked as much as your machine.
+- **`defaultEvery` and `minEvery`** are lengths of time, as `tend` reads them:
+  `"30m"`, `"2 hours"`, `"1 day"`. A leading "every", the way the `schedule`
+  tool writes its intervals (`"every 30 minutes"`), reads the same here and in
+  a watch's own interval. A watch asking for less than `minEvery` is raised to
+  it. The floor protects the site or account being checked as much as your
+  machine.
 - **`check`** runs once. `previous` is the snapshot the last successful check
   returned, and `undefined` on a watch's first check.
 
@@ -94,31 +96,50 @@ export default ((ctx) => {
 ```
 
 `register` refuses, at load, a kind no runner could use: a name that isn't
-lowercase, no `check`, an interval that isn't a length of time, or a
+lowercase, no description or one longer than a line of 160 characters, no
+schema, no `check`, an interval that isn't a length of time, or a
 `defaultEvery` under its own `minEvery`. A plugin that throws partway through
 loading has what it registered taken back, so nothing half-loaded stays.
 
-Like every registration through `ctx`, a kind comes out when the plugin is
-unloaded, and a reload replaces it with the new load's. A runner looking a kind
-up after a reload gets the new one.
+Like every registration through `ctx`, a kind comes out when its plugin is
+unloaded. When that happens depends on how the plugin was loaded:
+
+- A plugin loaded with the runtime (the `builtin:*` set) is loaded again on
+  every reload, so its kinds are replaced with the new load's, and turning it
+  off removes them.
+- A plugin loaded before the runtime (google-tools, or any plugin installed
+  with `tai plugin`) loads once per process. Its kinds stay as first
+  registered until a restart, whatever the reload changed.
+
+See [runtime plugins across a reload](./architecture.md#runtime-plugins-across-a-reload).
 
 ## Writing a runner
 
-A runner finds kinds through the same view, `ctx.watcherKinds.get(name)` and
-`ctx.watcherKinds.list()`, with no runtime import of core. Before it trusts a
-watch or a result it calls the helpers core exports:
+A runner reaches everything it needs through the same view, and imports
+nothing from core at run time:
 
-| Helper | Does |
+| On `ctx.watcherKinds` | Does |
 |---|---|
-| `validateWatchConfig(kind, config)` | every way a watch's config fails the kind's schema, as sentences an agent can act on. Empty when it passes. A watch with no settings passes `{}` |
-| `watchInterval(kind, every?)` | the interval in milliseconds: `every` when given, else `defaultEvery`, never under `minEvery`. Sets `raisedFrom` when it raised one, so the runner can say so. A string back is a correction |
-| `watcherResult(raw, previous)` | what a check returned, made safe to keep: throws a `WatcherError` (count it as a failure) for a missing snapshot, one that isn't JSON or one over 4 KB; folds `change` and `value` to one line, cut with an ellipsis past their caps; drops a `change` when there was no `previous`, which holds the baseline rule for a kind that forgets it |
+| `get(name)`, `list()` | the kind a watch names, and every kind registered now |
+| `validate(kind, config)` | every way a watch's config fails the kind's schema, as sentences an agent can act on. Empty when it passes. A watch with no settings passes `{}` |
+| `interval(kind, every?)` | the interval in milliseconds: `every` when given, else `defaultEvery`, never under `minEvery`. Sets `raisedFrom` when it raised one, so the runner can say so. A string back is a correction |
+| `result(raw, previous)` | what a check returned, made safe to keep: throws a `WatcherError` (count it as a failure) for a missing snapshot, one that isn't JSON, one that is `null` once serialized (NaN, Infinity, an invalid date) or one over 4 KB; folds `change` and `value` to one line, cut with an ellipsis past their caps; drops a `change` when there was no `previous`, which holds the baseline rule for a kind that forgets it |
+
+Why the context and not core's exports: a plugin under `<TAI_HOME>/plugins`
+resolves its own install of core. That copy can be older than the host's, and
+a named import of something it lacks fails before `register(ctx)` runs, so the
+runner silently contributes nothing. It is also a separate module, with its
+own empty registry and its own `WatcherError` class. So catch a refused result
+by `err.name === "WatcherError"`, not with `instanceof`. Core exports the same
+functions (`validateWatchConfig`, `watchInterval`, `watcherResult`) for code
+inside core and for tests.
 
 What a runner decides for itself: when to run each watch, how long a check may
 take, how many failures in a row stop a watch, and what a change does. A kind
 is promised `undefined` as `previous` on a first check, so hand it that even if
-your store keeps "no snapshot yet" as `null`. A snapshot is never `null`, so
-the two can't be confused.
+your store keeps "no snapshot yet" as `null`. A kept snapshot is never `null`,
+because `result` refuses one that serializes to it, so the two can't be
+confused.
 
 ## How this differs from workflow triggers
 
