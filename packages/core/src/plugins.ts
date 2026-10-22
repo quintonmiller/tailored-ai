@@ -96,6 +96,11 @@ function collectingContext(
     stateProviders: { register: wrap((...a) => base.stateProviders.register(...a)) },
     stateTypes: { register: wrap((...a) => base.stateTypes.register(...a)) },
     componentKinds: { register: wrap((...a) => base.componentKinds.register(...a)) },
+    watcherKinds: {
+      register: wrap((...a) => base.watcherKinds.register(...a)),
+      get: (kind) => base.watcherKinds.get(kind),
+      list: () => base.watcherKinds.list(),
+    },
     mediaStores: { register: wrap((...a) => base.mediaStores.register(...a)) },
     mediaRenditions: { register: wrap((...a) => base.mediaRenditions.register(...a)) },
     taskBackends: { register: wrap((...a) => base.taskBackends.register(...a)) },

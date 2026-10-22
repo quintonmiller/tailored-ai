@@ -27,6 +27,7 @@ import { AgentRuntime, type ToolFactorySync } from "../runtime.js";
 import { stateTypeRegistry } from "../state/registry.js";
 import type { Tool } from "../tools/interface.js";
 import { registerToolFactory } from "../tools/tool-factories.js";
+import { getWatcherKind } from "../watchers/registry.js";
 
 let tmp: string;
 let disposers: Array<() => void | Promise<void>> = [];
@@ -86,6 +87,16 @@ function probePlugin(ctx: PluginContext) {
   }
   if (ctx.config.stateType === true) {
     ctx.stateTypes.register({ name: "probe_record", description: "A probe record." } as never);
+  }
+  if (ctx.config.watcherKind === true) {
+    ctx.watcherKinds.register({
+      kind: "probe_watch",
+      description: "Checks nothing.",
+      schema: { type: "object" },
+      defaultEvery: "1h",
+      minEvery: "15m",
+      check: () => ({ snapshot: greeting }),
+    });
   }
   ctx.http.register({ method: "GET", path: "hello", handler: () => ({ json: { greeting } }) });
   // A plugin that fails partway, after its tool and route are already in.
@@ -318,7 +329,7 @@ describe("a reload replaces what runtime plugins registered", () => {
   });
 
   it("leaves nothing of a plugin that throws partway through loading, and loads it cleanly once fixed", async () => {
-    const tai = start(config({ config: { greeting: "broken", fail: true, stateType: true } }));
+    const tai = start(config({ config: { greeting: "broken", fail: true, stateType: true, watcherKind: true } }));
     const hello = () =>
       tai.runtime
         .getHttpRoutes()
@@ -329,6 +340,7 @@ describe("a reload replaces what runtime plugins registered", () => {
     expect(tai.tool("probe")).toBeUndefined();
     expect(hello()).toHaveLength(0);
     expect(stateTypeRegistry.has("probe_record")).toBe(false);
+    expect(getWatcherKind("probe_watch")).toBeUndefined();
 
     // Fixed by a reload: it loads, rather than colliding with its own leftovers.
     expect((await tai.reload(config({ config: { greeting: "fixed" } }))).added).toEqual(["probe"]);
@@ -344,5 +356,21 @@ describe("a reload replaces what runtime plugins registered", () => {
 
     await tai.reload(config({ enabled: false }));
     expect(stateTypeRegistry.has("probe_record")).toBe(false);
+  });
+
+  it("replaces a plugin's watcher kind on reload, and takes it out when a reload turns the plugin off", async () => {
+    const tai = start(config({ config: { watcherKind: true, greeting: "first" } }));
+    await tai.load();
+    const check = async () =>
+      (await getWatcherKind("probe_watch")?.check({}, undefined, { now: new Date(), signal: AbortSignal.abort() }))
+        ?.snapshot;
+    expect(await check()).toBe("first");
+
+    // The kind a runner finds after a reload is the new load's, not the old one's.
+    await tai.reload(config({ config: { watcherKind: true, greeting: "second" } }));
+    expect(await check()).toBe("second");
+
+    await tai.reload(config({ enabled: false }));
+    expect(getWatcherKind("probe_watch")).toBeUndefined();
   });
 });
