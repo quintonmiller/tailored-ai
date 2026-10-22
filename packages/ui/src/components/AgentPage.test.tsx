@@ -719,9 +719,11 @@ describe("a commitment's check", () => {
     });
     agent = planner as never;
     await render();
-    expect(readText(lisbon().querySelector(".agent-page-meta"))).toBe(
-      "check Friday 9am, in 2d 3h · checked 3h ago · asks first · updated 2h ago",
+    // The time it was read as, in this machine's zone, with the words as written in its title.
+    expect(readText(lisbon().querySelector(".agent-page-meta"))).toMatch(
+      /^check \w{3}, \w{3} \d{1,2}, \d{2}:\d{2}, in 2d 3h · checked 3h ago · asks first · updated 2h ago$/,
     );
+    expect(check().title).toBe('"Friday 9am", as written');
   });
 
   it("is changed in place, as a person's edit the directory reads again", async () => {

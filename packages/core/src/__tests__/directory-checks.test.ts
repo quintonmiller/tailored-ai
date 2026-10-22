@@ -203,6 +203,19 @@ describe("the commitment tool", () => {
     expect(data.checkOn).toBeUndefined();
   });
 
+  it("says the check in the commitment's line as it read it, so a relative one doesn't go stale", async () => {
+    await run("planner", { action: "open", goal: "Watch hotel prices", doneWhen: "Three under budget" });
+    const id = "planner-watch-hotel-prices";
+    const said = await run("planner", { action: "update", id, nextCheck: "in 2 days" });
+    expect(said).toContain("check: Sat, Oct 24, 11:00, last update");
+    expect(said).not.toContain("check: in 2 days");
+    await run("planner", { action: "update", id, nextCheck: "when plan/lisbon changes" });
+    expect(await run("planner", { action: "list" })).toContain("check: when plan/lisbon changes, last update");
+    // A note is only its words.
+    await run("planner", { action: "update", id, nextCheck: "after Sam replies" });
+    expect(await run("planner", { action: "list" })).toContain("check: after Sam replies, last update");
+  });
+
   it("reads the time in the runtime's zone", async () => {
     zone = "America/Los_Angeles";
     await run("planner", { action: "open", goal: "Call the vet", doneWhen: "Booked", nextCheck: "Friday 9am" });

@@ -445,8 +445,11 @@ it subscribes only to events something actually names.
 | `wake` | why the turn is running when nobody asked for it, `{ kind, ref }`: set on a subscription's turn or one started through `runtime.wakeAgent` (the places plugin's `tend`, the directory's `upkeep`, a `schedule` wake an agent booked in a session), and on an agent either delegates to or messages. Cron, wakes booked in a room, room check-ins, autopilot and exploratory ticks don't set it yet, so a missing `wake` doesn't mean a person asked |
 
 So a deployment can put a check in front of every call a tool declares
-irreversible, whichever tool it is. Most tools declare nothing yet, MCP tools
-among them, and arrive as `effect: read`; the second entry catches those:
+irreversible, whichever tool it is. Of core's tools, `exec` and `coding_agent`
+declare an effect, `state` says per call (`read` for `types`, `get`, `query`
+and `search`, `write` for the rest) and `read` says `read`. Most other tools
+declare nothing yet, MCP tools among them, and arrive as `effect: read`; the
+second entry catches those:
 
 ```yaml
 hooks:

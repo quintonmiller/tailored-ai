@@ -199,6 +199,11 @@ export const COMMITMENT_SCHEMA: JsonSchema = {
           at: { type: "string" },
           text: { type: "string", maxLength: 500 },
           by: { type: "string", maxLength: 128, description: "Who wrote it, on a room's commitment." },
+          kind: {
+            type: "string",
+            maxLength: 32,
+            description: '"check" on one a check wrote with nothing new in it, which isn\'t the work moving.',
+          },
         },
       },
       description: "Dated one-line entries, newest first.",
@@ -557,6 +562,11 @@ export class Directory {
   /** The time zone a check like "Friday 9am" is read in: the runtime's, or this machine's. */
   timeZone(): string {
     return this.opts.timeZone?.() ?? systemTimeZone();
+  }
+
+  /** Now, with the zone a check's time is said in: what a commitment's line is written for. */
+  clock(): { now: Date; timeZone: string } {
+    return { now: this.now(), timeZone: this.timeZone() };
   }
 
   agents(): string[] {
@@ -1510,16 +1520,20 @@ export function roomOwnedId(room: RoomInfo, title: string): string {
 }
 
 /** A dated update in front of the old ones, keeping the newest {@link MAX_UPDATES}. */
-export function withUpdate(existing: unknown, update: { at: string; text: string; by?: string }): Update[] {
+export function withUpdate(existing: unknown, update: Update): Update[] {
   const old = Array.isArray(existing) ? (existing as Update[]) : [];
   return [{ ...update, text: update.text.slice(0, 500) }, ...old].slice(0, MAX_UPDATES);
 }
 
-/** One of a commitment's dated updates. `by` says who wrote it, on a room's. */
+/**
+ * One of a commitment's dated updates. `by` says who wrote it, on a room's;
+ * `kind` is {@link CHECK_UPDATE} on one a check wrote with nothing new in it.
+ */
 export interface Update {
   at: string;
   text: string;
   by?: string;
+  kind?: string;
 }
 
 /**
@@ -1609,6 +1623,18 @@ export function ago(iso: string | undefined, now: Date): string | undefined {
 export const NO_CHANGE = "Checked; no change.";
 
 /**
+ * The `kind` of an update a check wrote with nothing new in it. That entry is
+ * known by this mark, not by its words: an agent that writes the same
+ * sentence has still written an update, and the words can change.
+ */
+export const CHECK_UPDATE = "check";
+
+/** Whether an update is one a check wrote with nothing new in it. */
+export function checkedOnly(update: unknown): boolean {
+  return !!update && typeof update === "object" && (update as { kind?: unknown }).kind === CHECK_UPDATE;
+}
+
+/**
  * When a commitment last moved: its newest update, or the record's last
  * change. A check that changed nothing isn't a move, so work that only gets
  * looked at still reads as stalled, to its owner and to upkeep.
@@ -1616,7 +1642,7 @@ export const NO_CHANGE = "Checked; no change.";
 export function lastUpdate(record: StateRecord): string {
   const updates = record.data.updates;
   const moved = Array.isArray(updates)
-    ? (updates as Array<{ at?: unknown; text?: unknown } | undefined>).find((u) => u?.text !== NO_CHANGE)
+    ? (updates as Array<{ at?: unknown } | undefined>).find((u) => !checkedOnly(u))
     : undefined;
   return typeof moved?.at === "string" ? moved.at : record.updatedAt;
 }

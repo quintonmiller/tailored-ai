@@ -8,7 +8,8 @@
  *
  *   - `checkAt`: when the owner is next woken, in UTC (ISO);
  *   - `checkOn`: the record change that wakes it sooner, `{ type, id?, where? }`;
- *   - `checkedAt`: when it was last woken for one.
+ *   - `checkedAt`: when it was last woken for one;
+ *   - `checkEvents`: what changed since, for the next check to say why it came.
  *
  * They are read from the text whenever it's written: by the `commitment`
  * tool, which says what it made of it, and after a person's edit on the State
@@ -24,7 +25,9 @@ import { type StateChange, StateConflictError, type StateRecord } from "../state
 import { describeEvent } from "../subscriptions/describe.js";
 import {
   ACTIVE,
+  CHECK_UPDATE,
   COMMITMENT_TYPE,
+  checkedOnly,
   type Directory,
   formatProgress,
   NO_CHANGE,
@@ -228,34 +231,46 @@ export async function readCheckFor(directory: Directory, owner: string | undefin
 /**
  * Bring a commitment's check fields in line with a `nextCheck` someone other
  * than the directory wrote: a person on the State page, or on an agent or
- * room page. Written as the directory, against the version that change made:
- * a later write either came from the tools, which read the text themselves,
- * or brings its own change to look at, so a conflict is left alone.
+ * room page. Written as the directory, against the version that change made.
+ * A write that crossed it, such as the checker moving the check on, is read
+ * past once: while the record still holds the text this change wrote, the
+ * fields are worked out again against it. Text that has changed since is
+ * left alone, since whoever changed it brings its own reading.
  */
 export async function rederive(directory: Directory, change: StateChange): Promise<StateRecord | undefined> {
   if (change.type !== COMMITMENT_TYPE || change.op === "delete" || byDirectory(change)) return undefined;
   const before = change.before?.nextCheck;
-  const after = change.after?.nextCheck;
-  if (before === after || !change.after) return undefined;
-  const text = typeof after === "string" ? after.trim() : "";
-  const status = String(change.after.status ?? "open") as Status;
-  const check = text && ACTIVE.includes(status) ? await readCheckFor(directory, owner(change), text) : undefined;
-  const had = change.after;
-  // Only what differs: a note where there was no check changes nothing, and writes nothing.
-  const changes = Object.fromEntries(
-    Object.entries(checkFields(check)).filter(([key, value]) => !isDeepStrictEqual(value ?? undefined, had[key])),
-  );
-  if (Object.keys(changes).length === 0) return undefined;
-  try {
-    return await directory.service().patch(CHECKER, { type: change.type, id: change.id }, changes, change.version);
-  } catch (err) {
-    if (err instanceof StateConflictError) return undefined;
-    throw err;
+  const written = change.after?.nextCheck;
+  if (before === written || !change.after) return undefined;
+  const service = directory.service();
+  const ref = { type: change.type, id: change.id };
+  let had: Record<string, unknown> = change.after;
+  let version = change.version;
+  for (let attempt = 0; ; attempt++) {
+    const text = typeof written === "string" ? written.trim() : "";
+    const status = String(had.status ?? "open") as Status;
+    const check = text && ACTIVE.includes(status) ? await readCheckFor(directory, ownerIn(had), text) : undefined;
+    const current = had;
+    // Only what differs: a note where there was no check changes nothing, and writes nothing.
+    const changes = Object.fromEntries(
+      Object.entries(checkFields(check)).filter(([key, value]) => !isDeepStrictEqual(value ?? undefined, current[key])),
+    );
+    if (Object.keys(changes).length === 0) return undefined;
+    try {
+      return await service.patch(CHECKER, ref, changes, version);
+    } catch (err) {
+      if (!(err instanceof StateConflictError)) throw err;
+      if (attempt >= 1) return undefined;
+    }
+    const fresh = await service.get(CHECKER, ref);
+    if (!fresh || fresh.archivedAt || !isDeepStrictEqual(fresh.data.nextCheck, written)) return undefined;
+    had = fresh.data;
+    version = fresh.version;
   }
 }
 
-function owner(change: StateChange): string | undefined {
-  const value = change.after?.owner;
+function ownerIn(data: Record<string, unknown>): string | undefined {
+  const value = data.owner;
   return typeof value === "string" && value ? value : undefined;
 }
 
@@ -267,8 +282,17 @@ export const CHECK_KIND = "commitment";
 /** How often due checks are looked for. */
 export const CHECK_TICK_MS = 30_000;
 
-/** At the agent's hourly wake ceiling, a check comes round again this much later. */
+/** At the agent's hourly wake ceiling, a check comes round again this much later, or when the hour has room. */
 export const CEILING_DELAY_MS = 5 * 60_000;
+
+/**
+ * How long a claimed check is held. The claim moves the check this far on
+ * rather than taking it away, so a turn that never gets to its end (the
+ * process stopped in the middle, or the write after it failed) comes round
+ * again then instead of never. Longer than a turn: within one runtime,
+ * nothing starts beside a running check anyway.
+ */
+export const LEASE_MS = 60 * 60_000;
 
 /** Days to the next check after one that changed nothing: the first, the second, the third, then every one after. */
 export const BACKOFF_DAYS = [1, 2, 4, 7];
@@ -276,7 +300,7 @@ export const BACKOFF_DAYS = [1, 2, 4, 7];
 /** What a check that ended with no update to its commitment writes for it. */
 export { NO_CHANGE };
 
-/** Due checks read per look. One at a time, oldest first; the rest wait for the next look. */
+/** Due checks tried per look. One at a time, oldest first; the rest wait for the next look. */
 const DUE_READ = 20;
 
 /** Lines kept of what a check on a change saw, newest first; the last says how many more there were. */
@@ -301,13 +325,25 @@ export interface CheckerOptions {
     agent: string,
     opts: { prompt: string; sessionKey: string; wake: CheckWake },
   ) => Promise<"ran" | "paused" | "at-ceiling" | "gone">;
-  /** Why the waker would turn a wake away now, or undefined when it would run. Counts nothing. */
+  /**
+   * Why the waker would turn a wake away now, or undefined when it would run.
+   * Counts nothing. `until`, at the ceiling, is when the hour has room.
+   */
   refusal: (
     agent: string,
     where: { sessionKey: string },
-  ) => { outcome: "paused" | "at-ceiling" | "gone"; why: string } | undefined;
+  ) => { outcome: "paused" | "at-ceiling" | "gone"; why: string; until?: number } | undefined;
+  /** Whether turns nobody asked for are paused for everyone. A look then reads nothing, since nothing could run. */
+  paused?: () => boolean;
   /** Whether an agent can record what it did: it has the `commitment` tool. */
   canUpdate: (agent: string) => boolean;
+  /**
+   * What the checkers of one runtime share, so the checker a reload starts
+   * waits for a check the last one began. Checkers of different runtimes in
+   * one process don't wait for each other. Without one, every checker given
+   * none shares one.
+   */
+  lock?: object;
   log?: (line: string) => void;
   warn?: (line: string) => void;
 }
@@ -317,16 +353,21 @@ interface Watch {
   id: string;
   on: CheckOn;
   owner?: string;
+  /** The commitment's own scope. Whatever it's told of a change, everyone who can read it is told too. */
+  scope: string;
 }
 
 /**
- * The check in hand, shared by every load of the plugin. A reload stops one
+ * The look in hand, by lock (`CheckerOptions.lock`). A reload stops one
  * checker and starts the next while a turn the old one began may still be
  * running: the new one starts nothing until that's done, so checks go one at
  * a time across a reload too. The claim on the record is what keeps the same
  * check from running twice.
  */
-let running: Promise<void> | undefined;
+const running = new WeakMap<object, Promise<void>>();
+
+/** The lock of every checker given none. */
+const SHARED = {};
 
 /** A check's fields read off a record, leaving out what a hand edit made unusable. */
 export function checkOnOf(value: unknown): CheckOn | undefined {
@@ -345,6 +386,47 @@ const active = (data: Record<string, unknown>) => ACTIVE.includes(String(data.st
 const stamp = (value: unknown) => (typeof value === "string" && value ? value : undefined);
 const textOf = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
 
+/** Whether a check is held by its claim, its time the lease from when it was checked: its turn is running. */
+export function leased(data: Record<string, unknown>): boolean {
+  const checked = Date.parse(stamp(data.checkedAt) ?? "");
+  return Number.isFinite(checked) && stamp(data.checkAt) === new Date(checked + LEASE_MS).toISOString();
+}
+
+/**
+ * A commitment's check as its line says it to an agent: what the directory
+ * read, so "in 2 days" doesn't still say so a week on. The change it watches
+ * for, the time it's next woken ("now" while its check runs), or the text
+ * itself for a note, for one written before checks were read, and for work
+ * that's finished.
+ */
+export function checkLine(data: Record<string, unknown>, timeZone: string): string | undefined {
+  if (!active(data)) return textOf(data.nextCheck);
+  const on = checkOnOf(data.checkOn);
+  if (on) return `when ${describeOn(on)} changes`;
+  if (leased(data)) return "now";
+  const at = Date.parse(stamp(data.checkAt) ?? "");
+  return Number.isFinite(at) ? formatLocal(new Date(at), timeZone) : textOf(data.nextCheck);
+}
+
+/**
+ * Whether a commitment's `nextCheck` was written before the directory read
+ * checks: active, with text, and none of the fields the directory keeps.
+ */
+function unread(record: StateRecord): boolean {
+  const d = record.data;
+  return (
+    !record.archivedAt &&
+    active(d) &&
+    !!textOf(d.nextCheck) &&
+    ["checkAt", "checkOn", "checkedAt"].every((key) => d[key] === undefined)
+  );
+}
+
+/** A `nextCheck` that reads the same whenever it's read: a change, or a date ("2026-10-28", "2026-10-28 14:00"). */
+function fixed(text: string): boolean {
+  return !!parseEvent(text) || /^\d{4}-\d{2}-\d{2}\b/.test(text.trim());
+}
+
 function updatesOf(data: Record<string, unknown>): Update[] {
   return Array.isArray(data.updates) ? (data.updates as Update[]).filter((u) => u && typeof u.text === "string") : [];
 }
@@ -358,7 +440,7 @@ function newest(data: Record<string, unknown>): string {
 /** When the next check falls after one that changed nothing, or that left no check of its own. */
 export function backoff(updates: Update[], now: Date): Date {
   let quiet = 0;
-  while (quiet < updates.length && updates[quiet].text === NO_CHANGE) quiet++;
+  while (quiet < updates.length && checkedOnly(updates[quiet])) quiet++;
   const days = BACKOFF_DAYS[Math.min(Math.max(quiet - 1, 0), BACKOFF_DAYS.length - 1)];
   return new Date(now.getTime() + days * DAY_MS);
 }
@@ -425,7 +507,7 @@ export function checkPrompt(record: StateRecord, at: { timeZone: string; whose: 
     lines.push("Latest:");
     for (const u of updates) lines.push(`- ${String(u.at).slice(0, 10)}: ${u.text}`);
   }
-  const events = Array.isArray(d.checkEvents) ? d.checkEvents.filter((e): e is string => typeof e === "string") : [];
+  const events = stringsOf(d.checkEvents);
   const on = checkOnOf(d.checkOn);
   const dueAt = stamp(d.checkAt);
   if (events.length) {
@@ -439,8 +521,9 @@ export function checkPrompt(record: StateRecord, at: { timeZone: string; whose: 
     );
   }
   const autonomy = String(d.autonomy ?? "suggest");
+  // What the guard below lets through, in the same words: its own tools, and tools that say they only read.
   const rule =
-    "read anything and update your commitments and docs, but put anything else that would change something in nextStep and set the commitment waiting on a person.";
+    "update your commitments and docs and read records and files, but put anything that would change something else in nextStep and set the commitment waiting on a person.";
   lines.push(
     autonomy === "suggest"
       ? `It asks first: ${rule}`
@@ -466,10 +549,12 @@ export class Checker {
   /** What changes were seen, by commitment, not yet written onto it. */
   private readonly seen = new Map<string, string[]>();
   private stopped = true;
+  private readonly lock: object;
   private readonly log: (line: string) => void;
   private readonly warn: (line: string) => void;
 
   constructor(private readonly opts: CheckerOptions) {
+    this.lock = opts.lock ?? SHARED;
     this.log = opts.log ?? ((line) => console.log(`[directory] ${line}`));
     this.warn = opts.warn ?? ((line) => console.warn(`[directory] ${line}`));
   }
@@ -478,7 +563,11 @@ export class Checker {
     return this.opts.directory;
   }
 
-  /** Start looking: the commitments that watch for a change are read, then due checks every thirty seconds. */
+  /**
+   * Start looking: the commitments that watch for a change are read (and
+   * those written before checks were read, read once), then due checks
+   * every thirty seconds.
+   */
   start(): Promise<void> {
     this.stop();
     this.stopped = false;
@@ -503,9 +592,9 @@ export class Checker {
     return wasRunning ? this.flush() : Promise.resolve();
   }
 
-  /** The check running now, any load's: what a test waits for. */
+  /** The look running now under this checker's lock, a reloaded one's included: what a test waits for. */
   idle(): Promise<void> {
-    return running ?? Promise.resolve();
+    return running.get(this.lock) ?? Promise.resolve();
   }
 
   /** The commitments watching for a change now, by id. */
@@ -513,87 +602,109 @@ export class Checker {
     return [...this.watches.keys()].sort();
   }
 
-  /** One look for due checks. Nothing starts while a check is running, this checker's or one a reload replaced. */
+  /** One look for due checks. Nothing starts while a look is running under the same lock, this checker's or not. */
   tick(): void {
-    if (this.stopped || running) return;
-    running = this.run()
+    if (this.stopped || running.has(this.lock)) return;
+    const look = this.run()
       .catch((err: unknown) => this.warn(`commitment checks failed: ${(err as Error).message}`))
-      .finally(() => {
-        running = undefined;
-      });
+      .finally(() => running.delete(this.lock));
+    running.set(this.lock, look);
   }
 
+  /**
+   * One look: due checks, oldest first, until {@link DUE_READ} have been
+   * tried. An agent found paused is passed over for the rest of the look,
+   * its checks left due, so one switched-off agent can't hold up everyone
+   * else's. Paused for everyone, nothing is read.
+   */
   private async run(): Promise<void> {
-    if (!this.directory.active()) return;
+    if (!this.directory.active() || this.opts.paused?.()) return;
     const now = this.directory.now();
-    const due = await this.directory.service().query(CHECKER, {
-      type: COMMITMENT_TYPE,
-      where: { status: { in: [...ACTIVE] }, checkAt: { lte: now.toISOString() } },
-      orderBy: { field: "checkAt", direction: "asc" },
-      limit: DUE_READ,
-    });
-    for (const record of due) {
-      // A checker a reload stopped finishes the check in hand and starts no other: the next load takes them.
-      if (this.stopped) return;
-      await this.check(record.id);
+    const paused = new Set<string>();
+    let tried = 0;
+    // Checks left due stay in the query's answer, so each page starts past them. The rest moved on when tried.
+    let left = 0;
+    for (;;) {
+      const due = await this.directory.service().query(CHECKER, {
+        type: COMMITMENT_TYPE,
+        where: { status: { in: [...ACTIVE] }, checkAt: { lte: now.toISOString() } },
+        orderBy: { field: "checkAt", direction: "asc" },
+        limit: DUE_READ,
+        offset: left,
+      });
+      for (const record of due) {
+        // A checker a reload stopped finishes the check in hand and starts no other: the next load takes them.
+        if (this.stopped) return;
+        if (await this.check(record.id, paused)) tried++;
+        else if (this.opts.paused?.()) return;
+        else left++;
+        if (tried >= DUE_READ) return;
+      }
+      if (due.length < DUE_READ) return;
     }
   }
 
   /**
-   * One check. It's claimed before the turn (its time taken off, `checkedAt`
-   * set), so a slow turn is never started twice, however many looks or loads
-   * come while it runs. Paused, it stays due and nothing is written; at the
-   * agent's hourly ceiling it comes round five minutes on.
+   * One check. It's claimed before the turn (its time moved a lease on,
+   * `checkedAt` set), so a slow turn is never started twice, however many
+   * looks or loads come while it runs. Paused, it stays due and nothing is
+   * written; at the agent's hourly ceiling it comes round five minutes on,
+   * or when the hour has room. False when it was left due for a paused agent,
+   * whose other checks the look then passes over.
    */
-  private async check(id: string): Promise<void> {
+  private async check(id: string, paused: Set<string>): Promise<boolean> {
     const service = this.directory.service();
     const ref = { type: COMMITMENT_TYPE, id };
     const now = this.directory.now();
     const record = await service.get(CHECKER, ref);
     const due = stamp(record?.data.checkAt);
     // Looked at again: it may have been finished, archived, moved on or claimed since the query.
-    if (!record || record.archivedAt || !active(record.data) || !due || due > now.toISOString()) return;
+    if (!record || record.archivedAt || !active(record.data) || !due || due > now.toISOString()) return true;
     const owner = stamp(record.data.owner);
     const agent = await wakeeOf(this.directory, owner);
     if (!agent) {
       const room = roomOfOwner(owner);
       await this.giveUp(record, room ? `${this.directory.ownerName(owner)} has no lead to wake` : "it has no owner");
-      return;
+      return true;
     }
+    if (paused.has(agent)) return false;
     if (!this.opts.canUpdate(agent)) {
       // It couldn't write down what it found, so a turn would be spent for nothing. Config may give it the tool.
       this.log(`${agent} has no commitment tool, so its check on ${id} waits a day`);
       await this.amend(id, () => ({ checkAt: new Date(now.getTime() + DAY_MS).toISOString() }));
-      return;
+      return true;
     }
     const sessionKey = checkSession(id);
     const refused = this.opts.refusal(agent, { sessionKey });
-    if (refused?.outcome === "paused") return;
+    if (refused?.outcome === "paused") {
+      paused.add(agent);
+      return false;
+    }
     if (refused?.outcome === "gone") {
       await this.giveUp(record, refused.why);
-      return;
+      return true;
     }
     if (refused) {
-      this.log(`${agent}'s check on ${id} waits five minutes: ${refused.why}`);
+      const later = this.later(now, refused.until);
+      this.log(`${agent}'s check on ${id} waits until ${later.toISOString()}: ${refused.why}`);
       await this.amend(id, (data) =>
-        data.checkAt === record.data.checkAt
-          ? { checkAt: new Date(now.getTime() + CEILING_DELAY_MS).toISOString() }
-          : undefined,
+        data.checkAt === record.data.checkAt ? { checkAt: later.toISOString() } : undefined,
       );
-      return;
+      return true;
     }
 
+    const lease = new Date(now.getTime() + LEASE_MS).toISOString();
     let claimed: StateRecord;
     try {
       claimed = await service.patch(
         CHECKER,
         ref,
-        { checkAt: null, checkedAt: now.toISOString(), checkEvents: null },
+        { checkAt: lease, checkedAt: now.toISOString(), checkEvents: null },
         record.version,
       );
     } catch (err) {
       // Changed since it was read: the next look sees it as it is now.
-      if (err instanceof StateConflictError) return;
+      if (err instanceof StateConflictError) return true;
       throw err;
     }
     const prompt = checkPrompt(record, {
@@ -607,25 +718,44 @@ export class Checker {
     } catch (err) {
       failure = err as Error;
     }
-    await this.after(record, claimed, outcome, failure);
+    await this.after(record, claimed, { agent, sessionKey, lease }, outcome, failure);
+    if (outcome !== "paused") return true;
+    paused.add(agent);
+    return false;
   }
 
-  /** What follows a check's wake: put it back when it was turned away, and after a turn, its next check. */
+  /** When a check turned away at the ceiling comes round: five minutes on, or when the hour has room if that's later. */
+  private later(now: Date, until: number | undefined): Date {
+    return new Date(Math.max(now.getTime() + CEILING_DELAY_MS, until ?? 0));
+  }
+
+  /**
+   * What follows a check's wake: put it back when it was turned away, and
+   * after a turn, its next check. A check still on its lease is one nobody
+   * set again during the turn, the agent, a person or a change it watches;
+   * any other a turn leaves stands, a note included, since the agent was told
+   * nothing wakes it for one.
+   */
   private async after(
     was: StateRecord,
     claimed: StateRecord,
+    turn: { agent: string; sessionKey: string; lease: string },
     outcome: "ran" | "paused" | "at-ceiling" | "gone" | undefined,
     failure: Error | undefined,
   ): Promise<void> {
     const id = was.id;
+    const held = (data: Record<string, unknown>) => stamp(data.checkAt) === turn.lease;
     // Turned away after all, between the look and the wake: as it would have been before the claim.
     if (outcome === "paused" || outcome === "at-ceiling") {
       const at =
         outcome === "paused"
           ? stamp(was.data.checkAt)
-          : new Date(this.directory.now().getTime() + CEILING_DELAY_MS).toISOString();
+          : this.later(
+              this.directory.now(),
+              this.opts.refusal(turn.agent, { sessionKey: turn.sessionKey })?.until,
+            ).toISOString();
       await this.amend(id, (data) => {
-        if (stamp(data.checkAt)) return undefined;
+        if (!held(data)) return undefined;
         const events = withEvents(stringsOf(data.checkEvents), was.data.checkEvents);
         return {
           checkAt: at ?? null,
@@ -642,7 +772,8 @@ export class Checker {
     }
     const now = this.directory.now();
     await this.amend(id, (data) => {
-      if (!active(data)) return undefined;
+      // Finished during the turn: no note, and no check left on it.
+      if (!active(data)) return held(data) ? { checkAt: null } : undefined;
       const changes: Record<string, unknown> = {};
       let updates = updatesOf(data);
       if (failure) {
@@ -652,11 +783,10 @@ export class Checker {
         });
         changes.updates = updates;
       } else if (newest(data) === newest(claimed.data)) {
-        updates = withUpdate(updates, { at: now.toISOString(), text: NO_CHANGE });
+        updates = withUpdate(updates, { at: now.toISOString(), text: NO_CHANGE, kind: CHECK_UPDATE });
         changes.updates = updates;
       }
-      // The agent set a new check, or a change it watches came during the turn: that stands.
-      if (!stamp(data.checkAt)) {
+      if (held(data)) {
         changes.checkAt = (
           checkOnOf(data.checkOn) ? new Date(now.getTime() + BACKSTOP_MS) : backoff(updates, now)
         ).toISOString();
@@ -706,15 +836,42 @@ export class Checker {
 
   // ---------------------------------------------------------------- changes
 
-  /** Read which commitments watch for a change. After that, `onChange` keeps it current. */
+  /**
+   * Read which commitments watch for a change. After that, `onChange` keeps
+   * it current. A commitment written before the directory read checks, whose
+   * `nextCheck` reads the same whenever it's read (a date, or a change), is
+   * read now, once, so it wakes its owner like one written today. A relative
+   * one ("in 2 days", "Friday") is left as written: what it meant when it was
+   * written can't be told now.
+   */
   private async index(): Promise<void> {
     const all = await this.directory.all(COMMITMENT_TYPE);
-    for (const record of all) this.keep(record.id, record.data, false);
+    for (const record of all) {
+      const read = unread(record) ? await this.backfill(record) : record;
+      if (read) this.keep(read.id, read.data, read.scope, !!read.archivedAt);
+    }
   }
 
-  private keep(id: string, data: Record<string, unknown> | undefined, archived: boolean): void {
+  /** Read an older commitment's `nextCheck` that reads the same whenever it's read. Undefined if it changed meanwhile. */
+  private async backfill(record: StateRecord): Promise<StateRecord | undefined> {
+    const text = textOf(record.data.nextCheck);
+    if (!text || !fixed(text)) return record;
+    const fields = newCheckFields(await readCheckFor(this.directory, stamp(record.data.owner), text));
+    if (Object.keys(fields).length === 0) return record;
+    try {
+      return await this.directory
+        .service()
+        .patch(CHECKER, { type: COMMITMENT_TYPE, id: record.id }, fields, record.version);
+    } catch (err) {
+      // Written since it was read, by a load or a writer that reads checks itself; its change keeps the index.
+      if (err instanceof StateConflictError) return undefined;
+      throw err;
+    }
+  }
+
+  private keep(id: string, data: Record<string, unknown> | undefined, scope: string, archived: boolean): void {
     const on = checkOnOf(data?.checkOn);
-    if (!archived && data && on && active(data)) this.watches.set(id, { id, on, owner: stamp(data.owner) });
+    if (!archived && data && on && active(data)) this.watches.set(id, { id, on, owner: stamp(data.owner), scope });
     else this.watches.delete(id);
   }
 
@@ -728,7 +885,7 @@ export class Checker {
     if (this.stopped) return;
     if (change.type === COMMITMENT_TYPE) {
       if (change.op === "delete") this.watches.delete(change.id);
-      else this.keep(change.id, change.after, change.lifecycle === "archived");
+      else this.keep(change.id, change.after, change.scope, change.lifecycle === "archived");
     }
     if (change.source?.surface === CHECK_SURFACE) return;
     // A check someone set for a time already gone is due now, not at the next look.
@@ -753,11 +910,31 @@ export class Checker {
         ? canReadType(service, reader, change.type) && (service.visibleScopes(reader)?.includes(change.scope) ?? true)
         : !!(await service.get(reader, { type: change.type, id: change.id }));
     if (!readable) return;
-    this.seen.set(watch.id, [describeEvent("state.changed", change), ...(this.seen.get(watch.id) ?? [])]);
+    this.seen.set(watch.id, [this.said(watch, change), ...(this.seen.get(watch.id) ?? [])]);
     if (!this.gather) {
       this.gather = setTimeout(() => void this.flush(), GATHER_MS);
       this.gather.unref?.();
     }
+  }
+
+  /**
+   * The line a change leaves on the commitment watching it. Everyone who can
+   * read the commitment reads the line, and that can be more than can read
+   * what changed: the agent it wakes can, but a shared commitment is read by
+   * every agent. So a change is told in full, values and all, only when its
+   * record is as open as the commitment: global or in the commitment's own
+   * scope, and of a type anyone may read. Otherwise the line says no more
+   * than the commitment already does, and the agent reads the record itself.
+   */
+  private said(watch: Watch, change: StateChange): string {
+    const read = this.directory.service().getType(change.type)?.access?.read;
+    const open = !read || (read.includes("*") && read.includes("user"));
+    if (open && (change.scope === "global" || change.scope === watch.scope)) {
+      return describeEvent("state.changed", change);
+    }
+    return watch.on.id
+      ? `${change.type}/${change.id} changed; read it to see how`
+      : `a ${change.type} it watches changed; look it up to see which`;
   }
 
   /**
@@ -798,11 +975,16 @@ const OWN_TOOLS = new Set(["commitment", "writeup", "directory"]);
 /** What a check's turn is told when a call would change something outside the directory. */
 export const ASKS_FIRST = "This commitment asks first: put it in nextStep and set the commitment waiting on a person.";
 
+/** What a check's turn is told when a tool says nothing of what it does, so it can't be let through as a read. */
+export const notOpen = (tool: string) =>
+  `"${tool}" isn't open to a commitment check yet: note in nextStep what you'd use it for.`;
+
 /**
  * Until autonomy is enforced, every check's turn acts as `suggest`: a call
- * that writes, can't be undone, or says nothing about what it does is
- * refused with one sentence, except the agent's own directory tools and
- * reads. Undefined for a call that may go ahead, and for every turn a check
+ * that writes or can't be undone is refused with one sentence, and so is one
+ * whose tool says nothing of what it does, in its own sentence, since it may
+ * only be a read. The agent's own directory tools and declared reads go
+ * through. Undefined for a call that may go ahead, and for every turn a check
  * didn't start, a person's chat included.
  */
 export function asksFirst(call: {
@@ -812,6 +994,6 @@ export function asksFirst(call: {
   wake?: { kind: string };
 }): string | undefined {
   if (call.wake?.kind !== CHECK_KIND || OWN_TOOLS.has(call.tool)) return undefined;
-  if (call.effectDeclared && call.effect === "read") return undefined;
-  return ASKS_FIRST;
+  if (!call.effectDeclared) return notOpen(call.tool);
+  return call.effect === "read" ? undefined : ASKS_FIRST;
 }

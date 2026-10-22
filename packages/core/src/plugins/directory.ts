@@ -15,6 +15,9 @@
  *
  * Config (`plugins: [{ module: builtin:directory, config: {...} }]`):
  *   - `pin` (default true): the prompt block. `false` leaves it out.
+ *   - `checks` (default true): commitments whose check comes due wake their
+ *     owner. `false` wakes no one for them; `nextCheck` is still read and
+ *     kept beside the text, and upkeep reports a dated one that has come.
  *   - `minMeaning` (default 0.5) and `minWords` (default 0.3): how close a
  *     search hit must be to count as found, for searches matched by meaning
  *     and by words. Below the bar a search finds nothing and notes a miss.
@@ -96,6 +99,8 @@ const PINNED_LINE_CHARS = 400;
 
 export interface DirectoryConfig {
   pin: boolean;
+  /** Whether a commitment's check wakes its owner when it comes due. */
+  checks: boolean;
   bar: Bar;
   upkeep: UpkeepSettings;
   /** Who leads which room, by the room's name or ref. */
@@ -123,6 +128,7 @@ export function readConfig(raw: Record<string, unknown>): DirectoryConfig {
   };
   return {
     pin: raw.pin !== false,
+    checks: raw.checks !== false,
     bar: { meaning: share("minMeaning", DEFAULT_BAR.meaning), words: share("minWords", DEFAULT_BAR.words) },
     upkeep: parseUpkeep(raw.upkeep, (problem) => console.warn(`[directory] ${problem}`)),
     leads: parseLeads(raw.leads, (problem) => console.warn(`[directory] ${problem}`)),
@@ -214,7 +220,7 @@ function asleep(runtime: AgentRuntime, agent: string): string | null {
  * `upkeep:<agent>` session through the runtime's waker, with the round budget
  * as its ceiling.
  */
-function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: UpkeepSettings): Upkeep {
+function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: UpkeepSettings, checks: boolean): Upkeep {
   const resolve = (agent: string) =>
     resolveAgent(
       agent === "default" ? undefined : agent,
@@ -228,6 +234,7 @@ function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: Upkeep
   return new Upkeep({
     directory,
     settings,
+    checks,
     has: (agent, tool) => hasTool(runtime, agent, tool),
     memory: () => runtime.getMemoryBackend(),
     embedder: () => runtime.getEmbedder(),
@@ -275,14 +282,14 @@ export function commitmentsSlot(directory: Directory, takesPart: (agent: string)
         ...records.filter((r) => r.data.status === "open"),
         ...records.filter((r) => r.data.status !== "open"),
       ];
-      const now = directory.now();
+      const clock = directory.clock();
       // Room for the count line, which goes last and must survive.
       const reserve = `\n…and ${PINNED_READ}+ more; commitment list shows them.`.length;
       const lines: string[] = [];
       let used = 0;
       const name = (owner: string) => directory.ownerName(owner);
       for (const r of ordered.slice(0, PINNED)) {
-        const full = commitmentLine(r, now, name) + (r.scope === `agent:${agent}` ? ", private" : "");
+        const full = commitmentLine(r, clock, name) + (r.scope === `agent:${agent}` ? ", private" : "");
         const line = full.length > PINNED_LINE_CHARS ? `${full.slice(0, PINNED_LINE_CHARS - 1)}…` : full;
         const cost = line.length + (lines.length ? 1 : 0);
         if (lines.length > 0 && used + cost + reserve > PINNED_CHARS) break;
@@ -439,14 +446,17 @@ const plugin: Plugin = (ctx) => {
   const directory = directoryFor(() => runtime.getStateService());
 
   // Commitment checks (`directory-checks.ts`): each due check wakes the commitment's owner through the runtime's
-  // waker, one at a time. A runtime with no waker can't wake anyone, so it gets no runner.
+  // waker, one at a time per runtime, a reload's next load included. A runtime with no waker can't wake anyone, so
+  // it gets no runner, and neither does a config that turns checks off.
   const checker =
-    typeof runtime.wakeAgent === "function"
+    config.checks && typeof runtime.wakeAgent === "function"
       ? new Checker({
           directory,
           wake: (agent, opts) => runtime.wakeAgent(agent, opts),
           refusal: (agent, where) => runtime.wakeRefusal(agent, where),
+          paused: () => runtime.isAgentsPaused?.("autonomous") ?? false,
           canUpdate: (agent) => hasCommitmentTool(runtime, agent),
+          lock: runtime,
         })
       : undefined;
   if (checker) {
@@ -489,7 +499,7 @@ const plugin: Plugin = (ctx) => {
 
   // Upkeep: each agent, on the interval, looks after what it owns (`directory-upkeep.ts`). The schedule is off unless
   // set; a person can start a turn from the agent's page either way.
-  const upkeep = upkeepFor(runtime, directory, config.upkeep);
+  const upkeep = upkeepFor(runtime, directory, config.upkeep, config.checks);
   const schedule = config.upkeep.schedule;
   if (schedule) {
     if (schedule.agents !== "all") {

@@ -59,9 +59,9 @@ export function pageOrder(data: Record<string, unknown> | undefined): string[] {
 /** When a commitment last moved: its newest update, or the record's last change. */
 export function lastMoved(record: StateRecordInfo): string {
   const updates = record.data.updates;
-  // A check that changed nothing says the agent looked, not that the work moved. Mirrors the directory's words.
+  // A check that changed nothing says the agent looked, not that the work moved. The directory marks those entries.
   const moved = Array.isArray(updates)
-    ? (updates as Array<{ at?: unknown; text?: unknown } | undefined>).find((u) => u?.text !== "Checked; no change.")
+    ? (updates as Array<{ at?: unknown; kind?: unknown } | undefined>).find((u) => u?.kind !== "check")
     : undefined;
   return typeof moved?.at === "string" ? moved.at : record.updatedAt;
 }
@@ -143,13 +143,14 @@ export function distance(ms: number): string {
 }
 
 /**
- * When a commitment's check wakes its agent, as its page says it: the text
- * people and agents write, with how far off the time it was read as is
- * ("check Friday 9am, in 2d 3h"), or that it's due. A check on a change says
- * itself; `title` gives the backstop time. Text the directory couldn't read
- * as a time or a change, or that was written before it read them, is marked
- * as a note, since nothing wakes the agent for it. Undefined when there's no
- * check at all.
+ * When a commitment's check wakes its agent, as its page says it: the time
+ * it was read as and how far off that is ("check Fri, Oct 23, 09:00, in 2d
+ * 3h"), or that it's due, with the words people and agents wrote in `title`.
+ * The time rather than the words, since "in 2 days" no longer says when once
+ * a day has gone by. A check on a change says itself; `title` gives the
+ * backstop time. Text the directory couldn't read as a time or a change, or
+ * that was written before it read them, is marked as a note, since nothing
+ * wakes the agent for it. Undefined when there's no check at all.
  */
 export function checkWhen(
   data: Record<string, unknown>,
@@ -177,7 +178,7 @@ export function checkWhen(
     return { label: `check ${said ?? "on a change"}`, title: `Or ${local(at)}, if nothing changes by then` };
   const ms = at - now.getTime();
   const when = ms > 0 ? `in ${distance(ms)}` : "due now";
-  return { label: said ? `check ${said}, ${when}` : `check ${when}`, title: local(at) };
+  return { label: `check ${local(at)}, ${when}`, ...(said ? { title: `"${said}", as written` } : {}) };
 }
 
 /** "just now", "5m ago", "3h ago", "2d ago". */

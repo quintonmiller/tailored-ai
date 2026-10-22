@@ -216,13 +216,43 @@ describe("commitment evidence", () => {
         goal: "Stalled",
         checkAt: new Date(NOW.getTime() + DAY).toISOString(),
         updates: [
+          { at: daysAgo(1), text: "Checked; no change.", kind: "check" },
+          { at: daysAgo(3), text: "Checked; no change.", kind: "check" },
+          { at: daysAgo(20), text: "Asked the hotel." },
+        ],
+      }),
+      // Known by the mark the check leaves, not the words: an agent that writes them has still written an update.
+      rec(COMMITMENT_TYPE, "planner-copied", {
+        goal: "Copied",
+        checkAt: new Date(NOW.getTime() + DAY).toISOString(),
+        updates: [
           { at: daysAgo(1), text: "Checked; no change." },
-          { at: daysAgo(3), text: "Checked; no change." },
           { at: daysAgo(20), text: "Asked the hotel." },
         ],
       }),
     ];
     expect(lines(commitmentItems(records, NOW, DAYS))).toEqual(['- planner-stalled "Stalled": no update in 20 days']);
+  });
+
+  it("reports a time check the directory read when checks are turned off, since nothing else wakes the agent", () => {
+    const records = [
+      rec(COMMITMENT_TYPE, "planner-read", {
+        goal: "Read",
+        nextCheck: "in 2 days",
+        checkAt: new Date(NOW.getTime() - DAY).toISOString(),
+      }),
+      // A check on a change waits for the change, so its backstop passing isn't a check that has come.
+      rec(COMMITMENT_TYPE, "planner-watch", {
+        goal: "Watch",
+        nextCheck: "when plan changes",
+        checkOn: { type: "plan" },
+        checkAt: new Date(NOW.getTime() - DAY).toISOString(),
+      }),
+    ];
+    expect(lines(commitmentItems(records, NOW, DAYS))).toEqual([]);
+    expect(lines(commitmentItems(records, NOW, DAYS, new Map(), false))).toEqual([
+      `- planner-read "Read": its next check, set for ${new Date(NOW.getTime() - DAY).toISOString().slice(0, 10)}, has come`,
+    ]);
   });
 
   it("gives one line with every reason a commitment has, and uses its last update when history can't say", () => {

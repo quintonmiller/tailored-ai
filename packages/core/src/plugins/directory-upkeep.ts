@@ -226,13 +226,15 @@ const CLOSED: readonly string[] = ["done", "dropped"];
  * dropped `days.finished` or more ago without being archived. One line per
  * commitment, with every reason it has. `waitingSince` says when each waiting
  * one started waiting, where its history could tell; otherwise its last update
- * stands in.
+ * stands in. `checksWake` says the directory's checks wake agents themselves,
+ * so a check it read is theirs to notice, not upkeep's.
  */
 export function commitmentItems(
   records: StateRecord[],
   now: Date,
   days: UpkeepDays,
   waitingSince: Map<string, string> = new Map(),
+  checksWake = true,
 ): Item[] {
   const items: Item[] = [];
   for (const r of records) {
@@ -248,10 +250,15 @@ export function commitmentItems(
     if ((ACTIVE as readonly string[]).includes(status)) {
       const check = text(r.data.nextCheck);
       // A check the directory read wakes the agent itself when it comes (`directory-checks.ts`); only one written
-      // before it read them is left for upkeep to notice.
+      // before it read them is left for upkeep to notice. With checks turned off, a time it read is upkeep's too.
       const read = ["checkAt", "checkOn", "checkedAt"].some((key) => r.data[key] !== undefined);
-      const due = read ? undefined : checkDate(check);
-      if (due !== undefined && due <= now.getTime()) add("check", `its next check, ${check}, has come`);
+      const at = typeof r.data.checkAt === "string" && !r.data.checkOn ? Date.parse(r.data.checkAt) : Number.NaN;
+      if (!read) {
+        const due = checkDate(check);
+        if (due !== undefined && due <= now.getTime()) add("check", `its next check, ${check}, has come`);
+      } else if (!checksWake && at <= now.getTime()) {
+        add("check", `its next check, set for ${String(r.data.checkAt).slice(0, 10)}, has come`);
+      }
       if (status === "waiting") {
         const waited = daysSince(waitingSince.get(r.id) ?? lastUpdate(r), now);
         const on = text(r.data.waitingOn);
@@ -644,6 +651,8 @@ export interface UpkeepOptions {
    * turned the turn away, with why in words for the page.
    */
   run: (agent: string, session: { id: string }, message: string, maxRounds: number) => Promise<"ran" | WakeRefusal>;
+  /** Whether the directory's checks wake agents when they come due. Off, upkeep reports a time one that has come. */
+  checks?: boolean;
 }
 
 /** What upkeep found for one agent. */
@@ -677,6 +686,10 @@ export class Upkeep {
     return this.opts.directory;
   }
 
+  private checksWake(): boolean {
+    return this.opts.checks !== false;
+  }
+
   /**
    * Everything upkeep finds for `agent`, as of now: commitments, docs and
    * misses since `since`, its page, and its notes. Each kind only when the
@@ -706,7 +719,7 @@ export class Upkeep {
     if (has("commitment")) {
       sections.push({
         title: "Your commitments",
-        items: commitmentItems(commitments, now, days, await this.waitingSince(commitments)),
+        items: commitmentItems(commitments, now, days, await this.waitingSince(commitments), this.checksWake()),
       });
     }
     if (has("writeup")) {
@@ -773,7 +786,9 @@ export class Upkeep {
       directory.roomProfile(room),
     ]);
     const items: Item[] = [];
-    if (has("commitment")) items.push(...commitmentItems(commitments, now, days, await this.waitingSince(commitments)));
+    if (has("commitment")) {
+      items.push(...commitmentItems(commitments, now, days, await this.waitingSince(commitments), this.checksWake()));
+    }
     if (has("writeup")) {
       const from = since ? parseTime(since) : now.getTime() - FIRST_MISSES_DAYS * DAY_MS;
       const misses = (await directory.all(MISS_TYPE, owner)).filter((m) => {

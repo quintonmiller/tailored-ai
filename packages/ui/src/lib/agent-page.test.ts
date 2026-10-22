@@ -92,23 +92,32 @@ describe("commitments by section", () => {
 describe("a commitment's check", () => {
   const hoursOn = (h: number) => new Date(NOW.getTime() + h * 3_600_000).toISOString();
 
-  it("says the text with how far off the time it was read as, or that it's due", () => {
-    expect(checkWhen({ nextCheck: "Friday 9am", checkAt: hoursOn(51) }, NOW)?.label).toBe("check Friday 9am, in 2d 3h");
-    expect(checkWhen({ nextCheck: "in 2 minutes", checkAt: hoursOn(-1) }, NOW)?.label).toBe(
-      "check in 2 minutes, due now",
-    );
-    // Moved on by the directory after a check that changed nothing: the text is older than the time.
-    expect(checkWhen({ checkAt: hoursOn(24) }, NOW)?.label).toBe("check in 1d");
+  // The time in this machine's zone, as the page says it.
+  const LOCAL = /^check \w{3}, \w{3} \d{1,2}, \d{2}:\d{2}, /;
+
+  it("says the time it was read as and how far off, or that it's due, with the words as written", () => {
+    const friday = checkWhen({ nextCheck: "Friday 9am", checkAt: hoursOn(51) }, NOW);
+    expect(friday?.label).toMatch(new RegExp(`${LOCAL.source}in 2d 3h$`));
+    expect(friday?.title).toBe('"Friday 9am", as written');
+    // Not the words, which go stale: "in 2 minutes" an hour after it was due.
+    const late = checkWhen({ nextCheck: "in 2 minutes", checkAt: hoursOn(-1) }, NOW);
+    expect(late?.label).toMatch(new RegExp(`${LOCAL.source}due now$`));
+    expect(late?.label).not.toContain("in 2 minutes");
+    // Moved on by the directory after a check that changed nothing.
+    expect(checkWhen({ checkAt: hoursOn(24) }, NOW)?.label).toMatch(new RegExp(`${LOCAL.source}in 1d$`));
   });
 
-  it("doesn't count a check that changed nothing as the work moving", () => {
+  it("doesn't count a check that changed nothing as the work moving, by the mark the directory leaves", () => {
     const r = rec("a", {
       updates: [
-        { at: hoursOn(-1), text: "Checked; no change." },
+        { at: hoursOn(-1), text: "Checked; no change.", kind: "check" },
         { at: hoursOn(-30), text: "Asked the hotel." },
       ],
     });
     expect(lastMoved(r)).toBe(hoursOn(-30));
+    // The same words without the mark are an update someone wrote.
+    const copied = rec("b", { updates: [{ at: hoursOn(-1), text: "Checked; no change." }] });
+    expect(lastMoved(copied)).toBe(hoursOn(-1));
   });
 
   it("lets a check on a change say itself, and marks text it couldn't read as a note", () => {

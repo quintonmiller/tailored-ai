@@ -22,6 +22,8 @@ export class ReadTool implements Tool {
   name = "read";
   description =
     "Read a file. Large files come back in one window at a time; the result says how to continue from where it stopped.";
+  /** Said rather than left to the default, so a policy that lets only declared reads through lets this through. */
+  effect = "read" as const;
   parameters = {
     type: "object",
     properties: {

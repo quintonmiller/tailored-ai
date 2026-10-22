@@ -1201,8 +1201,11 @@ describe("the commitments block", () => {
     const lines = text.split("\n").filter((l) => l.startsWith("- "));
     expect(lines).toHaveLength(3);
     expect(lines).toContain('- planner-gift-ideas "Gift ideas": open, last update just now, private');
-    expect(lines).toContain(
-      '- planner-weekly-review "Weekly review": open, 1/3, next: Gather notes, check: Friday, last update just now',
+    // The check as the directory read it: the Friday it meant, not the word, which says less every day.
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /^- planner-weekly-review "Weekly review": open, 1\/3, next: Gather notes, check: Fri, \w{3} \d{1,2}, 09:00, last update just now$/,
+      ),
     );
     // Work in hand first; what waits on someone after it.
     expect(lines[2]).toBe('- planner-book-flights "Book flights": waiting on a person, last update just now');

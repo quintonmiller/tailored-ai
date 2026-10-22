@@ -30,10 +30,14 @@ import {
   asksFirst,
   BACKSTOP_MS,
   CEILING_DELAY_MS,
+  CHECKER,
   Checker,
   type CheckerOptions,
   checkPrompt,
+  LEASE_MS,
   NO_CHANGE,
+  notOpen,
+  rederive,
   withEvents,
 } from "../plugins/directory-checks.js";
 import { COMMITMENT_TYPE, DIRECTORY_TYPES, Directory } from "../plugins/directory-records.js";
@@ -43,10 +47,11 @@ import { RoomStore } from "../rooms/store.js";
 import { AgentRuntime } from "../runtime.js";
 import { stateTypeRegistry } from "../state/registry.js";
 import { type StateCaller, StateService } from "../state/service.js";
-import type { StateRecord, StateTypeDef } from "../state/types.js";
+import type { StateChange, StateRecord, StateTypeDef } from "../state/types.js";
 import type { Tool } from "../tools/interface.js";
 
 const MINUTE = 60_000;
+const HOUR = 3_600_000;
 const DAY = 86_400_000;
 const PERSON: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "web" } };
 /** As the commitment tool writes for an agent. */
@@ -57,7 +62,7 @@ const forAgent = (agent: string): StateCaller => ({
 const START = new Date("2026-10-22T10:00:00.000Z");
 const iso = (ms: number) => new Date(ms).toISOString();
 
-/** A type only the planner may read, and one anyone may. */
+/** A type only the planner may read, and two anyone may. */
 const PLAN: StateTypeDef = {
   name: "plan",
   description: "Plans.",
@@ -65,6 +70,7 @@ const PLAN: StateTypeDef = {
   access: { read: ["planner", "user"] },
 };
 const NOTE: StateTypeDef = { name: "note", description: "Notes.", scope: "global" };
+const TRIP: StateTypeDef = { name: "trip", description: "Trips.", scope: "global" };
 
 let db: ReturnType<typeof initDatabase>;
 let events: TypedEventBus;
@@ -76,10 +82,12 @@ let woken: Array<{ agent: string; prompt: string; sessionKey: string; wake: { ki
 let act: (agent: string, id: string) => Promise<"ran" | "paused" | "at-ceiling" | "gone">;
 let refusal: CheckerOptions["refusal"];
 let tools: Record<string, boolean>;
+let allPaused: boolean;
 let checkers: Checker[];
 let typeDisposers: Array<() => void>;
 
-function checker(): Checker {
+/** A checker; `lock` stands for another runtime's, which doesn't wait for this one's. */
+function checker(lock?: object): Checker {
   const c = new Checker({
     directory,
     wake: async (agent, opts) => {
@@ -87,7 +95,9 @@ function checker(): Checker {
       return act(agent, opts.wake.ref ?? "");
     },
     refusal: (agent, where) => refusal(agent, where),
+    paused: () => allPaused,
     canUpdate: (agent) => tools[agent] !== false,
+    ...(lock ? { lock } : {}),
     log: () => {},
     warn: () => {},
   });
@@ -96,8 +106,8 @@ function checker(): Checker {
 }
 
 /** Start a checker and wire it to the bus, as the plugin does. */
-async function started(): Promise<Checker> {
-  const c = checker();
+async function started(lock?: object): Promise<Checker> {
+  const c = checker(lock);
   events.on("state.changed", (change) => c.onChange(change));
   await c.start();
   await c.idle();
@@ -135,7 +145,11 @@ async function settle(): Promise<void> {
 beforeEach(() => {
   db = initDatabase(":memory:");
   events = new TypedEventBus();
-  service = new StateService({ getConfig: () => ({ state: { backend: "sqlite", types: [PLAN, NOTE] } }), db, events });
+  service = new StateService({
+    getConfig: () => ({ state: { backend: "sqlite", types: [PLAN, NOTE, TRIP] } }),
+    db,
+    events,
+  });
   typeDisposers = DIRECTORY_TYPES.map((def) => stateTypeRegistry.register(def.name, { ...def }));
   store = new RoomStore(db);
   clock = START.getTime();
@@ -159,6 +173,7 @@ beforeEach(() => {
   act = async () => "ran";
   refusal = () => undefined;
   tools = {};
+  allPaused = false;
   checkers = [];
 });
 
@@ -192,8 +207,8 @@ describe("a due check", () => {
     clock = START.getTime() + 2 * MINUTE;
     c.tick();
     await vi.waitFor(() => expect(during).toBeDefined());
-    // Claimed: its time taken off and when it was checked set, before the agent did anything.
-    expect(during?.data.checkAt).toBeUndefined();
+    // Claimed: its time moved a lease on and when it was checked set, before the agent did anything.
+    expect(during?.data.checkAt).toBe(iso(clock + LEASE_MS));
     expect(during?.data.checkedAt).toBe(iso(clock));
     // Another look, and another checker, while the turn runs: nothing more.
     c.tick();
@@ -240,6 +255,65 @@ describe("a due check", () => {
     await at(c, START.getTime() + MINUTE);
     expect(woken).toHaveLength(0);
     expect((await read("planner-watch")).data.checkAt).toBe(iso(START.getTime() + MINUTE + CEILING_DELAY_MS));
+  });
+
+  it("at the ceiling waits for the hour to have room, when that's later than five minutes", async () => {
+    await commitment("planner-watch", { checkAt: iso(START.getTime()) });
+    refusal = () => ({
+      outcome: "at-ceiling",
+      why: "it's at its wake ceiling: 12 wakes in the last hour",
+      until: START.getTime() + 40 * MINUTE,
+    });
+    await started();
+    expect(woken).toHaveLength(0);
+    expect((await read("planner-watch")).data.checkAt).toBe(iso(START.getTime() + 40 * MINUTE));
+  });
+
+  it("passes over an agent that's switched off, so its checks don't hold up everyone else's", async () => {
+    // More of the oldest due checks than one look reads, all for an agent paused on the Agents page.
+    for (let i = 0; i < 20; i++) {
+      await commitment(`writer-${i}`, { owner: "writer", checkAt: iso(START.getTime() - DAY + i * MINUTE) });
+    }
+    await commitment("planner-watch", { checkAt: iso(START.getTime()) });
+    refusal = (agent) =>
+      agent === "writer" ? { outcome: "paused", why: "it's switched off or paused on the Agents page" } : undefined;
+    await started();
+    expect(woken.map((w) => w.agent)).toEqual(["planner"]);
+    // The writer's stay due and untouched, for when it's switched on again.
+    expect((await read("writer-0")).version).toBe(1);
+    expect((await read("writer-0")).data.checkAt).toBe(iso(START.getTime() - DAY));
+  });
+
+  it("reads nothing while agents are paused for everyone, and runs at the first look after", async () => {
+    await commitment("planner-watch", { checkAt: iso(START.getTime()) });
+    allPaused = true;
+    const query = vi.spyOn(service, "query");
+    const c = await started();
+    await at(c, START.getTime() + MINUTE);
+    expect(query.mock.calls.filter(([caller]) => caller === CHECKER)).toEqual([]);
+    expect(woken).toHaveLength(0);
+    allPaused = false;
+    await at(c, START.getTime() + 2 * MINUTE);
+    expect(woken).toHaveLength(1);
+  });
+
+  it("comes round again a lease on when its turn never got to its end", async () => {
+    await commitment("planner-watch", { nextCheck: "in 2 minutes", checkAt: iso(START.getTime()) });
+    // The process stops in the middle of the turn: the claim landed, and nothing after it ever will.
+    act = () => new Promise<"ran">((resolve) => held.push(() => resolve("ran")));
+    await checker().start();
+    await vi.waitFor(() => expect(woken).toHaveLength(1));
+    expect((await read("planner-watch")).data.checkAt).toBe(iso(START.getTime() + LEASE_MS));
+    // A new process on the same store, which knows nothing of the first: not due again until the lease runs out.
+    act = async () => "ran";
+    const next = await started({});
+    await at(next, START.getTime() + LEASE_MS - MINUTE);
+    expect(woken).toHaveLength(1);
+    await at(next, START.getTime() + LEASE_MS);
+    expect(woken).toHaveLength(2);
+    const r = await read("planner-watch");
+    expect(texts(r)[0]).toBe(NO_CHANGE);
+    expect(r.data.checkAt).toBe(iso(START.getTime() + LEASE_MS + DAY));
   });
 
   it("is put back as it was when the waker turns it away after the claim", async () => {
@@ -329,6 +403,50 @@ describe("a due check", () => {
     expect(r.data.checkAt).toBe(iso(START.getTime() + DAY));
   });
 
+  it("whose agent left a note for its check keeps it a note, as the tool told it, and nothing wakes it", async () => {
+    await commitment("planner-watch", { nextCheck: "in 2 minutes", checkAt: iso(START.getTime()) });
+    act = async (agent, id) => {
+      const r = await read(id);
+      // As the tool writes a note: the text, and no time or change beside it.
+      await service.patch(
+        forAgent(agent),
+        { type: COMMITMENT_TYPE, id },
+        {
+          nextCheck: "after Sam replies",
+          checkAt: null,
+          checkOn: null,
+          updates: [{ at: iso(clock), text: "Asked Sam." }],
+        },
+        r.version,
+      );
+      return "ran";
+    };
+    const c = await started();
+    expect(woken).toHaveLength(1);
+    const r = await read("planner-watch");
+    expect(r.data.nextCheck).toBe("after Sam replies");
+    expect(r.data.checkAt).toBeUndefined();
+    await at(c, START.getTime() + 30 * DAY);
+    expect(woken).toHaveLength(1);
+  });
+
+  it("marks the note it writes for a check that changed nothing, so the same words from the agent still count", async () => {
+    await commitment("planner-watch", {
+      checkAt: iso(START.getTime()),
+      // The agent wrote the very words itself, a day ago: that was an update, not a check.
+      updates: [{ at: iso(START.getTime() - DAY), text: NO_CHANGE }],
+    });
+    const c = await started();
+    const r = await read("planner-watch");
+    expect(r.data.updates).toEqual([
+      { at: iso(START.getTime()), text: NO_CHANGE, kind: "check" },
+      { at: iso(START.getTime() - DAY), text: NO_CHANGE },
+    ]);
+    // One check that changed nothing so far, so the first step of the backoff.
+    expect(r.data.checkAt).toBe(iso(START.getTime() + DAY));
+    await c.stop();
+  });
+
   it("never wakes for a finished, dropped or archived commitment", async () => {
     await commitment("planner-done", { status: "done", checkAt: iso(START.getTime()) });
     await commitment("planner-dropped", { status: "dropped", checkAt: iso(START.getTime()) });
@@ -390,7 +508,7 @@ describe("a due check", () => {
         "- 2026-10-20: Found five.",
         "- 2026-10-19: Asked for dates.",
         'Why now: its check was due Fri, Oct 23, 09:00 ("Friday 9am").',
-        "It asks first: read anything and update your commitments and docs, but put anything else that would change something in nextStep and set the commitment waiting on a person.",
+        "It asks first: update your commitments and docs and read records and files, but put anything that would change something else in nextStep and set the commitment waiting on a person.",
         "Do the next step, then update the commitment with progress and a new check (commitment update, id planner-watch).",
       ].join("\n"),
     );
@@ -405,33 +523,34 @@ describe("a due check", () => {
 });
 
 describe("a check on a change", () => {
-  async function watching(on: Record<string, unknown>, owner = "planner") {
-    await service.put(PERSON, { type: "plan", id: "lisbon", scope: "global", data: { status: "draft" } }, 0);
-    await commitment(`${owner}-watch`, {
-      owner,
-      nextCheck: "when plan/lisbon changes",
-      checkOn: on,
-      checkAt: iso(START.getTime() + BACKSTOP_MS),
-    });
+  /** A commitment watching `on`, and the record `<type>/lisbon` for it to watch. */
+  async function watching(on: Record<string, unknown>, owner = "planner", type = "plan", scope = "global") {
+    await service.put(PERSON, { type, id: "lisbon", scope: "global", data: { status: "draft" } }, 0);
+    await commitment(
+      `${owner}-watch`,
+      { owner, nextCheck: `when ${type}/lisbon changes`, checkOn: on, checkAt: iso(START.getTime() + BACKSTOP_MS) },
+      scope,
+    );
   }
 
-  const touch = async (caller: StateCaller, data: Record<string, unknown>) => {
-    const plan = await service.get(PERSON, { type: "plan", id: "lisbon" });
-    await service.patch(caller, { type: "plan", id: "lisbon" }, data, plan?.version);
+  const touch = async (caller: StateCaller, data: Record<string, unknown>, type = "plan") => {
+    const record = await service.get(PERSON, { type, id: "lisbon" });
+    await service.patch(caller, { type, id: "lisbon" }, data, record?.version);
   };
 
   it("makes a burst of changes one wake, which says what changed", async () => {
     // The gathering window is a timer: held still, so the burst ends when the test says.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    await watching({ type: "plan", id: "lisbon" });
+    // A record anyone may read, so the lines can say what changed in it.
+    await watching({ type: "trip", id: "lisbon" }, "planner", "trip");
     const c = await started();
     expect(c.watching()).toEqual(["planner-watch"]);
     // A burst comes over a while, not all at once: each change is seen before the next.
-    await touch(PERSON, { status: "final" });
+    await touch(PERSON, { status: "final" }, "trip");
     await settle();
-    await touch(PERSON, { budget: 900 });
+    await touch(PERSON, { budget: 900 }, "trip");
     await settle();
-    await touch(PERSON, { budget: 950 });
+    await touch(PERSON, { budget: 950 }, "trip");
     await settle();
     expect(woken).toHaveLength(0);
     await c.flush();
@@ -443,9 +562,9 @@ describe("a check on a change", () => {
     expect(prompt).toContain("Why now: what it watches changed.");
     expect(prompt).toContain(
       [
-        "- plan/lisbon updated by a person (web): budget: 900 → 950",
-        "- plan/lisbon updated by a person (web): budget set to 900",
-        "- plan/lisbon updated by a person (web): status: draft → final",
+        "- trip/lisbon updated by a person (web): budget: 900 → 950",
+        "- trip/lisbon updated by a person (web): budget set to 900",
+        "- trip/lisbon updated by a person (web): status: draft → final",
       ].join("\n"),
     );
     // The lines went with the wake; after a turn that changed nothing, the backstop comes round again.
@@ -513,10 +632,97 @@ describe("a check on a change", () => {
     expect(woken).toHaveLength(0);
   });
 
+  it("tells what changed only where everyone who can read the commitment could read it", async () => {
+    // A shared commitment watches a plan, which only the planner may read; every agent reads the commitment.
+    await watching({ type: "plan", id: "lisbon" });
+    allPaused = true;
+    const c = await started();
+    await touch(PERSON, { budget: 4321 });
+    await settle();
+    await c.flush();
+    expect((await read("planner-watch")).data.checkEvents).toEqual(["plan/lisbon changed; read it to see how"]);
+    const writer: StateCaller = { actor: { kind: "agent", name: "writer" } };
+    const seen = await service.get(writer, { type: COMMITMENT_TYPE, id: "planner-watch" });
+    expect(seen).toBeDefined();
+    expect(JSON.stringify(seen?.data)).not.toContain("4321");
+    // The planner, which can read the plan, is told to.
+    allPaused = false;
+    await at(c, clock);
+    expect(woken[0].prompt).toContain("- plan/lisbon changed; read it to see how");
+  });
+
+  it("names no more than the commitment does for a record kept narrower than it, and all of it in its own scope", async () => {
+    store.upsertRoom({ ref: { backend: "local", id: "garden" }, name: "garden" }, "alex");
+    store.subscribe({ agent: "planner", roomRef: "local:garden", source: "config" });
+    await service.put(PERSON, { type: "note", id: "gate", scope: "room:local:garden", data: { text: "old" } }, 0);
+    // A shared commitment and one in the room, both watching any note.
+    const on = { nextCheck: "when note changes", checkOn: { type: "note" }, checkAt: iso(START.getTime() + DAY) };
+    await commitment("planner-notes", on);
+    await commitment("planner-garden", on, "room:local:garden");
+    allPaused = true;
+    const c = await started();
+    const note = await service.get(PERSON, { type: "note", id: "gate" });
+    await service.patch(PERSON, { type: "note", id: "gate" }, { text: "code 4321" }, note?.version);
+    await settle();
+    await c.flush();
+    expect((await read("planner-notes")).data.checkEvents).toEqual([
+      "a note it watches changed; look it up to see which",
+    ]);
+    expect((await read("planner-garden")).data.checkEvents).toEqual([
+      "note/gate updated by a person (web): text: old → code 4321",
+    ]);
+  });
+
   it("keeps the five newest lines, the last counting the rest", () => {
     expect(withEvents(["a", "b"], ["c"])).toEqual(["a", "b", "c"]);
     expect(withEvents(["a", "b", "c"], ["d", "e", "f"])).toEqual(["a", "b", "c", "d", "…and 2 more"]);
     expect(withEvents(["z"], ["a", "b", "c", "d", "…and 2 more"])).toEqual(["z", "a", "b", "c", "…and 3 more"]);
+  });
+});
+
+describe("a person's edit, read again", () => {
+  const ref = { type: COMMITMENT_TYPE, id: "planner-watch" };
+
+  it("is read past a write that crossed it, and left alone once its text has changed since", async () => {
+    const r = await commitment("planner-watch", { nextCheck: "in 2 days", checkAt: iso(START.getTime() + 2 * DAY) });
+    const changes: StateChange[] = [];
+    const sub = events.on("state.changed", (change) => void changes.push(change));
+    await service.patch(PERSON, ref, { nextCheck: "in 1 hour" }, r.version);
+    // The checker moves the check on before the person's edit is read again.
+    await service.patch(CHECKER, ref, { checkAt: iso(START.getTime() + 3 * DAY) }, r.version + 1);
+    await rederive(directory, changes[0]);
+    expect((await read("planner-watch")).data.checkAt).toBe(iso(START.getTime() + HOUR));
+
+    // Two edits, the first read after the second landed: the second's own reading is what counts.
+    await service.patch(PERSON, ref, { nextCheck: "in 5 hours" }, (await read("planner-watch")).version);
+    const first = changes.at(-1) as StateChange;
+    await service.patch(PERSON, ref, { nextCheck: "in 3 hours" }, (await read("planner-watch")).version);
+    const version = (await read("planner-watch")).version;
+    sub.dispose();
+    expect(await rederive(directory, first)).toBeUndefined();
+    expect((await read("planner-watch")).version).toBe(version);
+  });
+});
+
+describe("a commitment written before checks were read", () => {
+  it("is read once when the checker starts, when it reads the same whenever it's read", async () => {
+    await commitment("planner-dated", { nextCheck: "2026-10-28" });
+    await commitment("planner-watch", { nextCheck: "when trip/lisbon changes" });
+    await commitment("planner-relative", { nextCheck: "in 2 days" });
+    await commitment("planner-done", { status: "done", nextCheck: "2026-10-28" });
+    const c = await started();
+    // 09:00 in Lisbon, which is back on UTC by then.
+    expect((await read("planner-dated")).data.checkAt).toBe("2026-10-28T09:00:00.000Z");
+    expect((await read("planner-watch")).data.checkOn).toEqual({ type: "trip", id: "lisbon" });
+    expect(c.watching()).toEqual(["planner-watch"]);
+    // What "in 2 days" meant when it was written can't be told now, so it's left as it was.
+    expect((await read("planner-relative")).version).toBe(1);
+    expect((await read("planner-done")).version).toBe(1);
+    // Once: a second start writes nothing more.
+    const version = (await read("planner-dated")).version;
+    await c.stop();
+    await started();
+    expect((await read("planner-dated")).version).toBe(version);
   });
 });
 
@@ -526,7 +732,8 @@ describe("the suggest guard", () => {
   it("refuses a check's call that writes, can't be undone, or says nothing of what it does", () => {
     expect(asksFirst({ tool: "exec", effect: "write", effectDeclared: true, wake })).toBe(ASKS_FIRST);
     expect(asksFirst({ tool: "coding_agent", effect: "irreversible", effectDeclared: true, wake })).toBe(ASKS_FIRST);
-    expect(asksFirst({ tool: "web_fetch", effect: "read", effectDeclared: false, wake })).toBe(ASKS_FIRST);
+    // A tool that says nothing may only read, so it isn't sent to a person: it's said to be closed to a check.
+    expect(asksFirst({ tool: "web_fetch", effect: "read", effectDeclared: false, wake })).toBe(notOpen("web_fetch"));
   });
 
   it("lets through its reads and the agent's own directory tools", () => {
@@ -552,6 +759,7 @@ describe("the plugin", () => {
   let routes: HttpRouteRegistry;
   let loaded: LoadedPlugin[];
   let wakeAgent: ReturnType<typeof vi.fn>;
+  let runtime: AgentRuntime;
 
   function fakeRuntime() {
     return {
@@ -566,11 +774,13 @@ describe("the plugin", () => {
     } as unknown as AgentRuntime;
   }
 
-  async function load(): Promise<LoadedPlugin> {
+  /** Load the plugin into this test's runtime: every load of a test is a reload of the same one. */
+  async function load(config?: Record<string, unknown>): Promise<LoadedPlugin> {
+    runtime ??= fakeRuntime();
     const [plugin] = await loadPlugins(
-      { plugins: [{ module: "builtin:directory", enabled: true }] } as never,
+      { plugins: [{ module: "builtin:directory", enabled: true, ...(config ? { config } : {}) }] } as never,
       async () => directoryPlugin,
-      { context: createPluginContext({ runtime: fakeRuntime(), events }) },
+      { context: createPluginContext({ runtime, events }) },
     );
     expect(plugin.ok).toBe(true);
     loaded.push(plugin);
@@ -582,6 +792,7 @@ describe("the plugin", () => {
     typeDisposers = [];
     routes = new HttpRouteRegistry();
     loaded = [];
+    runtime = undefined as unknown as AgentRuntime;
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
@@ -623,6 +834,20 @@ describe("the plugin", () => {
     await settle();
     expect(wakeAgent).toHaveBeenCalledTimes(1);
     expect((await read("planner-watch")).data.checkAt).toBe(iso(START.getTime() + DAY));
+  });
+
+  it("wakes no one with checks turned off, and still reads a check as it's written", async () => {
+    wakeAgent = vi.fn(async () => "ran");
+    await load({ checks: false });
+    // Due a minute ago: with checks on, it would be woken at once (see above).
+    await commitment("planner-watch", { checkAt: iso(START.getTime() - MINUTE) });
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(wakeAgent).not.toHaveBeenCalled();
+    const r = await read("planner-watch");
+    await service.patch(PERSON, { type: COMMITMENT_TYPE, id: "planner-watch" }, { nextCheck: "in 2 hours" }, r.version);
+    await settle();
+    expect((await read("planner-watch")).data.checkAt).toBe(iso(START.getTime() + 2 * HOUR));
   });
 
   it("takes its timer and listeners away when it's turned off", async () => {
@@ -708,7 +933,7 @@ describe("a check's turn, through the agent loop", () => {
         temperature: 0.3,
         extraInstructions: "",
       },
-      agents: { planner: { tools: ["commitment", "save_file", "fetch_page", "look_up"] } },
+      agents: { planner: { tools: ["commitment", "save_file", "fetch_page", "look_up", "state"] } },
       rooms: { maxWakesPerHour: 12 },
       tools: {},
       custom_tools: {},
@@ -775,6 +1000,9 @@ describe("a check's turn, through the agent loop", () => {
           name: "commitment",
           arguments: { action: "update", id: "planner-watch", note: "Prices unchanged.", nextCheck: "Friday 9am" },
         },
+        // The core state tool says which of its calls only read: a check can read what it watches, not change it.
+        { name: "state", arguments: { action: "get", type: COMMITMENT_TYPE, id: "planner-watch" } },
+        { name: "state", arguments: { action: "patch", type: COMMITMENT_TYPE, id: "planner-watch", data: {} } },
       ],
     ];
     await runtime.getStateService().put(
@@ -812,9 +1040,11 @@ describe("a check's turn, through the agent loop", () => {
     ).toBe(true);
     expect(ran).toEqual(["look_up"]);
     expect(outputs["save_file-0"]).toEqual([ASKS_FIRST]);
-    expect(outputs["fetch_page-1"]).toEqual([ASKS_FIRST]);
+    expect(outputs["fetch_page-1"]).toEqual([notOpen("fetch_page")]);
     expect(outputs["look_up-2"]).toEqual(["look_up ran"]);
     expect(outputs["commitment-3"]?.[0]).toMatch(/^Updated planner-watch/);
+    expect(outputs["state-4"]?.[0]).toContain("planner-watch");
+    expect(outputs["state-5"]).toEqual([ASKS_FIRST]);
     // The agent set a new check, so that's the one kept.
     const r = await runtime.getStateService().get(PERSON, { type: COMMITMENT_TYPE, id: "planner-watch" });
     expect(r?.data.nextCheck).toBe("Friday 9am");

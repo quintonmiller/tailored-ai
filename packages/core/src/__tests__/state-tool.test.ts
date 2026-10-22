@@ -13,6 +13,7 @@ import { registerStateProvider, registerStateType } from "../state/registry.js";
 import { type StateConfig, StateService } from "../state/service.js";
 import { SqliteStateProvider } from "../state/sqlite-provider.js";
 import "../tools/builtin.js";
+import { declaredEffectOf } from "../tools/effect.js";
 import type { ToolContext } from "../tools/interface.js";
 import { StateTool } from "../tools/state.js";
 import { toolFactoryRegistry } from "../tools/tool-factories.js";
@@ -59,6 +60,15 @@ describe("state tool", () => {
 
   afterEach(async () => {
     await service.close();
+  });
+
+  it("says which calls only read, so a policy that lets reads through can tell", () => {
+    for (const action of ["types", "get", "query", "search", "GET"])
+      expect(declaredEffectOf(tool, { action })).toBe("read");
+    // Anything else may change a record, an action it doesn't know included.
+    for (const action of ["put", "patch", "delete", "archive", "unarchive", "nonsense", undefined]) {
+      expect(declaredEffectOf(tool, { action })).toBe("write");
+    }
   });
 
   it("lists types as fields a model can read, and says what this agent may do", async () => {
