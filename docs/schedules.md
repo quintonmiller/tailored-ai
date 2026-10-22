@@ -93,10 +93,17 @@ A room wake goes through `RoomWatcher.runScheduledWake`, which shares
 guard, `maxWakesPerHour`, `pass` handling, the silence refund and repeat
 suppression. A self-booked wake is not a way around the deployment's brakes.
 
-A session wake runs the loop against that session and persists the reply there.
-Nothing is pushed anywhere, and both the booking echo and the wake prompt say
-so — an agent that assumes it has been heard will not use the tools that would
-actually reach someone.
+A session wake runs in that session through
+[`runtime.wakeAgent`](./architecture.md#waking-an-agent-from-a-plugin), and the
+reply persists there. Nothing is pushed anywhere, and both the booking echo and
+the wake prompt say so — an agent that assumes it has been heard will not use
+the tools that would actually reach someone. Going through the waker, it stops
+for what every turn nobody asked for stops for: it counts as one of the agent's
+wakes for the hour (`rooms.maxWakesPerHour`, shared with its subscriptions, its
+tend and its upkeep), and its tools see `{ kind: "schedule", ref: <schedule id> }`
+as why the turn runs. Its `notify_owner` is not held back by the
+[repeat gate](./notifications.md), as a room wake's isn't: a reminder says the
+same thing each time it comes round, and each time is wanted.
 
 ## Firing
 
@@ -128,13 +135,27 @@ check-ins. A recurring occurrence is skipped — the next comes round anyway —
 a one-shot is left due, so a commitment made before the pause is kept the moment
 it lifts. A commitment survives a pause; a heartbeat does not need to.
 
+An online agent switched off or paused on the Agents page is a pause for that
+agent, and its session wakes are held the same way: a one-shot waits, looked at
+again every five minutes with its due time kept, so when it runs the agent hears
+how late it is; a recurring occurrence is skipped. A restart looks at a waiting
+one-shot again straight away.
+
+A one-shot booked in a session that its agent's hourly wake ceiling turns away
+waits too, rather than being given up after `maxDeferrals`: the ceiling is a
+rolling hour, so it always has room again within the hour, and a reminder that
+lapses while it's full would be lost for good. It's looked at again when the
+hour has room, or after five minutes when a woken turn is still running in its
+session, and it keeps its due time, so the agent hears how late it is.
+
 ### Refusals
 
 | Outcome | Meaning | What the scheduler does |
 |---|---|---|
 | `ran` | the turn happened | records the run |
-| `at-ceiling` | temporarily refused (wake ceiling, paused, turn in flight) | retries in 5 minutes, up to `maxDeferrals` |
-| `gone` | the agent left the room, or it was archived | retires the schedule |
+| `at-ceiling` | temporarily refused: the agent is at its wake ceiling (the room's, or for a session wake its own hourly one), agents are paused (a room wake), or a turn is in flight where it would land | retries in 5 minutes, up to `maxDeferrals`, then gives up on that occurrence, retiring a one-shot. A one-shot booked in a session waits until it can run instead (see [Pauses](#pauses)) |
+| `paused` | a session wake whose online agent is switched off or paused on the Agents page | holds a one-shot until it lifts, skips a recurring occurrence (see [Pauses](#pauses)) |
+| `gone` | the agent left the room, the room was archived, or the session it was booked in or the agent itself is gone | retires the schedule |
 
 A refused wake is not counted as a run: counting it would misreport the run
 number to the agent and reset the deferral streak that stops a room permanently
@@ -153,7 +174,7 @@ schedules:
   maxPerAgent: 20          # live schedules one agent may hold
   minIntervalMinutes: 15   # floor on how often a recurrence may fire
   maxHorizonDays: 365      # furthest a one-shot may be booked
-  maxDeferrals: 3          # retries when a room is at its ceiling
+  maxDeferrals: 3          # retries when a wake ceiling turns a wake away (not a session one-shot, which waits)
 ```
 
 Timezone precedence is explicit config, then a plugin provider's timezone,

@@ -47,7 +47,7 @@ export type { TaskInfo } from "./agent/tasks.js";
 export { getTask, listTasks, startTask } from "./agent/tasks.js";
 export type { CapToolOutputOptions } from "./agent/tool-output.js";
 export { capToolOutput, DEFAULT_MAX_TOOL_OUTPUT_CHARS, resolveToolOutputLimit } from "./agent/tool-output.js";
-export type { RoomWaker, Wake, WakeAgentOptions, WakeOutcome } from "./agent/wake.js";
+export type { RoomWaker, Wake, WakeAgentOptions, WakeOutcome, WakeRefusal, WakeSession } from "./agent/wake.js";
 export type {
   ApprovalHandler,
   ApprovalRequest,

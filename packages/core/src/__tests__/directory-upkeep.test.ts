@@ -6,6 +6,7 @@
  */
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WakeOutcome } from "../agent/wake.js";
 import { setCoreMemory } from "../db/core-memory-queries.js";
 import { createNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
@@ -501,6 +502,8 @@ describe("an upkeep turn", () => {
   let tools: Record<string, Tool>;
   let runs: { agent: string; session: string; message: string; maxRounds: number }[];
   let turn: (agent: string, session: string) => Promise<void>;
+  /** What the waker says to the next turns: "ran", or why it turned them away. */
+  let waker: WakeOutcome;
   let settings: UpkeepSettings;
 
   const ctx = (agent: string, sessionId: string): ToolContext => ({
@@ -535,8 +538,10 @@ describe("an upkeep turn", () => {
       embedder: () => embedder,
       session: (agent) => ({ id: `upkeep-${agent}` }),
       run: async (agent, session, message, maxRounds) => {
+        if (waker !== "ran") return { outcome: waker, why: `the waker said ${waker}` };
         runs.push({ agent, session: session.id, message, maxRounds });
         await turn(agent, session.id);
+        return "ran";
       },
     });
   }
@@ -562,6 +567,7 @@ describe("an upkeep turn", () => {
     };
     runs = [];
     turn = async () => {};
+    waker = "ran";
     settings = parseUpkeep({}, () => {});
 
     // A month and a half of the planner's work, some of it gone stale.
@@ -695,6 +701,7 @@ describe("an upkeep turn", () => {
       session: (agent) => ({ id: `upkeep-${agent}` }),
       run: async (agent, session, message, maxRounds) => {
         runs.push({ agent, session: session.id, message, maxRounds });
+        return "ran";
       },
     });
     expect(await keeper.turn("writer")).toBe("quiet");
@@ -714,6 +721,50 @@ describe("an upkeep turn", () => {
     turn = async () => {};
     expect(await keeper.turn("planner")).toBe("woken");
     expect((await directory.upkeep("planner"))?.data.error).toBeUndefined();
+  });
+
+  it("counts nothing for a turn the waker turns away: on the schedule the record stays as it was, asked for it says why", async () => {
+    turn = async () => {
+      throw new Error("the model is unreachable");
+    };
+    const keeper = upkeep();
+    await expect(keeper.turn("planner")).rejects.toThrow("the model is unreachable");
+    const failed = (await directory.upkeep("planner"))?.data ?? {};
+    turn = async () => {};
+    runs = [];
+
+    // At the ceiling on the schedule: skipped like any other skip, the last failure still showing.
+    waker = "at-ceiling";
+    clock = new Date(NOW.getTime() + 60_000);
+    expect(await keeper.turn("planner")).toBe("at-ceiling");
+    const skipped = (await directory.upkeep("planner"))?.data ?? {};
+    expect(skipped).toMatchObject({
+      error: "the model is unreachable",
+      failedAt: failed.failedAt,
+      started: failed.started,
+    });
+    expect(skipped.at).toBeUndefined();
+    expect(skipped.fingerprint).toBeUndefined();
+    expect(runs).toHaveLength(0);
+
+    // The next turn the waker lets through finds the same evidence new, and wakes the agent for it.
+    waker = "ran";
+    expect(await keeper.turn("planner")).toBe("woken");
+    const ran = (await directory.upkeep("planner"))?.data ?? {};
+    expect(ran.error).toBeUndefined();
+
+    // Asked for by a person and turned away: the waker's reason is kept for the page; what the last turn counted stays.
+    waker = "at-ceiling";
+    clock = new Date(NOW.getTime() + 120_000);
+    expect(await keeper.turn("planner", { force: true })).toBe("at-ceiling");
+    expect((await directory.upkeep("planner"))?.data).toMatchObject({
+      error: "the waker said at-ceiling",
+      failedAt: clock.toISOString(),
+      at: ran.at,
+      fingerprint: ran.fingerprint,
+      changed: ran.changed,
+    });
+    expect(runs).toHaveLength(1);
   });
 
   it("counts pinned notes and core memory against the budget, and offers core_memory only when they're over it", async () => {
@@ -900,6 +951,7 @@ describe("an upkeep turn", () => {
       session: (agent) => ({ id: `upkeep-${agent}` }),
       run: async (agent, session, message, maxRounds) => {
         runs.push({ agent, session: session.id, message, maxRounds });
+        return "ran";
       },
     });
     expect(await keeper.turn("planner")).toBe("woken");

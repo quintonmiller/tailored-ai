@@ -786,6 +786,7 @@ describe("the lead's upkeep", () => {
       run: async (agent, session, message) => {
         messages.push(message);
         await turn(agent, session.id);
+        return "ran";
       },
     });
   }

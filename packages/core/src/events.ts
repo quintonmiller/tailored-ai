@@ -371,7 +371,7 @@ export interface RuntimeEventMap {
     agent: string;
     wake: Wake;
     targetKind: "session" | "room";
-    /** The session key, or the room's ref. */
+    /** The session key (its id, for a session woken by id that has no key), or the room's ref. */
     target: string;
   };
 

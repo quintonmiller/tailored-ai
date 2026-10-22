@@ -1346,7 +1346,11 @@ which runs on the same timing. A turn that comes round
 while agents are paused, or while an agent's own switch on the Agents page has
 it switched off or paused, is skipped, not saved up, so lifting a pause wakes
 nobody at once. An agent without the `place` tool is skipped too, and the log
-says so. Leave `tend` out and nothing changes.
+says so. A tend counts as one of the agent's wakes for the hour
+(`rooms.maxWakesPerHour`, shared with its subscriptions, its upkeep and the
+wakes it books itself), so one that comes round when the agent is at that
+ceiling is skipped the same way, and the log says why. Leave `tend` out and
+nothing changes.
 
 You can also ask an agent yourself, whenever you like: see below.
 

@@ -17,9 +17,12 @@ import {
   initDatabase,
   type LoadedPlugin,
   loadPlugins,
+  type RuntimeEventPayload,
   type StateCaller,
   toolFactoryRegistry,
+  type Wake,
 } from "@tailored-ai/core";
+import { nextTend, TEND_TICK_MS } from "@tailored-ai/core/plugins/places-tend";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../index.js";
 
@@ -55,6 +58,8 @@ let pluginConfig: Record<string, unknown>;
 let agentRounds: number;
 /** Agents beyond the two every test has. */
 let moreAgents: Record<string, unknown>;
+/** Each agent's wakes an hour, turns nobody asked for, shared by everything that wakes it. */
+let maxWakes: number;
 
 function buildConfig(authToken?: string): AgentConfig {
   return {
@@ -74,6 +79,7 @@ function buildConfig(authToken?: string): AgentConfig {
       "trip-planner": { description: "Plans trips." },
       ...moreAgents,
     },
+    rooms: { maxWakesPerHour: maxWakes },
     cron: { enabled: false, jobs: [] },
     context: { directory: "./data/context", kbDirectory: "./data/kb" },
     channels: {},
@@ -151,6 +157,7 @@ beforeEach(() => {
   pluginConfig = {};
   agentRounds = 1;
   moreAgents = {};
+  maxWakes = 12;
 });
 
 afterEach(async () => {
@@ -160,6 +167,7 @@ afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
   rmSync(tmpDir, { recursive: true, force: true });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -479,6 +487,133 @@ describe("the directory routes", () => {
       expect((await app.fetch(upkeep("trip-planner"))).status).toBe(202);
       await finished(app, "trip-planner");
       expect(chats.filter((c) => c.tools?.length).length).toBe(1);
+    });
+
+    it("goes through the waker: its tools see an upkeep, the bus hears it, and it counts toward the agent's hour", async () => {
+      maxWakes = 2;
+      const app = await start();
+      await finishedLongAgo();
+      const woken: Array<RuntimeEventPayload<"agent.woken">> = [];
+      runtime.events.on("agent.woken", (e) => {
+        woken.push(e);
+      });
+      const seen: Array<Wake | undefined> = [];
+      runtime.events.onWaterfall("agent.pre_tool_use", (p, next) => {
+        seen.push(p.wake);
+        return next(p);
+      });
+      script = [calls("commitment", { action: "archive", id: "trip-planner-transfer", reason: "Long done." })];
+
+      expect((await app.fetch(upkeep("trip-planner"))).status).toBe(202);
+      await finished(app, "trip-planner");
+
+      const wake = { kind: "upkeep", ref: "upkeep/trip-planner" };
+      expect(woken).toEqual([{ agent: "trip-planner", wake, targetKind: "session", target: "upkeep:trip-planner" }]);
+      expect(seen).toEqual([wake]);
+      // One of its two wakes this hour went on tidying up.
+      const other = { prompt: "x", sessionKey: "watch:trip-planner", wake: { kind: "watch" } };
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("ran");
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("at-ceiling");
+    });
+
+    it("answers at once when the agent is at its hourly wake ceiling, says so, and runs nothing", async () => {
+      maxWakes = 1;
+      const app = await start();
+      await finishedLongAgo();
+      const other = { prompt: "x", sessionKey: "watch:trip-planner", wake: { kind: "watch" } };
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("ran");
+      chats = [];
+
+      const res = await app.fetch(upkeep("trip-planner"));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "trip-planner can't tidy up now: it's at its wake ceiling: 1 wake in the last hour. Try again later.",
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(chats).toEqual([]);
+      // Nothing started, so the page has no turn to show, and no failure either.
+      expect(await view(app, "trip-planner")).toEqual({ running: false });
+      // Another agent's hour is its own.
+      expect((await app.fetch(upkeep("planner"))).status).toBe(202);
+      await finished(app, "planner");
+    });
+
+    it("gives the agent's own ceiling as the reason, not another agent's turn that happens to be running", async () => {
+      maxWakes = 1;
+      const app = await start();
+      await finishedLongAgo();
+      const other = { prompt: "x", sessionKey: "watch:trip-planner", wake: { kind: "watch" } };
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("ran");
+      // The planner's upkeep takes its time, so turns on an interval are busy while trip-planner asks.
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      script = [
+        async () => {
+          await gate;
+          return { content: "ok", usage: { input: 0, output: 0 }, finishReason: "stop" };
+        },
+      ];
+      expect((await app.fetch(upkeep("planner"))).status).toBe(202);
+      await new Promise((r) => setTimeout(r, 20));
+      expect((await view(app, "planner")).running).toBe(true);
+
+      // Waiting a minute for the planner wouldn't help: trip-planner's hour is what's full.
+      const res = await app.fetch(upkeep("trip-planner"));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "trip-planner can't tidy up now: it's at its wake ceiling: 1 wake in the last hour. Try again later.",
+      });
+      release();
+      await finished(app, "planner");
+    });
+
+    it("keeps the waker's own reason for the page when the turn is turned away after the answer", async () => {
+      maxWakes = 1;
+      const app = await start();
+      await finishedLongAgo();
+      const other = { prompt: "x", sessionKey: "watch:trip-planner", wake: { kind: "watch" } };
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("ran");
+      chats = [];
+      // The hour fills while the evidence is read: the route's look finds room, the wake itself doesn't.
+      vi.spyOn(runtime, "wakeRefusal").mockReturnValueOnce(undefined);
+
+      expect((await app.fetch(upkeep("trip-planner"))).status).toBe(202);
+      const done = await finished(app, "trip-planner");
+      expect(done.error).toBe("it's at its wake ceiling: 1 wake in the last hour");
+      expect(done.at).toBeUndefined();
+      expect(chats).toEqual([]);
+    });
+
+    it("skips a scheduled upkeep at the hourly ceiling before reading its evidence, and runs it at its next time", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+      const HOUR = 3_600_000;
+      pluginConfig = { upkeep: { every: "1h", agents: ["trip-planner"] } };
+      maxWakes = 1;
+      const app = await start();
+      await finishedLongAgo();
+      const due = nextTend("trip-planner", HOUR, Date.now(), "upkeep");
+      // Its one wake for the hour goes on something else, a minute before its upkeep comes round.
+      await vi.advanceTimersByTimeAsync(due - Date.now() - 60_000);
+      const other = { prompt: "x", sessionKey: "watch:trip-planner", wake: { kind: "watch" } };
+      expect(await runtime.wakeAgent("trip-planner", other)).toBe("ran");
+      chats = [];
+
+      await vi.advanceTimersByTimeAsync(60_000 + TEND_TICK_MS);
+      expect(chats).toEqual([]);
+      const said = vi.mocked(console.log).mock.calls.map((c) => String(c[0]));
+      expect(said).toContain(
+        "[directory] trip-planner's upkeep skipped: it's at its wake ceiling: 1 wake in the last hour",
+      );
+      expect(await view(app, "trip-planner")).toEqual({ running: false, every: "hour" });
+
+      // Its next time, an hour on, the hour has room: it runs, with the evidence it would have had.
+      await vi.advanceTimersByTimeAsync(HOUR);
+      const done = await finished(app, "trip-planner");
+      expect(done.at).toBeTruthy();
+      const first = chats[0].messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+      expect(first).toContain('- trip-planner-transfer "Airport transfer": done 12 days ago and still not archived');
     });
 
     it("refuses while agents are paused, while it's already running, and for an agent with nothing to tidy with", async () => {

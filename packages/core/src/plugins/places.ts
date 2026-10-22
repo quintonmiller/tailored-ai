@@ -43,8 +43,6 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgent } from "../agent/agents.js";
-import { runAgentLoop } from "../agent/loop.js";
-import { findOrCreateSession } from "../agent/session.js";
 import type { AgentConfig } from "../config.js";
 import { mediaPart, textPart } from "../content/types.js";
 import { getExploratoryState } from "../db/exploratory-queries.js";
@@ -4162,9 +4160,10 @@ const plugin: Plugin = (ctx) => {
         // The switches that put an agent to sleep in the world: the global pause, and an online agent's own.
         const why = asleep(agent);
         if (why) return why;
-        return resolve(agent).tools.some((t) => t.name === "place")
-          ? null
-          : "it has no place tool (name place in its tools)";
+        if (!resolve(agent).tools.some((t) => t.name === "place"))
+          return "it has no place tool (name place in its tools)";
+        // At its hourly wake ceiling, skipped before what it did is counted: the waker would turn the turn away.
+        return runtime.wakeRefusal(agent, { sessionKey: turnSession("tend", agent) })?.why ?? null;
       },
       tend: async (agent, since) => {
         const rooms = talkRooms();
@@ -4198,13 +4197,14 @@ const plugin: Plugin = (ctx) => {
           ...(away ? { away } : {}),
           meetings: mine.map((r) => r.name),
         });
-        const resolved = resolve(agent);
-        const session = findOrCreateSession(runtime.db, key, resolved.model, resolved.provider);
-        await runAgentLoop(
-          message,
-          runtime.buildLoopOptions({ session, ...(agent === "default" ? {} : { agentName: agent }) }),
-        );
-        return "woken";
+        // Through the waker, like every turn nobody asked for: it counts toward the agent's hourly ceiling, and its
+        // tools see it as a tend. One turned away is skipped until the agent's next time.
+        const outcome = await runtime.wakeAgent(agent, {
+          prompt: message,
+          sessionKey: key,
+          wake: { kind: "tend", ref: `${PLACE_TYPE}/${homeId(agent)}` },
+        });
+        return outcome === "ran" ? "woken" : outcome;
       },
     });
     tender.start();

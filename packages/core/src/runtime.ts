@@ -7,7 +7,15 @@ import type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { canSelfModify } from "./agent/prompt.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
-import { AgentWaker, type RoomWaker, type Wake, type WakeAgentOptions, type WakeOutcome } from "./agent/wake.js";
+import {
+  AgentWaker,
+  type RoomWaker,
+  type Wake,
+  type WakeAgentOptions,
+  type WakeOutcome,
+  type WakeRefusal,
+  type WakeSession,
+} from "./agent/wake.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import type { OutboundNotifier } from "./channels/outbound.js";
 import {
@@ -1308,15 +1316,30 @@ export class AgentRuntime {
    * for an agent that isn't there.
    * Emits `agent.woken`, and the turn's tools see `wake` on their context.
    *
-   * `sessionKey` runs the turn in that session, where a reply reaches nobody
-   * unless the agent sends it somewhere, so the prompt should say so. `room`
-   * runs it in the room, through the room's own turn order and ceiling, and
-   * the agent can `pass`; called from inside a turn in that same room, it is
-   * `at-ceiling` rather than waiting on the turn it came from. A turn that
-   * throws rejects.
+   * `sessionKey` runs the turn in that session, found or made, and
+   * `sessionId` in a session that already exists (`gone` when it doesn't).
+   * A reply there reaches nobody unless the agent sends it somewhere, so the
+   * prompt should say so. `maxToolRounds` caps a session turn's rounds of
+   * tool calls. `room` runs it in the room, through the room's own turn order
+   * and ceiling, and the agent can `pass`; called from inside a turn in that
+   * same room, it is `at-ceiling` rather than waiting on the turn it came
+   * from. A turn that throws rejects.
    */
   wakeAgent(agent: string, opts: WakeAgentOptions): Promise<WakeOutcome> {
     return this._waker.wake(agent, opts);
+  }
+
+  /**
+   * Why a session wake for `agent` would be turned away now, with the outcome
+   * it would come to and why in words for a person, or undefined when it
+   * would run. Nothing runs and nothing counts toward the hour. For a caller
+   * that answers before its turn starts, such as a route that replies and
+   * runs the turn after; `wakeAgent` checks again when the turn comes. At the
+   * hourly ceiling, `until` says when the hour next has room, for a caller
+   * that waits rather than giving up.
+   */
+  wakeRefusal(agent: string, where: WakeSession): WakeRefusal | undefined {
+    return this._waker.refusal(agent, where);
   }
 
   /**

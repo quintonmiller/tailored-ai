@@ -17,9 +17,11 @@ import {
   offsetOf,
   parseTend,
   quiet,
+  REFUSED_WORDS,
   runNow,
   TEND_TICK_MS,
   Tender,
+  type TurnOutcome,
   tendMessage,
   turnSession,
   UPKEEP_KIND,
@@ -480,6 +482,50 @@ describe("tending, as time goes by", () => {
     expect(tended).toHaveLength(0);
     await pass(HOUR);
     expect(new Set(tended.map((t) => t.agent))).toEqual(new Set(["planner", "writer", "reviewer"]));
+  });
+
+  it("skips a turn the waker turns away, says why, and tries it again at the agent's next time, not sooner", async () => {
+    let clock = Date.parse("2026-10-19T00:00:00Z");
+    const logs: string[] = [];
+    const tended: number[] = [];
+    let answer: TurnOutcome = "at-ceiling";
+    const tender = new Tender({
+      settings: { everyMs: HOUR, agents: ["planner"] },
+      agents: () => ["planner"],
+      unready: () => null,
+      tend: async () => {
+        tended.push(clock);
+        return answer;
+      },
+      now: () => clock,
+      log: (line) => logs.push(line),
+    });
+    tender.tick();
+    const first = tender.dueAt("planner") as number;
+    clock = first;
+    tender.tick();
+    await tender.idle();
+    expect(logs).toEqual([
+      "planner's tend skipped: it's at its hourly wake ceiling, or a woken turn is still running in its session",
+    ]);
+    // Moved on to its next time, like any skipped turn: the looks between start nothing.
+    expect(tender.dueAt("planner")).toBe(first + HOUR);
+    answer = "woken";
+    for (clock = first + TEND_TICK_MS; clock < first + HOUR; clock += TEND_TICK_MS) tender.tick();
+    await tender.idle();
+    expect(tended).toEqual([first]);
+    clock = first + HOUR;
+    tender.tick();
+    await tender.idle();
+    expect(tended).toEqual([first, first + HOUR]);
+    expect(logs.at(-1)).toBe("planner tended its room");
+    for (const how of ["paused", "gone"] as const) {
+      answer = how;
+      clock += HOUR;
+      tender.tick();
+      await tender.idle();
+      expect(logs.at(-1)).toBe(`planner's tend skipped: ${REFUSED_WORDS[how]}`);
+    }
   });
 
   it("wakes nobody on starting, however long it was down: each agent's next time is still ahead", async () => {

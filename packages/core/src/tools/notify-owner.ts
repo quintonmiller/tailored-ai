@@ -70,8 +70,12 @@ export class NotifyOwnerTool implements Tool {
     // or a woken turn (a subscription, a plugin's own) is the agent deciding on
     // its own that the user should hear something, and that is what repeats.
     // When the user is present and asked for something, send it however many
-    // times they ask.
-    const proactive = Boolean(context.exploratoryRunId || context.autopilotTaskId || context.wake);
+    // times they ask. A wake the agent booked for itself isn't gated either:
+    // it is often a person's ask kept for later ("remind me every hour to
+    // stretch"), it says the same thing each time it comes round, and each
+    // time is wanted. One booked in a room was never gated, so the two agree.
+    const woken = context.wake !== undefined && context.wake.kind !== "schedule";
+    const proactive = Boolean(context.exploratoryRunId || context.autopilotTaskId || woken);
     const gate = proactive ? resolveGate(this.getGate) : undefined;
 
     try {

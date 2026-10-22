@@ -330,8 +330,8 @@ yet.", or, when the last one failed, when and why ("Couldn't tidy up 2h ago:
 scheduled. **Tidy up now** starts a turn at once. While it runs the line says
 "Tidying up: going over its commitments, docs, page and notes…"; when it
 finishes, "Tidied up just now: …" with what changed. If it can't run now,
-because agents are paused or another turn is running, the line says so until
-the next upkeep starts or finishes.
+because agents are paused, another turn is running, or the agent is at its
+hourly wake ceiling, the line says so until the next upkeep starts or finishes.
 
 The page changes as the records do, from the same stream the State page
 reads: an update the agent posts, a doc it reviews, something you hand it.
@@ -439,9 +439,13 @@ at different times. One turn runs at a time, tends and upkeep alike, and one
 you start from the page waits for no other: while any turn is running it's
 refused, so a model server that serves one request at a time is never asked
 for two. A turn that comes round while agents are paused, or while an online
-agent is switched off or paused, is skipped and not saved up. A tend leaves
-what an upkeep turn did out of what the agent did: tidying its commitments
-isn't news for its room.
+agent is switched off or paused, is skipped and not saved up. An upkeep turn
+counts as one of the agent's wakes for the hour (`rooms.maxWakesPerHour`,
+shared with its subscriptions, its tend and the wakes it books itself), so one
+that comes round when the agent is at that ceiling is skipped the same way,
+before its evidence is read, and the log says why. A tend leaves what an
+upkeep turn did out of what the agent did: tidying its commitments isn't news
+for its room.
 
 **What it counts.** Each kind only when the agent has the tool to act on it:
 commitments with `commitment`, docs with `writeup`, the page with
@@ -518,6 +522,10 @@ Each section shows eight lines at most, then a count of the rest.
   answer, keeps why and when, shown on the page, and leaves the fingerprint as
   it was, so the next one tries again. A memory store that can't be read only
   leaves the notes out.
+- **A turn that is turned away** after its evidence is read (the agent reached
+  its hourly wake ceiling in the meantime) counts nothing and leaves the
+  fingerprint as it was. One you started says why on the page, as a failure
+  does; a scheduled one leaves the record as it was, like any skipped turn.
 - **An `upkeep` record a person archives** is written live again on the next
   turn or counted read, with what it held, so archiving it never stops upkeep.
 
@@ -739,7 +747,7 @@ Behind the usual bearer auth, as a person: every scope.
 | `PUT /api/ext/builtin:directory/rooms/:room/lead` | Body `{ lead }`: an agent, or `null` to go back to config's choice and then the room's creator. `200` with `{ lead }` as `GET` gives it. `400` for no such agent |
 | `PATCH /api/ext/builtin:directory/rooms/:room/profile` | Body with any of `purpose`, `takesOn`, `howToAsk`, `note`; an empty one clears it. Written as you, so the fields you change hold. `200` with `{ profile }` |
 | `PATCH /api/ext/builtin:directory/rooms/:room/commitments/:id` | Body with any of `goal`, `doneWhen`, `nextStep`, `status`, `waitingOn`, for one of the room's commitments. Written as you, with a dated update saying a person changed it. `200` with `{ commitment }` |
-| `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep or any other agent turn on an interval (a tend, another agent's upkeep) is running, or for an agent with no `commitment` tool. `404` for a name that is no agent |
+| `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause or the agent's hourly wake ceiling. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep or any other agent turn on an interval (a tend, another agent's upkeep) is running, while the agent is at its hourly wake ceiling ("trip-planner can't tidy up now: it's at its wake ceiling: 12 wakes in the last hour. Try again later."), or for an agent with no `commitment` tool. `404` for a name that is no agent |
 
 Counts and lists read at most 5,000 records of each type. The routes come and
 go with the directory; see [Changing it while TAI runs](#turn-it-on). A

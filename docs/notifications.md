@@ -7,8 +7,13 @@ when it repeats.
   question ten times and you should get ten answers. These never touch the gate.
 - **It decided.** A cron summary, a blocked-task nudge, a digest, `notify_owner`
   from a background tick, an autopilot run or a woken turn (a subscription, or a
-  turn a plugin started with `runtime.wakeAgent`). Nobody asked for these at the
-  moment they fire, so a repeat is pure noise.
+  turn a plugin started with `runtime.wakeAgent` such as a tend or an upkeep).
+  Nobody asked for these at the moment they fire, so a repeat is pure noise.
+
+A wake an agent [booked for itself](./schedules.md) is the first kind, asked for
+earlier: "remind me every hour to stretch" says the same thing each time it
+comes round, and each time is wanted. Its `notify_owner` isn't gated, whether
+it was booked in a room or a session.
 
 `NotificationGate` (`packages/core/src/notifications/dedup.ts`) sits in front of
 the second kind only. It also tells the runtime's event bus about each of those
