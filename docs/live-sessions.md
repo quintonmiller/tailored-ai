@@ -1341,7 +1341,8 @@ A reply in that session reaches nobody, and the message says so: what the
 agent changes in the room is what people see. An agent that did nothing in
 the interval isn't woken, since there is nothing new for its room to show.
 One tend runs at a time, even across a config reload, so never two for one
-agent. A turn that comes round
+agent, and never beside the directory's [upkeep](./directory.md#upkeep) turn,
+which runs on the same timing. A turn that comes round
 while agents are paused, or while an agent's own switch on the Agents page has
 it switched off or paused, is skipped, not saved up, so lifting a pause wakes
 nobody at once. An agent without the `place` tool is skipped too, and the log

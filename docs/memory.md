@@ -146,7 +146,7 @@ For a personal install with Discord + web sessions, `keyPrefixes: ["discord:", "
 
 ## Promotion & sweep
 
-- `notes.ref_count` (M6): every note surfaced by `recall query` increments this counter. Auto-promotion (`recallQuery({trackRefs:true, autoPromote:true, embedder})`) clones a note into `memory_chunks` once `ref_count >= 3` so semantic search finds it. Idempotent: existing chunks short-circuit the promotion.
+- `notes.ref_count` (M6): every note surfaced by `recall query` increments this counter. Auto-promotion (`recallQuery({trackRefs:true, autoPromote:true, embedder})`) clones a note into `memory_chunks` once `ref_count >= 3` so semantic search finds it. Idempotent: existing chunks short-circuit the promotion. The same hit stamps `notes.recalled_at`, so a reader can tell when a note was last recalled and not only how often; the SQLite backend returns it as `metadata.recalled_at`. A note recalled before that column existed has it null, as does one never recalled.
 - `recall action: promote` — manual promotion of a specific note id. Requires an embedder. Pass `force: true` to re-index.
 - `promoteNote(db, embedder, noteId, opts)` — programmatic API. `recordNoteHit(db, noteId, {embedder, threshold, onPromote})` — ref-tracker + fire-and-forget promotion.
 - `runMemorySweep(db, opts)` — daily hygiene pass: extends TTL on referenced-but-expiring notes (`ref_count >= 3`, ttl ≤ now+1d → +7 days), then archives expired low-importance notes that aren't kept. Returns `{archivedExpired, extendedTtl, remainingNotes, totalChunks}`; `remainingNotes` counts live notes and `totalChunks` the chunks that can still surface. (It used to delete, and report `deletedExpired`.)

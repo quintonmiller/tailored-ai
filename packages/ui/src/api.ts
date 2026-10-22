@@ -2040,6 +2040,19 @@ export function replaceStateRecord(
   });
 }
 
+/** Change some of a record's fields, leaving the rest and its scope as they are. A field set to null is removed. */
+export function patchStateRecord(
+  type: string,
+  id: string,
+  changes: Record<string, unknown>,
+  expectedVersion: number,
+): Promise<StateRecordInfo> {
+  return stateWrite("PATCH", `/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, {
+    changes,
+    expectedVersion,
+  });
+}
+
 export function deleteStateRecord(type: string, id: string): Promise<StateRecordInfo> {
   return stateWrite("DELETE", `/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}`);
 }
@@ -2082,6 +2095,28 @@ export interface DirectoryAgentSummary {
   docs: number;
 }
 
+/** What an upkeep turn changed: how many of the agent's records it archived, reviewed, updated and closed. */
+export interface UpkeepChanged {
+  archived: number;
+  reviewed: number;
+  updated: number;
+  closed: number;
+}
+
+/** An agent's upkeep, as its page shows it. */
+export interface DirectoryUpkeep {
+  /** Whether a turn is running now. */
+  running: boolean;
+  /** When the last turn finished. */
+  at?: string;
+  /** What it changed, counted from history; absent when the store keeps none. */
+  changed?: UpkeepChanged;
+  /** Why the latest turn stopped, when it failed. */
+  error?: string;
+  /** How often it comes round by itself, when it does: "day", "12 hours". */
+  every?: string;
+}
+
 /** One agent's records, as its page draws them: private ones included, since a person sees everything. */
 export interface DirectoryAgent {
   name: string;
@@ -2092,6 +2127,8 @@ export interface DirectoryAgent {
   commitments: StateRecordInfo[];
   docs: StateRecordInfo[];
   misses: StateRecordInfo[];
+  /** Its upkeep; null for an agent with none to do (no commitment tool). Absent from a server before upkeep. */
+  upkeep?: DirectoryUpkeep | null;
 }
 
 const DIRECTORY = "/api/ext/builtin:directory";
@@ -2128,7 +2165,16 @@ export function fetchDirectoryAgent(name: string): Promise<DirectoryAgent | null
  */
 export async function handToAgent(
   name: string,
-  input: { goal: string; doneWhen?: string },
+  input: { goal: string; doneWhen?: string; autonomy?: string },
 ): Promise<{ commitment: StateRecordInfo; inPrompt: boolean; why?: "tool" | "pin" }> {
   return stateWrite("POST", `${DIRECTORY}/agents/${encodeURIComponent(name)}/commitments`, input);
+}
+
+/**
+ * Ask an agent to tidy up now: its upkeep turn, at once. It runs on after the
+ * answer; the page sees it start and finish. Throws with the server's reason
+ * when it can't (agents paused, already running).
+ */
+export function runUpkeep(name: string): Promise<{ started: boolean }> {
+  return stateWrite("POST", `${DIRECTORY}/agents/${encodeURIComponent(name)}/upkeep`);
 }

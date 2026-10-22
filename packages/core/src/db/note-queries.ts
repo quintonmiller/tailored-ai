@@ -18,6 +18,11 @@ export interface Note {
   created_at: string;
   ttl_at: string | null;
   /**
+   * When recall last surfaced it, in SQLite's `datetime('now')` form, or null
+   * when it never has since this was recorded.
+   */
+  recalled_at: string | null;
+  /**
    * Never swept: set by `recall action="keep"`. Stored in the `archival`
    * column, which is named for an older meaning and is NOT the archive.
    */
@@ -81,6 +86,7 @@ interface NoteRow {
   ref_count: number;
   created_at: string;
   ttl_at: string | null;
+  recalled_at: string | null;
   archival: number;
   archived_at: string | null;
   archived_by: string | null;
@@ -96,7 +102,8 @@ function rowToNote(row: NoteRow): Note {
     // tolerate malformed JSON
   }
   const { archival, ...rest } = row;
-  return { ...rest, tags, kept: archival === 1 };
+  // A database opened before the column exists reads as never recalled rather than as undefined.
+  return { ...rest, recalled_at: rest.recalled_at ?? null, tags, kept: archival === 1 };
 }
 
 export function createNote(db: Database.Database, input: NoteInput): Note {
@@ -351,16 +358,19 @@ export function keepNote(db: Database.Database, id: string, reason: string): Not
 }
 
 /**
- * Increment a note's ref_count. Used as the auto-promotion signal — every
- * time a note is surfaced by recall, this ticks up. Returns the new count
- * (or null if the note doesn't exist or is archived).
+ * Increment a note's ref_count and stamp when. Used as the auto-promotion
+ * signal — every time a note is surfaced by recall, this ticks up — and by
+ * upkeep to tell a note nobody recalls any more. Returns the new count (or
+ * null if the note doesn't exist or is archived).
  *
  * An archived note only surfaces when someone asks for archived notes, which
  * is a look back rather than use, so it neither counts nor gets promoted.
  */
 export function incrementNoteRef(db: Database.Database, id: string): number | null {
   const res = db
-    .prepare("UPDATE notes SET ref_count = ref_count + 1 WHERE id = ? AND archived_at IS NULL RETURNING ref_count")
+    .prepare(
+      "UPDATE notes SET ref_count = ref_count + 1, recalled_at = datetime('now') WHERE id = ? AND archived_at IS NULL RETURNING ref_count",
+    )
     .get(id) as { ref_count: number } | undefined;
   return res?.ref_count ?? null;
 }

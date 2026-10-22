@@ -15,9 +15,9 @@ import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
 import {
   ACTIVE,
+  AGENT_AUTONOMY,
   type AgentEntry,
   AUTONOMY,
-  type Autonomy,
   ago,
   COMMITMENT_TYPE,
   type Directory,
@@ -38,6 +38,7 @@ import {
   slug,
   stringList,
   titleOf,
+  UPKEEP_SESSIONS,
 } from "./directory-records.js";
 
 /** Records shown in one section of `about` before the rest are counted. */
@@ -57,6 +58,26 @@ const fail = (error: string): ToolResult => ({ success: false, output: "", error
  * this.
  */
 export const TURNED_OFF = "The directory is turned off, so this tool does nothing now.";
+
+/**
+ * The caller for a tool call: the agent, from the tool context. In an upkeep
+ * turn's session its writes say so, so the turn's changes can be counted from
+ * the records' history rather than from what the agent says it did.
+ */
+function callerFor(context: ToolContext, tool: string): StateCaller {
+  const caller = agentStateCaller(context, tool);
+  return UPKEEP_SESSIONS.has(context.sessionId)
+    ? { ...caller, source: { ...caller.source, surface: "upkeep" } }
+    : caller;
+}
+
+/**
+ * What an agent is told when it asks for more autonomy than it may give
+ * itself, in one sentence: a person grants it, and what the commitment has.
+ */
+export function autonomyRefused(asked: string, has: string): string {
+  return `Only a person can grant ${asked}, on the State page or the agent page, so it's ${has}.`;
+}
 
 function text(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -337,7 +358,7 @@ export class DirectoryTool implements Tool {
   constructor(private readonly directory: Directory) {}
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const caller = agentStateCaller(context, this.name);
+    const caller = callerFor(context, this.name);
     const me = caller.actor.name;
     const action = String(args.action ?? "").toLowerCase();
     return attempt(async () => {
@@ -444,6 +465,11 @@ export class DirectoryTool implements Tool {
         else delete next[key];
       };
       set("note", note);
+      // When the note was written, so upkeep can tell a note older than the work it describes.
+      if (note !== undefined && note !== (typeof data.note === "string" ? data.note : "")) {
+        if (note) next.noteAt = this.directory.now().toISOString();
+        else delete next.noteAt;
+      }
       set("order", order);
       set("hide", hide && [...hide, ...theirs.filter((id) => !hide.includes(id))]);
       // A section taken away leaves no trace in the order or the hidden list.
@@ -544,8 +570,7 @@ export class CommitmentTool implements Tool {
       autonomy: {
         type: "string",
         enum: [...AUTONOMY],
-        description:
-          "open: suggest asks before acting (default); tell acts on reversible steps and reports; quiet acts and logs.",
+        description: "open or update: suggest, asking before acting. tell and quiet are granted by a person.",
       },
       private: { type: "boolean", description: "open: only you can see it." },
       from: { type: "string", description: "open: who asked for it." },
@@ -568,7 +593,7 @@ export class CommitmentTool implements Tool {
   constructor(private readonly directory: Directory) {}
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const caller = agentStateCaller(context, this.name);
+    const caller = callerFor(context, this.name);
     const action = String(args.action ?? "").toLowerCase();
     const id = text(args.id);
     return attempt(async () => {
@@ -598,8 +623,10 @@ export class CommitmentTool implements Tool {
     if (!goal || !doneWhen) {
       return fail("open needs `goal` (what it's for, in a line) and `doneWhen` (how anyone can tell it's finished).");
     }
-    const autonomy = text(args.autonomy) ?? "suggest";
-    if (!(AUTONOMY as readonly string[]).includes(autonomy)) return fail(`autonomy is one of: ${AUTONOMY.join(", ")}.`);
+    const asked = text(args.autonomy) ?? AGENT_AUTONOMY;
+    if (!(AUTONOMY as readonly string[]).includes(asked)) return fail(`autonomy is one of: ${AUTONOMY.join(", ")}.`);
+    // An agent may only ask first; more is a person's to grant. It opens anyway, and is told.
+    const autonomy = AGENT_AUTONOMY;
     const now = this.directory.now();
     const me = caller.actor.name;
     const isPrivate = args.private === true || args.private === "true";
@@ -607,7 +634,7 @@ export class CommitmentTool implements Tool {
       goal,
       doneWhen,
       status: "open",
-      autonomy: autonomy as Autonomy,
+      autonomy,
       updates: [{ at: now.toISOString(), text: "Opened." }],
     };
     for (const field of ["nextStep", "nextCheck", "from"] as const) {
@@ -617,6 +644,7 @@ export class CommitmentTool implements Tool {
     const scope = isPrivate ? `agent:${me}` : "global";
     const record = await this.directory.create(caller, this.name, COMMITMENT_TYPE, goal, scope, data);
     const lines = [`Opened ${record.id}: "${goal}" (${isPrivate ? "private" : "shared"}, ${autonomy}).`];
+    if (asked !== autonomy) lines.push(autonomyRefused(asked, autonomy));
     const similar = similarLine(await this.directory.similar(caller, COMMITMENT_TYPE, goal, me), now);
     if (similar) lines.push(similar);
     return ok(lines.join("\n"));
@@ -640,7 +668,18 @@ export class CommitmentTool implements Tool {
     const nextStep = text(args.nextStep);
     const nextCheck = text(args.nextCheck);
     const waitingOn = text(args.waitingOn);
-    if (!note && progress === undefined && !nextStep && !nextCheck && !status && !waitingOn) {
+    const autonomy = text(args.autonomy);
+    if (autonomy && !(AUTONOMY as readonly string[]).includes(autonomy)) {
+      return fail(`autonomy is one of: ${AUTONOMY.join(", ")}.`);
+    }
+    // An agent can step back to asking first, never up: a granted tell or quiet is left as it is.
+    const lower = autonomy === AGENT_AUTONOMY;
+    const refuse = autonomy && !lower;
+    if (!note && progress === undefined && !nextStep && !nextCheck && !status && !waitingOn && !lower) {
+      if (refuse) {
+        const record = await this.directory.own(caller, COMMITMENT_TYPE, id, "commitment");
+        return fail(autonomyRefused(autonomy, String(record.data.autonomy ?? AGENT_AUTONOMY)));
+      }
       return fail("update needs at least one of `note`, `progress`, `nextStep`, `nextCheck`, `status` or `waitingOn`.");
     }
     const now = this.directory.now();
@@ -654,11 +693,15 @@ export class CommitmentTool implements Tool {
       if (next) changes.status = next;
       if (waitingOn) changes.waitingOn = waitingOn;
       else if (next === "open") changes.waitingOn = null;
+      if (lower && r.data.autonomy !== AGENT_AUTONOMY) changes.autonomy = AGENT_AUTONOMY;
       const said = note ?? describeChanges(changes);
       changes.updates = withUpdate(r.data.updates, { at: now.toISOString(), text: said });
       return changes;
     });
-    return ok(`Updated ${commitmentLine(record, now).slice(2)}`);
+    const updated = `Updated ${commitmentLine(record, now).slice(2)}`;
+    return ok(
+      refuse ? `${updated}\n${autonomyRefused(autonomy, String(record.data.autonomy ?? AGENT_AUTONOMY))}` : updated,
+    );
   }
 
   private async finish(
@@ -724,6 +767,7 @@ function describeChanges(changes: Record<string, unknown>): string {
   else if (changes.status === "open") parts.push("Back in hand.");
   if (changes.nextStep) parts.push(`Next: ${changes.nextStep}.`);
   if (changes.nextCheck) parts.push(`Check: ${changes.nextCheck}.`);
+  if (changes.autonomy) parts.push(`Asks first now.`);
   return parts.join(" ") || "Updated.";
 }
 
@@ -771,7 +815,7 @@ export class WriteupTool implements Tool {
   constructor(private readonly directory: Directory) {}
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
-    const caller = agentStateCaller(context, this.name);
+    const caller = callerFor(context, this.name);
     const me = caller.actor.name;
     const action = String(args.action ?? "").toLowerCase();
     const id = text(args.id);
@@ -823,6 +867,8 @@ export class WriteupTool implements Tool {
       if (action === "read") {
         const record = await this.directory.service().get(caller, { type: DOC_TYPE, id });
         if (!record) return fail(`There is no doc "${id}".`);
+        // Another agent reading it is evidence for its owner's upkeep that it's worth keeping current.
+        await this.directory.countRead(record, me);
         return ok(formatDoc(record, me));
       }
       if (action === "review") {

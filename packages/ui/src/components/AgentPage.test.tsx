@@ -136,6 +136,7 @@ let hotels: Record<string, unknown>[];
 let hotelsRead: "ok" | "fail" | Promise<void>;
 let handStatus: number;
 let handWhy: string | undefined;
+let upkeepAnswer: { status: number; body: unknown };
 const calls: { method: string; url: string; body?: unknown }[] = [];
 
 beforeEach(() => {
@@ -148,6 +149,7 @@ beforeEach(() => {
   hotelsRead = "ok";
   handStatus = 201;
   handWhy = undefined;
+  upkeepAnswer = { status: 202, body: { started: true } };
   hotels = [
     rec("hotel", "tejo", { name: "Lisboa Tejo", price: 122, shortlisted: true }),
     rec("hotel", "memmo", { name: "Memmo Alfama", price: 178, shortlisted: true }),
@@ -165,6 +167,9 @@ beforeEach(() => {
         if (directoryOff === "html") return new Response("<!doctype html><html></html>", { status: 200 });
         // A store that threw: the server's plain-text 500, not JSON.
         if (directoryBroken) return new Response("Internal Server Error", { status: 500 });
+        if (method === "POST" && url.endsWith("/upkeep")) {
+          return new Response(JSON.stringify(upkeepAnswer.body), { status: upkeepAnswer.status });
+        }
         if (method === "POST") {
           if (handStatus !== 201)
             return new Response(JSON.stringify({ error: "Say what you're handing over." }), { status: handStatus });
@@ -176,6 +181,9 @@ beforeEach(() => {
           return new Response(JSON.stringify(answer), { status: 201 });
         }
         return new Response(JSON.stringify(agent), { status: 200 });
+      }
+      if (method === "PATCH" && url.startsWith("/api/state/commitment/")) {
+        return new Response(JSON.stringify({ ...agent?.commitments[0], version: 2 }));
       }
       if (url.startsWith("/api/state/types")) {
         return new Response(JSON.stringify({ types: [{ name: "hotel", title: "name", canWrite: true }] }));
@@ -204,6 +212,16 @@ async function render(name = "trip-planner", description = "Plans trips.") {
 }
 
 const section = (label: string) => container.querySelector(`section[aria-label="${label}"]`) as HTMLElement | null;
+/** A line's text as a person reads it: a select says the option it shows, not every option it has. */
+function readText(el: Element | null | undefined): string | undefined {
+  if (!el) return undefined;
+  const copy = el.cloneNode(true) as Element;
+  for (const select of copy.querySelectorAll("select")) {
+    const original = el.querySelector(`select[aria-label="${select.getAttribute("aria-label")}"]`) as HTMLSelectElement;
+    select.replaceWith(original.selectedOptions[0]?.textContent ?? "");
+  }
+  return copy.textContent ?? undefined;
+}
 const headings = () => [...container.querySelectorAll("section > h2")].map((h) => h.childNodes[0]?.textContent);
 const settle = () => act(() => new Promise((r) => setTimeout(r, 200)));
 
@@ -267,7 +285,7 @@ describe("an agent's page", () => {
     expect(lisbon.textContent).toContain("Done when Hotel booked");
     expect(lisbon.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("60");
     expect(lisbon.textContent).toContain("3 of 5 (60%)");
-    expect(lisbon.querySelector(".agent-page-meta")?.textContent).toBe("check Friday · asks first · updated 2h ago");
+    expect(readText(lisbon.querySelector(".agent-page-meta"))).toBe("check Friday · asks first · updated 2h ago");
     expect(lisbon.querySelector("summary")?.textContent).toBe("2 updates");
     expect([...lisbon.querySelectorAll(".agent-page-updates li span")].map((s) => s.textContent)).toEqual([
       "Found three hotels.",
@@ -437,7 +455,7 @@ describe("an agent's page", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"], now: NOW });
     try {
       await render();
-      const meta = () => section("Working on")?.querySelector(".agent-page-meta")?.textContent;
+      const meta = () => readText(section("Working on")?.querySelector(".agent-page-meta"));
       expect(meta()).toBe("check Friday · asks first · updated 2h ago");
       await act(async () => vi.advanceTimersByTime(60 * 60_000));
       expect(meta()).toBe("check Friday · asks first · updated 3h ago");
@@ -561,6 +579,28 @@ describe("handing it something", () => {
     }
   });
 
+  it("lets a person give it more autonomy than it can give itself", async () => {
+    await render();
+    const choice = container.querySelector(".agent-page-form select") as HTMLSelectElement;
+    expect(choice.value).toBe("suggest");
+    expect([...choice.options].map((o) => o.textContent)).toEqual([
+      "asks first",
+      "acts, then tells you",
+      "acts quietly",
+    ]);
+    await act(async () => {
+      type(field(0), "Rebook the flights if they move");
+      choice.value = "tell";
+      choice.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => submit().click());
+    await act(async () => {});
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({
+      goal: "Rebook the flights if they move",
+      autonomy: "tell",
+    });
+  });
+
   it("leaves done-when out when it's empty, and shows the server's refusal", async () => {
     handStatus = 400;
     await render();
@@ -570,5 +610,136 @@ describe("handing it something", () => {
     expect(calls.find((c) => c.method === "POST")?.body).toEqual({ goal: "Something" });
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Say what you're handing over.");
     expect(field(0).value).toBe("Something");
+  });
+});
+
+describe("autonomy on its work", () => {
+  it("lets a person change what a commitment may do on its own, in place", async () => {
+    await render();
+    const pick = section("Working on")?.querySelector(".agent-page-meta select") as HTMLSelectElement;
+    expect(pick.value).toBe("suggest");
+    await act(async () => {
+      pick.value = "quiet";
+      pick.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => {});
+    expect(calls.find((c) => c.method === "PATCH")).toEqual({
+      method: "PATCH",
+      url: "/api/state/commitment/trip-planner-lisbon",
+      body: { changes: { autonomy: "quiet" }, expectedVersion: 1 },
+    });
+  });
+});
+
+describe("upkeep", () => {
+  const upkeepLine = () => section("Upkeep");
+  const tidyButton = () => upkeepLine()?.querySelector("button") as HTMLButtonElement;
+  const status = () => upkeepLine()?.querySelector("output")?.textContent;
+  const changed = { archived: 2, reviewed: 1, updated: 0, closed: 1 };
+
+  it("says when it last looked after what it owns and what that changed, over the page", async () => {
+    agent = { ...tripPlanner(), upkeep: { running: false, at: hoursAgo(3), changed, every: "day" } } as never;
+    await render();
+    expect(container.querySelector(".agent-page")?.firstElementChild?.getAttribute("aria-label")).toBe("Upkeep");
+    expect(status()).toBe("Last upkeep 3h ago: archived 2, reviewed 1, closed 1.Comes round every day.");
+    expect(tidyButton().textContent).toBe("Tidy up now");
+    expect(tidyButton().disabled).toBe(false);
+  });
+
+  it("says when it has had none, when one changed nothing, and when one stopped", async () => {
+    for (const [upkeep, said] of [
+      [{ running: false }, "No upkeep yet."],
+      [
+        { running: false, at: hoursAgo(1), changed: { archived: 0, reviewed: 0, updated: 0, closed: 0 } },
+        "Last upkeep 1h ago: changed nothing.",
+      ],
+      [{ running: false, at: hoursAgo(1) }, "Last upkeep 1h ago."],
+      [
+        { running: false, at: hoursAgo(5), error: "the model is unreachable" },
+        "Its last upkeep stopped: the model is unreachable",
+      ],
+    ] as const) {
+      agent = { ...tripPlanner(), upkeep } as never;
+      await render();
+      expect(status()).toBe(said);
+      act(() => root.unmount());
+      root = createRoot(container);
+    }
+  });
+
+  it("isn't there for an agent with no upkeep to do", async () => {
+    agent = { ...tripPlanner(), upkeep: null } as never;
+    await render();
+    expect(upkeepLine()).toBeNull();
+  });
+
+  it("tidies up now when asked, says so while it runs, and says what changed when it finishes", async () => {
+    agent = { ...tripPlanner(), upkeep: { running: false, at: hoursAgo(30), changed } } as never;
+    await render();
+    // The server has it running by the time the page reads it again.
+    agent = { ...tripPlanner(), upkeep: { running: true, at: hoursAgo(30), changed } } as never;
+    await act(async () => tidyButton().click());
+    await act(async () => {});
+    expect(calls.find((c) => c.method === "POST")).toEqual({
+      method: "POST",
+      url: "/api/ext/builtin:directory/agents/trip-planner/upkeep",
+    });
+    expect(status()).toBe("Tidying up: going over its commitments, docs, page and notes…");
+    expect(tidyButton().textContent).toBe("Tidying up…");
+    expect(tidyButton().disabled).toBe(true);
+
+    // It finishes: the upkeep record changes, and the page hears of it.
+    agent = {
+      ...tripPlanner(),
+      upkeep: {
+        running: false,
+        at: new Date().toISOString(),
+        changed: { archived: 1, reviewed: 1, updated: 0, closed: 0 },
+      },
+    } as never;
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "upkeep",
+        id: "trip-planner",
+        op: "update",
+        before: { owner: "trip-planner" },
+        after: { owner: "trip-planner" },
+      }),
+    );
+    await settle();
+    expect(status()).toBe("✓ Tidied up just now: archived 1, reviewed 1.");
+    expect(tidyButton().disabled).toBe(false);
+  });
+
+  it("reads itself again while a turn runs, so the end shows even without the stream", async () => {
+    agent = { ...tripPlanner(), upkeep: { running: true } } as never;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await render();
+      const reads = () => calls.filter((c) => c.url === "/api/ext/builtin:directory/agents/trip-planner").length;
+      const before = reads();
+      agent = { ...tripPlanner(), upkeep: { running: false, at: new Date().toISOString(), changed } } as never;
+      await act(async () => vi.advanceTimersByTime(2_000));
+      await act(async () => {});
+      expect(reads()).toBe(before + 1);
+      expect(status()).toBe("✓ Tidied up just now: archived 2, reviewed 1, closed 1.");
+      // Finished, it stops asking.
+      await act(async () => vi.advanceTimersByTime(10_000));
+      expect(reads()).toBe(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the server's reason when it can't tidy up now", async () => {
+    upkeepAnswer = { status: 409, body: { error: "trip-planner can't tidy up now: agents are paused." } };
+    agent = { ...tripPlanner(), upkeep: { running: false } } as never;
+    await render();
+    await act(async () => tidyButton().click());
+    await act(async () => {});
+    expect(upkeepLine()?.querySelector('[role="alert"]')?.textContent).toBe(
+      "trip-planner can't tidy up now: agents are paused.",
+    );
+    expect(tidyButton().disabled).toBe(false);
   });
 });

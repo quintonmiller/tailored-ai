@@ -525,6 +525,7 @@ function noteFragment(note: Note, extra: Record<string, unknown> = {}): MemoryFr
       importance: note.importance,
       ref_count: note.ref_count,
       created_at: note.created_at,
+      recalled_at: note.recalled_at,
       ttl_at: note.ttl_at,
       project_id: note.project_id,
       agent: note.agent,

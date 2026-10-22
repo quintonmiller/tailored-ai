@@ -27,9 +27,11 @@
  * are paused or the agent's own switch has it asleep: a turn that comes round
  * then is skipped, not saved up, so lifting a pause doesn't wake everyone at
  * once. This file is the timing and the words; `places.ts` wires them to the
- * runtime.
+ * runtime. The directory's upkeep turn (`directory-upkeep.ts`) runs on the
+ * same timing, as a tender of its own kind.
  */
 import type Database from "better-sqlite3";
+import type { ExploratoryState } from "../db/exploratory-queries.js";
 import { makeRoomSessionKey } from "../rooms/watcher.js";
 import { parseWindow } from "../subscriptions/keys.js";
 import type { TaskBackend } from "../tasks/interface.js";
@@ -47,29 +49,35 @@ export const TEND_FLOOR_MS = 60_000;
 
 /**
  * The plugin config's `tend`, read: undefined when there is none (it is off),
- * or why it can't be used, in words for the log.
+ * or why it can't be used, in words for the log. `name` is the key it was
+ * given under, for those words: other turns on an interval (the directory's
+ * upkeep) read their settings the same way.
  */
-export function parseTend(raw: unknown): TendSettings | string | undefined {
+export function parseTend(raw: unknown, name = "tend"): TendSettings | string | undefined {
   if (raw === undefined || raw === null || raw === false) return undefined;
-  if (typeof raw !== "object" || Array.isArray(raw)) return 'tend is { every: "24h", agents: [names] | "all" }.';
+  if (typeof raw !== "object" || Array.isArray(raw)) return `${name} is { every: "24h", agents: [names] | "all" }.`;
   const { every, agents } = raw as { every?: unknown; agents?: unknown };
   const everyMs = typeof every === "string" || typeof every === "number" ? parseWindow(String(every)) : undefined;
-  if (!everyMs) return `tend.every is a length of time like "24h" or "30 minutes", not ${JSON.stringify(every)}.`;
-  if (everyMs < TEND_FLOOR_MS) return "tend.every is at least a minute.";
+  if (!everyMs) return `${name}.every is a length of time like "24h" or "30 minutes", not ${JSON.stringify(every)}.`;
+  if (everyMs < TEND_FLOOR_MS) return `${name}.every is at least a minute.`;
   if (agents === "all") return { everyMs, agents };
   if (!Array.isArray(agents) || !agents.length || agents.some((a) => typeof a !== "string" || !a.trim()))
-    return 'tend.agents is a list of agent names, or "all".';
+    return `${name}.agents is a list of agent names, or "all".`;
   return { everyMs, agents: [...new Set(agents.map((a) => (a as string).trim()))] };
 }
 
-/** Where in each interval an agent's tend falls, in ms from the interval's start: the same for a name, always. */
-export function offsetOf(agent: string, everyMs: number): number {
-  return Math.floor(seeded(`tend\n${agent}`)() * everyMs);
+/**
+ * Where in each interval an agent's turn falls, in ms from the interval's
+ * start: the same for a name, always. Each kind of turn has times of its own,
+ * so an agent's tend and its upkeep on the same interval don't fall together.
+ */
+export function offsetOf(agent: string, everyMs: number, kind = "tend"): number {
+  return Math.floor(seeded(`${kind}\n${agent}`)() * everyMs);
 }
 
-/** When an agent's next tend is: the first of its times strictly after `after`. Its times are `every` apart, offset by its name. */
-export function nextTend(agent: string, everyMs: number, after: number): number {
-  const phase = offsetOf(agent, everyMs);
+/** When an agent's next turn is: the first of its times strictly after `after`. Its times are `every` apart, offset by its name. */
+export function nextTend(agent: string, everyMs: number, after: number, kind = "tend"): number {
+  const phase = offsetOf(agent, everyMs, kind);
   return (Math.floor((after - phase) / everyMs) + 1) * everyMs + phase;
 }
 
@@ -175,7 +183,7 @@ export function tendMessage(at: {
 /** A time as SQLite writes `datetime('now')`: what `created_at` columns compare against. */
 export const dbTime = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
 /** A time from a column or an ISO string; SQLite's own form is UTC without saying so. */
-const parseTime = (at: string) =>
+export const parseTime = (at: string) =>
   Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(at) ? `${at.replace(" ", "T")}Z` : at);
 
 /**
@@ -262,6 +270,23 @@ export async function gatherDone(at: {
 // When
 // --------------------------------------------------------------------------
 
+/**
+ * Why an agent with nothing to do is asleep, or null when it is awake: the
+ * global pause, or an online agent's own switch from the Agents page. A turn
+ * on an interval is skipped while it is.
+ */
+export function whyAsleep(at: {
+  paused: boolean;
+  own: Pick<ExploratoryState, "enabled" | "paused_until"> | null;
+  now: Date;
+}): string | null {
+  if (at.paused) return "agents are paused";
+  if (!at.own) return null;
+  if (!at.own.enabled) return "switched off";
+  if (at.own.paused_until && new Date(at.own.paused_until) > at.now) return "paused";
+  return null;
+}
+
 export interface TenderOptions {
   settings: TendSettings;
   /** Every agent the tend could be for: those with bodies. */
@@ -272,17 +297,55 @@ export interface TenderOptions {
   tend: (agent: string, since: number) => Promise<"woken" | "quiet">;
   now?: () => number;
   log?: (line: string) => void;
+  /** Where a failed turn is said. */
+  warn?: (line: string) => void;
+  /**
+   * What kind of turn this tender runs, "tend" unless said: it sets each
+   * agent's times, and keys the turn in flight. Another plugin's turn on an
+   * interval (the directory's upkeep) is a tender of its own kind.
+   */
+  kind?: string;
+  /** The log's words for how a turn went, a tend's unless given. */
+  said?: { woken: (agent: string) => string; quiet: (agent: string) => string; failed: (agent: string) => string };
 }
 
 /** How often due tends are looked for. */
 export const TEND_TICK_MS = 30_000;
 
 /**
- * Agents being tended right now, by any tender. A reload stops the old
- * tender and starts a new one while a turn the old one began may still be
- * going: this is what keeps the new one from starting another beside it.
+ * Turns running right now, by any tender of any kind or by hand, keyed by
+ * kind and agent. A reload stops the old tender and starts a new one while a
+ * turn the old one began may still be going: this is what keeps the new one
+ * from starting another beside it. Every kind shares it, so a tend and an
+ * upkeep never run at once either.
  */
 const inFlight = new Set<string>();
+
+const flightKey = (kind: string, agent: string) => `${kind}\n${agent}`;
+
+/** Whether a turn of `kind` is running for `agent` now, from a tender or by hand. */
+export function busy(kind: string, agent: string): boolean {
+  return inFlight.has(flightKey(kind, agent));
+}
+
+/**
+ * Run one turn now, outside any tender's times: a person asked for it. It
+ * counts as in flight while it runs, so no tender starts a turn beside it.
+ * Undefined, without running, when that agent's turn of that kind is already
+ * going.
+ */
+export function runNow<T>(kind: string, agent: string, run: () => Promise<T>): Promise<T> | undefined {
+  const key = flightKey(kind, agent);
+  if (inFlight.has(key)) return undefined;
+  inFlight.add(key);
+  return run().finally(() => inFlight.delete(key));
+}
+
+const TEND_SAID = {
+  woken: (agent: string) => `${agent} tended its room`,
+  quiet: (agent: string) => `${agent} had nothing new, so wasn't woken to tend its room`,
+  failed: (agent: string) => `${agent}'s tend failed`,
+};
 
 /** Keeps each agent's next tend, and runs them one at a time as they come due. */
 export class Tender {
@@ -291,10 +354,14 @@ export class Tender {
   private timer: ReturnType<typeof setInterval> | undefined;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
+  private readonly warn: (line: string) => void;
+  private readonly kind: string;
 
   constructor(private readonly opts: TenderOptions) {
     this.now = opts.now ?? (() => Date.now());
     this.log = opts.log ?? ((line) => console.log(`[places] ${line}`));
+    this.warn = opts.warn ?? ((line) => console.warn(`[places] ${line}`));
+    this.kind = opts.kind ?? "tend";
   }
 
   /** The agents tended, of those there are. */
@@ -324,34 +391,32 @@ export class Tender {
   tick(): void {
     const now = this.now();
     const { everyMs } = this.opts.settings;
+    const { kind } = this;
+    const said = this.opts.said ?? TEND_SAID;
     const wanted = this.wanted();
-    for (const agent of wanted) if (!this.due.has(agent)) this.due.set(agent, nextTend(agent, everyMs, now));
+    for (const agent of wanted) if (!this.due.has(agent)) this.due.set(agent, nextTend(agent, everyMs, now, kind));
     for (const agent of [...this.due.keys()]) if (!wanted.includes(agent)) this.due.delete(agent);
     if (this.running || inFlight.size) return;
     const ready = [...this.due.entries()].filter(([, at]) => at <= now).sort((a, b) => a[1] - b[1]);
     for (const [agent, at] of ready) {
-      this.due.set(agent, nextTend(agent, everyMs, now));
+      this.due.set(agent, nextTend(agent, everyMs, now, kind));
       const why = this.opts.unready(agent);
       if (why) {
-        this.log(`${agent}'s tend skipped: ${why}`);
+        this.log(`${agent}'s ${kind} skipped: ${why}`);
         continue;
       }
       // What it covers is the interval that just ended, wherever in it the look came.
       const since = at - everyMs;
-      inFlight.add(agent);
+      const key = flightKey(kind, agent);
+      inFlight.add(key);
       this.running = this.opts
         .tend(agent, since)
         .then(
-          (how) =>
-            this.log(
-              how === "quiet"
-                ? `${agent} had nothing new, so wasn't woken to tend its room`
-                : `${agent} tended its room`,
-            ),
-          (err: unknown) => console.warn(`[places] ${agent}'s tend failed: ${(err as Error).message}`),
+          (how) => this.log(how === "quiet" ? said.quiet(agent) : said.woken(agent)),
+          (err: unknown) => this.warn(`${said.failed(agent)}: ${(err as Error).message}`),
         )
         .finally(() => {
-          inFlight.delete(agent);
+          inFlight.delete(key);
           this.running = undefined;
         });
       return;
