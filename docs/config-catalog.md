@@ -180,7 +180,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 50 | 4 |
+| `time.provider` | string | `system` | 49 | 4 |
 
 ### `tools`
 
@@ -208,7 +208,7 @@ Fields: **79** · with no read site found: **0**
 | `tools.web_search.apiKey` | string | `""` | 23 | 1 |
 | `tools.web_search.enabled` | boolean | `false` | 49 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 50 | **0** |
+| `tools.web_search.provider` | string | `brave` | 49 | **0** |
 | `tools.write.enabled` | boolean | `true` | 49 | 1 |
 
 ### `webhooks`

@@ -24,13 +24,15 @@
  * An agent that leads a room looks after the room's records in the same
  * turn, under a section of their own, by the same rules.
  *
- * The turn runs in the agent's own `upkeep:<agent>` session, with a small
- * budget of tool rounds. What it changed is counted afterwards from the
- * history of the agent's records, never from what the agent says it did, and
- * kept in its `upkeep` record for its page.
+ * The turn runs in the agent's own `upkeep:<agent>` session through
+ * `runtime.wakeAgent`, with a small budget of tool rounds, so it counts toward
+ * the agent's hourly wake ceiling like any turn nobody asked for. What it
+ * changed is counted afterwards from the history of the agent's records, never
+ * from what the agent says it did, and kept in its `upkeep` record for its page.
  */
 import { isDeepStrictEqual } from "node:util";
 import { pinnedLoad } from "../agent/memory-inject.js";
+import type { WakeOutcome } from "../agent/wake.js";
 import type { MemoryBackend, MemoryFragment } from "../memory/interface.js";
 import { memoryScope } from "../memory/scope.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
@@ -52,7 +54,7 @@ import {
   UPKEEP_SESSIONS,
 } from "./directory-records.js";
 import { type RoomInfo, roomOwner } from "./directory-rooms.js";
-import { parseTend, parseTime, type TendSettings } from "./places-tend.js";
+import { parseTend, parseTime, REFUSED_WORDS, type TendSettings, type TurnOutcome } from "./places-tend.js";
 
 /** Upkeep as configured: when it runs by itself, and the bars its evidence is counted against. */
 export interface UpkeepSettings {
@@ -633,8 +635,11 @@ export interface UpkeepOptions {
   embedder?: () => EmbeddingProvider | undefined;
   /** The agent's `upkeep:<agent>` session, found or made. */
   session: (agent: string) => { id: string };
-  /** Run the agent's turn in that session with `message`, taking at most `maxRounds` rounds of tool calls. */
-  run: (agent: string, session: { id: string }, message: string, maxRounds: number) => Promise<void>;
+  /**
+   * Run the agent's turn in that session with `message`, taking at most
+   * `maxRounds` rounds of tool calls: "ran", or why the waker turned it away.
+   */
+  run: (agent: string, session: { id: string }, message: string, maxRounds: number) => Promise<WakeOutcome>;
 }
 
 /** What upkeep found for one agent. */
@@ -960,8 +965,13 @@ export class Upkeep {
    * came to afterwards in the agent's upkeep record. "quiet" when it didn't
    * wake the agent. A failure anywhere is kept in the record, with when, for
    * the page, and thrown.
+   *
+   * A wake the waker turns away (at the agent's hourly ceiling, or paused)
+   * ran nothing, so nothing is counted and the fingerprint stays for the next
+   * turn. Asked for, why is kept in the record for the page, as a failure is;
+   * on the schedule, the record is put back as it was, as for any skipped turn.
    */
-  async turn(agent: string, opts: { force?: boolean } = {}): Promise<"woken" | "quiet"> {
+  async turn(agent: string, opts: { force?: boolean } = {}): Promise<TurnOutcome> {
     const directory = this.directory;
     try {
       const record = await directory.upkeep(agent);
@@ -986,10 +996,24 @@ export class Upkeep {
       });
       const session = this.opts.session(agent);
       UPKEEP_SESSIONS.add(session.id);
+      let outcome: WakeOutcome;
       try {
-        await this.opts.run(agent, session, message, this.opts.settings.maxRounds);
+        outcome = await this.opts.run(agent, session, message, this.opts.settings.maxRounds);
       } finally {
         UPKEEP_SESSIONS.delete(session.id);
+      }
+      if (outcome !== "ran") {
+        const was = record?.data ?? {};
+        await directory.saveUpkeep(agent, () =>
+          opts.force
+            ? { error: REFUSED_WORDS[outcome], failedAt: directory.now().toISOString() }
+            : {
+                started: text(was.started) ?? null,
+                error: text(was.error) ?? null,
+                failedAt: text(was.failedAt) ?? null,
+              },
+        );
+        return outcome;
       }
 
       const changed = await this.changes(agent, started);

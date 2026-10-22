@@ -6,9 +6,10 @@ when it repeats.
 - **You asked.** A chat reply, a direct answer, a tool result. Ask the same
   question ten times and you should get ten answers. These never touch the gate.
 - **It decided.** A cron summary, a blocked-task nudge, a digest, `notify_owner`
-  from a background tick, an autopilot run or a woken turn (a subscription, or a
-  turn a plugin started with `runtime.wakeAgent`). Nobody asked for these at the
-  moment they fire, so a repeat is pure noise.
+  from a background tick, an autopilot run or a woken turn (a subscription, a
+  turn a plugin started with `runtime.wakeAgent` such as a tend or an upkeep,
+  or a wake an agent booked in a session). Nobody asked for these at the moment
+  they fire, so a repeat is pure noise.
 
 `NotificationGate` (`packages/core/src/notifications/dedup.ts`) sits in front of
 the second kind only. It also tells the runtime's event bus about each of those

@@ -442,7 +442,7 @@ it subscribes only to events something actually names.
 | `agent`, `sessionId`, `projectId` | whose turn it is |
 | `effect` | what the tool says this call does: `read`, `write` or `irreversible`. `read` when the tool says nothing, which is how the loop's own checks read it |
 | `effectDeclared` | `false` when the tool says nothing, so `effect` is that default rather than the tool's word |
-| `wake` | why the turn is running when nobody asked for it, `{ kind, ref }`: set on a subscription's turn or one started through `runtime.wakeAgent`, and on an agent either delegates to or messages. Cron, schedules, room check-ins, autopilot and exploratory ticks don't set it yet, so a missing `wake` doesn't mean a person asked |
+| `wake` | why the turn is running when nobody asked for it, `{ kind, ref }`: set on a subscription's turn or one started through `runtime.wakeAgent` (the places plugin's `tend`, the directory's `upkeep`, a `schedule` wake an agent booked in a session), and on an agent either delegates to or messages. Cron, wakes booked in a room, room check-ins, autopilot and exploratory ticks don't set it yet, so a missing `wake` doesn't mean a person asked |
 
 So a deployment can put a check in front of every call a tool declares
 irreversible, whichever tool it is. Most tools declare nothing yet, MCP tools

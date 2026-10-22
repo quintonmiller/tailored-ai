@@ -26,11 +26,14 @@
  * One tend runs at a time, so never two for one agent, and none while agents
  * are paused or the agent's own switch has it asleep: a turn that comes round
  * then is skipped, not saved up, so lifting a pause doesn't wake everyone at
- * once. This file is the timing and the words; `places.ts` wires them to the
- * runtime. The directory's upkeep turn (`directory-upkeep.ts`) runs on the
- * same timing, as a tender of its own kind.
+ * once. The turn itself goes through `runtime.wakeAgent`, so it counts toward
+ * the agent's hourly wake ceiling like any turn nobody asked for; one the
+ * waker turns away is skipped the same way. This file is the timing and the
+ * words; `places.ts` wires them to the runtime. The directory's upkeep turn
+ * (`directory-upkeep.ts`) runs on the same timing, as a tender of its own kind.
  */
 import type Database from "better-sqlite3";
+import type { WakeOutcome } from "../agent/wake.js";
 import type { ExploratoryState } from "../db/exploratory-queries.js";
 import { makeRoomSessionKey } from "../rooms/watcher.js";
 import { parseWindow } from "../subscriptions/keys.js";
@@ -300,14 +303,37 @@ export function whyAsleep(at: {
   return null;
 }
 
+/** What a wake the runtime's waker turned away came to: `paused`, `at-ceiling` or `gone`. */
+export type Refused = Exclude<WakeOutcome, "ran">;
+
+/**
+ * How one turn on an interval went: the agent was woken, there was nothing
+ * new to wake it for, or the waker turned the wake away.
+ */
+export type TurnOutcome = "woken" | "quiet" | Refused;
+
+/** Why the waker turned a turn away, in words for the log and the page. */
+export const REFUSED_WORDS: Record<Refused, string> = {
+  paused: "agents are paused, or it's switched off or paused on the Agents page",
+  "at-ceiling": "it's at its hourly wake ceiling, or a woken turn is still running in its session",
+  gone: "there's no agent of that name to wake",
+};
+
+/** Whether a turn's outcome is a wake the waker turned away. */
+export const refused = (how: TurnOutcome): how is Refused => how !== "woken" && how !== "quiet";
+
 export interface TenderOptions {
   settings: TendSettings;
   /** Every agent the tend could be for: those with bodies. */
   agents: () => string[];
   /** Why an agent can't be tended now (paused, asleep, no place tool), or null when it can. */
   unready: (agent: string) => string | null;
-  /** Tend one agent, given the start of what its message covers. "quiet" when there was nothing to show. */
-  tend: (agent: string, since: number) => Promise<"woken" | "quiet">;
+  /**
+   * Tend one agent, given the start of what its message covers. "quiet" when
+   * there was nothing to show; what the waker said when it turned the turn
+   * away, which skips it until the agent's next time like any other skip.
+   */
+  tend: (agent: string, since: number) => Promise<TurnOutcome>;
   now?: () => number;
   log?: (line: string) => void;
   /** Where a failed turn is said. */
@@ -339,6 +365,11 @@ const flightKey = (kind: string, agent: string) => `${kind}\n${agent}`;
 /** Whether a turn of `kind` is running for `agent` now, from a tender or by hand. */
 export function busy(kind: string, agent: string): boolean {
   return inFlight.has(flightKey(kind, agent));
+}
+
+/** Whether any turn on an interval is running now, of any kind and for any agent, from a tender or by hand. */
+export function turnRunning(): boolean {
+  return inFlight.size > 0;
 }
 
 /**
@@ -427,7 +458,11 @@ export class Tender {
       this.running = this.opts
         .tend(agent, since)
         .then(
-          (how) => this.log(how === "quiet" ? said.quiet(agent) : said.woken(agent)),
+          (how) => {
+            // Turned away by the waker: skipped like a turn that came round while the agent couldn't take it.
+            if (refused(how)) this.log(`${agent}'s ${kind} skipped: ${REFUSED_WORDS[how]}`);
+            else this.log(how === "quiet" ? said.quiet(agent) : said.woken(agent));
+          },
           (err: unknown) => this.warn(`${said.failed(agent)}: ${(err as Error).message}`),
         )
         .finally(() => {

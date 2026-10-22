@@ -14,11 +14,15 @@
  * at-most-once, which is the right side to fail on — a wake that arrives twice
  * is worse than one that arrives never, and the crash window between claim and
  * dispatch costs exactly one wake, logged.
+ *
+ * **A session wake goes through `runtime.wakeAgent`.** It stops for what every
+ * turn nobody asked for stops for, counts toward the agent's hourly wake
+ * ceiling, and its tools see it as `{ kind: "schedule", ref: <schedule id> }`.
+ * A room wake goes through the room watcher, which applies the room's own.
  */
 
-import { runAgentLoop } from "../agent/loop.js";
-import { loadSession } from "../agent/session.js";
-import type { RoomWatcher, ScheduledWakeOutcome } from "../rooms/watcher.js";
+import type { WakeOutcome } from "../agent/wake.js";
+import type { RoomWatcher } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 import { runtimeTimeProvider } from "../time/provider.js";
 import { fromDbTime, type ScheduleRow, ScheduleStore } from "./store.js";
@@ -39,7 +43,7 @@ export interface ScheduleRunnerOptions {
 /** Defaults live in config.ts DEFAULT_CONFIG; these are the fallbacks for direct construction. */
 const FALLBACK_TICK_SECONDS = 30;
 const FALLBACK_MAX_DEFERRALS = 3;
-/** How long a wake refused by the room's wake ceiling waits before trying again. */
+/** How long a wake refused by a wake ceiling, or held while its agent is paused, waits before trying again. */
 const DEFER_MINUTES = 5;
 
 export class ScheduleRunner {
@@ -50,6 +54,11 @@ export class ScheduleRunner {
   private timer: ReturnType<typeof setInterval> | undefined;
   /** In-flight ids, so a long turn is not counted twice by overlapping ticks. */
   private running = new Set<string>();
+  /**
+   * One-shots held because their agent is switched off or paused on its own,
+   * by id, with when to look again. In memory: a restart looks at once.
+   */
+  private readonly held = new Map<string, number>();
 
   constructor(opts: ScheduleRunnerOptions) {
     this.runtime = opts.runtime;
@@ -98,8 +107,10 @@ export class ScheduleRunner {
    * than through a real timer.
    */
   async tick(): Promise<void> {
-    for (const row of this.store.listDue(this.now())) {
+    const now = this.now();
+    for (const row of this.store.listDue(now)) {
       if (this.running.has(row.id)) continue;
+      if ((this.held.get(row.id) ?? 0) > now.getTime()) continue;
       try {
         await this.fire(row);
       } catch (err) {
@@ -153,7 +164,9 @@ export class ScheduleRunner {
     try {
       const lateBy = now.getTime() - due.getTime();
       const outcome = await this.dispatch(row, lateBy);
+      if (outcome !== "paused") this.held.delete(row.id);
       if (outcome === "at-ceiling") this.handleDeferral(row);
+      if (outcome === "paused") this.holdWhilePaused(row);
       if (outcome === "gone") {
         this.store.setStatus(row.id, "expired");
         console.warn(
@@ -184,9 +197,10 @@ export class ScheduleRunner {
   }
 
   /**
-   * The room refused the wake because the agent is at its hourly ceiling. Try
-   * again shortly rather than dropping it, but not forever: a room permanently
-   * at its limit would otherwise collect a retry every five minutes for ever.
+   * The room or the waker refused the wake: the agent is at its hourly
+   * ceiling, or a turn is still running where it would land. Try again
+   * shortly rather than dropping it, but not forever: an agent permanently at
+   * its limit would otherwise collect a retry every five minutes for ever.
    */
   private handleDeferral(row: ScheduleRow): void {
     const max = this.settings()?.maxDeferrals ?? FALLBACK_MAX_DEFERRALS;
@@ -211,7 +225,27 @@ export class ScheduleRunner {
     console.log(`[schedules] ${row.id} (${row.agent}) deferred ${DEFER_MINUTES}m: at wake ceiling`);
   }
 
-  private async dispatch(row: ScheduleRow, lateBy: number): Promise<ScheduledWakeOutcome> {
+  /**
+   * The agent is switched off or paused on its own on the Agents page, which
+   * is a pause for that agent, so it is treated like one: a one-shot waits
+   * until it lifts, looked at again every few minutes and with its due time
+   * kept, so the agent hears how late it is; a recurring occurrence is skipped,
+   * since the next one comes round anyway.
+   */
+  private holdWhilePaused(row: ScheduleRow): void {
+    if (row.kind !== "once") {
+      console.log(`[schedules] ${row.id} (${row.agent}) skipped: ${row.agent} is paused`);
+      return;
+    }
+    if (!this.held.has(row.id)) {
+      console.log(`[schedules] ${row.id} (${row.agent}) held until ${row.agent} is no longer paused`);
+    }
+    this.held.set(row.id, this.now().getTime() + DEFER_MINUTES * 60_000);
+    // claim() marked it done and left its due time as it was: back in the due set, still as late as it is.
+    this.store.setStatus(row.id, "pending");
+  }
+
+  private async dispatch(row: ScheduleRow, lateBy: number): Promise<WakeOutcome> {
     const context = {
       scheduleId: row.id,
       note: row.note,
@@ -238,14 +272,12 @@ export class ScheduleRunner {
 
   /**
    * A wake booked outside a room. The turn runs in the session it was booked
-   * from and its reply persists there; nothing is pushed anywhere. The prompt
-   * says so, because an agent that assumes it has been heard will not use the
-   * tools that would actually reach someone.
+   * from, by its id, and its reply persists there; nothing is pushed anywhere.
+   * The prompt says so, because an agent that assumes it has been heard will
+   * not use the tools that would actually reach someone. A session that is no
+   * longer there is `gone`.
    */
-  private async runSessionWake(row: ScheduleRow, ctx: WakeContext): Promise<ScheduledWakeOutcome> {
-    const session = loadSession(this.runtime.db, row.target);
-    if (!session) return "gone";
-
+  private async runSessionWake(row: ScheduleRow, ctx: WakeContext): Promise<WakeOutcome> {
     const prompt = [
       `This is a wake you scheduled${describeBooking(ctx, this.now())}.`,
       `Your note to yourself: "${ctx.note}"`,
@@ -256,8 +288,10 @@ export class ScheduleRunner {
       "Nobody is reading this session right now. If something here needs to reach a person, send it — a reply here goes nowhere on its own.",
     ].join("\n");
 
-    console.log(`[schedules] ${ctx.scheduleId} waking ${row.agent} in session ${row.target}`);
-    await runAgentLoop(prompt, this.runtime.buildLoopOptions({ session, agentName: row.agent }));
-    return "ran";
+    return this.runtime.wakeAgent(row.agent, {
+      prompt,
+      sessionId: row.target,
+      wake: { kind: "schedule", ref: row.id },
+    });
   }
 }

@@ -293,13 +293,132 @@ describe("runtime.wakeAgent", () => {
     expect(await runtime.wakeAgent("planner", { prompt: "x", room: "eng", wake: { kind: "lead" } })).toBe("gone");
   });
 
+  it("runs a turn in a session named by its id, and is gone for one that isn't there", async () => {
+    const runtime = makeRuntime();
+    const woken: Array<RuntimeEventPayload<"agent.woken">> = [];
+    runtime.events.on("agent.woken", (e) => {
+      woken.push(e);
+    });
+    const keyed = runtime.findOrCreateSession({ key: "web:planner" });
+    const bare = runtime.findOrCreateSession({});
+    const schedule: Wake = { kind: "schedule", ref: "sch_1" };
+    queue = [[{ name: "probe", arguments: {} }], [{ name: "probe", arguments: {} }]];
+
+    expect(
+      await runtime.wakeAgent("planner", { prompt: "Check the deploy.", sessionId: keyed.id, wake: schedule }),
+    ).toBe("ran");
+    expect(
+      await runtime.wakeAgent("planner", { prompt: "Check the deploy.", sessionId: bare.id, wake: schedule }),
+    ).toBe("ran");
+
+    expect(probed).toEqual([schedule, schedule]);
+    // Named by its key when it has one, by its id when it hasn't.
+    expect(woken.map((e) => e.target)).toEqual(["web:planner", bare.id]);
+    const said = db.prepare("SELECT session_id FROM messages WHERE role = 'user'").all() as { session_id: string }[];
+    expect(said.map((m) => m.session_id)).toEqual([keyed.id, bare.id]);
+
+    expect(await runtime.wakeAgent("planner", { prompt: "x", sessionId: "no-such-session", wake: schedule })).toBe(
+      "gone",
+    );
+    expect(requests).toBe(4);
+  });
+
+  it("keeps one woken turn at a time in a session, whether it is named by its key or its id", async () => {
+    const runtime = makeRuntime();
+    let release = () => {};
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = wakeOf(runtime);
+    await vi.waitFor(() => expect(requests).toBe(1));
+    const session = db.prepare("SELECT id FROM sessions WHERE key = ?").get("upkeep:planner") as { id: string };
+
+    expect(await runtime.wakeAgent("planner", { prompt: "x", sessionId: session.id, wake: { kind: "schedule" } })).toBe(
+      "at-ceiling",
+    );
+
+    release();
+    expect(await first).toBe("ran");
+    expect(await runtime.wakeAgent("planner", { prompt: "x", sessionId: session.id, wake: { kind: "schedule" } })).toBe(
+      "ran",
+    );
+  });
+
+  it("holds a session turn to a budget of tool rounds, or the agent's own when that is fewer", async () => {
+    const runtime = makeRuntime();
+    // A different call each round, so the loop's cycle detector doesn't take the tool away first.
+    const forever = () => Array.from({ length: 10 }, (_, n) => [{ name: "probe", arguments: { n } }]);
+
+    queue = forever();
+    await runtime.wakeAgent("planner", { prompt: "x", sessionKey: "upkeep:planner", wake: upkeep, maxToolRounds: 2 });
+    expect(probed).toHaveLength(2);
+
+    // The planner is configured for four rounds: a budget of six gives it four.
+    probed = [];
+    queue = forever();
+    await runtime.wakeAgent("planner", { prompt: "x", sessionKey: "upkeep:planner", wake: upkeep, maxToolRounds: 6 });
+    expect(probed).toHaveLength(4);
+
+    for (const maxToolRounds of [0, 1.5, Number.NaN]) {
+      await expect(
+        runtime.wakeAgent("planner", { prompt: "x", sessionKey: "upkeep:planner", wake: upkeep, maxToolRounds }),
+      ).rejects.toThrow(/maxToolRounds is a whole number, at least 1/);
+    }
+  });
+
+  it("says why a session wake would be turned away, without running it or counting it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-21T09:00:00Z"));
+    const runtime = makeRuntime(makeConfig({ maxWakesPerHour: 1 }));
+    const where = { sessionKey: "upkeep:planner" };
+
+    // Asking is free: as often as you like, and the one wake of the hour is still there.
+    for (let i = 0; i < 3; i++) expect(runtime.wakeRefusal("planner", where)).toBeUndefined();
+    expect(requests).toBe(0);
+    expect(await wakeOf(runtime)).toBe("ran");
+    expect(runtime.wakeRefusal("planner", where)).toEqual({
+      outcome: "at-ceiling",
+      why: "it's at its wake ceiling: 1 wake in the last hour",
+    });
+    expect(runtime.wakeRefusal("reviewer", { sessionKey: "upkeep:reviewer" })).toBeUndefined();
+    expect(runtime.wakeRefusal("nobody", where)).toEqual({ outcome: "gone", why: "there's no agent called nobody" });
+    expect(runtime.wakeRefusal("planner", { sessionId: "no-such-session" })).toMatchObject({ outcome: "gone" });
+    updateExploratoryState(db, "researcher", { enabled: false });
+    expect(runtime.wakeRefusal("researcher", where)).toEqual({
+      outcome: "paused",
+      why: "it's switched off or paused on the Agents page",
+    });
+    runtime.setAgentsPaused({ paused: true });
+    expect(runtime.wakeRefusal("reviewer", where)).toEqual({ outcome: "paused", why: "agents are paused" });
+    runtime.setAgentsPaused({ paused: false });
+
+    vi.setSystemTime(new Date("2026-10-21T10:00:01Z"));
+    expect(runtime.wakeRefusal("planner", where)).toBeUndefined();
+  });
+
+  it("says a turn is still running in the session, before it says anything of the hour", async () => {
+    const runtime = makeRuntime(makeConfig({ maxWakesPerHour: 1 }));
+    let release = () => {};
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = wakeOf(runtime);
+    await vi.waitFor(() => expect(requests).toBe(1));
+    expect(runtime.wakeRefusal("planner", { sessionKey: "upkeep:planner" })).toEqual({
+      outcome: "at-ceiling",
+      why: "a woken turn is still running in its session",
+    });
+    release();
+    await first;
+  });
+
   it("refuses a wake with neither a session nor a room", async () => {
     const runtime = makeRuntime();
     await expect(
       runtime.wakeAgent("planner", { prompt: "x", wake: upkeep } as unknown as Parameters<
         AgentRuntime["wakeAgent"]
       >[1]),
-    ).rejects.toThrow(/sessionKey or a room/);
+    ).rejects.toThrow(/needs a sessionKey, a sessionId or a room/);
   });
 });
 

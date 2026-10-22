@@ -376,8 +376,9 @@ ceiling, and the agent can `pass`.
   `includeOwn: true`.
 - Session wakes go through `runtime.wakeAgent`, so they share one hourly
   ceiling per agent (`rooms.maxWakesPerHour`) with the turns plugins start that
-  way ([architecture](./architecture.md#waking-an-agent-from-a-plugin)): one
-  count, not two. Room wakes use the room's.
+  way, such as a tend or an upkeep, and the wakes the agent books in a session
+  ([architecture](./architecture.md#waking-an-agent-from-a-plugin)): one count,
+  not several. Room wakes use the room's.
 - A wake refused by a ceiling or by pausing agents is held and retried every
   minute for up to an hour, then dropped with a warning. A session wake for an
   online agent switched off or paused on the Agents page counts as paused.

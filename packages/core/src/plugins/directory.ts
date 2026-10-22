@@ -33,7 +33,6 @@ import {
   registerContextSlot,
   unregisterContextSlot,
 } from "../agent/context-slots.js";
-import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
 import { getExploratoryState } from "../db/exploratory-queries.js";
 import type { TaiHttpResponse } from "../http/registry.js";
@@ -66,7 +65,18 @@ import {
 import { type RoomInfo, type RoomSource, roomOfOwner, roomOwner } from "./directory-rooms.js";
 import { CommitmentTool, commitmentLine, DirectoryTool, WriteupTool } from "./directory-tools.js";
 import { changedOf, parseUpkeep, Upkeep, type UpkeepSettings } from "./directory-upkeep.js";
-import { busy, everyWords, runNow, Tender, turnSession, UPKEEP_KIND, whyAsleep } from "./places-tend.js";
+import {
+  busy,
+  everyWords,
+  REFUSED_WORDS,
+  refused,
+  runNow,
+  Tender,
+  turnRunning,
+  turnSession,
+  UPKEEP_KIND,
+  whyAsleep,
+} from "./places-tend.js";
 
 export const COMMITMENTS_SLOT_ID = "directory.commitments";
 /** Commitments shown in the prompt block before the rest are counted. */
@@ -199,7 +209,8 @@ function asleep(runtime: AgentRuntime, agent: string): string | null {
 /**
  * Upkeep turns for the agents of this runtime: the evidence read through the
  * directory and the memory store, and the turn run in the agent's own
- * `upkeep:<agent>` session with the round budget as its ceiling.
+ * `upkeep:<agent>` session through the runtime's waker, with the round budget
+ * as its ceiling.
  */
 function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: UpkeepSettings): Upkeep {
   const resolve = (agent: string) =>
@@ -222,15 +233,15 @@ function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: Upkeep
       const resolved = resolve(agent);
       return findOrCreateSession(runtime.db, turnSession(UPKEEP_KIND, agent), resolved.model, resolved.provider);
     },
-    run: async (agent, session, message, maxRounds) => {
-      const options = runtime.buildLoopOptions({
-        session: session as ReturnType<typeof findOrCreateSession>,
-        ...(agent === "default" ? {} : { agentName: agent }),
-      });
-      // The budget is a ceiling: an agent configured for fewer rounds keeps its own.
-      const rounds = Math.min(options.maxToolRounds ?? maxRounds, maxRounds);
-      await runAgentLoop(message, { ...options, maxToolRounds: rounds });
-    },
+    // By the session's id, so the turn runs in the session whose writes upkeep counts. The waker holds it to the
+    // pause and the hourly ceiling, and caps its rounds: an agent configured for fewer keeps its own.
+    run: (agent, session, message, maxRounds) =>
+      runtime.wakeAgent(agent, {
+        prompt: message,
+        sessionId: session.id,
+        wake: { kind: UPKEEP_KIND, ref: `${UPKEEP_TYPE}/${agent}` },
+        maxToolRounds: maxRounds,
+      }),
   });
 }
 
@@ -446,7 +457,11 @@ const plugin: Plugin = (ctx) => {
       kind: UPKEEP_KIND,
       settings: schedule,
       agents: () => roster(runtime).filter((a) => hasCommitmentTool(runtime, a)),
-      unready: (agent) => asleep(runtime, agent),
+      // At its hourly wake ceiling, the turn is skipped before its evidence is read: the waker would turn it away.
+      unready: (agent) =>
+        asleep(runtime, agent) ??
+        runtime.wakeRefusal(agent, { sessionKey: turnSession(UPKEEP_KIND, agent) })?.why ??
+        null,
       tend: (agent) => upkeep.turn(agent),
       log: (line) => console.log(`[directory] ${line}`),
       warn: (line) => console.warn(`[directory] ${line}`),
@@ -577,7 +592,8 @@ const plugin: Plugin = (ctx) => {
   });
 
   // A person asking an agent to tidy up now: its upkeep turn at once, past the "nothing changed" check but not the
-  // pause. It runs on after the answer, which is 202; the page sees it start and finish from the state stream.
+  // pause or the agent's hourly wake ceiling. It runs on after the answer, which is 202; the page sees it start and
+  // finish from the state stream.
   ctx.http.register({
     method: "POST",
     path: "agents/:name/upkeep",
@@ -593,15 +609,25 @@ const plugin: Plugin = (ctx) => {
       }
       const why = asleep(runtime, agent);
       if (why) return { status: 409, json: { error: `${agent} can't tidy up now: ${why}.` } };
-      const started = runNow(UPKEEP_KIND, agent, () => upkeep.turn(agent, { force: true }));
+      // Asked before the answer, since the turn only reaches the waker once its evidence is read.
+      const refusal = runtime.wakeRefusal(agent, { sessionKey: turnSession(UPKEEP_KIND, agent) });
+      const started = refusal ? undefined : runNow(UPKEEP_KIND, agent, () => upkeep.turn(agent, { force: true }));
       if (!started) {
         // Turns on an interval go one at a time, a person's included: one is going now, this agent's or another's.
         const error = busy(UPKEEP_KIND, agent)
           ? `${agent} is already tidying up.`
-          : "Another turn is running now: tends and upkeep go one at a time. Try again in a minute.";
+          : turnRunning() || !refusal
+            ? "Another turn is running now: tends and upkeep go one at a time. Try again in a minute."
+            : `${agent} can't tidy up now: ${refusal.why}. Try again later.`;
         return { status: 409, json: { error } };
       }
-      started.catch((err: unknown) => console.warn(`[directory] ${agent}'s upkeep failed: ${(err as Error).message}`));
+      started.then(
+        (how) => {
+          // The waker can still turn it away once the evidence is read; the turn keeps why for the page.
+          if (refused(how)) console.log(`[directory] ${agent}'s upkeep was turned away: ${REFUSED_WORDS[how]}`);
+        },
+        (err: unknown) => console.warn(`[directory] ${agent}'s upkeep failed: ${(err as Error).message}`),
+      );
       return { status: 202, json: { started: true } };
     },
   });
