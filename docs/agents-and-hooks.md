@@ -404,8 +404,8 @@ fires. That failure mode is the one this codebase keeps producing, most recently
 an entire trigger kind ([#561](https://github.com/quintonmiller/tailored-ai/issues/561)).
 
 **Only some events can be refused.** `denyIf` means something on a waterfall
-(`agent.pre_tool_use`, `agent.context_slots`) and nothing on a broadcast, which
-reports what already happened. Setting it on a broadcast is a warning rather
+(`agent.pre_tool_use`, `agent.context_slots`, `notification.outgoing`) and
+nothing on a broadcast, which reports what already happened. Setting it on a broadcast is a warning rather
 than a silent no-op.
 
 **A failed policy hook refuses by default.** A check that could not run has not

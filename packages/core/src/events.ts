@@ -666,6 +666,18 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * A message nobody asked for went out through the notification gate: a cron
+   * summary, an owner notification, `notify_owner` from a tick or a woken turn,
+   * a room post. Emitted once the transport has taken it, never for one the
+   * gate held back or one whose send threw, so a subscriber counting these
+   * counts messages that went out.
+   *
+   * `notification.outgoing` is the same message a moment earlier, while it can
+   * still be held back.
+   */
+  "notification.sent": NotificationSent;
+
+  /**
    * A proposal (pull/merge request) was opened by a `RepoBackend`.
    *
    * Slice 4 of the platform vision (`docs/platform-vision.md`): emitted by
@@ -944,8 +956,10 @@ export type RuntimeEventHandler<K extends RuntimeEvent> = (
  * }
  * ```
  *
- * Core declares one: `agent.context_slots`, the slot list the loop is about to
- * render. See {@link ContextSlotWaterfall}.
+ * Core declares three: `agent.context_slots`, the slot list the loop is about to
+ * render (see {@link ContextSlotWaterfall}); `agent.pre_tool_use`, a tool call
+ * about to run; and `notification.outgoing`, a message nobody asked for about to
+ * pass the notification gate.
  */
 export interface RuntimeWaterfallMap {
   /**
@@ -983,6 +997,64 @@ export interface RuntimeWaterfallMap {
    * sandbox — where nothing can reorder them.
    */
   "agent.pre_tool_use": PreToolUseWaterfall;
+
+  /**
+   * A message nobody asked for, about to pass the notification gate. It runs
+   * before the repeat check, so a subscriber sees every one, repeats included,
+   * and can hold one back by setting `deny`: the gate logs it with that reason,
+   * as it logs a repeat, and nothing is sent.
+   *
+   * The message can't be changed here, only stopped. The caller has already
+   * built the send, so rewriting the payload would change nothing it does.
+   */
+  "notification.outgoing": NotificationOutgoingWaterfall;
+}
+
+/**
+ * What the notification gate tells the bus about a message nobody asked for.
+ * Shared by `notification.outgoing` and `notification.sent`.
+ */
+export interface NotificationFields {
+  /** The stream it belongs to, which is what the gate counts repeats within: `cron:digest`, `room:planner`. */
+  source: string;
+  /**
+   * What kind of message it is, coarse on purpose: one kind per sort of
+   * initiative (`cron:<job>`, `digest`, `task-blocked`, `notify:<wake kind>`,
+   * `room`), not one per fact, so a kind is something a person can mute or a
+   * plugin can count. The caller names it; otherwise it is `source` with the
+   * sending agent's name taken off the end.
+   */
+  kind: string;
+  /** The agent sending it, when an agent is. */
+  agent?: string;
+  /** The outbound channel's id, or a room's backend. */
+  channel: string;
+  /** Who gets it: a user id for a DM, a channel or room id for a post. */
+  target: string;
+  /** The first 200 characters of the message. */
+  preview: string;
+}
+
+/** Payload for `notification.outgoing`. */
+export interface NotificationOutgoingWaterfall extends NotificationFields {
+  /**
+   * Set to hold the message back. The text is logged as the reason, and an
+   * agent whose `notify_owner` call or room post was held back reads it as the
+   * tool's answer, so write it for that agent: what to do instead.
+   */
+  deny?: string;
+}
+
+/** Payload for `notification.sent`. */
+export interface NotificationSent extends NotificationFields {
+  /**
+   * The `notification_log` row the send was recorded on. Later sends of the
+   * same fact to the same place share it. Absent when the send could not be
+   * recorded.
+   */
+  logId?: number;
+  /** When it went out, as SQLite's `datetime('now')` writes it (UTC). */
+  at: string;
 }
 
 /**
@@ -1061,7 +1133,7 @@ export interface ContextSlotWaterfall extends ContextSlotContext {
  * registers it with {@link registerWaterfallEvent} so config-declared hooks can
  * reach it too.
  */
-const waterfallEvents = new Set<string>(["agent.context_slots", "agent.pre_tool_use"]);
+const waterfallEvents = new Set<string>(["agent.context_slots", "agent.pre_tool_use", "notification.outgoing"]);
 
 /** Declare a plugin's waterfall event so config-declared subscribers dispatch it correctly. */
 export function registerWaterfallEvent(event: string): void {
@@ -1101,6 +1173,7 @@ export const KNOWN_BROADCAST_EVENTS = [
   "digest.ready",
   "form.completed",
   "interface.action",
+  "notification.sent",
   "question.asked",
   "repo.check.completed",
   "repo.proposal.closed",
@@ -1180,6 +1253,8 @@ export const AGENT_SCOPED_EVENTS = [
   "approval.requested",
   "approval.settled",
   "interface.action",
+  "notification.outgoing",
+  "notification.sent",
   "room.membership_changed",
   "room.turn_ended",
   "room.woke",

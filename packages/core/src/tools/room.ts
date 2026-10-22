@@ -442,9 +442,11 @@ export class RoomTool implements Tool {
     let sent = false;
     let postedId = "";
     let suppression = "";
-    await gate.deliver(
+    const decision = await gate.deliver(
       {
         source: `room:${agentName}`,
+        kind: "room",
+        agent: agentName,
         channel: room.ref.backend,
         target: room.ref.id,
         content: spoken,
@@ -478,6 +480,9 @@ export class RoomTool implements Tool {
       },
     );
 
+    if (decision.verdict === "held") {
+      return ok(`Held back — ${decision.reason}`);
+    }
     if (!sent) {
       return ok(
         `Held back — the same point was already made in "${room.name}" within the ${urgency}-urgency window (${this.windowFor(urgency)}h). ${suppression}`.trim(),

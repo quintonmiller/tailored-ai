@@ -1228,10 +1228,14 @@ export class AgentRuntime {
    *
    * Deliberately NOT applied to chat replies: if the user asks the same thing
    * twice they get an answer twice.
+   *
+   * Built with the runtime's bus, which outlives a reload (it is cleared, not
+   * replaced), so `notification.outgoing` and `notification.sent` reach
+   * whoever subscribed since.
    */
   getNotificationGate(): NotificationGate {
     if (!this._notificationGate) {
-      this._notificationGate = new NotificationGate(this.db, () => this.getConfig().notifications?.dedup);
+      this._notificationGate = new NotificationGate(this.db, () => this.getConfig().notifications?.dedup, this.events);
     }
     return this._notificationGate;
   }

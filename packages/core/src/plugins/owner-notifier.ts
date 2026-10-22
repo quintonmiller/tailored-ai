@@ -33,7 +33,7 @@
 
 import { getAutopilotSettings, isInQuietHours } from "../db/autopilot-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
-import { normalizeForDedup, resolveGate } from "../notifications/dedup.js";
+import { type NotificationCandidate, normalizeForDedup, resolveGate } from "../notifications/dedup.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 import { runtimeTimeProvider } from "../time/provider.js";
@@ -70,12 +70,12 @@ export class OwnerNotifier {
     // Keyed on the task and reason: two different tasks failing overnight must
     // never collapse into one notification just because their message bodies
     // read alike.
-    await this.dmOwner(
-      e.message,
-      "[owner-notifier] Notify DM failed:",
-      "owner-notifier:needs_human",
-      e.taskId ? `task:${e.taskId}:${e.reason ?? "needs_human"}` : undefined,
-    );
+    await this.dmOwner(e.message, "[owner-notifier] Notify DM failed:", {
+      source: "owner-notifier:needs_human",
+      kind: "task-blocked",
+      agent: e.agentName,
+      key: e.taskId ? `task:${e.taskId}:${e.reason ?? "needs_human"}` : undefined,
+    });
   }
 
   private async onDigest(e: RuntimeEventPayload<"digest.ready">): Promise<void> {
@@ -87,7 +87,13 @@ export class OwnerNotifier {
         // in a token count, which exact hashing would miss but the similarity
         // tier catches. An empty digest is not news.
         const decision = await resolveGate(() => this.runtime.getNotificationGate?.()).deliver(
-          { source: `owner-notifier:digest:${e.periodLabel}`, channel: out.id, target: ownerId, content: e.content },
+          {
+            source: `owner-notifier:digest:${e.periodLabel}`,
+            kind: "digest",
+            channel: out.id,
+            target: ownerId,
+            content: e.content,
+          },
           () => out.sendDM(ownerId, e.content),
           (msg) => console.log(msg),
         );
@@ -114,19 +120,21 @@ export class OwnerNotifier {
       await this.dmOwner(
         `Task ${e.taskId} is blocked — agent needs input:\n${e.question}`,
         "[owner-notifier] Task question DM failed:",
-        "owner-notifier:question",
-        `task:${e.taskId}:${normalizeForDedup(e.question).slice(0, 120)}`,
+        {
+          source: "owner-notifier:question",
+          kind: "question",
+          key: `task:${e.taskId}:${normalizeForDedup(e.question).slice(0, 120)}`,
+        },
       );
       return;
     }
 
     // Out-of-autopilot question: the inbox file already has it, so a repeat DM
     // adds nothing.
-    await this.dmOwner(
-      `Question from autonomous agent:\n${e.question}`,
-      "[owner-notifier] Question DM failed:",
-      "owner-notifier:question",
-    );
+    await this.dmOwner(`Question from autonomous agent:\n${e.question}`, "[owner-notifier] Question DM failed:", {
+      source: "owner-notifier:question",
+      kind: "question",
+    });
   }
 
   private async onForm(e: RuntimeEventPayload<"form.completed">): Promise<void> {
@@ -140,6 +148,8 @@ export class OwnerNotifier {
       console.log(`[owner-notifier] form message — no owner configured; would have sent: ${e.message}`);
       return;
     }
+    // Sent directly, as the workflow step asked: it has never passed the repeat
+    // gate, so it isn't announced as `notification.sent` either.
     await out.sendDM(ownerId, e.message);
   }
 
@@ -153,17 +163,22 @@ export class OwnerNotifier {
    * DM the owner, but only if we haven't already told them this.
    *
    * Everything this plugin sends is unsolicited, so it all goes through the
-   * repeat gate. `dedupKey` should be the identity of the underlying fact when
-   * one exists (`task:<id>:blocked`) — that keeps suppressing across rewordings,
+   * repeat gate. `key` should be the identity of the underlying fact when one
+   * exists (`task:<id>:blocked`) — that keeps suppressing across rewordings,
    * which content hashing alone cannot do when a model restates the same news.
+   * `kind` is the coarse sort of message it is, for subscribers on the bus.
    */
-  private async dmOwner(message: string, errPrefix: string, source: string, dedupKey?: string): Promise<void> {
+  private async dmOwner(
+    message: string,
+    errPrefix: string,
+    meta: Pick<NotificationCandidate, "source" | "kind" | "agent" | "key">,
+  ): Promise<void> {
     const out = this.runtime.resolveOutbound();
     const ownerId = this.runtime.getOwnerId();
     if (!out || !ownerId) return;
     try {
       await resolveGate(() => this.runtime.getNotificationGate?.()).deliver(
-        { source, channel: out.id, target: ownerId, content: message, key: dedupKey },
+        { ...meta, channel: out.id, target: ownerId, content: message },
         () => out.sendDM(ownerId, message),
         (msg) => console.log(msg),
       );

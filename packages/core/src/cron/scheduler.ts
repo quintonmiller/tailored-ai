@@ -370,6 +370,8 @@ export class CronScheduler {
     // answer now, so it always goes out, unchanged or not. It still records a
     // send so the window advances.
     const gate = solicited ? PASSTHROUGH_GATE : resolveGate(() => this.runtime.getNotificationGate?.());
+    // One kind per job: a job is one sort of message, however its text varies.
+    const about = { source: `cron:${job.name}`, kind: `cron:${job.name}`, agent: job.agent ?? job.profile };
 
     if (mode === "dm") {
       const userId = delivery?.target ?? this.runtime.getOwnerId(channelId);
@@ -378,7 +380,7 @@ export class CronScheduler {
         return;
       }
       const decision = await gate.deliver(
-        { source: `cron:${job.name}`, channel: channelId, target: userId, content: response },
+        { ...about, channel: channelId, target: userId, content: response },
         () => out.sendDM(userId, response),
         (msg) => console.log(msg),
       );
@@ -392,7 +394,7 @@ export class CronScheduler {
     }
     const target = delivery.target;
     const decision = await gate.deliver(
-      { source: `cron:${job.name}`, channel: channelId, target, content: response },
+      { ...about, channel: channelId, target, content: response },
       () => out.send(target, response),
       (msg) => console.log(msg),
     );
