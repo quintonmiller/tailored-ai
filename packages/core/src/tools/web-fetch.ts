@@ -4,7 +4,14 @@ import { isTransientError, withRetry } from "./retry.js";
 
 const MAX_BODY_LENGTH = 8000;
 
-function stripHtmlToText(html: string): string {
+/** How long `web_fetch` waits for an answer. The watchers plugin fetches on the same terms. */
+export const WEB_FETCH_TIMEOUT_MS = 15_000;
+
+/** What `web_fetch` tells a site it is. */
+export const WEB_FETCH_USER_AGENT = "autonomous-agent/0.1 (bot)";
+
+/** A page's readable text: scripts and styles dropped, blocks as lines, common entities decoded. */
+export function stripHtmlToText(html: string): string {
   return (
     html
       // Remove script/style blocks
@@ -46,7 +53,7 @@ export class WebFetchTool implements Tool {
   private timeoutMs: number;
   private egressPolicy: EgressPolicy | undefined;
 
-  constructor(timeoutMs: number = 15_000, egressPolicy?: EgressPolicy) {
+  constructor(timeoutMs: number = WEB_FETCH_TIMEOUT_MS, egressPolicy?: EgressPolicy) {
     this.timeoutMs = timeoutMs;
     this.egressPolicy = egressPolicy;
   }
@@ -103,7 +110,7 @@ export class WebFetchTool implements Tool {
           try {
             const r = await fetch(url, {
               headers: {
-                "User-Agent": "autonomous-agent/0.1 (bot)",
+                "User-Agent": WEB_FETCH_USER_AGENT,
                 Accept: "text/html, application/json, text/plain, */*",
               },
               redirect: "follow",

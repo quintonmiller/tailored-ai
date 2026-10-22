@@ -812,6 +812,10 @@ export const DEFAULT_DISABLED_PLUGIN_MODULES = [
   // declared a world-state type), and records it writes other agents read.
   // See docs/directory.md.
   "builtin:directory",
+  // Off until asked for: it fetches pages on its own schedule and wakes agents
+  // when they change, and adds the `watch` tool to every agent that doesn't
+  // narrow its `tools:`. See docs/watchers.md.
+  "builtin:watchers",
 ] as const;
 
 export interface AgentConfig {

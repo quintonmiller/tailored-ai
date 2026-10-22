@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 47 | 141 |
+| `agents` | object | {} | 47 | 143 |
 
 ### `autopilot`
 
@@ -142,7 +142,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `server.host` | string | `127.0.0.1` | 20 | 5 |
+| `server.host` | string | `127.0.0.1` | 23 | 5 |
 | `server.port` | number | `3000` | 8 | 7 |
 
 ### `state`
