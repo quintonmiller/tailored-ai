@@ -2,10 +2,10 @@
  * Waking an agent for a turn nobody asked for.
  *
  * Subscriptions and plugins that start turns of their own come through here,
- * so they all stop for the same things: the pause switch, one hourly wake
- * ceiling per agent, a turn already running in the same session, and an agent
- * that isn't there or is switched off. The session and loop are set up the
- * same way for each of them too. A plugin that called `runAgentLoop` itself
+ * so they all stop for the same things: the pause switch, an online agent
+ * switched off or paused on its own, one hourly wake ceiling per agent, a turn
+ * already running in the same session, and an agent that isn't there. The
+ * session and loop are set up the same way for each of them too. A plugin that called `runAgentLoop` itself
  * skipped every one of those.
  *
  * A turn with a `room` goes to the room watcher, which the host wires in with
@@ -30,9 +30,11 @@ export interface Wake {
 }
 
 /**
- * What became of a wake. `paused` and `at-ceiling` pass, so try again later.
- * `gone` means there is nothing to wake: no such agent or room, an agent that
- * isn't in the room, or an agent switched off. Don't retry it.
+ * What became of a wake. `paused` and `at-ceiling` pass, so try again later:
+ * `paused` while autonomous turns are paused, for everyone or for this online
+ * agent on its own (switched off or paused on the Agents page, both of which a
+ * person can undo). `gone` means there is nothing to wake: no such agent or
+ * room, an agent that isn't in the room, or rooms switched off. Don't retry it.
  */
 export type WakeOutcome = "ran" | "paused" | "at-ceiling" | "gone";
 
@@ -72,6 +74,8 @@ export class AgentWaker {
   /** `<agent> <session key>` for every woken turn still running. */
   private readonly running = new Set<string>();
   private roomWaker: RoomWaker | undefined;
+  /** Whether a room wake has already been told there is no room waker. Said once, not per wake. */
+  private warnedNoRoomWaker = false;
 
   constructor(
     private readonly host: WakeHost,
@@ -93,13 +97,22 @@ export class AgentWaker {
     // The base agent answers to "default" whether or not one is declared, as it
     // does everywhere else an agent is named.
     if (!definition && agent !== "default") return "gone";
-    // An online agent switched off on the Agents page takes no turns of its own.
-    if (definition?.online?.enabled && getExploratoryState(host.db, agent)?.enabled === false) return "gone";
+    // An online agent switched off or paused on the Agents page takes no turns
+    // of its own. Both are a person's switch and both can be undone, so the
+    // wake waits rather than being thrown away.
+    if (definition?.online?.enabled && this.ownPause(agent)) return "paused";
 
     if (opts.room !== undefined) {
       if (this.roomWaker) return this.roomWaker(agent, opts.room, { prompt: opts.prompt, wake: opts.wake });
       // Rooms switched off is permanent; rooms still starting is not.
-      return host.getConfig().rooms?.enabled === false ? "gone" : "at-ceiling";
+      if (host.getConfig().rooms?.enabled === false) return "gone";
+      if (!this.warnedNoRoomWaker) {
+        this.warnedNoRoomWaker = true;
+        console.warn(
+          `[wake] a room wake for ${agent} arrived with no room waker; it will be "at-ceiling" until the host calls setRoomWaker.`,
+        );
+      }
+      return "at-ceiling";
     }
 
     // Two turns at once in one session would interleave their history. Checked
@@ -139,6 +152,14 @@ export class AgentWaker {
       this.running.delete(key);
     }
     return "ran";
+  }
+
+  /** Whether an online agent's own switch is off, or its own pause hasn't run out. */
+  private ownPause(agent: string): boolean {
+    const own = getExploratoryState(this.host.db, agent);
+    if (!own) return false;
+    if (!own.enabled) return true;
+    return own.paused_until !== null && Date.parse(own.paused_until) > this.now();
   }
 }
 

@@ -98,8 +98,8 @@ export interface RuntimeOptions {
       getOwnerId?: (channelId?: string) => string | undefined;
       /** Repeat gate for unsolicited outbound messages. See NotificationGate. */
       getNotificationGate?: () => NotificationGate | undefined;
-      /** Deliver a message straight to another agent and return its reply. */
-      deliverAgentMessage?: (to: string, from: string, body: string) => Promise<string>;
+      /** Deliver a message straight to another agent and return its reply. `wake` carries a woken sender's reason over. */
+      deliverAgentMessage?: (to: string, from: string, body: string, wake?: Wake) => Promise<string>;
       taskBackend?: TaskBackend;
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
@@ -384,7 +384,7 @@ export class AgentRuntime {
       resolveOutbound: (id?: string) => this.resolveOutbound(id),
       getOwnerId: (id?: string) => this.getOwnerId(id),
       getNotificationGate: () => this.getNotificationGate(),
-      deliverAgentMessage: (to, from, body) => this.deliverAgentMessage(to, from, body),
+      deliverAgentMessage: (to, from, body, wake) => this.deliverAgentMessage(to, from, body, "dm", wake),
       events: this.events,
     };
   }
@@ -1249,8 +1249,11 @@ export class AgentRuntime {
    * `via` labels the surface that produced the delivery for `agent.messaged`
    * subscribers. Defaults to `"dm"` — the agent-chose-to-speak case — so the
    * only caller that has to say anything is the one that is something else.
+   *
+   * `wake` is the sender's, when the sender's turn was woken: the recipient's
+   * turn is still that unprompted work, so its tools see the same reason.
    */
-  async deliverAgentMessage(to: string, from: string, body: string, via = "dm"): Promise<string> {
+  async deliverAgentMessage(to: string, from: string, body: string, via = "dm", wake?: Wake): Promise<string> {
     // One agent starting a whole new loop in another agent, unattended, is the
     // exact shape of the incident this switch exists for — a room with the
     // room taken out. Gated even though a person may be somewhere up the
@@ -1281,7 +1284,7 @@ export class AgentRuntime {
     const key = resolved.roomSessionScope === "shared" ? `room:all:${to}` : `dm:${from}:${to}`;
     const session = findOrCreateSession(this.db, key, resolved.model, resolved.provider);
 
-    const base = this.buildLoopOptions({ agentName: to, session });
+    const base = this.buildLoopOptions({ agentName: to, session, ...(wake ? { wake } : {}) });
     const reply = await runAgentLoop(`Direct message from ${from}:\n\n${body}`, base);
 
     // After the loop, so one event is one complete exchange. A delivery that
@@ -1294,16 +1297,19 @@ export class AgentRuntime {
 
   /**
    * Wake an agent for a turn nobody asked for, under the brakes every such
-   * turn shares: refused while autonomous runs are paused, held at the
-   * agent's hourly wake ceiling (`rooms.maxWakesPerHour`, one count with
-   * subscription wakes) or while a woken turn is still running in the same
-   * session, and `gone` for an agent that isn't there or is switched off.
+   * turn shares: `paused` while autonomous runs are paused or this online
+   * agent is switched off or paused on its own, held at the agent's hourly
+   * wake ceiling (`rooms.maxWakesPerHour`, one count with subscription wakes)
+   * or while a woken turn is still running in the same session, and `gone`
+   * for an agent that isn't there.
    * Emits `agent.woken`, and the turn's tools see `wake` on their context.
    *
    * `sessionKey` runs the turn in that session, where a reply reaches nobody
    * unless the agent sends it somewhere, so the prompt should say so. `room`
    * runs it in the room, through the room's own turn order and ceiling, and
-   * the agent can `pass`. A turn that throws rejects.
+   * the agent can `pass`; called from inside a turn in that same room, it is
+   * `at-ceiling` rather than waiting on the turn it came from. A turn that
+   * throws rejects.
    */
   wakeAgent(agent: string, opts: WakeAgentOptions): Promise<WakeOutcome> {
     return this._waker.wake(agent, opts);
@@ -1312,7 +1318,8 @@ export class AgentRuntime {
   /**
    * Where `wakeAgent` sends a turn with a `room`. The host sets it once its
    * room watcher is running and clears it when rooms are off. Until then a
-   * room wake reports `at-ceiling`, or `gone` when rooms are switched off.
+   * room wake reports `at-ceiling`, with a warning the first time, or `gone`
+   * when rooms are switched off.
    */
   setRoomWaker(waker: RoomWaker | undefined): void {
     this._waker.setRoomWaker(waker);

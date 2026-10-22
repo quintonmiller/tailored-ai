@@ -19,7 +19,7 @@ import type { AgentConfig } from "../config.js";
 import { updateExploratoryState } from "../db/exploratory-queries.js";
 import { initDatabase } from "../db/schema.js";
 import type { PreToolUseWaterfall, RuntimeEventPayload } from "../events.js";
-import { createTools } from "../factories.js";
+import { createMetaTools, createTools } from "../factories.js";
 import type { AIProvider, ChatResponse } from "../providers/interface.js";
 import { AgentRuntime } from "../runtime.js";
 import { createSubscriptionDelivery } from "../subscriptions/delivery.js";
@@ -35,6 +35,8 @@ let requests: number;
 let hold: Promise<void> | undefined;
 /** What each `probe` call saw on its context. */
 let probed: Array<ToolContext["wake"]>;
+/** Which agent made each `probe` call. */
+let probedBy: Array<string | undefined>;
 
 const usage = { input: 0, output: 0 };
 const provider: AIProvider = {
@@ -64,6 +66,7 @@ const probe: Tool = {
   parameters: { type: "object", properties: {} },
   async execute(_args, context) {
     probed.push(context.wake);
+    probedBy.push(context.agentName);
     return { success: true, output: "ok" };
   },
 };
@@ -92,7 +95,7 @@ function makeConfig(over: { maxWakesPerHour?: number; rooms?: Record<string, unk
       extraInstructions: "",
     },
     agents: {
-      planner: { tools: ["probe", "save", "notify_owner"] },
+      planner: { tools: ["probe", "save", "notify_owner", "delegate", "room"] },
       reviewer: { tools: ["probe"] },
       researcher: { tools: ["probe", "recall"], online: { enabled: true } },
     },
@@ -141,6 +144,7 @@ beforeEach(() => {
   requests = 0;
   hold = undefined;
   probed = [];
+  probedBy = [];
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -226,15 +230,26 @@ describe("runtime.wakeAgent", () => {
     expect(await wakeOf(runtime)).toBe("ran");
   });
 
-  it("is gone for an agent that isn't there, or an online agent switched off", async () => {
+  it("is gone for an agent that isn't there", async () => {
     const runtime = makeRuntime();
     expect(await wakeOf(runtime, "nobody")).toBe("gone");
+    expect(requests).toBe(0);
+  });
 
+  it("is paused, not gone, for an online agent switched off or paused on its own", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-21T09:00:00Z"));
+    const runtime = makeRuntime();
+
+    // Both are a person's switch on the Agents page, and both can be undone,
+    // so a caller holds the wake rather than throwing it away.
     updateExploratoryState(db, "researcher", { enabled: false });
-    expect(await wakeOf(runtime, "researcher")).toBe("gone");
+    expect(await wakeOf(runtime, "researcher")).toBe("paused");
+    updateExploratoryState(db, "researcher", { enabled: true, paused_until: "2026-10-21T13:00:00Z" });
+    expect(await wakeOf(runtime, "researcher")).toBe("paused");
     expect(requests).toBe(0);
 
-    updateExploratoryState(db, "researcher", { enabled: true });
+    vi.setSystemTime(new Date("2026-10-21T13:00:01Z"));
     expect(await wakeOf(runtime, "researcher")).toBe("ran");
   });
 
@@ -261,6 +276,18 @@ describe("runtime.wakeAgent", () => {
     expect(roomWaker).toHaveBeenCalledTimes(1);
   });
 
+  it("warns once when a room wake arrives before the host has set a room waker", async () => {
+    const runtime = makeRuntime();
+    const warn = vi.mocked(console.warn);
+    const turn = { prompt: "Summarise the week.", room: "eng", wake: { kind: "lead" } };
+
+    expect(await runtime.wakeAgent("planner", turn)).toBe("at-ceiling");
+    expect(await runtime.wakeAgent("planner", turn)).toBe("at-ceiling");
+
+    const said = warn.mock.calls.filter((c) => String(c[0]).includes("setRoomWaker"));
+    expect(said).toHaveLength(1);
+  });
+
   it("is gone for a room turn while rooms are switched off", async () => {
     const runtime = makeRuntime(makeConfig({ rooms: { enabled: false } }));
     expect(await runtime.wakeAgent("planner", { prompt: "x", room: "eng", wake: { kind: "lead" } })).toBe("gone");
@@ -273,6 +300,50 @@ describe("runtime.wakeAgent", () => {
         AgentRuntime["wakeAgent"]
       >[1]),
     ).rejects.toThrow(/sessionKey or a room/);
+  });
+});
+
+describe("work a woken turn hands on", () => {
+  it("stays woken in an agent it delegates to", async () => {
+    const runtime = makeRuntime();
+    runtime.setMetaTools(createMetaTools(runtime, join(home, "context"), join(home, "kb")));
+    // planner delegates, then reviewer's turn calls probe.
+    queue = [
+      [{ name: "delegate", arguments: { agent: "reviewer", task: "Check the plan." } }],
+      [{ name: "probe", arguments: {} }],
+    ];
+
+    expect(await wakeOf(runtime)).toBe("ran");
+
+    expect(probedBy).toEqual(["reviewer"]);
+    expect(probed).toEqual([upkeep]);
+  });
+
+  it("stays woken in an agent it messages", async () => {
+    const runtime = makeRuntime();
+    queue = [
+      [{ name: "room", arguments: { action: "dm", agent: "reviewer", body: "Check the plan." } }],
+      [{ name: "probe", arguments: {} }],
+    ];
+
+    expect(await wakeOf(runtime)).toBe("ran");
+
+    expect(probedBy).toEqual(["reviewer"]);
+    expect(probed).toEqual([upkeep]);
+  });
+
+  it("stays unwoken in an agent messaged from a person's own chat", async () => {
+    const runtime = makeRuntime();
+    queue = [
+      [{ name: "room", arguments: { action: "dm", agent: "reviewer", body: "Check the plan." } }],
+      [{ name: "probe", arguments: {} }],
+    ];
+
+    const session = runtime.findOrCreateSession({ key: "web:owner" });
+    await runAgentLoop("ask reviewer", runtime.buildLoopOptions({ session, agentName: "planner" }));
+
+    expect(probedBy).toEqual(["reviewer"]);
+    expect(probed).toEqual([undefined]);
   });
 });
 

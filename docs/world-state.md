@@ -379,10 +379,10 @@ ceiling, and the agent can `pass`.
   way ([architecture](./architecture.md#waking-an-agent-from-a-plugin)): one
   count, not two. Room wakes use the room's.
 - A wake refused by a ceiling or by pausing agents is held and retried every
-  minute for up to an hour, then dropped with a warning.
+  minute for up to an hour, then dropped with a warning. A session wake for an
+  online agent switched off or paused on the Agents page counts as paused.
 - Events for an agent that isn't there are dropped with a warning rather than
-  retried, and so are session events for an online agent switched off on the
-  Agents page.
+  retried.
 - The turn's tools see which subscription woke it as `ToolContext.wake`:
   `{ kind: "subscription", ref }`, where `ref` is the subscription's agent,
   `on`, `when`, `deliver`, target, `window` and `every` joined by `|`.

@@ -9,6 +9,7 @@
  * keeps producing; #561 was a whole trigger kind of it.
  */
 import { describe, expect, it, vi } from "vitest";
+import YAML from "yaml";
 import {
   listEventHookHandlers,
   matchesWhen,
@@ -65,6 +66,16 @@ describe("matchesWhen", () => {
 
   it("matches everything when nothing is declared", () => {
     expect(matchesWhen({ tool: "exec" }, undefined)).toBe(true);
+  });
+
+  it("matches a value YAML reads as a boolean or a number, written unquoted", () => {
+    // Unquoted, YAML hands these over as `false` and `3`, not text. A hook
+    // meant to catch undeclared tools was skipped without a word.
+    const { when } = YAML.parse("when: { effectDeclared: false, attempt: 3 }");
+    expect(when).toEqual({ effectDeclared: false, attempt: 3 });
+    expect(matchesWhen({ effectDeclared: false, attempt: 3 }, when)).toBe(true);
+    expect(matchesWhen({ effectDeclared: true, attempt: 3 }, when)).toBe(false);
+    expect(matchesWhen({ effectDeclared: false }, { effectDeclared: "false" })).toBe(true);
   });
 });
 

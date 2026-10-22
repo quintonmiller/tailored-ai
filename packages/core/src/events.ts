@@ -1023,7 +1023,13 @@ export interface PreToolUseWaterfall {
   effect: ToolEffect;
   /** False when the tool declares no effect, so `effect` is the `read` it defaults to rather than its word. */
   effectDeclared: boolean;
-  /** Why the turn is running when nobody asked for it, as `ToolContext.wake` has it. Absent on a turn a person started. */
+  /**
+   * Why the turn is running, as `ToolContext.wake` has it. Set on turns started
+   * through `runtime.wakeAgent` and on subscription turns, and carried into an
+   * agent they delegate to or message. Other turns nobody asked for (cron,
+   * schedules, room check-ins, autopilot, exploratory ticks) don't set it yet,
+   * so its absence doesn't mean a person asked.
+   */
   wake?: Wake;
   /**
    * Set to refuse the call. The text is returned to the model in place of the

@@ -93,9 +93,9 @@ the same things. The outcome says which:
 | `outcome` | when | what to do |
 |---|---|---|
 | `ran` | the turn ran | |
-| `paused` | autonomous turns are paused (`/pause`) | skip it, or try later |
-| `at-ceiling` | the agent has had `rooms.maxWakesPerHour` session wakes in the last hour, plugins' and subscriptions' counted together; a woken turn is still running in that session; the room turned it away (its own ceiling, a turn already running); or rooms are still starting | try later |
-| `gone` | no such agent, an online agent switched off on the Agents page, a room that doesn't exist, is archived or doesn't have the agent in it, or rooms switched off | don't retry |
+| `paused` | autonomous turns are paused (`/pause`), or this online agent is switched off or paused on the Agents page | skip it, or try later |
+| `at-ceiling` | the agent has had `rooms.maxWakesPerHour` session wakes in the last hour, plugins' and subscriptions' counted together; a woken turn is still running in that session; the room turned it away (its own ceiling, a turn already queued or running, or a wake started from inside a turn in that room); or rooms are still starting | try later |
+| `gone` | no such agent, a room that doesn't exist, is archived or doesn't have the agent in it, or rooms switched off | don't retry |
 
 - **`sessionKey`** runs the turn in that session. A reply there reaches nobody,
   so the prompt has to say so. One session per kind of work (`upkeep:<agent>`)
@@ -104,11 +104,16 @@ the same things. The outcome says which:
   turn (who and where the agent is, what it missed) with `pass` offered. The
   room's turn order and hourly ceiling apply in place of the session one. The
   host connects the room watcher with `runtime.setRoomWaker`; the CLI does.
+  A room wake resolves once the room's queued turns ahead of it have run, so a
+  tool can't wait on one in the room its own turn is in: that wake comes back
+  `at-ceiling` straight away.
 - **`wake`** says why the turn runs: `kind` in your own word, `ref` for which
   one. The turn's tools see it as `ToolContext.wake`,
   [`agent.pre_tool_use`](#agentpre_tool_use-and-agentpost_tool_use) carries it,
   and `notify_owner` treats the turn as unprompted, so a repeat goes through the
-  [repeat gate](./notifications.md).
+  [repeat gate](./notifications.md). It carries over to an agent the turn
+  delegates to or messages, and a room's activity line shows it as why the
+  agent woke.
 - **`agent.woken`** is emitted once a wake has passed the pause and the ceiling
   and its turn is about to run, with the agent, the wake, and where it runs.
 - A turn that throws rejects, and still counts toward the hour. The count lives
@@ -500,9 +505,13 @@ It also sees what the call does and why the turn runs. `effect` is the tool's
 own declaration for these arguments (`read`, `write` or `irreversible`), read
 the way the loop's derivability check reads it, so a tool that declares nothing
 shows `read`. `effectDeclared` is `false` then, which lets a policy tell "says
-it only reads" from "says nothing". `wake` is set on a turn nobody asked for
-([above](#waking-an-agent-from-a-plugin)) and absent on one a person started.
-All three describe the call as it arrived, and changing them changes nothing.
+it only reads" from "says nothing". `wake` is set on turns started through
+[`runtime.wakeAgent`](#waking-an-agent-from-a-plugin) and on subscription
+turns, and on an agent either one delegates to or messages. Other turns nobody
+asked for (cron, schedules, room check-ins, autopilot, exploratory ticks,
+places' `tend`) don't set it yet, so a missing `wake` doesn't mean a person
+asked. All three describe the call as it arrived, and changing them changes
+nothing.
 
 What must stay authoritative *after* a human says yes does not belong here.
 Those ceilings live inside the tools — `exec`'s allowlist, the path boundary,

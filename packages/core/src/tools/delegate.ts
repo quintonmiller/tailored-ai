@@ -5,6 +5,7 @@ import { executeHooks } from "../agent/hooks.js";
 import { isStallStop, type LoopStop, runAgentLoop } from "../agent/loop.js";
 import { newSession } from "../agent/session.js";
 import { startTask, type TaskInfo } from "../agent/tasks.js";
+import type { Wake } from "../agent/wake.js";
 import type { AgentConfig } from "../config.js";
 import { ensureContextDir } from "../context.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -113,10 +114,13 @@ export class DelegateTool implements Tool {
       // tool set exactly its own `tools:` list, as before: this is a
       // confinement fix and should not hand a sub-agent `admin` or a second
       // `delegate` on the way past.
+      // A woken turn's work stays woken in the agent it hands it to, so a
+      // policy keyed on `wake` can't be stepped round by delegating.
       const base = this.runtime.buildLoopOptions({
         session,
         agentName,
         includeMetaTools: false,
+        ...(context.wake ? { wake: context.wake } : {}),
       });
 
       const response = await runAgentLoop(task, {
@@ -151,7 +155,7 @@ export class DelegateTool implements Tool {
       const info = startTask(
         task,
         runDelegate,
-        notifiable ? (done) => this.notifyDelegator(delegator as string, agentName, done) : undefined,
+        notifiable ? (done) => this.notifyDelegator(delegator as string, agentName, done, context.wake) : undefined,
       );
 
       // Say what actually happens next. This used to read "Background task
@@ -204,7 +208,7 @@ export class DelegateTool implements Tool {
    * delivery mechanism. Attributed to the agent that did the work, because the
    * result really is theirs.
    */
-  private async notifyDelegator(to: string, from: string, info: TaskInfo): Promise<void> {
+  private async notifyDelegator(to: string, from: string, info: TaskInfo, wake?: Wake): Promise<void> {
     const body =
       info.status === "completed"
         ? [
@@ -222,7 +226,7 @@ export class DelegateTool implements Tool {
             ``,
             `Error: ${info.error ?? "unknown"}`,
           ].join("\n");
-    await this.runtime.deliverAgentMessage(to, from, body, "delegate");
+    await this.runtime.deliverAgentMessage(to, from, body, "delegate", wake);
   }
 }
 
