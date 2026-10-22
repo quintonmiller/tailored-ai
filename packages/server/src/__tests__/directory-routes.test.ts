@@ -11,23 +11,50 @@ import {
   type AgentConfig,
   AgentRuntime,
   type AIProvider,
+  type ChatParams,
+  type ChatResponse,
   createPluginContext,
   initDatabase,
   type LoadedPlugin,
   loadPlugins,
   type StateCaller,
+  toolFactoryRegistry,
 } from "@tailored-ai/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../index.js";
+
+/** What the model answers, call by call; "ok" once the script runs out. Every call it gets is kept. */
+let script: ((params: ChatParams) => ChatResponse | Promise<ChatResponse>)[];
+let chats: ChatParams[];
 
 function fakeProvider(): AIProvider {
   return {
     id: "fake",
     name: "fake",
     supportsTools: true,
-    chat: async () => ({ content: "ok", usage: { input: 0, output: 0 }, finishReason: "stop" }),
+    chat: async (params: ChatParams) => {
+      chats.push(params);
+      const next = script.shift();
+      return next ? next(params) : { content: "ok", usage: { input: 0, output: 0 }, finishReason: "stop" };
+    },
   };
 }
+
+/** A model reply that calls one tool. */
+function calls(name: string, args: Record<string, unknown>): (params: ChatParams) => ChatResponse {
+  return () => ({
+    content: null,
+    toolCalls: [{ id: `call-${chats.length}`, name, arguments: args }],
+    usage: { input: 0, output: 0 },
+    finishReason: "tool_calls",
+  });
+}
+
+let pluginConfig: Record<string, unknown>;
+/** Tool rounds every agent is configured for. */
+let agentRounds: number;
+/** Agents beyond the two every test has. */
+let moreAgents: Record<string, unknown>;
 
 function buildConfig(authToken?: string): AgentConfig {
   return {
@@ -40,11 +67,12 @@ function buildConfig(authToken?: string): AgentConfig {
       maxHistoryTokens: 100,
       maxContextTokens: 4096,
       temperature: 0.3,
-      maxToolRounds: 1,
+      maxToolRounds: agentRounds,
     },
     agents: {
       planner: { description: "Plans the week." },
       "trip-planner": { description: "Plans trips." },
+      ...moreAgents,
     },
     cron: { enabled: false, jobs: [] },
     context: { directory: "./data/context", kbDirectory: "./data/kb" },
@@ -55,7 +83,7 @@ function buildConfig(authToken?: string): AgentConfig {
     custom_tools: {},
     commands: {},
     state: { backend: "sqlite" },
-    plugins: [{ module: "builtin:directory", enabled: true }],
+    plugins: [{ module: "builtin:directory", enabled: true, config: pluginConfig }],
   } as unknown as AgentConfig;
 }
 
@@ -75,7 +103,9 @@ async function start(authToken?: string) {
       db,
       contextDir: join(tmpDir, "context"),
       kbDir: join(tmpDir, "kb"),
-      createTools: () => [],
+      // The directory's tools, as the CLI's walk of the factory registry builds them once the plugin is loaded.
+      createTools: (config, _contextDir, _configPath, tctx) =>
+        ["directory", "commitment", "writeup"].flatMap((name) => toolFactoryRegistry.get(name)?.(config, tctx) ?? []),
       createProvider: () => ({ provider: fakeProvider(), model: "fake" }),
     },
     () => cfg,
@@ -86,6 +116,7 @@ async function start(authToken?: string) {
     context: createPluginContext({ runtime, events: runtime.events }),
   });
   expect(plugins.map((p) => [p.module, p.ok, p.shape])).toEqual([["builtin:directory", true, "register"]]);
+  runtime.syncToolFactories();
   const service = runtime.getStateService();
   await service.put(person, {
     type: "profile",
@@ -115,6 +146,11 @@ beforeEach(() => {
   process.env.HOME = tmpDir;
   db = initDatabase(":memory:");
   plugins = [];
+  script = [];
+  chats = [];
+  pluginConfig = {};
+  agentRounds = 1;
+  moreAgents = {};
 });
 
 afterEach(async () => {
@@ -218,5 +254,122 @@ describe("the directory routes", () => {
         body: JSON.stringify({ goal: "Sneak in" }),
       });
     expect((await app.fetch(handOver())).status).toBe(401);
+  });
+
+  describe("tidying up now", () => {
+    const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+    const upkeep = (name: string) =>
+      new Request(`http://t/api/ext/builtin:directory/agents/${name}/upkeep`, { method: "POST" });
+    type View = { running: boolean; at?: string; changed?: Record<string, number>; error?: string; every?: string };
+    async function view(app: { fetch: (r: Request) => Response | Promise<Response> }, name: string): Promise<View> {
+      const res = await app.fetch(new Request(`http://t/api/ext/builtin:directory/agents/${name}`));
+      return ((await res.json()) as { upkeep: View }).upkeep;
+    }
+    async function finished(app: { fetch: (r: Request) => Response | Promise<Response> }, name: string) {
+      for (let i = 0; i < 200; i++) {
+        const v = await view(app, name);
+        if (!v.running && (v.at || v.error)) return v;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error(`${name}'s upkeep never finished`);
+    }
+    async function finishedLongAgo() {
+      await runtime.getStateService().put(person, {
+        type: "commitment",
+        id: "trip-planner-transfer",
+        scope: "global",
+        data: {
+          owner: "trip-planner",
+          goal: "Airport transfer",
+          status: "done",
+          updates: [{ at: daysAgo(12), text: "Done." }],
+        },
+      });
+    }
+
+    it("runs the agent's upkeep at once, in its own session, and the page sees what it changed", async () => {
+      const app = await start();
+      await finishedLongAgo();
+      script = [calls("commitment", { action: "archive", id: "trip-planner-transfer", reason: "Long done." })];
+      expect(await view(app, "trip-planner")).toEqual({ running: false });
+
+      const res = await app.fetch(upkeep("trip-planner"));
+      expect(res.status).toBe(202);
+      expect(await res.json()).toEqual({ started: true });
+      const done = await finished(app, "trip-planner");
+      expect(done).toMatchObject({ running: false, changed: { archived: 1, reviewed: 0, updated: 0, closed: 0 } });
+      expect(done.error).toBeUndefined();
+
+      // The model got the evidence, counted, in the agent's upkeep session.
+      const first = chats[0].messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+      expect(first).toContain("Time to look after what you own");
+      expect(first).toContain('- trip-planner-transfer "Airport transfer": done 12 days ago and still not archived');
+      const archived = await runtime.getStateService().get(person, { type: "commitment", id: "trip-planner-transfer" });
+      expect(archived?.archivedAt).toBeTruthy();
+      const session = db.prepare("SELECT key FROM sessions WHERE key LIKE 'upkeep:%'").all() as { key: string }[];
+      expect(session).toEqual([{ key: "upkeep:trip-planner" }]);
+    });
+
+    it("keeps the turn to its budget of tool rounds, or the agent's own when that is fewer", async () => {
+      pluginConfig = { upkeep: { maxRounds: 2 } };
+      agentRounds = 10;
+      const app = await start();
+      await finishedLongAgo();
+      // A model that would list commitments forever.
+      script = Array.from({ length: 10 }, () => calls("commitment", { action: "list" }));
+      expect((await app.fetch(upkeep("trip-planner"))).status).toBe(202);
+      await finished(app, "trip-planner");
+      // Two rounds with tools; whatever the loop asks after that, it asks without them.
+      expect(chats.filter((c) => c.tools?.length).length).toBe(2);
+      const ran = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE role = 'tool'").get() as { n: number };
+      expect(ran.n).toBe(2);
+    });
+
+    it("gives an agent configured for fewer rounds no more than its own", async () => {
+      pluginConfig = { upkeep: { maxRounds: 4 } };
+      agentRounds = 1;
+      const app = await start();
+      await finishedLongAgo();
+      script = Array.from({ length: 10 }, () => calls("commitment", { action: "list" }));
+      expect((await app.fetch(upkeep("trip-planner"))).status).toBe(202);
+      await finished(app, "trip-planner");
+      expect(chats.filter((c) => c.tools?.length).length).toBe(1);
+    });
+
+    it("refuses while agents are paused, while it's already running, and for an agent with nothing to tidy with", async () => {
+      moreAgents = { writer: { description: "Writes things up.", tools: ["writeup"] } };
+      const app = await start();
+      runtime.setAgentsPaused({ paused: true, by: "test" });
+      const paused = await app.fetch(upkeep("trip-planner"));
+      expect(paused.status).toBe(409);
+      expect(await paused.json()).toEqual({ error: "trip-planner can't tidy up now: agents are paused." });
+      runtime.setAgentsPaused({ paused: false });
+
+      // A model that takes its time, so the second ask comes while the first runs.
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      script = [
+        async () => {
+          await gate;
+          return { content: "ok", usage: { input: 0, output: 0 }, finishReason: "stop" };
+        },
+      ];
+      expect((await app.fetch(upkeep("trip-planner"))).status).toBe(202);
+      await new Promise((r) => setTimeout(r, 20));
+      expect((await view(app, "trip-planner")).running).toBe(true);
+      const again = await app.fetch(upkeep("trip-planner"));
+      expect(again.status).toBe(409);
+      expect(await again.json()).toEqual({ error: "trip-planner is already tidying up." });
+      release();
+      await finished(app, "trip-planner");
+
+      expect((await app.fetch(upkeep("ghost"))).status).toBe(404);
+      const toolless = await app.fetch(upkeep("writer"));
+      expect(toolless.status).toBe(409);
+      expect(await toolless.json()).toEqual({ error: "writer has no commitment tool, so it has no upkeep to do." });
+      expect(await view(app, "writer")).toBeNull();
+    });
   });
 });

@@ -181,7 +181,16 @@ import {
   townSeats,
   type Visit,
 } from "./places-routines.js";
-import { everyWords, gatherDone, parseTend, quiet, Tender, tendMessage } from "./places-tend.js";
+import {
+  everyWords,
+  gatherDone,
+  parseTend,
+  quiet,
+  Tender,
+  tendMessage,
+  turnSession,
+  UPKEEP_KIND,
+} from "./places-tend.js";
 import { TOWN, TOWN_NAME, type Town, townPlace } from "./places-town.js";
 import {
   type Area,
@@ -4160,14 +4169,21 @@ const plugin: Plugin = (ctx) => {
       tend: async (agent, since) => {
         const rooms = talkRooms();
         const mine = rooms.filter((r) => r.members.includes(agent));
-        const key = `tend:${agent}`;
+        const key = turnSession("tend", agent);
         let tasks: ReturnType<AgentRuntime["getTaskBackend"]> | undefined;
         try {
           tasks = runtime.getTaskBackend();
         } catch {
           // No task backend to ask: the summary goes without tasks.
         }
-        const done = await gatherDone({ db: runtime.db, agent, since, rooms: mine, tasks, skip: key });
+        const done = await gatherDone({
+          db: runtime.db,
+          agent,
+          since,
+          rooms: mine,
+          tasks,
+          skip: [key, turnSession(UPKEEP_KIND, agent)],
+        });
         if (quiet(done)) return "quiet";
         const service = runtime.getStateService();
         const { place } = await readHome(service, PLUGIN_CALLER, agent, homes);

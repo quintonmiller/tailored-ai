@@ -22,9 +22,11 @@ import {
   DOC_TYPE,
   MISS_TYPE,
   missId,
+  ownedId,
   PAGE_TYPE,
   PROFILE_TYPE,
   parseProgress,
+  slug,
 } from "../plugins/directory-records.js";
 import { TURNED_OFF } from "../plugins/directory-tools.js";
 import { type LoadedPlugin, loadPlugins } from "../plugins.js";
@@ -389,12 +391,76 @@ describe("commitment", () => {
       goal: "Gift ideas",
       doneWhen: "One picked",
       private: true,
-      autonomy: "quiet",
     });
-    expect(out).toContain("(private, quiet)");
+    expect(out).toContain("(private, suggest)");
     expect((await record(COMMITMENT_TYPE, "planner-gift-ideas"))?.scope).toBe("agent:planner");
     const again = await run("planner", "commitment", { action: "open", goal: "Gift ideas", doneWhen: "Two picked" });
     expect(again).toContain("planner-gift-ideas-2");
+  });
+
+  it("cuts a long goal's id at a whole word, not inside one", () => {
+    expect(ownedId("planner", "Venue, catering and flowers for the wedding Nov 2026 logistics")).toBe(
+      "planner-venue-catering-and-flowers-for-the",
+    );
+    expect(slug("Plan the wedding logistics for November 2026")).toBe("plan-the-wedding-logistics-for-november");
+    // A word that ends right at the limit is whole; one word longer than the limit is all there is to cut.
+    expect(slug("abcde fghij klm", 11)).toBe("abcde-fghij");
+    expect(slug("supercalifragilistic expialidocious", 10)).toBe("supercalif");
+    expect(slug("Lisbon trip, Nov 12-16")).toBe("lisbon-trip-nov-12-16");
+  });
+
+  it("lets an agent ask first and no more: more autonomy is a person's to grant, and the agent is told so", async () => {
+    const opened = await run("planner", "commitment", {
+      action: "open",
+      goal: "Watch hotel prices",
+      doneWhen: "Booked",
+      autonomy: "tell",
+    });
+    expect(opened).toContain('Opened planner-watch-hotel-prices: "Watch hotel prices" (shared, suggest).');
+    expect(opened).toContain("Only a person can grant tell, on the State page or the agent page, so it's suggest.");
+    expect((await record(COMMITMENT_TYPE, "planner-watch-hotel-prices"))?.data.autonomy).toBe("suggest");
+
+    // Asking on its own changes nothing, and says what it has.
+    expect(
+      await refused("planner", "commitment", { action: "update", id: "planner-watch-hotel-prices", autonomy: "quiet" }),
+    ).toBe("Only a person can grant quiet, on the State page or the agent page, so it's suggest.");
+
+    // A person grants tell; the agent's other updates leave it, and asking for quiet keeps it.
+    const granted = await record(COMMITMENT_TYPE, "planner-watch-hotel-prices");
+    await service.patch(
+      PERSON,
+      { type: COMMITMENT_TYPE, id: "planner-watch-hotel-prices" },
+      { autonomy: "tell" },
+      granted?.version,
+    );
+    const asked = await run("planner", "commitment", {
+      action: "update",
+      id: "planner-watch-hotel-prices",
+      note: "Prices dipped.",
+      autonomy: "quiet",
+    });
+    expect(asked).toContain("Only a person can grant quiet, on the State page or the agent page, so it's tell.");
+    expect((await record(COMMITMENT_TYPE, "planner-watch-hotel-prices"))?.data.autonomy).toBe("tell");
+
+    // Asking for what it already has is no refusal, alone or with an update, and adds no update of its own.
+    const before = await record(COMMITMENT_TYPE, "planner-watch-hotel-prices");
+    expect(
+      await run("planner", "commitment", { action: "update", id: "planner-watch-hotel-prices", autonomy: "tell" }),
+    ).toBe("planner-watch-hotel-prices already has tell; nothing changed.");
+    expect((await record(COMMITMENT_TYPE, "planner-watch-hotel-prices"))?.version).toBe(before?.version);
+    const same = await run("planner", "commitment", {
+      action: "update",
+      id: "planner-watch-hotel-prices",
+      note: "Still dipping.",
+      autonomy: "tell",
+    });
+    expect(same).not.toContain("Only a person");
+
+    // It can always step back to asking first.
+    await run("planner", "commitment", { action: "update", id: "planner-watch-hotel-prices", autonomy: "suggest" });
+    const stepped = await record(COMMITMENT_TYPE, "planner-watch-hotel-prices");
+    expect(stepped?.data.autonomy).toBe("suggest");
+    expect((stepped?.data.updates as { text: string }[])[0].text).toBe("Asks first now.");
   });
 
   it("asks for what it needs", async () => {
@@ -1265,6 +1331,7 @@ describe("the page", () => {
     expect(page?.data).toEqual({
       owner: "planner",
       note: "I keep the week straight, so nothing lands on Friday by surprise.",
+      noteAt: expect.any(String),
       order: ["working", "waiting"],
       hide: ["docs"],
     });
@@ -1276,6 +1343,7 @@ describe("the page", () => {
     expect((await record(PAGE_TYPE, "planner"))?.data).toEqual({
       owner: "planner",
       note: "I keep the week straight, so nothing lands on Friday by surprise.",
+      noteAt: page?.data.noteAt,
       order: ["working", "waiting"],
     });
     const read = await run("planner", "directory", { action: "page" });
@@ -1308,6 +1376,7 @@ describe("the page", () => {
     expect((await record(PAGE_TYPE, "planner"))?.data).toEqual({
       owner: "planner",
       note: "Still mine.",
+      noteAt: expect.any(String),
       order: ["working"],
       hide: ["docs"],
     });
@@ -1485,6 +1554,18 @@ describe("handing an agent something", () => {
     );
   });
 
+  it("lets a person grant more autonomy than the agent can give itself, and refuses one that doesn't exist", async () => {
+    const res = await post(
+      "agents/:name/commitments",
+      { name: "planner" },
+      { goal: "Rebook flights", autonomy: "tell" },
+    );
+    expect(res.status).toBe(201);
+    expect((await record(COMMITMENT_TYPE, "planner-rebook-flights"))?.data.autonomy).toBe("tell");
+    const bad = await post("agents/:name/commitments", { name: "planner" }, { goal: "Rebook", autonomy: "always" });
+    expect(bad).toMatchObject({ status: 400, json: { error: "autonomy is one of: suggest, tell, quiet." } });
+  });
+
   it("says the block is off when it is, for an agent that has the tool", async () => {
     await unload(loaded[0]);
     await load({ pin: false });
@@ -1513,6 +1594,7 @@ describe("handing an agent something", () => {
       "GET agents",
       "GET agents/:name",
       "POST agents/:name/commitments",
+      "POST agents/:name/upkeep",
     ]);
     await unload(loaded[0]);
     for (const r of mounted) {

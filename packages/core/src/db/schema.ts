@@ -855,6 +855,17 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Safe migration: when recall last surfaced a note. `ref_count` says how
+  // often, never when, so a note recalled twice in its first week and never
+  // again looked as used as one recalled yesterday. NULL on every older row:
+  // readers fall back to `created_at` for a note never recalled, and leave
+  // alone one recalled before this column existed.
+  try {
+    db.exec("ALTER TABLE notes ADD COLUMN recalled_at TEXT");
+  } catch {
+    // Column already exists
+  }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_notes_archival
       ON notes(archival, created_at);

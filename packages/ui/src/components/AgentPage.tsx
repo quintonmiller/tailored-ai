@@ -1,5 +1,22 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type DirectoryAgent, fetchDirectoryAgent, handToAgent, type StateRecordInfo } from "../api";
+import {
+  type FormEvent,
+  type ReactElement,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  type DirectoryAgent,
+  type DirectoryUpkeep,
+  fetchDirectoryAgent,
+  handToAgent,
+  patchStateRecord,
+  runUpkeep,
+  type StateRecordInfo,
+} from "../api";
 import {
   AUTONOMY,
   ago,
@@ -13,13 +30,17 @@ import {
   progressOf,
   recentMisses,
   updatesOf,
+  upkeepChanges,
 } from "../lib/agent-page";
 import { renderMarkdown } from "../lib/markdown";
 import { subscribeStateChanges } from "../lib/state-events";
 import { Progress, QueryList } from "./InterfaceComponents";
 
 /** The record types an agent's page is drawn from: a change to any of them that is this agent's redraws it. */
-const PAGE_TYPES = new Set(["profile", "commitment", "doc", "miss", "page"]);
+const PAGE_TYPES = new Set(["profile", "commitment", "doc", "miss", "page", "upkeep"]);
+
+/** How often the page reads itself again while the agent is tidying up, in case the state stream misses the end. */
+const UPKEEP_POLL_MS = 2_000;
 
 /** How long to gather a burst of changes before reading the page again. */
 const SETTLE_MS = 120;
@@ -92,11 +113,19 @@ export function AgentPage({ name, description }: { name: string; description?: s
     };
   }, [name, load]);
 
+  // While it tidies up, read the page now and then too, so the end shows even when the stream drops it.
+  const tidying = !!agent?.upkeep?.running;
+  useEffect(() => {
+    if (!tidying) return;
+    const timer = setInterval(load, UPKEEP_POLL_MS);
+    return () => clearInterval(timer);
+  }, [tidying, load]);
+
   if (error && agent === undefined)
     return <div className="agent-section agent-empty">Couldn't load the page: {error}</div>;
   if (agent === undefined) return <div className="agent-section agent-loading">Loading…</div>;
   if (agent === null) return <DirectoryOff description={description} />;
-  return <PageBody agent={agent} />;
+  return <PageBody agent={agent} reload={load} />;
 }
 
 /** What a page shows with the directory off: the configured description, and how to turn it on. */
@@ -117,7 +146,7 @@ export function DirectoryOff({ description }: { description?: string }) {
   );
 }
 
-function PageBody({ agent }: { agent: DirectoryAgent }) {
+function PageBody({ agent, reload }: { agent: DirectoryAgent; reload: () => void }) {
   const now = useNow();
   const page = agent.page?.data;
   const extra = new Map(pageSections(page).map((s) => [s.id, s]));
@@ -147,7 +176,7 @@ function PageBody({ agent }: { agent: DirectoryAgent }) {
             ) : (
               <ul className="agent-page-list">
                 {groups.working.map((r) => (
-                  <Working key={r.id} record={r} agent={agent.name} now={now} />
+                  <Working key={r.id} record={r} agent={agent.name} now={now} reload={reload} />
                 ))}
               </ul>
             )}
@@ -207,6 +236,7 @@ function PageBody({ agent }: { agent: DirectoryAgent }) {
 
   return (
     <div className="agent-page">
+      {agent.upkeep && <Upkeep agent={agent.name} upkeep={agent.upkeep} now={now} reload={reload} />}
       {order.map(section)}
       <HandOver agent={agent.name} example={list(agent.profile?.data.takesOn)[0]} />
     </div>
@@ -310,17 +340,73 @@ function Goal({ record, agent }: { record: StateRecordInfo; agent: string }) {
   );
 }
 
-/** A line of small facts, broken between them rather than inside one. */
-function Meta({ parts }: { parts: string[] }) {
+/** A line of small facts, broken between them rather than inside one. A fact may be a control, like a select. */
+function Meta({ parts }: { parts: (string | ReactElement)[] }) {
   return (
     <div className="agent-page-meta">
       {parts.map((p, i) => (
-        <span key={p}>
+        <span key={typeof p === "string" ? p : `control-${i}`}>
           {i > 0 && " · "}
           <span className="agent-page-nowrap">{p}</span>
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * How much the agent may do on its own about a commitment, which a person can
+ * change here: the agent can only ask first, so more is yours to grant. The
+ * pick shows at once and holds until the record comes back changed; a
+ * refusal goes to `onError`, said under the line rather than inside it.
+ */
+function AutonomyPick({
+  record,
+  reload,
+  onError,
+}: {
+  record: StateRecordInfo;
+  reload: () => void;
+  onError: (error: string | null) => void;
+}) {
+  const [pending, setPending] = useState<string | null>(null);
+  const current = text(record.data.autonomy) ?? "suggest";
+  // A new version is the record as saved, whoever saved it: it speaks for itself again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new version clears the pick.
+  useEffect(() => setPending(null), [record.version]);
+  async function change(next: string) {
+    setPending(next);
+    onError(null);
+    try {
+      await patchStateRecord(record.type, record.id, { autonomy: next }, record.version);
+      // Read again rather than wait on the stream, which may miss it.
+      reload();
+    } catch (err) {
+      setPending(null);
+      onError(
+        (err as { status?: number }).status === 409
+          ? "This changed while you were looking. Pick again."
+          : (err as Error).message,
+      );
+    }
+  }
+  const shown = pending ?? current;
+  return (
+    <span className="agent-page-autonomy">
+      <select
+        aria-label={`What it may do on its own about “${text(record.data.goal) ?? record.id}”`}
+        title="It can only ask first; acting on its own is yours to grant."
+        value={shown}
+        onChange={(e) => change(e.target.value)}
+      >
+        {Object.entries(AUTONOMY).map(([value, words]) => (
+          <option key={value} value={value}>
+            {words}
+          </option>
+        ))}
+        {!(shown in AUTONOMY) && <option value={shown}>{shown}</option>}
+      </select>
+    </span>
   );
 }
 
@@ -345,15 +431,26 @@ function Updates({ record }: { record: StateRecordInfo }) {
   );
 }
 
-function Working({ record, agent, now }: { record: StateRecordInfo; agent: string; now: Date }) {
+function Working({
+  record,
+  agent,
+  now,
+  reload,
+}: {
+  record: StateRecordInfo;
+  agent: string;
+  now: Date;
+  reload: () => void;
+}) {
   const d = record.data;
   const progress = progressOf(d.progress);
+  const [error, setError] = useState<string | null>(null);
   const meta = [
     text(d.nextCheck) && `check ${text(d.nextCheck)}`,
-    text(d.autonomy) && (AUTONOMY[text(d.autonomy) as string] ?? text(d.autonomy)),
+    <AutonomyPick key="autonomy" record={record} reload={reload} onError={setError} />,
     text(d.from) && `from ${text(d.from)}`,
     `updated ${ago(lastMoved(record), now)}`,
-  ].filter(Boolean);
+  ].filter((p): p is string | ReactElement => !!p);
   return (
     <li className="agent-page-item">
       <Goal record={record} agent={agent} />
@@ -377,7 +474,12 @@ function Working({ record, agent, now }: { record: StateRecordInfo; agent: strin
             <Progress props={{ label: "", value: progress.value, max: progress.max }} />
           </div>
         ))}
-      <Meta parts={meta as string[]} />
+      <Meta parts={meta} />
+      {error && (
+        <p className="agent-page-error agent-page-item-error" role="alert">
+          {error}
+        </p>
+      )}
       <Updates record={record} />
     </li>
   );
@@ -516,6 +618,7 @@ const NOT_IN_PROMPT: Record<string, string> = {
 function HandOver({ agent, example }: { agent: string; example?: string }) {
   const [goal, setGoal] = useState("");
   const [doneWhen, setDoneWhen] = useState("");
+  const [autonomy, setAutonomy] = useState("suggest");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [handed, setHanded] = useState<{ goal: string; inPrompt: boolean; why?: string } | null>(null);
@@ -529,6 +632,7 @@ function HandOver({ agent, example }: { agent: string; example?: string }) {
       const res = await handToAgent(agent, {
         goal: goal.trim(),
         ...(doneWhen.trim() ? { doneWhen: doneWhen.trim() } : {}),
+        ...(autonomy !== "suggest" ? { autonomy } : {}),
       });
       setHanded({ goal: goal.trim(), inPrompt: res.inPrompt, why: res.why });
       setGoal("");
@@ -564,6 +668,16 @@ function HandOver({ agent, example }: { agent: string; example?: string }) {
             onChange={(e) => setDoneWhen(e.target.value)}
           />
         </label>
+        <label>
+          <span>On its own, it</span>
+          <select value={autonomy} onChange={(e) => setAutonomy(e.target.value)}>
+            {Object.entries(AUTONOMY).map(([value, words]) => (
+              <option key={value} value={value}>
+                {words}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="submit" className="primary" disabled={!goal.trim() || busy}>
           {busy ? "Handing over…" : "Hand it over"}
         </button>
@@ -576,6 +690,108 @@ function HandOver({ agent, example }: { agent: string; example?: string }) {
             : ((handed.why && NOT_IN_PROMPT[handed.why]) ?? "It won't see this in its prompt on its own.")}
         </output>
       )}
+      {error && (
+        <p className="agent-page-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The agent's upkeep, in a line: when it last looked after what it owns and
+ * what that changed, counted from its records' history, or that it is doing
+ * so now. "Tidy up now" asks for a turn at once.
+ */
+function Upkeep({
+  agent,
+  upkeep,
+  now,
+  reload,
+}: {
+  agent: string;
+  upkeep: DirectoryUpkeep;
+  now: Date;
+  reload: () => void;
+}) {
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Set when a turn this page saw running has finished, so the line says it just did.
+  const [finished, setFinished] = useState(false);
+  const wasRunning = useRef(upkeep.running);
+  useEffect(() => {
+    if (wasRunning.current && !upkeep.running) setFinished(true);
+    wasRunning.current = upkeep.running;
+    // An upkeep under way is news past an earlier refusal, which would otherwise sit under it.
+    if (upkeep.running) setError(null);
+  }, [upkeep.running]);
+  // So is one that finished, the scheduled kind included.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new finish time is the trigger.
+  useEffect(() => setError(null), [upkeep.at]);
+
+  const running = upkeep.running || asking;
+  const changes = upkeepChanges(upkeep.changed);
+
+  async function tidy() {
+    setAsking(true);
+    setError(null);
+    setFinished(false);
+    try {
+      await runUpkeep(agent);
+      wasRunning.current = true;
+      reload();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  const last = upkeep.at && (
+    <>
+      {finished && (
+        <span className="agent-page-done" aria-hidden="true">
+          ✓{" "}
+        </span>
+      )}
+      {finished ? "Tidied up" : "Last upkeep"} {ago(upkeep.at, now)}
+      {changes ? `: ${changes}` : ""}.
+    </>
+  );
+  let status: ReactNode;
+  if (running) {
+    status = (
+      <span>
+        <span className="agent-now-pulse" aria-hidden="true" />
+        Tidying up: going over its commitments, docs, page and notes…
+      </span>
+    );
+  } else if (upkeep.error) {
+    // When it failed and why, with the last good one after it, so an old failure reads as old.
+    status = (
+      <>
+        <span className="agent-page-upkeep-failed" title={upkeep.error}>
+          Couldn't tidy up{upkeep.failedAt ? ` ${ago(upkeep.failedAt, now)}` : ""}: {upkeep.error}
+        </span>
+        {last && <span>{last}</span>}
+      </>
+    );
+  } else if (last) {
+    status = <span>{last}</span>;
+  } else {
+    status = <span>No upkeep yet.</span>;
+  }
+
+  return (
+    <section className="agent-section agent-page-upkeep" aria-label="Upkeep">
+      <output className="agent-page-upkeep-status" aria-live="polite">
+        {status}
+        {upkeep.every && !running && <span className="agent-page-upkeep-every">Comes round every {upkeep.every}.</span>}
+      </output>
+      <button type="button" onClick={tidy} disabled={running}>
+        {running ? "Tidying up…" : "Tidy up now"}
+      </button>
       {error && (
         <p className="agent-page-error" role="alert">
           {error}

@@ -111,6 +111,19 @@ export const AUTONOMY: Record<string, string> = {
   quiet: "acts quietly",
 };
 
+const UPKEEP_KINDS = ["archived", "reviewed", "updated", "closed"] as const;
+type UpkeepKind = (typeof UPKEEP_KINDS)[number];
+
+/**
+ * What an upkeep turn changed, in a few words: "archived 2, reviewed 1", or
+ * "changed nothing". Undefined when nothing was counted.
+ */
+export function upkeepChanges(changed: Partial<Record<UpkeepKind, number>> | undefined): string | undefined {
+  if (!changed) return undefined;
+  const parts = UPKEEP_KINDS.filter((k) => (changed[k] ?? 0) > 0).map((k) => `${k} ${changed[k]}`);
+  return parts.length ? parts.join(", ") : "changed nothing";
+}
+
 /** "just now", "5m ago", "3h ago", "2d ago". */
 export function ago(iso: string | undefined, now = new Date()): string {
   if (!iso) return "";

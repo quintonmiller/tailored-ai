@@ -83,9 +83,7 @@ export async function buildMemoryBlockWithMeta(
   opts: MemoryInjectOptions,
 ): Promise<MemoryInjectResult> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
-  const budget = opts.budgetTokens ?? DEFAULT_BUDGET;
-  const pinnedBudget = Math.min(opts.pinnedBudgetTokens ?? DEFAULT_PINNED_BUDGET, Math.floor(budget / 2));
-  const pinnedLimit = opts.pinnedLimit ?? DEFAULT_PINNED_LIMIT;
+  const { budget, pinnedBudget, pinnedLimit } = pinnedCaps(opts);
 
   // Pinned tier — separate call so we get the full pinned set
   // regardless of relevance to the user message. `freeText` left empty
@@ -129,6 +127,35 @@ export async function buildMemoryBlockWithMeta(
     total: hits.length,
     pinned: pinnedSection.included,
   };
+}
+
+type Caps = Pick<MemoryInjectOptions, "budgetTokens" | "pinnedBudgetTokens" | "pinnedLimit">;
+
+/** The block's token budget, and the pinned section's: its tokens, never more than half the block's, and its notes. */
+function pinnedCaps(opts: Caps): { budget: number; pinnedBudget: number; pinnedLimit: number } {
+  const budget = opts.budgetTokens ?? DEFAULT_BUDGET;
+  return {
+    budget,
+    pinnedBudget: Math.min(opts.pinnedBudgetTokens ?? DEFAULT_PINNED_BUDGET, Math.floor(budget / 2)),
+    pinnedLimit: opts.pinnedLimit ?? DEFAULT_PINNED_LIMIT,
+  };
+}
+
+/**
+ * What of the pinned notes a backend surfaces (in its order, as an
+ * `includePrelude` query returns them) loads on every turn, under the same
+ * caps the injection applies: the notes that fit, and the characters they
+ * take. A pinned note that doesn't fit never loads. For a caller that wants
+ * the real cost of what's pinned rather than the sum of every pinned note.
+ */
+export function pinnedLoad(fragments: MemoryFragment[], opts: Caps = {}): { included: PinnedHit[]; charsUsed: number } {
+  const { pinnedBudget, pinnedLimit } = pinnedCaps(opts);
+  const { included, charsUsed } = renderPinned(
+    fragments.filter((f) => f.metadata?.pinned === true),
+    pinnedBudget,
+    pinnedLimit,
+  );
+  return { included, charsUsed };
 }
 
 function renderPinned(

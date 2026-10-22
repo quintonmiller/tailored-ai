@@ -5,11 +5,12 @@ things up for each other. Other agents ask about any of it with one tool. It
 all lives in [world state](./world-state.md), so people see and edit the same
 records on the State page.
 
-This is steps 2 and 3 of [ownership and upkeep](./ownership-design.md). What
+This is steps 2 to 4 of [ownership and upkeep](./ownership-design.md). What
 works today: the records, the three tools, the similar-work check, misses, a
-"Your commitments" block in the prompt, and a page for every agent in the web
-UI that the agent arranges and you can hand work through. Nothing acts on a
-commitment by itself yet; see [Not yet](#not-yet).
+"Your commitments" block in the prompt, a page for every agent in the web UI
+that the agent arranges and you can hand work through, and an
+[upkeep turn](#upkeep) in which an agent looks after what it owns. Nothing
+acts on a commitment by itself yet; see [Not yet](#not-yet).
 
 ## Turn it on
 
@@ -24,9 +25,13 @@ plugins:
       pin: true         # the "Your commitments" block; false leaves it out
       minMeaning: 0.5   # how close a search hit by meaning must be, 0 to 1
       minWords: 0.3     # how close a search hit by words must be, 0 to 1
+      upkeep:           # off unless set; see Upkeep
+        every: 24h
+        agents: all
 ```
 
-Every key under `config` is optional; the values above are the defaults.
+Every key under `config` is optional; the values above are the defaults,
+except `upkeep`, which is off until you set it.
 
 Turning it on adds three tools, `directory`, `commitment` and `writeup`. It
 can add a fourth: `state` is offered once any world-state type exists, so on
@@ -36,14 +41,14 @@ it. An agent with no `tools:` list gets all of them. An agent with a list gets
 the ones it names, so a reader that should only look things up might take
 `[directory, writeup]`, and one that shouldn't have `state` leaves it out.
 
-**Changing it while TAI runs.** A config reload picks up `pin` and the two
-bars at once, and turning the directory on or off by reload adds or removes
+**Changing it while TAI runs.** A config reload picks up `pin`, the two
+bars and `upkeep` at once, and turning the directory on or off by reload adds or removes
 its tools, types, prompt block and routes straight away. A call already
 running when it is turned off answers that the directory is turned off, and
 the agent pages show the [fallback](#with-the-directory-off).
 
 **A type of the same name in your config wins.** If `state.types` declares a
-`profile`, `commitment`, `doc`, `miss` or `page`, that declaration replaces
+`profile`, `commitment`, `doc`, `miss`, `page` or `upkeep`, that declaration replaces
 the directory's, and the directory warns at load. Its `access` then decides who
 can write, so agents may change each other's records through `state`, and a
 kind it declares without `search` can't be searched: `directory search` says
@@ -55,7 +60,7 @@ searches match by meaning. Without them they match words. See
 
 ## The records
 
-Five world-state types, declared by the plugin:
+Six world-state types, declared by the plugin:
 
 | Type | Id | Where it lives | Holds |
 |---|---|---|---|
@@ -63,11 +68,13 @@ Five world-state types, declared by the plugin:
 | `commitment` | `<owner>-<slug>` | `global`, or `agent:<owner>` when private | `owner`, `goal`, `doneWhen`, `status` (`open`, `waiting`, `done`, `dropped`), `nextStep`, `nextCheck`, `autonomy` (`suggest`, `tell`, `quiet`), `progress`, `updates`, `waitingOn`, `from` |
 | `doc` | `<owner>-<slug>` | `global` | `owner`, `title`, `summary`, `body`, `tags`, `reviewedAt` |
 | `miss` | `miss-<day>-<hash>` | `agent:<owner>` | `owner`, `query`, `askedBy`, `at`, `closest` |
-| `page` | the agent's name | `global` | `owner`, `note`, `order`, `hide`, `extra` (see [Pages](#pages)) |
+| `page` | the agent's name | `global` | `owner`, `note`, `noteAt`, `order`, `hide`, `extra` (see [Pages](#pages)) |
+| `upkeep` | the agent's name | `agent:<owner>` | `owner`, `at`, `started`, `changed`, `fingerprint`, `error`, `failedAt`, `reads`, `readsAtLast` (see [Upkeep](#upkeep)) |
 
 - **Agents change only their own,** and only through the tools. They can read
-  all five through `state`, but its writes are refused: `access.write` is
-  people only.
+  all six through `state`, but its writes are refused: `access.write` is
+  people only. An `upkeep` record is the directory's own: no tool writes it
+  for its agent.
 - **People can edit anything** on the State page or through
   `/api/state/...`, including reassigning an `owner`.
 - **Every write says where it came from.** A tool's write is recorded as
@@ -84,6 +91,12 @@ Five world-state types, declared by the plugin:
 - **Archived** records drop out of `about`, lists, search and the prompt
   block, as everywhere in world state. A person brings one back from the State
   page.
+- **Ids are cut at a whole word.** A commitment's or a doc's id is
+  `<owner>-` and its title in lowercase words, at most 40 characters of title,
+  cut after the last word that fits: "Venue, catering and flowers for the
+  wedding Nov 2026 logistics" is `planner-venue-catering-and-flowers-for-the`.
+  Only a single word longer than that is cut inside it. Ids made before this
+  are left as they are.
 
 ## Asking about agents: `directory`
 
@@ -149,9 +162,23 @@ commitment(action: "open", goal: "Lisbon trip planning for November", doneWhen: 
 | `archive` | `id`, `reason`? | puts it away |
 | `list` | `agent`?, `status`? (`open`, `waiting`, `done`, `dropped` or `all`) | yours by default, open and waiting |
 
-`autonomy` is recorded for the pieces still to come; nothing acts on it yet.
-An agent sets it when it opens a commitment and can't raise it afterwards.
-A person can.
+`autonomy` says how much the agent may do about a commitment without asking:
+`suggest` asks first, `tell` acts on what's reversible and reports, `quiet`
+acts and logs. Nothing acts on it yet; it's recorded for the pieces still to
+come. **An agent can set `suggest` and nothing more.** `tell` and `quiet` are
+a person's to grant: on the State page, in the hand-over form on the agent's
+page, or on a commitment in its Working on list. An agent that asks for more,
+opening a commitment or updating one, gets one plain sentence back:
+
+```
+Opened planner-watch-hotel-prices: "Watch hotel prices" (shared, suggest).
+Only a person can grant tell, on the State page or the agent page, so it's suggest.
+```
+
+The rest of the call goes through. An agent can always step back to
+`suggest` with `update`, and asking for the autonomy a commitment already has
+changes nothing and isn't refused. Commitments an agent opened with `tell` or
+`quiet` before this are left as they are.
 
 ## What an agent writes up: `writeup`
 
@@ -160,7 +187,7 @@ A person can.
 | `write` | `title`, `summary`, `body`, `tags`? | creates a doc, reviewed today, and names up to two similar docs of other agents |
 | `update` | `id`, any of `title`, `summary`, `body`, `tags` | changes it and marks it reviewed: rewriting it is checking it |
 | `review` | `id` | marks it checked and still true today |
-| `read` | `id` | the whole doc, anyone's |
+| `read` | `id` | the whole doc, anyone's. Another agent's read is counted for the doc's owner (see [Upkeep](#upkeep)) |
 | `list` | `agent`? | yours by default |
 | `archive` | `id`, `reason`? | puts it away |
 
@@ -214,8 +241,8 @@ Looked for in your area lately, with no doc or commitment to find:
   agent could read itself: shared ones, or its own. The asker's private work,
   or a record in a room the agent isn't in, is never written into it.
 
-Nothing reads misses on its own yet. They're the evidence the upkeep turn
-(step 4) will start from.
+An agent's [upkeep turn](#upkeep) reads the misses in its area since its last
+upkeep, as a reason to write the doc that was missing.
 
 ## The prompt block
 
@@ -274,9 +301,10 @@ order:
 | Questions nobody could answer | `misses` | Misses in its area from the last two weeks. Left out when there are none |
 
 Under them, **Hand it something** takes a goal and, if you like, how you'll
-know it's done. It opens a commitment the agent owns, shared, `from: "a
-person"`, written as you, with "Handed over by a person on this page." as its
-first update. The agent sees it in its "Your commitments" block on its next
+know it's done and what it may do on its own: asks first (the default), acts
+then tells you, or acts quietly. It opens a commitment the agent owns, shared,
+`from: "a person"`, written as you, with "Handed over by a person on this
+page." as its first update. The agent sees it in its "Your commitments" block on its next
 turn; when it can't (it has no `commitment` tool, or `pin` is off), the page
 says which. A name that only has a profile left, an agent since removed, can't
 be handed anything.
@@ -284,6 +312,21 @@ be handed anything.
 A page with nothing open, waiting, finished or written up, as every agent's is
 right after you turn the directory on, says so in one line instead of four
 empty sections, so the form sits near the top.
+
+Each commitment in **Working on** shows what it may do on its own as a small
+choice you can change in place. That's how you grant `tell` or `quiet` on work
+the agent already has.
+
+Over the sections, an agent that has the `commitment` tool gets one line about
+its [upkeep](#upkeep): "Last upkeep 3h ago: archived 2, reviewed 1, closed
+1." (counted from its records' history, never from what it said), "No upkeep
+yet.", or, when the last one failed, when and why ("Couldn't tidy up 2h ago:
+…", with the last good one after it), and how often it comes round when it's
+scheduled. **Tidy up now** starts a turn at once. While it runs the line says
+"Tidying up: going over its commitments, docs, page and notes…"; when it
+finishes, "Tidied up just now: …" with what changed. If it can't run now,
+because agents are paused or another turn is running, the line says so until
+the next upkeep starts or finishes.
 
 The page changes as the records do, from the same stream the State page
 reads: an update the agent posts, a doc it reviews, something you hand it.
@@ -353,6 +396,126 @@ The page shows the configured description, a line on how to turn the
 directory on, and the settings below it, as the Agents page did before. The
 Agents list shows configured descriptions without counts.
 
+## Upkeep
+
+Now and then, an agent looks after what it owns. Upkeep counts what needs a
+look across its commitments, docs, page and notes, and gives the agent one
+message with that evidence and an invitation to tidy with the tools it
+already has. It's built from the places plugin's
+[tend turn](./live-sessions.md#rooms-that-follow-the-work), and runs on the
+same timing.
+
+```yaml
+plugins:
+  - module: builtin:directory
+    enabled: true
+    config:
+      upkeep:
+        every: 24h            # at least a minute
+        agents: all           # every agent with the commitment tool, or a list: [planner, writer]
+        maxRounds: 6          # rounds of tool calls a turn may take, 1 to 20
+        memoryBudget: 1500    # tokens pinned notes and core memory should keep under
+        waitingDays: 7
+        quietDays: 14
+        archiveAfterDays: 7
+        reviewDays: 30
+        recallDays: 30
+        expiringDays: 3
+```
+
+`every` and `agents` turn the schedule on; without them nothing runs by
+itself, and the bars still apply to a turn you start from the agent's page.
+The values above are the defaults. A value it can't use is said once in the
+log and replaced by its default.
+
+**When.** Each agent's turn comes round once every `every`, at a time its name
+sets, so many agents aren't woken together; an agent's tend and its upkeep fall
+at different times. One turn runs at a time, tends and upkeep alike, and one
+you start from the page waits for no other: while any turn is running it's
+refused, so a model server that serves one request at a time is never asked
+for two. A turn that comes round while agents are paused, or while an online
+agent is switched off or paused, is skipped and not saved up. A tend leaves
+what an upkeep turn did out of what the agent did: tidying its commitments
+isn't news for its room.
+
+**What it counts.** Each kind only when the agent has the tool to act on it:
+commitments with `commitment`, docs with `writeup`, the page with
+`directory`, notes with `recall`.
+
+| Evidence | Counts when | Default |
+|---|---|---|
+| Next check passed | an open or waiting commitment's `nextCheck` reads as a date (an ISO date like "2026-10-25", or a month named with its day and year, like "Oct 25, 2026" or "25 October 2026") and it has come. "Friday", "end of 2026" or "when the hotel replies" count for nothing | |
+| Waiting too long | waiting for `waitingDays` or more, since its history says it started waiting | 7 days |
+| No update | open or waiting, with no update for `quietDays` or more | 14 days |
+| Finished, not archived | done or dropped `archiveAfterDays` or more ago, and still not archived | 7 days |
+| Doc not reviewed | `reviewedAt` (or, never reviewed, when it was written) `reviewDays` or more ago | 30 days |
+| Doc read by others | other agents read it with `writeup read` since the last upkeep | |
+| Misses | searches in its area that found nothing, since the last upkeep (two weeks, the first time) | |
+| Page note | it has none, or it was written before its newest work: a commitment or doc it took on or wrote, or a commitment it finished | |
+| Note not recalled | one of its own live notes not recalled for `recallDays` or more, or never recalled and written that long ago. Pinned and kept notes are left out, pinned meaning however the memory store pins (a `pinned` tag, or high importance in the built-in store) | 30 days |
+| Same note twice | pairs of its notes whose words mostly overlap, or, with an embedder, whose meanings are nearly the same. An embedder that doesn't answer within 30 seconds is left for words alone | |
+| Note expiring | one of its notes expires within `expiringDays`, and isn't kept | 3 days |
+| Loaded every turn | what loads on every turn comes to more than `memoryBudget` tokens: its core memory, and the pinned notes that fit in the prompt's pinned section (four at most, about 200 tokens) | 1,500 |
+| Pinned, never loaded | pinned notes beyond what fits in that section, which never load at all | |
+
+A read counts only when another agent reads the doc. The owner reading its
+own doesn't, and the count is kept in the owner's `upkeep` record, which only
+the directory writes, so an agent can't add to its own.
+
+A note "not recalled" uses when recall last surfaced it. Notes have kept that
+since this release; a note recalled before then and never since has no time
+to go by, so it's left out rather than guessed at.
+
+**The message** goes to the agent's own `upkeep:<agent>` session:
+
+```
+Time to look after what you own. Counted from your records since your last upkeep on 2026-10-14:
+
+Your commitments
+- planner-venue "Book the venue": waiting on the caterer for 9 days
+- planner-cake-tasting "Cake tasting": done 10 days ago and still not archived
+
+Your docs
+- planner-guest-list "Guest list": not reviewed in 45 days; read 3 times by other agents since your last upkeep, lately by writer and assistant
+- Looked for in your area, with no doc or commitment to find: "seating chart rules", asked by writer
+
+Your page
+- Your page has no note for people.
+
+Tidy what needs it with the tools you have: commitment to post an update, finish, drop or archive one; writeup to review or update a doc, or write one that's missing; directory with action page to rewrite your page note; recall to keep a note or archive it. Retiring something means archiving it: nothing is deleted, and a person can bring it back. You have up to 6 rounds of tool calls for this. Leave what's in order as it is.
+Nobody reads a reply here; what you change is what people see.
+```
+
+Each section shows eight lines at most, then a count of the rest.
+
+**Rules.**
+
+- **Skipped when nothing is new.** When a turn ends, upkeep counts the
+  evidence again and keeps a fingerprint of it: which records, under which
+  rules, never how many days. A scheduled turn whose evidence is the same,
+  or less, or none at all doesn't wake the agent. Something new (a commitment
+  going quiet, a new read, a miss) wakes it. What cleared is dropped from the
+  fingerprint, so if it comes back it counts as new. Pairs of notes found by
+  meaning stay in it while the embedder isn't answering, so it answering
+  again wakes nobody for a pair already seen.
+- **A budget of rounds.** The turn takes at most `maxRounds` rounds of tool
+  calls, or the agent's own `maxToolRounds` when that is fewer.
+- **Retiring means archiving.** The message says so, and nothing upkeep
+  invites deletes anything.
+- **What changed is counted from history.** The tools' writes in an upkeep
+  turn are recorded with the surface `upkeep`. When the turn ends, upkeep reads
+  the history of the agent's commitments, docs, page and profile for those
+  writes and counts them: archived, reviewed (a doc whose only change was
+  `reviewedAt`), closed (a commitment that became done or dropped), and
+  updated (anything else), plus the notes it archived. What the agent says it
+  did doesn't count. A store that keeps no history leaves the counts out.
+- **A turn that fails**, anywhere from reading the evidence to the model's
+  answer, keeps why and when, shown on the page, and leaves the fingerprint as
+  it was, so the next one tries again. A memory store that can't be read only
+  leaves the notes out.
+- **An `upkeep` record a person archives** is written live again on the next
+  turn or counted read, with what it held, so archiving it never stops upkeep.
+
 ## HTTP
 
 Behind the usual bearer auth, as a person: every scope.
@@ -360,8 +523,9 @@ Behind the usual bearer auth, as a person: every scope.
 | Route | Returns |
 |---|---|
 | `GET /api/ext/builtin:directory/agents` | `{ agents: [{ name, profile, description?, commitments: { open, waiting, done }, docs }] }`: every agent (the agent registry and `config.agents`, as Discord counts them) and anyone with a profile. `profile` is the profile's data or `null`; `description` is the configured one |
-| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses }`: the profile and page records or `null`, and lists of full records, private ones included. `404` for a name that is neither an agent nor a profile |
-| `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen? }`. `201` with `{ commitment, inPrompt, why? }`, where `inPrompt` says whether the agent will see it in its prompt block and, when it won't, `why` is `"tool"` (no `commitment` tool) or `"pin"` (the block is off). `400` without a goal, or one longer than 300 characters. `404` for a name that is no agent, including one that only has a profile left |
+| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses, upkeep }`: the profile and page records or `null`, and lists of full records, private ones included. `upkeep` is `{ running, at?, changed?, error?, failedAt?, every? }`, or `null` for an agent upkeep can't run for (no `commitment` tool, or only a profile left). `404` for a name that is neither an agent nor a profile |
+| `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen?, autonomy? }`; `autonomy` is `suggest` (the default), `tell` or `quiet`. `201` with `{ commitment, inPrompt, why? }`, where `inPrompt` says whether the agent will see it in its prompt block and, when it won't, `why` is `"tool"` (no `commitment` tool) or `"pin"` (the block is off). `400` without a goal, one longer than 300 characters, or an unknown autonomy. `404` for a name that is no agent, including one that only has a profile left |
+| `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep or any other agent turn on an interval (a tend, another agent's upkeep) is running, or for an agent with no `commitment` tool. `404` for a name that is no agent |
 
 Counts and lists read at most 5,000 records of each type. The routes come and
 go with the directory; see [Changing it while TAI runs](#turn-it-on). A
@@ -370,9 +534,15 @@ request already on its way when a reload turns the directory off answers
 
 ## Not yet
 
-- **Nothing acts on a commitment.** `nextCheck` is text, `autonomy` is a
-  label, and no turn is started for either. Watchers, schedules and the
-  upkeep turn come later in the [build order](./ownership-design.md#build-order).
+- **Nothing acts on a commitment.** `autonomy` is a label, and no turn is
+  started when a `nextCheck` comes due: upkeep only notices it on its next
+  turn. Watchers and schedules come later in the
+  [build order](./ownership-design.md#build-order).
+- **Upkeep runs on an interval only.** It doesn't yet start when a
+  commitment's check comes due, a watcher fires or a person edits something
+  the agent owns. Its evidence doesn't yet include notes a newer note or doc
+  contradicts, what people corrected or waved away, or which page sections
+  people opened, and it raises no questions for a person.
 - **No room records or room pages.** A room's own commitments and docs, owned
   by its lead, and its page, are step 5.
 - **Pages are in the web UI only.** An agent's page on the wall of its home in

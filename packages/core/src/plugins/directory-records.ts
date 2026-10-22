@@ -31,6 +31,7 @@ export const COMMITMENT_TYPE = "commitment";
 export const DOC_TYPE = "doc";
 export const MISS_TYPE = "miss";
 export const PAGE_TYPE = "page";
+export const UPKEEP_TYPE = "upkeep";
 
 /** The kinds `directory search` looks through. Misses are signals for their owner, not answers. */
 export const SEARCH_KINDS = [COMMITMENT_TYPE, DOC_TYPE, PROFILE_TYPE] as const;
@@ -42,6 +43,12 @@ export const ACTIVE: Status[] = ["open", "waiting"];
 
 export const AUTONOMY = ["suggest", "tell", "quiet"] as const;
 export type Autonomy = (typeof AUTONOMY)[number];
+/**
+ * The autonomy an agent may give its own commitment. `tell` and `quiet` let it
+ * act without asking, so they are a person's to grant: on the State page, or
+ * on the agent's page when handing work over.
+ */
+export const AGENT_AUTONOMY: Autonomy = "suggest";
 
 /** Dated updates kept on a commitment, newest first. The record's history keeps every one. */
 export const MAX_UPDATES = 20;
@@ -170,6 +177,7 @@ export const PAGE_SCHEMA: JsonSchema = {
   properties: {
     owner: OWNER,
     note: { type: "string", maxLength: 300, description: "A sentence or two for people, in the agent's own words." },
+    noteAt: { type: "string", description: "When the note was last written." },
     order: {
       type: "array",
       maxItems: 30,
@@ -202,6 +210,29 @@ export const PAGE_SCHEMA: JsonSchema = {
       description:
         "Sections the agent added: each lists the records a state query matches, among the scopes the agent could see.",
     },
+  },
+};
+
+export const UPKEEP_SCHEMA: JsonSchema = {
+  type: "object",
+  required: ["owner"],
+  properties: {
+    owner: OWNER,
+    at: { type: "string", description: "When its last upkeep turn finished." },
+    started: { type: "string", description: "When its latest upkeep turn started." },
+    changed: {
+      type: "object",
+      description:
+        "What its last upkeep changed, counted from the history of its records: archived, reviewed, updated, closed.",
+    },
+    fingerprint: { type: "string", description: "What its evidence came to after its last upkeep." },
+    error: { type: "string", maxLength: 500, description: "Why its latest upkeep turn stopped, when it failed." },
+    failedAt: { type: "string", description: "When its latest upkeep turn stopped, when it failed." },
+    reads: {
+      type: "object",
+      description: "Reads of its docs by other agents, by doc id: how many, lately by whom, and when last.",
+    },
+    readsAtLast: { type: "object", description: "Each doc's read count when its last upkeep finished." },
   },
 };
 
@@ -258,6 +289,15 @@ export const DIRECTORY_TYPES: StateTypeDef[] = [
     schema: PAGE_SCHEMA,
     access: PEOPLE_WRITE,
   },
+  {
+    name: UPKEEP_TYPE,
+    description:
+      "An agent's upkeep, one per agent under its name: when it last looked after what it owns and what that changed, and how often other agents read its docs. Kept by the directory, never by the agent.",
+    scope: "agent",
+    title: "at",
+    schema: UPKEEP_SCHEMA,
+    access: PEOPLE_WRITE,
+  },
 ];
 
 /** How close a search hit must be to count as found. Meaning and words are different measures, so each has its own. */
@@ -292,6 +332,14 @@ export const FIND_SHOWN = 8;
 const PAGE = 500;
 const SCAN_CAP = 5_000;
 
+/**
+ * Sessions an upkeep turn is running in now, by id. The tools' writes there
+ * say `upkeep` as their surface, which is how the turn's changes are told
+ * from the agent's other work when they are counted. Kept here, at module
+ * level, so a reload in the middle of a turn doesn't lose it.
+ */
+export const UPKEEP_SESSIONS = new Set<string>();
+
 /** What a person sees through the UI or API: every scope. */
 export const PERSON: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "http" } };
 
@@ -302,10 +350,19 @@ const READER: StateCaller = { actor: { kind: "plugin", name: "directory" }, sour
  * Writes made for an agent through one of the tools. The plugin is the actor,
  * since agents can't write these types themselves; the source names the tool
  * and the agent whose doing it was, so a subscription doesn't wake an agent
- * for its own change.
+ * for its own change. `surface` is the agent's own, when it had one: an
+ * upkeep turn's writes say `upkeep`, which is how its changes are counted.
  */
-function writer(tool: string, agent: string): StateCaller {
-  return { actor: { kind: "plugin", name: "directory" }, source: { tool, onBehalfOf: agent } };
+function writer(tool: string, agent: string, surface?: string): StateCaller {
+  return {
+    actor: { kind: "plugin", name: "directory" },
+    source: { tool, onBehalfOf: agent, ...(surface ? { surface } : {}) },
+  };
+}
+
+/** The writer for a call the caller made: its tool, its name, and its surface. */
+function writerFor(caller: StateCaller, tool: string): StateCaller {
+  return writer(tool, caller.actor.name, caller.source?.surface);
 }
 
 /** Whether a type, as declared now, can be searched. A config type of the same name may have left `search` out. */
@@ -641,16 +698,20 @@ export class Directory {
   /**
    * A commitment a person hands an agent on its page: the agent's, shared,
    * open, from a person, and written as the person, so the State page and
-   * the record's history say who asked. Returns the record.
+   * the record's history say who asked. The person may grant it more than
+   * `suggest`, which the agent can't give itself. Returns the record.
    */
-  async handOver(agent: string, fields: { goal: string; doneWhen?: string }): Promise<StateRecord> {
+  async handOver(
+    agent: string,
+    fields: { goal: string; doneWhen?: string; autonomy?: Autonomy },
+  ): Promise<StateRecord> {
     const at = this.now().toISOString();
     const data: Record<string, unknown> = {
       owner: agent,
       goal: fields.goal,
       ...(fields.doneWhen ? { doneWhen: fields.doneWhen } : {}),
       status: "open",
-      autonomy: "suggest",
+      autonomy: fields.autonomy ?? AGENT_AUTONOMY,
       from: FROM_PERSON,
       updates: [{ at, text: "Handed over by a person on this page." }],
     };
@@ -680,7 +741,7 @@ export class Directory {
       const data = { ...change(existing && !existing.archivedAt ? { ...existing.data } : {}), owner: agent };
       try {
         return await service.put(
-          writer("directory", agent),
+          writerFor(caller, "directory"),
           { type, id: ref.id, scope: "global", data },
           existing?.version ?? 0,
         );
@@ -704,7 +765,7 @@ export class Directory {
   ): Promise<StateRecord> {
     const owner = caller.actor.name;
     this.checkScope(caller, scope);
-    return this.putNew(writer(tool, owner), type, ownedId(owner, title), scope, { ...data, owner }, title);
+    return this.putNew(writerFor(caller, tool), type, ownedId(owner, title), scope, { ...data, owner }, title);
   }
 
   /** Put a new record under `base`, or the first of `base-2` … that is free. */
@@ -766,12 +827,7 @@ export class Directory {
         throw new StateError(`${id} is archived. A person can bring it back on the State page.`);
       }
       try {
-        return await this.service().patch(
-          writer(tool, caller.actor.name),
-          { type, id },
-          change(record),
-          record.version,
-        );
+        return await this.service().patch(writerFor(caller, tool), { type, id }, change(record), record.version);
       } catch (err) {
         if (!(err instanceof StateConflictError) || attempt >= 1) throw err;
       }
@@ -782,22 +838,26 @@ export class Directory {
   async archive(caller: StateCaller, tool: string, type: string, id: string, noun: string, reason?: string) {
     const record = await this.own(caller, type, id, noun);
     if (record.archivedAt) return record;
-    const archived = await this.service().archive(
-      writer(tool, caller.actor.name),
-      { type, id },
-      reason,
-      record.version,
-    );
+    const archived = await this.service().archive(writerFor(caller, tool), { type, id }, reason, record.version);
     if (!archived) throw new StateError(`There is no ${noun} "${id}".`);
     return archived;
   }
 
-  /** Every record of a type, as a person sees them: for the HTTP routes, which count and list across agents. */
-  async all(type: string, where?: Record<string, string>): Promise<StateRecord[]> {
+  /**
+   * Every record of a type, as a person sees them: for the HTTP routes, which
+   * count and list across agents, and for upkeep. Archived ones only when asked.
+   */
+  async all(type: string, where?: Record<string, string>, includeArchived = false): Promise<StateRecord[]> {
     const service = this.service();
     const seen = new Map<string, StateRecord>();
     for (let offset = 0; seen.size < SCAN_CAP; offset += PAGE) {
-      const page = await service.query(PERSON, { type, ...(where ? { where } : {}), limit: PAGE, offset });
+      const page = await service.query(PERSON, {
+        type,
+        ...(where ? { where } : {}),
+        ...(includeArchived ? { includeArchived } : {}),
+        limit: PAGE,
+        offset,
+      });
       let fresh = 0;
       for (const record of page) {
         if (seen.has(record.id)) continue;
@@ -808,6 +868,70 @@ export class Directory {
       if (page.length < PAGE || fresh === 0) break;
     }
     return [...seen.values()];
+  }
+
+  /** An agent's upkeep record, kept under its name in its own scope. Null when it has had none. */
+  async upkeep(agent: string): Promise<StateRecord | null> {
+    return this.service().get(READER, { type: UPKEEP_TYPE, id: profileId(agent) });
+  }
+
+  /**
+   * Change an agent's upkeep record: `change` gets its fields as they stand,
+   * or none, and returns the fields to set (`null` removes one). Written by
+   * the plugin, as `caller` when given, so no agent can write it, the owner
+   * least of all. A concurrent write is tried again against the fresh record.
+   * One a person archived is written live again: upkeep keeps running, and a
+   * record it can't write would stop every turn and every read count.
+   */
+  async saveUpkeep(
+    agent: string,
+    change: (data: Record<string, unknown>) => Record<string, unknown>,
+    caller: StateCaller = READER,
+  ): Promise<StateRecord> {
+    const service = this.service();
+    const ref = { type: UPKEEP_TYPE, id: profileId(agent) };
+    for (let attempt = 0; ; attempt++) {
+      const existing = await service.get(READER, ref);
+      try {
+        if (existing && !existing.archivedAt) {
+          return await service.patch(caller, ref, change({ ...existing.data }), existing.version);
+        }
+        const data: Record<string, unknown> = { ...existing?.data };
+        for (const [key, value] of Object.entries(change({ ...existing?.data }))) {
+          if (value === null || value === undefined) delete data[key];
+          else data[key] = value;
+        }
+        const scope = existing?.scope ?? `agent:${agent}`;
+        return await service.put(caller, { ...ref, scope, data: { ...data, owner: agent } }, existing?.version ?? 0);
+      } catch (err) {
+        if (!(err instanceof StateConflictError) || attempt >= 2) throw err;
+      }
+    }
+  }
+
+  /**
+   * Count a read of a doc by an agent other than its owner, in the owner's
+   * upkeep record: written by the plugin for the reader, so the owner can't
+   * add to it. Its own reads don't count. Never fails the read it follows.
+   */
+  async countRead(doc: StateRecord, reader: string): Promise<void> {
+    const owner = ownerOf(doc);
+    if (!owner || owner === reader) return;
+    try {
+      await this.saveUpkeep(
+        owner,
+        (data) => {
+          const reads = readsOf(data.reads);
+          const was = reads[doc.id];
+          const by = [reader, ...(was?.by ?? []).filter((a) => a !== reader)].slice(0, READERS_KEPT);
+          reads[doc.id] = { n: (was?.n ?? 0) + 1, by, at: this.now().toISOString() };
+          return { reads };
+        },
+        writer("writeup", reader),
+      );
+    } catch (err) {
+      console.warn(`[directory] couldn't count a read of ${doc.id}: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -828,16 +952,23 @@ export function ownerOf(record: StateRecord): string | undefined {
 /** A record id names agents and titles in letters, digits, and `_ . : -`. */
 const RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
-/** Lowercase letters and digits joined by `-`, at most `max` long. Accents are dropped, not the letters under them. */
+/**
+ * Lowercase letters and digits joined by `-`, at most `max` long. Accents are
+ * dropped, not the letters under them. A longer one is cut at the last whole
+ * word that fits, so an id never ends in half a word; only a single word
+ * longer than `max` is cut inside it.
+ */
 export function slug(text: string, max = 40): string {
-  return text
+  const full = text
     .toLowerCase()
     .normalize("NFKD")
     .replace(/\p{M}+/gu, "")
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, max)
-    .replace(/-+$/, "");
+    .replace(/^-+|-+$/g, "");
+  if (full.length <= max) return full;
+  // One past the end, so a word that ends exactly at `max` is kept whole.
+  const end = full.slice(0, max + 1).lastIndexOf("-");
+  return (end > 0 ? full.slice(0, end) : full.slice(0, max)).replace(/-+$/, "");
 }
 
 /** A profile's or a page's id: the agent's name, or a slug of it when the name isn't a valid record id. */
@@ -943,4 +1074,30 @@ export function stringList(value: unknown): string[] | undefined {
   const raw = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[,;\n]/) : [value];
   const items = raw.filter((v) => typeof v === "string" || typeof v === "number").map((v) => String(v).trim());
   return [...new Set(items.filter(Boolean))];
+}
+
+/** Readers kept per doc in its read count, most recent first. */
+const READERS_KEPT = 5;
+
+/** One doc's reads by other agents: how many, lately by whom, when last. */
+export interface DocReads {
+  n: number;
+  by: string[];
+  at?: string;
+}
+
+/** The read counts an upkeep record holds, by doc id, leaving out anything a hand edit made unusable. */
+export function readsOf(value: unknown): Record<string, DocReads> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, DocReads> = {};
+  for (const [id, raw] of Object.entries(value as Record<string, unknown>)) {
+    const r = raw as { n?: unknown; by?: unknown; at?: unknown } | null;
+    if (!r || typeof r.n !== "number" || !Number.isFinite(r.n)) continue;
+    out[id] = {
+      n: r.n,
+      by: Array.isArray(r.by) ? r.by.filter((a): a is string => typeof a === "string") : [],
+      ...(typeof r.at === "string" ? { at: r.at } : {}),
+    };
+  }
+  return out;
 }

@@ -70,6 +70,23 @@ describe("ref_count column", () => {
   it("incrementNoteRef returns null when the note is missing", () => {
     expect(incrementNoteRef(db, "note_nope")).toBeNull();
   });
+
+  it("stamps when a note was last recalled, and the backend says it, so a reader can tell a note nobody uses now", async () => {
+    const n = createNote(db, { content: "x", agent: "planner" });
+    expect(n.recalled_at).toBeNull();
+    db.prepare("UPDATE notes SET recalled_at = '2026-01-01 00:00:00' WHERE id = ?").run(n.id);
+    recordNoteHit(db, n.id);
+    const stamped = getNote(db, n.id)!.recalled_at;
+    expect(stamped).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(stamped).not.toBe("2026-01-01 00:00:00");
+    const [listed] = await backend.list({ scope: "agent:planner", kind: "note" });
+    expect(listed.metadata?.recalled_at).toBe(stamped);
+    // An archived note isn't recalled, so it isn't stamped either.
+    archiveNote(db, n.id, { by: "planner" });
+    db.prepare("UPDATE notes SET recalled_at = NULL WHERE id = ?").run(n.id);
+    expect(incrementNoteRef(db, n.id)).toBeNull();
+    expect(getNote(db, n.id)!.recalled_at).toBeNull();
+  });
 });
 
 describe("extendNoteTtl", () => {

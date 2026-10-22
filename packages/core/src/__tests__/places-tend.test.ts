@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import {
+  busy,
   type Done,
   dbTime,
   doneLines,
@@ -16,9 +17,12 @@ import {
   offsetOf,
   parseTend,
   quiet,
+  runNow,
   TEND_TICK_MS,
   Tender,
   tendMessage,
+  turnSession,
+  UPKEEP_KIND,
 } from "../plugins/places-tend.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 
@@ -203,7 +207,12 @@ describe("what an agent has done, from what the runtime keeps", () => {
 
   it("counts its tool calls, the rooms it talked in, its photos and the tasks it finished, since then only", async () => {
     const done = await gatherDone({
-      db: seed(),
+      // Its upkeep tidied what it owns: not news for its room, and left out with its tend's own session.
+      db: seed(({ session, used, called }) => {
+        session("s-upkeep", "upkeep:planner");
+        used("s-upkeep", "planner", since + 4 * HOUR);
+        called("s-upkeep", [{ name: "commitment" }, { name: "commitment" }], since + 4 * HOUR);
+      }),
       agent: "planner",
       since,
       rooms: [
@@ -216,7 +225,7 @@ describe("what an agent has done, from what the runtime keeps", () => {
         task("Draft the itinerary", new Date(since + 5 * HOUR).toISOString()),
         task("Someone else's", dbTime(since + HOUR), "writer"),
       ]),
-      skip: "tend:planner",
+      skip: [turnSession("tend", "planner"), turnSession(UPKEEP_KIND, "planner")],
     });
     expect(done.tools).toEqual([
       ["web_search", 2],
@@ -367,6 +376,95 @@ describe("tending, as time goes by", () => {
     expect(started.slice(1).sort()).toEqual(["planner", "writer"]);
     releases.shift()?.();
     await after.idle();
+  });
+
+  it("gives another kind of turn times of its own, says it in its own words, and shares one turn at a time with tends", async () => {
+    let clock = Date.parse("2026-10-19T00:00:00Z");
+    const logs: string[] = [];
+    const releases: (() => void)[] = [];
+    const tends: string[] = [];
+    const tend = new Tender({
+      settings: { everyMs: HOUR, agents: ["planner"] },
+      agents: () => ["planner"],
+      unready: () => null,
+      tend: (agent) => {
+        tends.push(agent);
+        return new Promise((done) => releases.push(() => done("woken")));
+      },
+      now: () => clock,
+      log: () => {},
+    });
+    const upkeeps: string[] = [];
+    const upkeep = new Tender({
+      kind: "upkeep",
+      settings: { everyMs: HOUR, agents: ["planner"] },
+      agents: () => ["planner"],
+      unready: () => null,
+      tend: async (agent) => {
+        upkeeps.push(agent);
+        return "quiet";
+      },
+      now: () => clock,
+      log: (line) => logs.push(line),
+      said: { woken: (a) => `${a} woke`, quiet: (a) => `${a} stayed asleep`, failed: (a) => `${a} failed` },
+    });
+    expect(offsetOf("planner", HOUR, "upkeep")).not.toBe(offsetOf("planner", HOUR));
+    tend.tick();
+    upkeep.tick();
+    expect(upkeep.dueAt("planner")).toBe(nextTend("planner", HOUR, clock, "upkeep"));
+    expect(tend.dueAt("planner")).toBe(nextTend("planner", HOUR, clock));
+    // The tend comes due and is still going when the upkeep comes due: the upkeep waits.
+    clock = tend.dueAt("planner") as number;
+    tend.tick();
+    expect(busy("tend", "planner")).toBe(true);
+    clock = Math.max(clock, upkeep.dueAt("planner") as number) + HOUR;
+    upkeep.tick();
+    expect(upkeeps).toEqual([]);
+    releases.shift()?.();
+    await tend.idle();
+    expect(busy("tend", "planner")).toBe(false);
+    upkeep.tick();
+    await upkeep.idle();
+    expect(upkeeps).toEqual(["planner"]);
+    expect(logs).toEqual(["planner stayed asleep"]);
+  });
+
+  it("runs one turn by hand, counted in flight so no tender starts another beside it, and only one at once", async () => {
+    let release = () => {};
+    const first = runNow(
+      "upkeep",
+      "writer",
+      () =>
+        new Promise<string>((done) => {
+          release = () => done("woken");
+        }),
+    );
+    expect(first).toBeDefined();
+    expect(busy("upkeep", "writer")).toBe(true);
+    expect(runNow("upkeep", "writer", async () => "again")).toBeUndefined();
+    // One at a time holds for every kind and agent, not only this one.
+    expect(runNow("upkeep", "planner", async () => "beside")).toBeUndefined();
+    expect(runNow("tend", "writer", async () => "beside")).toBeUndefined();
+    let clock = Date.parse("2026-10-19T00:00:00Z");
+    const started: string[] = [];
+    const tender = new Tender({
+      settings: { everyMs: HOUR, agents: ["planner"] },
+      agents: () => ["planner"],
+      unready: () => null,
+      tend: async (agent) => {
+        started.push(agent);
+        return "woken";
+      },
+      now: () => clock,
+      log: () => {},
+    });
+    tender.tick();
+    clock = (tender.dueAt("planner") as number) + 1;
+    tender.tick();
+    expect(started).toEqual([]);
+    release();
+    expect(await first).toBe("woken");
+    expect(busy("upkeep", "writer")).toBe(false);
   });
 
   it("skips a turn while an agent can't be tended, and doesn't save it up for after", async () => {

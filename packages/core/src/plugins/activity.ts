@@ -44,7 +44,7 @@
  */
 
 import { isStallStop, stallReasonOf } from "../agent/loop.js";
-import { type ExploratoryState, getExploratoryState } from "../db/exploratory-queries.js";
+import { getExploratoryState } from "../db/exploratory-queries.js";
 import type { EventBus, RuntimeEventPayload, Subscription } from "../events.js";
 import { nextOwnTurn, type OwnTurns, ownTurnsOf } from "../exploratory/next-turn.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
@@ -61,6 +61,7 @@ import {
   timeKey,
 } from "./activity-history.js";
 import { anyAvatar } from "./places.js";
+import { whyAsleep } from "./places-tend.js";
 
 export const ACTIVITY_TYPE = "activity";
 export const SPEECH_TYPE = "speech";
@@ -771,21 +772,9 @@ export const ACTIVITY_SCHEMA = {
   },
 } as const;
 
-/**
- * Why an agent with nothing to do is asleep, or null when it is awake: the
- * global pause, or an online agent's own switch from the Agents page.
- */
-export function whyAsleep(at: {
-  paused: boolean;
-  own: Pick<ExploratoryState, "enabled" | "paused_until"> | null;
-  now: Date;
-}): string | null {
-  if (at.paused) return "agents are paused";
-  if (!at.own) return null;
-  if (!at.own.enabled) return "switched off";
-  if (at.own.paused_until && new Date(at.own.paused_until) > at.now) return "paused";
-  return null;
-}
+// Why an agent with nothing to do is asleep. It lives with the tend timing, which the directory's upkeep shares,
+// so that plugin can ask it without loading this one.
+export { whyAsleep };
 
 /**
  * When an agent next wakes on its own, as an ISO time: the soonest wake it
