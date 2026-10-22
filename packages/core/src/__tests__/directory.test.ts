@@ -442,6 +442,20 @@ describe("commitment", () => {
     expect(asked).toContain("Only a person can grant quiet, on the State page or the agent page, so it's tell.");
     expect((await record(COMMITMENT_TYPE, "planner-watch-hotel-prices"))?.data.autonomy).toBe("tell");
 
+    // Asking for what it already has is no refusal, alone or with an update, and adds no update of its own.
+    const before = await record(COMMITMENT_TYPE, "planner-watch-hotel-prices");
+    expect(
+      await run("planner", "commitment", { action: "update", id: "planner-watch-hotel-prices", autonomy: "tell" }),
+    ).toBe("planner-watch-hotel-prices already has tell; nothing changed.");
+    expect((await record(COMMITMENT_TYPE, "planner-watch-hotel-prices"))?.version).toBe(before?.version);
+    const same = await run("planner", "commitment", {
+      action: "update",
+      id: "planner-watch-hotel-prices",
+      note: "Still dipping.",
+      autonomy: "tell",
+    });
+    expect(same).not.toContain("Only a person");
+
     // It can always step back to asking first.
     await run("planner", "commitment", { action: "update", id: "planner-watch-hotel-prices", autonomy: "suggest" });
     const stepped = await record(COMMITMENT_TYPE, "planner-watch-hotel-prices");

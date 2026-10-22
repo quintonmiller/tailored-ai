@@ -227,6 +227,7 @@ export const UPKEEP_SCHEMA: JsonSchema = {
     },
     fingerprint: { type: "string", description: "What its evidence came to after its last upkeep." },
     error: { type: "string", maxLength: 500, description: "Why its latest upkeep turn stopped, when it failed." },
+    failedAt: { type: "string", description: "When its latest upkeep turn stopped, when it failed." },
     reads: {
       type: "object",
       description: "Reads of its docs by other agents, by doc id: how many, lately by whom, and when last.",
@@ -879,6 +880,8 @@ export class Directory {
    * or none, and returns the fields to set (`null` removes one). Written by
    * the plugin, as `caller` when given, so no agent can write it, the owner
    * least of all. A concurrent write is tried again against the fresh record.
+   * One a person archived is written live again: upkeep keeps running, and a
+   * record it can't write would stop every turn and every read count.
    */
   async saveUpkeep(
     agent: string,
@@ -890,10 +893,16 @@ export class Directory {
     for (let attempt = 0; ; attempt++) {
       const existing = await service.get(READER, ref);
       try {
-        if (existing) return await service.patch(caller, ref, change({ ...existing.data }), existing.version);
-        const fields = change({});
-        const data = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null && v !== undefined));
-        return await service.put(caller, { ...ref, scope: `agent:${agent}`, data: { ...data, owner: agent } }, 0);
+        if (existing && !existing.archivedAt) {
+          return await service.patch(caller, ref, change({ ...existing.data }), existing.version);
+        }
+        const data: Record<string, unknown> = { ...existing?.data };
+        for (const [key, value] of Object.entries(change({ ...existing?.data }))) {
+          if (value === null || value === undefined) delete data[key];
+          else data[key] = value;
+        }
+        const scope = existing?.scope ?? `agent:${agent}`;
+        return await service.put(caller, { ...ref, scope, data: { ...data, owner: agent } }, existing?.version ?? 0);
       } catch (err) {
         if (!(err instanceof StateConflictError) || attempt >= 2) throw err;
       }

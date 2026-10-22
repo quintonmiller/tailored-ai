@@ -176,7 +176,7 @@ function PageBody({ agent, reload }: { agent: DirectoryAgent; reload: () => void
             ) : (
               <ul className="agent-page-list">
                 {groups.working.map((r) => (
-                  <Working key={r.id} record={r} agent={agent.name} now={now} />
+                  <Working key={r.id} record={r} agent={agent.name} now={now} reload={reload} />
                 ))}
               </ul>
             )}
@@ -356,25 +356,47 @@ function Meta({ parts }: { parts: (string | ReactElement)[] }) {
 
 /**
  * How much the agent may do on its own about a commitment, which a person can
- * change here: the agent can only ask first, so more is yours to grant.
+ * change here: the agent can only ask first, so more is yours to grant. The
+ * pick shows at once and holds until the record comes back changed; a
+ * refusal goes to `onError`, said under the line rather than inside it.
  */
-function AutonomyPick({ record }: { record: StateRecordInfo }) {
-  const [error, setError] = useState<string | null>(null);
+function AutonomyPick({
+  record,
+  reload,
+  onError,
+}: {
+  record: StateRecordInfo;
+  reload: () => void;
+  onError: (error: string | null) => void;
+}) {
+  const [pending, setPending] = useState<string | null>(null);
   const current = text(record.data.autonomy) ?? "suggest";
+  // A new version is the record as saved, whoever saved it: it speaks for itself again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new version clears the pick.
+  useEffect(() => setPending(null), [record.version]);
   async function change(next: string) {
-    setError(null);
+    setPending(next);
+    onError(null);
     try {
       await patchStateRecord(record.type, record.id, { autonomy: next }, record.version);
+      // Read again rather than wait on the stream, which may miss it.
+      reload();
     } catch (err) {
-      setError((err as Error).message);
+      setPending(null);
+      onError(
+        (err as { status?: number }).status === 409
+          ? "This changed while you were looking. Pick again."
+          : (err as Error).message,
+      );
     }
   }
+  const shown = pending ?? current;
   return (
     <span className="agent-page-autonomy">
       <select
         aria-label={`What it may do on its own about “${text(record.data.goal) ?? record.id}”`}
         title="It can only ask first; acting on its own is yours to grant."
-        value={current}
+        value={shown}
         onChange={(e) => change(e.target.value)}
       >
         {Object.entries(AUTONOMY).map(([value, words]) => (
@@ -382,14 +404,8 @@ function AutonomyPick({ record }: { record: StateRecordInfo }) {
             {words}
           </option>
         ))}
-        {!(current in AUTONOMY) && <option value={current}>{current}</option>}
+        {!(shown in AUTONOMY) && <option value={shown}>{shown}</option>}
       </select>
-      {error && (
-        <span className="agent-page-error" role="alert">
-          {" "}
-          {error}
-        </span>
-      )}
     </span>
   );
 }
@@ -415,12 +431,23 @@ function Updates({ record }: { record: StateRecordInfo }) {
   );
 }
 
-function Working({ record, agent, now }: { record: StateRecordInfo; agent: string; now: Date }) {
+function Working({
+  record,
+  agent,
+  now,
+  reload,
+}: {
+  record: StateRecordInfo;
+  agent: string;
+  now: Date;
+  reload: () => void;
+}) {
   const d = record.data;
   const progress = progressOf(d.progress);
+  const [error, setError] = useState<string | null>(null);
   const meta = [
     text(d.nextCheck) && `check ${text(d.nextCheck)}`,
-    <AutonomyPick key="autonomy" record={record} />,
+    <AutonomyPick key="autonomy" record={record} reload={reload} onError={setError} />,
     text(d.from) && `from ${text(d.from)}`,
     `updated ${ago(lastMoved(record), now)}`,
   ].filter((p): p is string | ReactElement => !!p);
@@ -448,6 +475,11 @@ function Working({ record, agent, now }: { record: StateRecordInfo; agent: strin
           </div>
         ))}
       <Meta parts={meta} />
+      {error && (
+        <p className="agent-page-error agent-page-item-error" role="alert">
+          {error}
+        </p>
+      )}
       <Updates record={record} />
     </li>
   );
@@ -691,7 +723,12 @@ function Upkeep({
   useEffect(() => {
     if (wasRunning.current && !upkeep.running) setFinished(true);
     wasRunning.current = upkeep.running;
+    // An upkeep under way is news past an earlier refusal, which would otherwise sit under it.
+    if (upkeep.running) setError(null);
   }, [upkeep.running]);
+  // So is one that finished, the scheduled kind included.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new finish time is the trigger.
+  useEffect(() => setError(null), [upkeep.at]);
 
   const running = upkeep.running || asking;
   const changes = upkeepChanges(upkeep.changed);
@@ -711,6 +748,17 @@ function Upkeep({
     }
   }
 
+  const last = upkeep.at && (
+    <>
+      {finished && (
+        <span className="agent-page-done" aria-hidden="true">
+          ✓{" "}
+        </span>
+      )}
+      {finished ? "Tidied up" : "Last upkeep"} {ago(upkeep.at, now)}
+      {changes ? `: ${changes}` : ""}.
+    </>
+  );
   let status: ReactNode;
   if (running) {
     status = (
@@ -720,19 +768,17 @@ function Upkeep({
       </span>
     );
   } else if (upkeep.error) {
-    status = <span className="agent-page-upkeep-failed">Its last upkeep stopped: {upkeep.error}</span>;
-  } else if (upkeep.at) {
+    // When it failed and why, with the last good one after it, so an old failure reads as old.
     status = (
-      <span>
-        {finished && (
-          <span className="agent-page-done" aria-hidden="true">
-            ✓{" "}
-          </span>
-        )}
-        {finished ? "Tidied up" : "Last upkeep"} {ago(upkeep.at, now)}
-        {changes ? `: ${changes}` : ""}.
-      </span>
+      <>
+        <span className="agent-page-upkeep-failed" title={upkeep.error}>
+          Couldn't tidy up{upkeep.failedAt ? ` ${ago(upkeep.failedAt, now)}` : ""}: {upkeep.error}
+        </span>
+        {last && <span>{last}</span>}
+      </>
     );
+  } else if (last) {
+    status = <span>{last}</span>;
   } else {
     status = <span>No upkeep yet.</span>;
   }

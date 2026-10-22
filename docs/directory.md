@@ -69,7 +69,7 @@ Six world-state types, declared by the plugin:
 | `doc` | `<owner>-<slug>` | `global` | `owner`, `title`, `summary`, `body`, `tags`, `reviewedAt` |
 | `miss` | `miss-<day>-<hash>` | `agent:<owner>` | `owner`, `query`, `askedBy`, `at`, `closest` |
 | `page` | the agent's name | `global` | `owner`, `note`, `noteAt`, `order`, `hide`, `extra` (see [Pages](#pages)) |
-| `upkeep` | the agent's name | `agent:<owner>` | `owner`, `at`, `started`, `changed`, `fingerprint`, `error`, `reads`, `readsAtLast` (see [Upkeep](#upkeep)) |
+| `upkeep` | the agent's name | `agent:<owner>` | `owner`, `at`, `started`, `changed`, `fingerprint`, `error`, `failedAt`, `reads`, `readsAtLast` (see [Upkeep](#upkeep)) |
 
 - **Agents change only their own,** and only through the tools. They can read
   all six through `state`, but its writes are refused: `access.write` is
@@ -176,8 +176,9 @@ Only a person can grant tell, on the State page or the agent page, so it's sugge
 ```
 
 The rest of the call goes through. An agent can always step back to
-`suggest` with `update`. Commitments an agent opened with `tell` or `quiet`
-before this are left as they are.
+`suggest` with `update`, and asking for the autonomy a commitment already has
+changes nothing and isn't refused. Commitments an agent opened with `tell` or
+`quiet` before this are left as they are.
 
 ## What an agent writes up: `writeup`
 
@@ -319,11 +320,13 @@ the agent already has.
 Over the sections, an agent that has the `commitment` tool gets one line about
 its [upkeep](#upkeep): "Last upkeep 3h ago: archived 2, reviewed 1, closed
 1." (counted from its records' history, never from what it said), "No upkeep
-yet.", or why the last one stopped, and how often it comes round when it's
+yet.", or, when the last one failed, when and why ("Couldn't tidy up 2h ago:
+…", with the last good one after it), and how often it comes round when it's
 scheduled. **Tidy up now** starts a turn at once. While it runs the line says
 "Tidying up: going over its commitments, docs, page and notes…"; when it
 finishes, "Tidied up just now: …" with what changed. If it can't run now,
-because agents are paused or it's already running, the line says so.
+because agents are paused or another turn is running, the line says so until
+the next upkeep starts or finishes.
 
 The page changes as the records do, from the same stream the State page
 reads: an update the agent posts, a doc it reviews, something you hand it.
@@ -427,9 +430,13 @@ log and replaced by its default.
 
 **When.** Each agent's turn comes round once every `every`, at a time its name
 sets, so many agents aren't woken together; an agent's tend and its upkeep fall
-at different times. One turn runs at a time, tends and upkeep alike. A turn
-that comes round while agents are paused, or while an online agent is switched
-off or paused, is skipped and not saved up.
+at different times. One turn runs at a time, tends and upkeep alike, and one
+you start from the page waits for no other: while any turn is running it's
+refused, so a model server that serves one request at a time is never asked
+for two. A turn that comes round while agents are paused, or while an online
+agent is switched off or paused, is skipped and not saved up. A tend leaves
+what an upkeep turn did out of what the agent did: tidying its commitments
+isn't news for its room.
 
 **What it counts.** Each kind only when the agent has the tool to act on it:
 commitments with `commitment`, docs with `writeup`, the page with
@@ -437,7 +444,7 @@ commitments with `commitment`, docs with `writeup`, the page with
 
 | Evidence | Counts when | Default |
 |---|---|---|
-| Next check passed | an open or waiting commitment's `nextCheck` reads as a date ("2026-10-25", "Oct 25, 2026") and it has come. "Friday" or "when the hotel replies" count for nothing | |
+| Next check passed | an open or waiting commitment's `nextCheck` reads as a date (an ISO date like "2026-10-25", or a month named with its day and year, like "Oct 25, 2026" or "25 October 2026") and it has come. "Friday", "end of 2026" or "when the hotel replies" count for nothing | |
 | Waiting too long | waiting for `waitingDays` or more, since its history says it started waiting | 7 days |
 | No update | open or waiting, with no update for `quietDays` or more | 14 days |
 | Finished, not archived | done or dropped `archiveAfterDays` or more ago, and still not archived | 7 days |
@@ -445,10 +452,11 @@ commitments with `commitment`, docs with `writeup`, the page with
 | Doc read by others | other agents read it with `writeup read` since the last upkeep | |
 | Misses | searches in its area that found nothing, since the last upkeep (two weeks, the first time) | |
 | Page note | it has none, or it was written before its newest work: a commitment or doc it took on or wrote, or a commitment it finished | |
-| Note not recalled | one of its own live notes not recalled for `recallDays` or more, or never recalled and written that long ago. Pinned and kept notes are left out | 30 days |
-| Same note twice | pairs of its notes whose words mostly overlap, or, with an embedder, whose meanings are nearly the same | |
+| Note not recalled | one of its own live notes not recalled for `recallDays` or more, or never recalled and written that long ago. Pinned and kept notes are left out, pinned meaning however the memory store pins (a `pinned` tag, or high importance in the built-in store) | 30 days |
+| Same note twice | pairs of its notes whose words mostly overlap, or, with an embedder, whose meanings are nearly the same. An embedder that doesn't answer within 30 seconds is left for words alone | |
 | Note expiring | one of its notes expires within `expiringDays`, and isn't kept | 3 days |
-| Loaded every turn | its pinned notes and core memory come to more than `memoryBudget` tokens | 1,500 |
+| Loaded every turn | what loads on every turn comes to more than `memoryBudget` tokens: its core memory, and the pinned notes that fit in the prompt's pinned section (four at most, about 200 tokens) | 1,500 |
+| Pinned, never loaded | pinned notes beyond what fits in that section, which never load at all | |
 
 A read counts only when another agent reads the doc. The owner reading its
 own doesn't, and the count is kept in the owner's `upkeep` record, which only
@@ -482,12 +490,14 @@ Each section shows eight lines at most, then a count of the rest.
 
 **Rules.**
 
-- **Skipped when nothing changed.** When a turn ends, upkeep counts the
+- **Skipped when nothing is new.** When a turn ends, upkeep counts the
   evidence again and keeps a fingerprint of it: which records, under which
-  rules, never how many days. The next scheduled turn whose evidence has the
-  same fingerprint doesn't wake the agent, and neither does one with no
-  evidence at all. Something new (a commitment going quiet, a new read, a
-  miss) wakes it.
+  rules, never how many days. A scheduled turn whose evidence is the same,
+  or less, or none at all doesn't wake the agent. Something new (a commitment
+  going quiet, a new read, a miss) wakes it. What cleared is dropped from the
+  fingerprint, so if it comes back it counts as new. Pairs of notes found by
+  meaning stay in it while the embedder isn't answering, so it answering
+  again wakes nobody for a pair already seen.
 - **A budget of rounds.** The turn takes at most `maxRounds` rounds of tool
   calls, or the agent's own `maxToolRounds` when that is fewer.
 - **Retiring means archiving.** The message says so, and nothing upkeep
@@ -499,8 +509,12 @@ Each section shows eight lines at most, then a count of the rest.
   `reviewedAt`), closed (a commitment that became done or dropped), and
   updated (anything else), plus the notes it archived. What the agent says it
   did doesn't count. A store that keeps no history leaves the counts out.
-- **A turn that fails** keeps why, shown on the page, and leaves the
-  fingerprint as it was, so the next one tries again.
+- **A turn that fails**, anywhere from reading the evidence to the model's
+  answer, keeps why and when, shown on the page, and leaves the fingerprint as
+  it was, so the next one tries again. A memory store that can't be read only
+  leaves the notes out.
+- **An `upkeep` record a person archives** is written live again on the next
+  turn or counted read, with what it held, so archiving it never stops upkeep.
 
 ## HTTP
 
@@ -509,9 +523,9 @@ Behind the usual bearer auth, as a person: every scope.
 | Route | Returns |
 |---|---|
 | `GET /api/ext/builtin:directory/agents` | `{ agents: [{ name, profile, description?, commitments: { open, waiting, done }, docs }] }`: every agent (the agent registry and `config.agents`, as Discord counts them) and anyone with a profile. `profile` is the profile's data or `null`; `description` is the configured one |
-| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses, upkeep }`: the profile and page records or `null`, and lists of full records, private ones included. `upkeep` is `{ running, at?, changed?, error?, every? }`, or `null` for an agent upkeep can't run for (no `commitment` tool, or only a profile left). `404` for a name that is neither an agent nor a profile |
+| `GET /api/ext/builtin:directory/agents/:name` | `{ name, profile, description?, page, commitments, docs, misses, upkeep }`: the profile and page records or `null`, and lists of full records, private ones included. `upkeep` is `{ running, at?, changed?, error?, failedAt?, every? }`, or `null` for an agent upkeep can't run for (no `commitment` tool, or only a profile left). `404` for a name that is neither an agent nor a profile |
 | `POST /api/ext/builtin:directory/agents/:name/commitments` | Hands the agent a commitment. Body `{ goal, doneWhen?, autonomy? }`; `autonomy` is `suggest` (the default), `tell` or `quiet`. `201` with `{ commitment, inPrompt, why? }`, where `inPrompt` says whether the agent will see it in its prompt block and, when it won't, `why` is `"tool"` (no `commitment` tool) or `"pin"` (the block is off). `400` without a goal, one longer than 300 characters, or an unknown autonomy. `404` for a name that is no agent, including one that only has a profile left |
-| `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep is already running, or for an agent with no `commitment` tool. `404` for a name that is no agent |
+| `POST /api/ext/builtin:directory/agents/:name/upkeep` | Runs the agent's upkeep turn now, past the "nothing changed" check but not the pause. `202` with `{ started: true }`; the turn goes on after the answer, and `GET agents/:name` says `running` until it ends. `409` with the reason while agents are paused or the agent is switched off, while its upkeep or any other agent turn on an interval (a tend, another agent's upkeep) is running, or for an agent with no `commitment` tool. `404` for a name that is no agent |
 
 Counts and lists read at most 5,000 records of each type. The routes come and
 go with the directory; see [Changing it while TAI runs](#turn-it-on). A

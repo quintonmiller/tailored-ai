@@ -127,7 +127,7 @@ export async function embedQuery(embedder: EmbeddingProvider, text: string): Pro
  * bounds the wait: an embedder that ignores its signal can't hold a search,
  * or the index, past it. Its late answer is dropped.
  */
-function within<T>(work: () => Promise<T>, ms: number, controller: AbortController): Promise<T> {
+export function within<T>(work: () => Promise<T>, ms: number, controller: AbortController): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cut = new Promise<never>((_, reject) => {
     const stop = (why: string) => reject(new Error(why));

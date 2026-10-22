@@ -2017,7 +2017,8 @@ async function stateWrite<T>(method: string, path: string, body?: unknown): Prom
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const json = (await res.json().catch(() => ({}))) as { error?: string };
-  if (!res.ok) throw new Error(json.error ?? `${res.status} ${res.statusText}`);
+  // The status rides along, so a caller can tell a version conflict (409) from a refusal and say it plainly.
+  if (!res.ok) throw Object.assign(new Error(json.error ?? `${res.status} ${res.statusText}`), { status: res.status });
   return json as T;
 }
 
@@ -2113,6 +2114,8 @@ export interface DirectoryUpkeep {
   changed?: UpkeepChanged;
   /** Why the latest turn stopped, when it failed. */
   error?: string;
+  /** When it stopped, alongside `error`. */
+  failedAt?: string;
   /** How often it comes round by itself, when it does: "day", "12 hours". */
   every?: string;
 }

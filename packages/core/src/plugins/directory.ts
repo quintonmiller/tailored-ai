@@ -57,7 +57,7 @@ import {
 } from "./directory-records.js";
 import { CommitmentTool, commitmentLine, DirectoryTool, WriteupTool } from "./directory-tools.js";
 import { changedOf, parseUpkeep, Upkeep, type UpkeepSettings } from "./directory-upkeep.js";
-import { busy, everyWords, runNow, Tender, whyAsleep } from "./places-tend.js";
+import { busy, everyWords, runNow, Tender, turnSession, UPKEEP_KIND, whyAsleep } from "./places-tend.js";
 
 export const COMMITMENTS_SLOT_ID = "directory.commitments";
 /** Commitments shown in the prompt block before the rest are counted. */
@@ -78,9 +78,6 @@ export interface DirectoryConfig {
   bar: Bar;
   upkeep: UpkeepSettings;
 }
-
-/** What upkeep turns are called, in the log and among the turns in flight. */
-const UPKEEP = "upkeep";
 
 /**
  * The config of the load in effect, or null once the plugin is unloaded with
@@ -172,7 +169,7 @@ function upkeepFor(runtime: AgentRuntime, directory: Directory, settings: Upkeep
     embedder: () => runtime.getEmbedder(),
     session: (agent) => {
       const resolved = resolve(agent);
-      return findOrCreateSession(runtime.db, `upkeep:${agent}`, resolved.model, resolved.provider);
+      return findOrCreateSession(runtime.db, turnSession(UPKEEP_KIND, agent), resolved.model, resolved.provider);
     },
     run: async (agent, session, message, maxRounds) => {
       const options = runtime.buildLoopOptions({
@@ -351,7 +348,7 @@ const plugin: Plugin = (ctx) => {
       }
     }
     const tender = new Tender({
-      kind: UPKEEP,
+      kind: UPKEEP_KIND,
       settings: schedule,
       agents: () => roster(runtime).filter((a) => hasCommitmentTool(runtime, a)),
       unready: (agent) => asleep(runtime, agent),
@@ -424,10 +421,11 @@ const plugin: Plugin = (ctx) => {
     const scheduled = schedule && (schedule.agents === "all" || schedule.agents.includes(agent));
     const changed = changedOf(data.changed);
     return {
-      running: busy(UPKEEP, agent),
+      running: busy(UPKEEP_KIND, agent),
       ...(text(data.at) ? { at: text(data.at) } : {}),
       ...(changed ? { changed } : {}),
       ...(text(data.error) ? { error: text(data.error) } : {}),
+      ...(text(data.error) && text(data.failedAt) ? { failedAt: text(data.failedAt) } : {}),
       ...(scheduled ? { every: everyWords(schedule.everyMs) } : {}),
     };
   };
@@ -491,8 +489,14 @@ const plugin: Plugin = (ctx) => {
       }
       const why = asleep(runtime, agent);
       if (why) return { status: 409, json: { error: `${agent} can't tidy up now: ${why}.` } };
-      const started = runNow(UPKEEP, agent, () => upkeep.turn(agent, { force: true }));
-      if (!started) return { status: 409, json: { error: `${agent} is already tidying up.` } };
+      const started = runNow(UPKEEP_KIND, agent, () => upkeep.turn(agent, { force: true }));
+      if (!started) {
+        // Turns on an interval go one at a time, a person's included: one is going now, this agent's or another's.
+        const error = busy(UPKEEP_KIND, agent)
+          ? `${agent} is already tidying up.`
+          : "Another turn is running now: tends and upkeep go one at a time. Try again in a minute.";
+        return { status: 409, json: { error } };
+      }
       started.catch((err: unknown) => console.warn(`[directory] ${agent}'s upkeep failed: ${(err as Error).message}`));
       return { status: 202, json: { started: true } };
     },

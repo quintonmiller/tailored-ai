@@ -187,11 +187,24 @@ export const parseTime = (at: string) =>
   Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(at) ? `${at.replace(" ", "T")}Z` : at);
 
 /**
+ * The directory's upkeep: a turn on an interval of its own kind, run in the
+ * agent's `upkeep:<agent>` session. Named here, beside tend, so the two share
+ * one name for it: upkeep keys its turns by it, and a tend leaves its session
+ * out of what an agent did.
+ */
+export const UPKEEP_KIND = "upkeep";
+
+/** The session an agent's turn of `kind` runs in: `tend:<agent>`, `upkeep:<agent>`. */
+export const turnSession = (kind: string, agent: string) => `${kind}:${agent}`;
+
+/**
  * What an agent has done since `since`, from what the runtime keeps anyway:
  * the model calls it made say which sessions it ran in; the assistant turns
  * in those sessions say which tools it called; a room's session says it
- * talked there; and the task backend says which of its tasks are done. One
- * session, its own tend's, is left out: changing its room isn't news for it.
+ * talked there; and the task backend says which of its tasks are done. The
+ * sessions in `skip` are left out: its own tend's, since changing its room
+ * isn't news for it, and its upkeep's, since tidying what it owns isn't news
+ * for its room.
  */
 export async function gatherDone(at: {
   db: Database.Database;
@@ -200,8 +213,8 @@ export async function gatherDone(at: {
   /** The rooms it is a member of, by ref and name. */
   rooms: { ref: string; name: string }[];
   tasks?: TaskBackend;
-  /** Its tend session's key, left out. */
-  skip?: string;
+  /** The keys of sessions left out. */
+  skip?: string[];
 }): Promise<Done> {
   const since = dbTime(at.since);
   // The default agent's model calls carry no name, or "default" when the config has an `agents.default`.
@@ -212,7 +225,7 @@ export async function gatherDone(at: {
        WHERE ${who} AND t.created_at >= ?`,
     )
     .all(at.agent, since) as { id: string; key: string | null }[];
-  const ran = sessions.filter((s) => !at.skip || s.key !== at.skip);
+  const ran = sessions.filter((s) => !s.key || !at.skip?.includes(s.key));
 
   const counts = new Map<string, number>();
   let photos = 0;
@@ -331,12 +344,14 @@ export function busy(kind: string, agent: string): boolean {
 /**
  * Run one turn now, outside any tender's times: a person asked for it. It
  * counts as in flight while it runs, so no tender starts a turn beside it.
- * Undefined, without running, when that agent's turn of that kind is already
- * going.
+ * Undefined, without running, while any turn is going, of any kind and for
+ * any agent: one at a time holds for a turn a person starts too, which a
+ * model server that serves one request at a time needs. {@link busy} says
+ * whether it was this one.
  */
 export function runNow<T>(kind: string, agent: string, run: () => Promise<T>): Promise<T> | undefined {
+  if (inFlight.size) return undefined;
   const key = flightKey(kind, agent);
-  if (inFlight.has(key)) return undefined;
   inFlight.add(key);
   return run().finally(() => inFlight.delete(key));
 }

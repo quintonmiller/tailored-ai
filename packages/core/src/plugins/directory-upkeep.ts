@@ -27,10 +27,11 @@
  * kept in its `upkeep` record for its page.
  */
 import { isDeepStrictEqual } from "node:util";
+import { pinnedLoad } from "../agent/memory-inject.js";
 import type { MemoryBackend, MemoryFragment } from "../memory/interface.js";
 import { memoryScope } from "../memory/scope.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
-import { wordsOf } from "../state/search.js";
+import { within, wordsOf } from "../state/search.js";
 import { type StateChange, StateError, type StateRecord } from "../state/types.js";
 import {
   ACTIVE,
@@ -174,11 +175,21 @@ export function daysSince(at: string | undefined, now: Date): number | undefined
   return Number.isFinite(then) ? Math.floor((now.getTime() - then) / DAY_MS) : undefined;
 }
 
+const MONTH = String.raw`(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?`;
+const DATE_DAY = String.raw`(\d{1,2})(?:st|nd|rd|th)?`;
+const YEAR = String.raw`((?:19|20)\d{2})`;
+/** "Oct 25, 2026", "October 25th 2026". */
+const MONTH_FIRST = new RegExp(String.raw`\b${MONTH}\s+${DATE_DAY},?\s+${YEAR}\b`, "i");
+/** "25 Oct 2026", "25th of October, 2026". */
+const DAY_FIRST = new RegExp(String.raw`\b${DATE_DAY}\s+(?:of\s+)?${MONTH},?\s+${YEAR}\b`, "i");
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
 /**
  * When a commitment's `nextCheck` falls, when it reads as a date: an ISO date
- * (with a time or without) anywhere in it, or text with a four-digit year the
- * clock can read, like "Oct 25, 2026". "Friday" or "when the hotel replies"
- * read as no date, and count for nothing.
+ * (with a time or without) anywhere in it, or a month named with its day and
+ * year, like "Oct 25, 2026" or "25 October 2026". "Friday", "end of 2026" or
+ * "when the hotel replies in 2026" read as no date, and count for nothing:
+ * the clock's own reading of free text turns any year into 1 January.
  */
 export function checkDate(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -187,10 +198,18 @@ export function checkDate(value: string | undefined): number | undefined {
     const at = Date.parse(iso[2] ? `${iso[1]}T${iso[2]}${iso[3] ?? ""}` : iso[1]);
     return Number.isFinite(at) ? at : undefined;
   }
-  // A month and day with no year reads as the year 2001 to the clock, so a year is required.
-  if (!/\b(19|20)\d{2}\b/.test(value)) return undefined;
-  const at = Date.parse(value);
-  return Number.isFinite(at) ? at : undefined;
+  const monthFirst = MONTH_FIRST.exec(value);
+  const dayFirst = monthFirst ? undefined : DAY_FIRST.exec(value);
+  const [month, day, year] = monthFirst
+    ? [monthFirst[1], monthFirst[2], monthFirst[3]]
+    : dayFirst
+      ? [dayFirst[2], dayFirst[1], dayFirst[3]]
+      : [];
+  if (!month || !day || !year) return undefined;
+  // Midnight UTC, as an ISO date with no time reads. A day the month doesn't have, like 31 June, is no date.
+  const m = MONTHS.indexOf(month.slice(0, 3).toLowerCase());
+  const at = Date.UTC(Number(year), m, Number(day));
+  return new Date(at).getUTCDate() === Number(day) ? at : undefined;
 }
 
 const CLOSED: readonly string[] = ["done", "dropped"];
@@ -350,6 +369,8 @@ export function noteOf(f: MemoryFragment, agent: string): NoteView | undefined {
 
 /** The key of the evidence that what loads every turn is over its budget. */
 const LOADED = "note:loaded";
+/** How the key of a pair of notes that look like one ends. */
+const PAIR_KEY = ":same";
 
 /** Pairs of notes that look like one note, by the share of words they have in common. */
 const SAME_WORDS = 0.7;
@@ -408,9 +429,10 @@ function cosine(a: Float32Array, b: Float32Array): number {
 /**
  * The agent's own notes: live ones not recalled for `days.recall` or more
  * (pinned and kept ones aside: they are meant to stay), pairs that look like
- * the same note, notes that expire within `days.expiring`, and the size of
- * what loads every turn against the budget. A note recalled before recall
- * times were kept, and never since, has no time to go by and is left out.
+ * the same note, notes that expire within `days.expiring`, the size of what
+ * loads every turn against the budget, and pinned notes that don't fit in it
+ * and so never load. A note recalled before recall times were kept, and
+ * never since, has no time to go by and is left out.
  */
 export function noteItems(at: {
   notes: NoteView[];
@@ -419,6 +441,8 @@ export function noteItems(at: {
   days: UpkeepDays;
   loaded?: { tokens: number; budget: number };
   coreMemory?: boolean;
+  /** Pinned notes that don't fit in what loads every turn, by id, and how many do. */
+  unloaded?: { ids: string[]; fit: number };
 }): Item[] {
   const items: Item[] = [];
   const quote = (n: NoteView) => `${n.id} "${clip(n.text)}"`;
@@ -434,7 +458,10 @@ export function noteItems(at: {
     }
   }
   for (const [a, b] of at.pairs.slice(0, PAIRS_SHOWN)) {
-    items.push({ keys: [`note:${a.id}+${b.id}:same`], line: `- ${quote(a)} and ${quote(b)} look like the same note` });
+    items.push({
+      keys: [`note:${a.id}+${b.id}${PAIR_KEY}`],
+      line: `- ${quote(a)} and ${quote(b)} look like the same note`,
+    });
   }
   for (const n of at.notes) {
     if (n.kept || !n.ttlAt) continue;
@@ -453,12 +480,31 @@ export function noteItems(at: {
       line: `- Your pinned notes${at.coreMemory ? " and core memory" : ""} load on every turn: about ${at.loaded.tokens.toLocaleString("en-US")} tokens, over your budget of ${at.loaded.budget.toLocaleString("en-US")}.`,
     });
   }
+  const unloaded = at.unloaded?.ids ?? [];
+  if (unloaded.length) {
+    const shown = unloaded.slice(0, PAIRS_SHOWN);
+    const rest = unloaded.length - shown.length;
+    items.push({
+      keys: unloaded.map((id) => `note:${id}:unloaded`),
+      line: `- Only ${at.unloaded?.fit ?? 0} of your ${unloaded.length + (at.unloaded?.fit ?? 0)} pinned notes fit in what loads every turn, so these never load: ${list([...shown, ...(rest > 0 ? [`${rest} more`] : [])])}. Archive the ones that matter less, or fold several into one.`,
+    });
+  }
   return items;
 }
 
 /** The evidence's fingerprint: its keys, in order. Two lots of evidence with the same keys are the same evidence. */
 export function fingerprint(sections: Section[]): string {
   return [...new Set(sections.flatMap((s) => s.items.flatMap((i) => i.keys)))].sort().join("\n");
+}
+
+/**
+ * The keys of `now` a stored fingerprint doesn't have: what is new since. An
+ * empty answer means everything found was there before, or less: nothing to
+ * wake an agent for.
+ */
+export function newKeys(now: string, before: string | undefined): string[] {
+  const seen = new Set((before ?? "").split("\n"));
+  return now ? now.split("\n").filter((k) => !seen.has(k)) : [];
 }
 
 // --------------------------------------------------------------------------
@@ -570,12 +616,18 @@ export interface Found {
   fingerprint: string;
   /** The tools it has, of those the message names. */
   tools: string[];
+  /** The vectors its notes were compared by meaning with, when the embedder answered. */
+  vectors?: Map<string, Float32Array>;
+  /** Set when the embedder was asked and didn't answer: pairs only meaning would find may be missing. */
+  meaningMissed?: true;
 }
 
 /** Notes read for one upkeep: enough for any agent that keeps its notes tidy. */
 const NOTES_READ = 500;
 /** Notes compared by meaning, newest first: one embedding call's worth. */
 const NOTES_EMBEDDED = 100;
+/** How long upkeep waits for the embedder before matching notes by words alone. */
+const EMBED_TIMEOUT_MS = 30_000;
 /** Misses looked at on an agent's first upkeep, which has no "since". */
 const FIRST_MISSES_DAYS = 14;
 
@@ -590,9 +642,15 @@ export class Upkeep {
   /**
    * Everything upkeep finds for `agent`, as of now: commitments, docs and
    * misses since `since`, its page, and its notes. Each kind only when the
-   * agent has the tool to act on it.
+   * agent has the tool to act on it. `reuse` is what this turn found before
+   * the agent tidied: its notes' vectors are used again rather than asked
+   * for, so a second look can't disagree with the first because the embedder
+   * answered one and not the other.
    */
-  async gather(agent: string, at: { since?: string; readsAtLast: Record<string, number> }): Promise<Found> {
+  async gather(
+    agent: string,
+    at: { since?: string; readsAtLast: Record<string, number>; reuse?: Found },
+  ): Promise<Found> {
     const directory = this.directory;
     const now = directory.now();
     const { days } = this.opts.settings;
@@ -635,13 +693,19 @@ export class Upkeep {
     if (has("directory")) {
       sections.push({ title: "Your page", items: pageItems(page, [...commitments, ...docs], now) });
     }
-    if (has("recall")) sections.push({ title: "Your notes", items: await this.notes(agent, has("core_memory")) });
+    let notes: Awaited<ReturnType<Upkeep["notes"]>> | undefined;
+    if (has("recall")) {
+      notes = await this.notes(agent, has("core_memory"), at.reuse);
+      sections.push({ title: "Your notes", items: notes.items });
+    }
     // Core memory is only worth naming when what loads every turn is over its budget.
     const loaded = sections.some((s) => s.items.some((i) => i.keys.includes(LOADED)));
     return {
       sections,
       fingerprint: fingerprint(sections),
       tools: tools.filter((t) => t !== "core_memory" || loaded),
+      ...(notes?.vectors?.size ? { vectors: notes.vectors } : {}),
+      ...(notes?.missed ? { meaningMissed: true as const } : {}),
     };
   }
 
@@ -670,46 +734,97 @@ export class Upkeep {
     return since;
   }
 
-  /** The agent's notes, read through the memory store, as evidence. Nothing when there's no store that lists. */
-  private async notes(agent: string, coreMemory: boolean): Promise<Item[]> {
+  /**
+   * The agent's notes, read through the memory store, as evidence, with the
+   * vectors they were compared by and whether the embedder failed to answer.
+   * What `reuse` found earlier in the turn is used instead of asking the
+   * embedder again. Nothing when there's no store that lists, or it can't be
+   * read now: the rest of the evidence still stands.
+   */
+  private async notes(
+    agent: string,
+    coreMemory: boolean,
+    reuse?: Found,
+  ): Promise<{ items: Item[]; vectors?: Map<string, Float32Array>; missed: boolean }> {
     const backend = await this.opts.memory?.().catch(() => undefined);
-    if (!backend?.list) return [];
+    if (!backend?.list) return { items: [], missed: false };
     const { days, memoryBudget } = this.opts.settings;
     const now = this.directory.now();
-    const fragments = await backend.list({
-      scope: `agent:${agent}`,
-      kind: "note",
-      allProjects: true,
-      limit: NOTES_READ,
-    });
-    const notes = fragments.map((f) => noteOf(f, agent)).filter((n): n is NoteView => !!n);
-    let vectors: Map<string, Float32Array> | undefined;
-    const embedder = this.opts.embedder?.();
-    if (embedder && notes.length > 1) {
-      const compared = notes.slice(0, NOTES_EMBEDDED);
-      try {
-        const { vectors: out } = await embedder.embed(compared.map((n) => n.text));
-        vectors = new Map(compared.map((n, i) => [n.id, out[i]]));
-      } catch (err) {
-        // Words still find the near-copies; meaning only adds the rewordings.
-        console.warn(`[directory] upkeep couldn't compare ${agent}'s notes by meaning: ${(err as Error).message}`);
-      }
-    }
+    const fragments = await backend
+      .list({ scope: `agent:${agent}`, kind: "note", allProjects: true, limit: NOTES_READ })
+      .catch((err: unknown) => {
+        console.warn(`[directory] upkeep couldn't read ${agent}'s notes: ${(err as Error).message}`);
+        return [] as MemoryFragment[];
+      });
     // What loads every turn: the pinned notes the store surfaces for the agent, and its core memory.
     const scope = memoryScope(null, agent);
-    const pinned = (await backend.query({ includePrelude: true, scope, limit: 100 }).catch(() => [])).filter(
+    const surfaced = (await backend.query({ includePrelude: true, scope, limit: 100 }).catch(() => [])).filter(
       (f) => f.metadata?.pinned === true,
     );
+    // A store pins by rules of its own (a tag, or high importance) and only says so here, so a listed note
+    // that surfaced pinned is pinned, whatever its tags say.
+    const pinnedIds = new Set(surfaced.map((f) => f.id));
+    const notes = fragments
+      .map((f) => noteOf(f, agent))
+      .filter((n): n is NoteView => !!n)
+      .map((n) => (pinnedIds.has(n.id) ? { ...n, pinned: true } : n));
+    const { vectors, missed } = reuse
+      ? { vectors: reuse.vectors, missed: !!reuse.meaningMissed }
+      : await this.vectors(agent, notes);
+    // Measured as the prompt takes them: only the pinned notes that fit load; the rest never do.
+    const load = pinnedLoad(surfaced);
+    const fit = new Set(load.included.map((p) => p.noteId));
+    const unloaded = surfaced
+      .map((f) => f.id ?? "")
+      .filter((id) => id && !fit.has(id.startsWith("note:") ? id.slice("note:".length) : id));
     const core = backend.prelude ? await backend.prelude({ scope }).catch(() => "") : "";
-    const chars = pinned.reduce((n, f) => n + f.text.length + 3, 0) + core.length;
-    return noteItems({
-      notes,
-      pairs: duplicatePairs(notes, vectors),
-      now,
-      days,
-      loaded: { tokens: Math.ceil(chars / 4), budget: memoryBudget },
-      coreMemory: coreMemory && core.length > 0,
-    });
+    return {
+      items: noteItems({
+        notes,
+        pairs: duplicatePairs(notes, vectors),
+        now,
+        days,
+        loaded: { tokens: Math.ceil((load.charsUsed + core.length) / 4), budget: memoryBudget },
+        coreMemory: coreMemory && core.length > 0,
+        unloaded: { ids: unloaded, fit: load.included.length },
+      }),
+      ...(vectors ? { vectors } : {}),
+      missed,
+    };
+  }
+
+  /**
+   * The notes' vectors, newest first up to one call's worth, to match them by
+   * meaning. None with no embedder, or one that fails or doesn't answer in
+   * time, which is `missed`: words still find the near-copies, and meaning
+   * only adds the rewordings.
+   */
+  private async vectors(
+    agent: string,
+    notes: NoteView[],
+  ): Promise<{ vectors?: Map<string, Float32Array>; missed: boolean }> {
+    const embedder = this.opts.embedder?.();
+    if (!embedder || notes.length < 2) return { missed: false };
+    const compared = notes.slice(0, NOTES_EMBEDDED);
+    const controller = new AbortController();
+    try {
+      const { vectors } = await within(
+        () =>
+          embedder.embed(
+            compared.map((n) => n.text),
+            { signal: controller.signal },
+          ),
+        EMBED_TIMEOUT_MS,
+        controller,
+      );
+      return {
+        vectors: new Map(compared.flatMap((n, i) => (vectors[i] ? [[n.id, vectors[i]] as const] : []))),
+        missed: false,
+      };
+    } catch (err) {
+      console.warn(`[directory] upkeep couldn't compare ${agent}'s notes by meaning: ${(err as Error).message}`);
+      return { missed: true };
+    }
   }
 
   /**
@@ -766,55 +881,79 @@ export class Upkeep {
 
   /**
    * One upkeep turn for `agent`. Gathers the evidence and, unless `force`,
-   * wakes nobody when there's none, or when it is the same as when the last
-   * upkeep finished. Otherwise runs the turn, counts what it changed from
-   * history, and keeps when, what changed and what the evidence came to
-   * afterwards in the agent's upkeep record. "quiet" when it didn't wake the
-   * agent.
+   * wakes nobody when nothing in it is new since the last upkeep finished:
+   * none at all, the same, or less (what cleared is forgotten, so it counts
+   * as new if it comes back). Otherwise runs the turn, counts what it
+   * changed from history, and keeps when, what changed and what the evidence
+   * came to afterwards in the agent's upkeep record. "quiet" when it didn't
+   * wake the agent. A failure anywhere is kept in the record, with when, for
+   * the page, and thrown.
    */
   async turn(agent: string, opts: { force?: boolean } = {}): Promise<"woken" | "quiet"> {
     const directory = this.directory;
-    const record = await directory.upkeep(agent);
-    const since = text(record?.data.at);
-    const before = await this.gather(agent, { since, readsAtLast: counts(record?.data.readsAtLast) });
-    const nothing = !before.sections.some((s) => s.items.length);
-    if (!opts.force && (nothing || before.fingerprint === record?.data.fingerprint)) return "quiet";
-
-    const started = directory.now().toISOString();
-    await directory.saveUpkeep(agent, () => ({ started, error: null }));
-    const message = upkeepMessage({
-      sections: before.sections,
-      ...(since ? { since } : {}),
-      tools: before.tools,
-      maxRounds: this.opts.settings.maxRounds,
-    });
-    const session = this.opts.session(agent);
-    UPKEEP_SESSIONS.add(session.id);
     try {
-      await this.opts.run(agent, session, message, this.opts.settings.maxRounds);
+      const record = await directory.upkeep(agent);
+      const since = text(record?.data.at);
+      const stored = typeof record?.data.fingerprint === "string" ? record.data.fingerprint : undefined;
+      const before = await this.gather(agent, { since, readsAtLast: counts(record?.data.readsAtLast) });
+      if (!opts.force && newKeys(before.fingerprint, stored).length === 0) {
+        // Less than before: forget what cleared, so it counts as new if it comes back.
+        const next = keepPairs(before, stored);
+        if (stored !== undefined && stored !== next) await directory.saveUpkeep(agent, () => ({ fingerprint: next }));
+        return "quiet";
+      }
+
+      const started = directory.now().toISOString();
+      await directory.saveUpkeep(agent, () => ({ started, error: null, failedAt: null }));
+      const message = upkeepMessage({
+        sections: before.sections,
+        ...(since ? { since } : {}),
+        tools: before.tools,
+        maxRounds: this.opts.settings.maxRounds,
+      });
+      const session = this.opts.session(agent);
+      UPKEEP_SESSIONS.add(session.id);
+      try {
+        await this.opts.run(agent, session, message, this.opts.settings.maxRounds);
+      } finally {
+        UPKEEP_SESSIONS.delete(session.id);
+      }
+
+      const changed = await this.changes(agent, started);
+      const fresh = await directory.upkeep(agent);
+      const readsAtLast = counts(readsOf(fresh?.data.reads));
+      const at = directory.now().toISOString();
+      // What the evidence comes to now, after tidying: the next upkeep is skipped until something new turns up.
+      const after = await this.gather(agent, { since: at, readsAtLast, reuse: before });
+      await directory.saveUpkeep(agent, () => ({
+        at,
+        changed: changed ?? null,
+        fingerprint: keepPairs(after, stored),
+        readsAtLast,
+        error: null,
+        failedAt: null,
+      }));
+      return "woken";
     } catch (err) {
       const why = (err as Error).message || "it failed";
-      await directory.saveUpkeep(agent, () => ({ error: why.slice(0, 500) })).catch(() => {});
+      const failedAt = directory.now().toISOString();
+      await directory.saveUpkeep(agent, () => ({ error: why.slice(0, 500), failedAt })).catch(() => {});
       throw err;
-    } finally {
-      UPKEEP_SESSIONS.delete(session.id);
     }
-
-    const changed = await this.changes(agent, started);
-    const fresh = await directory.upkeep(agent);
-    const readsAtLast = counts(readsOf(fresh?.data.reads));
-    const at = directory.now().toISOString();
-    // What the evidence comes to now, after tidying: the next upkeep is skipped until this changes.
-    const after = await this.gather(agent, { since: at, readsAtLast });
-    await directory.saveUpkeep(agent, () => ({
-      at,
-      changed: changed ?? null,
-      fingerprint: after.fingerprint,
-      readsAtLast,
-      error: null,
-    }));
-    return "woken";
   }
+}
+
+/**
+ * What to keep as `found`'s fingerprint. When the embedder didn't answer,
+ * the pairs of notes `stored` had stay in it: they may be missing only
+ * because meaning couldn't be asked, and dropping them would wake the agent
+ * for pairs it has seen once the embedder answers again.
+ */
+function keepPairs(found: Found, stored: string | undefined): string {
+  if (!found.meaningMissed || !stored) return found.fingerprint;
+  const keys = new Set(found.fingerprint ? found.fingerprint.split("\n") : []);
+  for (const key of stored.split("\n")) if (key.endsWith(PAIR_KEY)) keys.add(key);
+  return [...keys].sort().join("\n");
 }
 
 /** Each doc's read count, from read records or a stored snapshot of them. */

@@ -672,16 +672,20 @@ export class CommitmentTool implements Tool {
     if (autonomy && !(AUTONOMY as readonly string[]).includes(autonomy)) {
       return fail(`autonomy is one of: ${AUTONOMY.join(", ")}.`);
     }
-    // An agent can step back to asking first, never up: a granted tell or quiet is left as it is.
-    const lower = autonomy === AGENT_AUTONOMY;
-    const refuse = autonomy && !lower;
-    if (!note && progress === undefined && !nextStep && !nextCheck && !status && !waitingOn && !lower) {
-      if (refuse) {
-        const record = await this.directory.own(caller, COMMITMENT_TYPE, id, "commitment");
-        return fail(autonomyRefused(autonomy, String(record.data.autonomy ?? AGENT_AUTONOMY)));
-      }
+    const others = !!note || progress !== undefined || !!nextStep || !!nextCheck || !!status || !!waitingOn;
+    if (!others && !autonomy) {
       return fail("update needs at least one of `note`, `progress`, `nextStep`, `nextCheck`, `status` or `waitingOn`.");
     }
+    // Asking for the autonomy it already has changes nothing, granted or not.
+    const has = autonomy
+      ? String((await this.directory.own(caller, COMMITMENT_TYPE, id, "commitment")).data.autonomy ?? AGENT_AUTONOMY)
+      : undefined;
+    const same = !!autonomy && autonomy === has;
+    // An agent can step back to asking first, never up: a granted tell or quiet is left as it is.
+    const lower = autonomy === AGENT_AUTONOMY && !same;
+    const refuse = !!autonomy && !same && !lower;
+    if (!others && same) return ok(`${id} already has ${autonomy}; nothing changed.`);
+    if (!others && refuse) return fail(autonomyRefused(autonomy, has ?? AGENT_AUTONOMY));
     const now = this.directory.now();
     const record = await this.directory.change(caller, this.name, COMMITMENT_TYPE, id, "commitment", (r) => {
       const changes: Record<string, unknown> = {};

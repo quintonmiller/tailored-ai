@@ -137,6 +137,7 @@ let hotelsRead: "ok" | "fail" | Promise<void>;
 let handStatus: number;
 let handWhy: string | undefined;
 let upkeepAnswer: { status: number; body: unknown };
+let patchAnswer: { status: number; body?: unknown };
 const calls: { method: string; url: string; body?: unknown }[] = [];
 
 beforeEach(() => {
@@ -150,6 +151,7 @@ beforeEach(() => {
   handStatus = 201;
   handWhy = undefined;
   upkeepAnswer = { status: 202, body: { started: true } };
+  patchAnswer = { status: 200 };
   hotels = [
     rec("hotel", "tejo", { name: "Lisboa Tejo", price: 122, shortlisted: true }),
     rec("hotel", "memmo", { name: "Memmo Alfama", price: 178, shortlisted: true }),
@@ -183,6 +185,9 @@ beforeEach(() => {
         return new Response(JSON.stringify(agent), { status: 200 });
       }
       if (method === "PATCH" && url.startsWith("/api/state/commitment/")) {
+        if (patchAnswer.status !== 200) {
+          return new Response(JSON.stringify(patchAnswer.body), { status: patchAnswer.status });
+        }
         return new Response(JSON.stringify({ ...agent?.commitments[0], version: 2 }));
       }
       if (url.startsWith("/api/state/types")) {
@@ -614,20 +619,52 @@ describe("handing it something", () => {
 });
 
 describe("autonomy on its work", () => {
-  it("lets a person change what a commitment may do on its own, in place", async () => {
-    await render();
-    const pick = section("Working on")?.querySelector(".agent-page-meta select") as HTMLSelectElement;
-    expect(pick.value).toBe("suggest");
-    await act(async () => {
-      pick.value = "quiet";
-      pick.dispatchEvent(new Event("change", { bubbles: true }));
+  const pick = () => section("Working on")?.querySelector(".agent-page-meta select") as HTMLSelectElement;
+  const choose = (value: string) =>
+    act(async () => {
+      const select = pick();
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
     });
+  const reads = () => calls.filter((c) => c.url === "/api/ext/builtin:directory/agents/trip-planner").length;
+
+  it("lets a person change what a commitment may do on its own, in place, and shows it at once", async () => {
+    await render();
+    expect(pick().value).toBe("suggest");
+    const before = reads();
+    await choose("quiet");
+    // The pick holds while the record is saved, rather than springing back until the stream redraws.
+    expect(pick().value).toBe("quiet");
     await act(async () => {});
     expect(calls.find((c) => c.method === "PATCH")).toEqual({
       method: "PATCH",
       url: "/api/state/commitment/trip-planner-lisbon",
       body: { changes: { autonomy: "quiet" }, expectedVersion: 1 },
     });
+    // Saved, the page reads itself again, without waiting on the stream.
+    expect(reads()).toBe(before + 1);
+    expect(pick().value).toBe("quiet");
+  });
+
+  it("says a refusal under the line, in plain words when the record changed meanwhile", async () => {
+    patchAnswer = {
+      status: 409,
+      body: { error: "commitment/trip-planner-lisbon is at version 4, but the write expected version 1." },
+    };
+    await render();
+    await choose("tell");
+    await act(async () => {});
+    const item = section("Working on")?.querySelector(".agent-page-item") as HTMLElement;
+    const alert = item.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("This changed while you were looking. Pick again.");
+    // A line of its own, not squeezed into the unbreakable facts.
+    expect(alert?.closest(".agent-page-meta")).toBeNull();
+    expect(pick().value).toBe("suggest");
+
+    patchAnswer = { status: 400, body: { error: "autonomy is one of: suggest, tell, quiet." } };
+    await choose("quiet");
+    await act(async () => {});
+    expect(item.querySelector('[role="alert"]')?.textContent).toBe("autonomy is one of: suggest, tell, quiet.");
   });
 });
 
@@ -655,8 +692,13 @@ describe("upkeep", () => {
       ],
       [{ running: false, at: hoursAgo(1) }, "Last upkeep 1h ago."],
       [
-        { running: false, at: hoursAgo(5), error: "the model is unreachable" },
-        "Its last upkeep stopped: the model is unreachable",
+        { running: false, error: "the model is unreachable", failedAt: hoursAgo(2) },
+        "Couldn't tidy up 2h ago: the model is unreachable",
+      ],
+      // The last good one stays in view after a failure, so the failure reads as newer than it.
+      [
+        { running: false, at: hoursAgo(26), changed, error: "fetch failed", failedAt: hoursAgo(1) },
+        "Couldn't tidy up 1h ago: fetch failedLast upkeep 1d ago: archived 2, reviewed 1, closed 1.",
       ],
     ] as const) {
       agent = { ...tripPlanner(), upkeep } as never;
@@ -741,5 +783,20 @@ describe("upkeep", () => {
       "trip-planner can't tidy up now: agents are paused.",
     );
     expect(tidyButton().disabled).toBe(false);
+
+    // The pause lifts and a scheduled upkeep runs and finishes: the old refusal goes, not to contradict it.
+    agent = { ...tripPlanner(), upkeep: { running: false, at: new Date().toISOString(), changed } } as never;
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "upkeep",
+        id: "trip-planner",
+        op: "update",
+        before: { owner: "trip-planner" },
+        after: { owner: "trip-planner" },
+      }),
+    );
+    await settle();
+    expect(status()).toBe("Last upkeep just now: archived 2, reviewed 1, closed 1.");
+    expect(upkeepLine()?.querySelector('[role="alert"]')).toBeNull();
   });
 });

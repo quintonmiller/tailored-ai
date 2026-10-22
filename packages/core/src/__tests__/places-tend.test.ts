@@ -21,6 +21,8 @@ import {
   TEND_TICK_MS,
   Tender,
   tendMessage,
+  turnSession,
+  UPKEEP_KIND,
 } from "../plugins/places-tend.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 
@@ -205,7 +207,12 @@ describe("what an agent has done, from what the runtime keeps", () => {
 
   it("counts its tool calls, the rooms it talked in, its photos and the tasks it finished, since then only", async () => {
     const done = await gatherDone({
-      db: seed(),
+      // Its upkeep tidied what it owns: not news for its room, and left out with its tend's own session.
+      db: seed(({ session, used, called }) => {
+        session("s-upkeep", "upkeep:planner");
+        used("s-upkeep", "planner", since + 4 * HOUR);
+        called("s-upkeep", [{ name: "commitment" }, { name: "commitment" }], since + 4 * HOUR);
+      }),
       agent: "planner",
       since,
       rooms: [
@@ -218,7 +225,7 @@ describe("what an agent has done, from what the runtime keeps", () => {
         task("Draft the itinerary", new Date(since + 5 * HOUR).toISOString()),
         task("Someone else's", dbTime(since + HOUR), "writer"),
       ]),
-      skip: "tend:planner",
+      skip: [turnSession("tend", "planner"), turnSession(UPKEEP_KIND, "planner")],
     });
     expect(done.tools).toEqual([
       ["web_search", 2],
@@ -435,6 +442,9 @@ describe("tending, as time goes by", () => {
     expect(first).toBeDefined();
     expect(busy("upkeep", "writer")).toBe(true);
     expect(runNow("upkeep", "writer", async () => "again")).toBeUndefined();
+    // One at a time holds for every kind and agent, not only this one.
+    expect(runNow("upkeep", "planner", async () => "beside")).toBeUndefined();
+    expect(runNow("tend", "writer", async () => "beside")).toBeUndefined();
     let clock = Date.parse("2026-10-19T00:00:00Z");
     const started: string[] = [];
     const tender = new Tender({

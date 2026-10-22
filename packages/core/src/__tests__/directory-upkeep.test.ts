@@ -28,6 +28,7 @@ import {
   duplicatePairs,
   fingerprint,
   type NoteView,
+  newKeys,
   noteItems,
   pageItems,
   parseUpkeep,
@@ -114,14 +115,24 @@ describe("the upkeep setting", () => {
 });
 
 describe("a next check that reads as a date", () => {
-  it("reads ISO dates and times, and dates with a year, and nothing else", () => {
+  it("reads ISO dates and times, and a month named with its day and year, and nothing else", () => {
     expect(checkDate("2026-10-18")).toBe(Date.parse("2026-10-18"));
     expect(checkDate("after 2026-10-18T09:30Z, once the quote is in")).toBe(Date.parse("2026-10-18T09:30Z"));
-    expect(checkDate("Oct 25, 2026")).toBe(Date.parse("Oct 25, 2026"));
+    const oct25 = Date.parse("2026-10-25");
+    expect(checkDate("Oct 25, 2026")).toBe(oct25);
+    expect(checkDate("chase them on October 25th 2026")).toBe(oct25);
+    expect(checkDate("25 Oct 2026")).toBe(oct25);
+    expect(checkDate("the 25th of October, 2026")).toBe(oct25);
     expect(checkDate("Friday")).toBeUndefined();
     // The clock reads a month and day with no year as 2001; that is no date.
     expect(checkDate("October 25")).toBeUndefined();
     expect(checkDate("when the hotel replies")).toBeUndefined();
+    // And free text with a year as 1 January of it, which would make these due all year.
+    expect(checkDate("end of 2026")).toBeUndefined();
+    expect(checkDate("when the hotel replies in 2026")).toBeUndefined();
+    expect(checkDate("Nov 2026")).toBeUndefined();
+    // A day the month doesn't have.
+    expect(checkDate("June 31, 2026")).toBeUndefined();
     expect(checkDate(undefined)).toBeUndefined();
   });
 });
@@ -347,6 +358,21 @@ describe("note evidence", () => {
       [],
     );
   });
+
+  it("names pinned notes that don't fit in what loads every turn, so never load", () => {
+    const items = noteItems({
+      notes: [],
+      pairs: [],
+      now: NOW,
+      days: DAYS,
+      unloaded: { ids: ["note:e", "note:f", "note:g", "note:h", "note:i", "note:j"], fit: 4 },
+    });
+    expect(lines(items)).toEqual([
+      "- Only 4 of your 10 pinned notes fit in what loads every turn, so these never load: note:e, note:f, note:g, note:h, note:i and 1 more. Archive the ones that matter less, or fold several into one.",
+    ]);
+    expect(items[0].keys).toContain("note:note:j:unloaded");
+    expect(noteItems({ notes: [], pairs: [], now: NOW, days: DAYS, unloaded: { ids: [], fit: 3 } })).toEqual([]);
+  });
 });
 
 describe("the fingerprint", () => {
@@ -368,6 +394,16 @@ describe("the fingerprint", () => {
       { title: "Your commitments", items: commitmentItems([venue(9)], new Date(NOW.getTime() + 6 * DAY), DAYS) },
     ];
     expect(fingerprint(quiet)).not.toBe(fingerprint(today));
+  });
+});
+
+describe("what's new since the last upkeep", () => {
+  it("is the keys the stored fingerprint doesn't have: none for the same evidence, or less of it", () => {
+    expect(newKeys("a\nb", undefined)).toEqual(["a", "b"]);
+    expect(newKeys("a\nb", "a\nb")).toEqual([]);
+    expect(newKeys("a", "a\nb")).toEqual([]);
+    expect(newKeys("", "a")).toEqual([]);
+    expect(newKeys("a\nc", "a\nb")).toEqual(["c"]);
   });
 });
 
@@ -725,6 +761,168 @@ describe("an upkeep turn", () => {
     expect(
       lines(words.sections.find((s) => s.title === "Your notes")?.items ?? []).some((l) => l.includes("same note")),
     ).toBe(false);
+  });
+
+  it("takes a note the store pins by importance as pinned, and counts only the pinned notes that load", async () => {
+    // Pinned by importance alone, with no tag: the store surfaces it pinned, and it loads every turn.
+    const rule = createNote(db, {
+      agent: "planner",
+      content: "Never book a venue without a rain plan.",
+      importance: 1,
+    });
+    db.prepare("UPDATE notes SET created_at = ? WHERE id = ?").run(sqlTime(daysAgo(90)), rule.id);
+    // Five long ones: together far over the budget, but only what fits in the pinned section ever loads.
+    for (const n of [1, 2, 3, 4, 5]) {
+      const content = `Pinned rule ${n}: ${"keep receipts for every deposit. ".repeat(9)}`;
+      createNote(db, { agent: "planner", content, tags: ["pinned"] });
+    }
+    settings = parseUpkeep({ memoryBudget: 300 }, () => {});
+    const found = await upkeep().gather("planner", { readsAtLast: {} });
+    const notes = lines(found.sections.find((s) => s.title === "Your notes")?.items ?? []);
+    expect(notes.some((l) => l.includes("rain plan") && l.includes("recalled"))).toBe(false);
+    expect(notes.some((l) => l.includes("The florist closes on Mondays."))).toBe(true);
+    // Six pinned, a few load: the rest are named, and what loads is measured as it loads, under the budget.
+    expect(notes).toContainEqual(
+      expect.stringMatching(/^- Only [1-4] of your 6 pinned notes fit in what loads every turn/),
+    );
+    expect(notes.some((l) => l.includes("load on every turn: about"))).toBe(false);
+  });
+
+  it("stops waiting for an embedder that doesn't answer, and matches notes by words", async () => {
+    createNote(db, { agent: "planner", content: "Morning calls suit the client." });
+    createNote(db, { agent: "planner", content: "The client likes being called in the morning." });
+    let signal: AbortSignal | undefined;
+    let asked = () => {};
+    const called = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
+    embedder = {
+      id: "stuck",
+      name: "stuck",
+      defaultModel: "s",
+      defaultDim: 2,
+      embed: (_inputs, opts) => {
+        signal = opts?.signal;
+        asked();
+        return new Promise(() => {});
+      },
+    };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = upkeep().gather("planner", { readsAtLast: {} });
+      await called;
+      await vi.advanceTimersByTimeAsync(30_000);
+      const found = await pending;
+      expect(signal?.aborted).toBe(true);
+      expect(found.meaningMissed).toBe(true);
+      expect(found.sections.find((s) => s.title === "Your notes")?.items.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks the embedder once a turn, and isn't woken again for a pair it saw when the embedder later fails", async () => {
+    createNote(db, { agent: "planner", content: "Morning calls suit the client." });
+    createNote(db, { agent: "planner", content: "The client likes being called in the morning." });
+    let calls = 0;
+    const working: EmbeddingProvider = {
+      id: "fake",
+      name: "fake",
+      defaultModel: "f",
+      defaultDim: 2,
+      embed: async (inputs) => {
+        calls++;
+        return {
+          vectors: inputs.map((t) => (/morning/i.test(t) ? new Float32Array([1, 0]) : new Float32Array([0, 1]))),
+          model: "f",
+          dim: 2,
+        };
+      },
+    };
+    embedder = working;
+    const keeper = upkeep();
+    expect(await keeper.turn("planner")).toBe("woken");
+    expect(calls).toBe(1);
+    expect(runs[0].message).toContain("look like the same note");
+    embedder = { ...working, embed: async () => Promise.reject(new Error("down")) };
+    expect(await keeper.turn("planner")).toBe("quiet");
+    embedder = working;
+    expect(await keeper.turn("planner")).toBe("quiet");
+    expect(runs).toHaveLength(1);
+  });
+
+  it("forgets evidence that cleared, so it wakes the agent when it comes back, and isn't woken by less", async () => {
+    const keeper = upkeep();
+    const found = (...keys: string[]) => ({
+      sections: [{ title: "Your commitments", items: keys.length ? [{ keys, line: "- something" }] : [] }],
+      fingerprint: [...keys].sort().join("\n"),
+      tools: [],
+    });
+    const gather = vi.spyOn(keeper, "gather");
+    const stored = async () => (await directory.upkeep("planner"))?.data.fingerprint;
+    gather.mockResolvedValueOnce(found("a", "b")).mockResolvedValueOnce(found("a", "b"));
+    expect(await keeper.turn("planner")).toBe("woken");
+    expect(await stored()).toBe("a\nb");
+    gather.mockResolvedValueOnce(found("a"));
+    expect(await keeper.turn("planner")).toBe("quiet");
+    expect(await stored()).toBe("a");
+    gather.mockResolvedValueOnce(found());
+    expect(await keeper.turn("planner")).toBe("quiet");
+    expect(await stored()).toBe("");
+    gather.mockResolvedValueOnce(found("a")).mockResolvedValueOnce(found("a"));
+    expect(await keeper.turn("planner")).toBe("woken");
+    expect(runs).toHaveLength(2);
+  });
+
+  it("keeps a failure from before the turn could start, with when, and drops only the notes when the store can't list", async () => {
+    const failing = new Upkeep({
+      directory,
+      settings,
+      has: () => {
+        throw new Error("the agent list is unreadable");
+      },
+      session: (agent) => ({ id: `upkeep-${agent}` }),
+      run: async () => {},
+    });
+    await expect(failing.turn("planner", { force: true })).rejects.toThrow("the agent list is unreadable");
+    expect((await directory.upkeep("planner"))?.data).toMatchObject({
+      error: "the agent list is unreadable",
+      failedAt: NOW.toISOString(),
+    });
+    const broken = Object.assign(Object.create(memory), {
+      list: async () => Promise.reject(new Error("the memory store is down")),
+    }) as SqliteMemoryBackend;
+    const keeper = new Upkeep({
+      directory,
+      settings,
+      has: () => true,
+      memory: async () => broken,
+      session: (agent) => ({ id: `upkeep-${agent}` }),
+      run: async (agent, session, message, maxRounds) => {
+        runs.push({ agent, session: session.id, message, maxRounds });
+      },
+    });
+    expect(await keeper.turn("planner")).toBe("woken");
+    expect(runs[0].message).toContain("planner-flowers");
+    expect(runs[0].message).not.toContain("The florist closes on Mondays.");
+    const record = await directory.upkeep("planner");
+    expect(record?.data.error).toBeUndefined();
+    expect(record?.data.failedAt).toBeUndefined();
+  });
+
+  it("writes an upkeep record a person archived live again, rather than failing every turn and read", async () => {
+    const record = await directory.upkeep("planner");
+    await service.archive(PERSON, { type: UPKEEP_TYPE, id: "planner" }, "Starting over.", record?.version);
+    expect((await directory.upkeep("planner"))?.archivedAt).toBeTruthy();
+    expect(await upkeep().turn("planner")).toBe("woken");
+    const live = await directory.upkeep("planner");
+    expect(live?.archivedAt).toBeFalsy();
+    expect(live?.data).toMatchObject({ at: NOW.toISOString(), owner: "planner" });
+    // The read counts it had are still there, and another read is counted on top.
+    await call("writer", "writeup", { action: "read", id: "planner-checklist" });
+    expect(
+      ((await directory.upkeep("planner"))?.data.reads as Record<string, { n: number }>)["planner-checklist"].n,
+    ).toBe(2);
   });
 });
 

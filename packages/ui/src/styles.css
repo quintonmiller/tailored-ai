@@ -6836,7 +6836,7 @@ select.model-entry-model {
   padding: 0 2px; margin: 0 -2px; cursor: pointer;
 }
 .agent-page-autonomy select:hover, .agent-page-autonomy select:focus-visible { border-color: var(--border); color: var(--text); }
-.agent-page-autonomy .agent-page-error { margin: 0; font-size: 12px; }
+.agent-page-item-error { margin: 4px 0 0; font-size: 12px; }
 
 /* Upkeep: a slim line over the page, with the one action a person has on it. */
 .agent-page-upkeep {
@@ -6849,7 +6849,11 @@ select.model-entry-model {
 }
 .agent-page-upkeep-status .agent-now-pulse { display: inline-block; margin-right: 8px; vertical-align: 1px; }
 .agent-page-upkeep-every { color: var(--text-dim); }
-.agent-page-upkeep-failed { color: var(--red); }
+/* The store's own words can run long: kept to two lines, all of it in the title. */
+.agent-page-upkeep-failed {
+  color: var(--red); overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
 .agent-page-upkeep button {
   background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 6px 12px; font-size: 12px; cursor: pointer; white-space: nowrap;
