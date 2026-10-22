@@ -28,14 +28,14 @@ Fields: **79** · with no read site found: **0**
 | `agent.maxContextTokens` | number | `32768` | 3 | 1 |
 | `agent.maxHistoryTokens` | number | `20000` | 3 | 3 |
 | `agent.maxToolOutputChars` | number | `32000` | 4 | 2 |
-| `agent.maxToolRounds` | number | `10` | 9 | 2 |
+| `agent.maxToolRounds` | number | `10` | 10 | 2 |
 | `agent.temperature` | number | `0.3` | 17 | 6 |
 
 ### `agents`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 45 | 138 |
+| `agents` | object | {} | 46 | 139 |
 
 ### `autopilot`
 
@@ -48,7 +48,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `briefing.enabled` | boolean | `false` | 47 | 1 |
+| `briefing.enabled` | boolean | `false` | 49 | 1 |
 | `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 29 | 1 |
 | `briefing.ttlMinutes` | number | `30` | 1 | 1 |
 
@@ -68,7 +68,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `context.directory` | string | `./data/context` | 9 | 1 |
+| `context.directory` | string | `./data/context` | 10 | 1 |
 | `context.kbDirectory` | string | `./data/kb` | 1 | 1 |
 | `context.warnTokens` | number | `4000` | 2 | 2 |
 
@@ -76,7 +76,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `cron.enabled` | boolean | `false` | 47 | 4 |
+| `cron.enabled` | boolean | `false` | 49 | 4 |
 | `cron.jobs` | array | `[]` | 6 | 6 |
 
 ### `custom_tools`
@@ -95,7 +95,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `live.enabled` | boolean | `false` | 47 | 2 |
+| `live.enabled` | boolean | `false` | 49 | 2 |
 | `live.limits.idleMinutes` | number | `10` | 4 | 2 |
 | `live.limits.maxMinutes` | number | `30` | 2 | 2 |
 | `live.limits.maxTurns` | number | `200` | 3 | 2 |
@@ -110,7 +110,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 89 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 90 |
 
 ### `prompts`
 
@@ -131,7 +131,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `schedules.enabled` | boolean | `true` | 47 | 1 |
+| `schedules.enabled` | boolean | `true` | 49 | 1 |
 | `schedules.maxDeferrals` | number | `3` | 1 | **0** |
 | `schedules.maxHorizonDays` | number | `365` | 2 | 1 |
 | `schedules.maxPerAgent` | number | `20` | 1 | 1 |
@@ -156,7 +156,7 @@ Fields: **79** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `suggestions.count` | number | `4` | 19 | 1 |
-| `suggestions.enabled` | boolean | `false` | 47 | 1 |
+| `suggestions.enabled` | boolean | `false` | 49 | 1 |
 | `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 29 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |
 
@@ -171,7 +171,7 @@ Fields: **79** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `taskWatcher.debounceMs` | number | `5000` | 1 | **0** |
-| `taskWatcher.enabled` | boolean | `false` | 47 | **0** |
+| `taskWatcher.enabled` | boolean | `false` | 49 | **0** |
 | `taskWatcher.maxStallRetries` | number | `1` | 2 | 1 |
 | `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 29 | **0** |
 | `taskWatcher.triggers` | array | `["created","updated"]` | 8 | **0** |
@@ -180,40 +180,40 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 49 | 4 |
+| `time.provider` | string | `system` | 50 | 4 |
 
 ### `tools`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tools.ask_user.enabled` | boolean | `true` | 47 | 1 |
+| `tools.ask_user.enabled` | boolean | `true` | 49 | 1 |
 | `tools.ask_user.inboxFile` | string | `inbox.md` | 2 | 1 |
-| `tools.collections.enabled` | boolean | `true` | 47 | 1 |
-| `tools.documents.enabled` | boolean | `true` | 47 | 1 |
-| `tools.edit.enabled` | boolean | `true` | 47 | 1 |
-| `tools.exec.enabled` | boolean | `true` | 47 | **0** |
-| `tools.extract_document.enabled` | boolean | `false` | 47 | 1 |
-| `tools.facts.enabled` | boolean | `true` | 47 | 1 |
-| `tools.interface.enabled` | boolean | `true` | 47 | 1 |
-| `tools.memory.enabled` | boolean | `true` | 47 | 1 |
-| `tools.projects.directory` | string | `./data/projects` | 9 | 2 |
-| `tools.projects.enabled` | boolean | `true` | 47 | 1 |
-| `tools.read.enabled` | boolean | `true` | 47 | 1 |
+| `tools.collections.enabled` | boolean | `true` | 49 | 1 |
+| `tools.documents.enabled` | boolean | `true` | 49 | 1 |
+| `tools.edit.enabled` | boolean | `true` | 49 | 1 |
+| `tools.exec.enabled` | boolean | `true` | 49 | **0** |
+| `tools.extract_document.enabled` | boolean | `false` | 49 | 1 |
+| `tools.facts.enabled` | boolean | `true` | 49 | 1 |
+| `tools.interface.enabled` | boolean | `true` | 49 | 1 |
+| `tools.memory.enabled` | boolean | `true` | 49 | 1 |
+| `tools.projects.directory` | string | `./data/projects` | 10 | 2 |
+| `tools.projects.enabled` | boolean | `true` | 49 | 1 |
+| `tools.read.enabled` | boolean | `true` | 49 | 1 |
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |
-| `tools.recall.enabled` | boolean | `true` | 47 | 1 |
-| `tools.room.enabled` | boolean | `true` | 47 | 1 |
-| `tools.state.enabled` | boolean | `true` | 47 | 4 |
-| `tools.tasks.enabled` | boolean | `true` | 47 | 1 |
-| `tools.web_fetch.enabled` | boolean | `true` | 47 | 1 |
+| `tools.recall.enabled` | boolean | `true` | 49 | 1 |
+| `tools.room.enabled` | boolean | `true` | 49 | 1 |
+| `tools.state.enabled` | boolean | `true` | 49 | 4 |
+| `tools.tasks.enabled` | boolean | `true` | 49 | 1 |
+| `tools.web_fetch.enabled` | boolean | `true` | 49 | 1 |
 | `tools.web_search.apiKey` | string | `""` | 23 | 1 |
-| `tools.web_search.enabled` | boolean | `false` | 47 | 2 |
+| `tools.web_search.enabled` | boolean | `false` | 49 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 49 | **0** |
-| `tools.write.enabled` | boolean | `true` | 47 | 1 |
+| `tools.web_search.provider` | string | `brave` | 50 | **0** |
+| `tools.write.enabled` | boolean | `true` | 49 | 1 |
 
 ### `webhooks`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `webhooks.enabled` | boolean | `false` | 47 | 1 |
+| `webhooks.enabled` | boolean | `false` | 49 | 1 |
 | `webhooks.routes` | array | `[]` | 2 | 1 |
